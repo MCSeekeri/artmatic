@@ -1,0 +1,63 @@
+@import '@fortawesome/fontawesome-free/css/all.min.css';
+
+:root {
+  --bg-0: #101216;
+  --bg-1: #16191f;
+  --bg-2: #1d2129;
+  --bg-3: #262b36;
+  --line: #323948;
+  --text-0: #e8ebf0;
+  --text-1: #aab2c0;
+  --text-2: #6b7485;
+  --accent: #5b9dff;
+  --accent-dim: #2c4d80;
+  --danger: #ff6b6b;
+  --ok: #51cf8a;
+  --radius: 6px;
+  --font-ui: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+#app { height: 100%; }
+
+button {
+  background: var(--bg-3);
+  color: var(--text-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: var(--line); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent-dim); border-color: var(--accent); }
+button.primary:hover { background: var(--accent); color: #fff; }
+
+input, select {
+  background: var(--bg-1);
+  color: var(--text-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+  font: inherit;
+}
+input[type='number'] { width: 72px; font-family: var(--font-mono); }
+input[type='range'] { padding: 0; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
