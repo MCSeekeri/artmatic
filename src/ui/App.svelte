@@ -76,7 +76,7 @@
     overflow-y: auto;
   }
   footer {
-    height: 240px;
+    height: 280px;
     flex-shrink: 0;
     border-top: 1px solid var(--line);
     background: var(--bg-1);

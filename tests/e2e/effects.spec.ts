@@ -56,12 +56,22 @@ test('echo：顺序渲染留下拖尾，clearFeedback 后消失，两次顺序�
     const mean = eval(meanSrc) as (d: number[]) => number;
     const A = (window as never as {
       __artmatic: {
-        store: { addTrack: (k: 'visual') => string; addClip: (t: string, c: unknown) => void };
+        store: {
+          addTrack: (k: 'visual') => string;
+          addClip: (t: string, c: unknown) => void;
+          commit: (label: string, fn: (p: { tracks: { clips: { kind: string }[]; enabled: boolean }[] }) => void) => void;
+        };
         renderFrame: (t: number) => void;
         readPixels: () => { data: number[] };
         renderer: { onSeek: () => void };
       };
     }).__artmatic;
+    // 关掉 demo 自带的特效轨：本测试只量化自己这组 flash+echo 的历史。
+    A.store.commit('关闭特效轨', (p) => {
+      for (const tr of p.tracks) {
+        if (tr.clips.some((c) => c.kind === 'effect')) tr.enabled = false;
+      }
+    });
     // 亮闪源：只在 [0, 0.5] 存在
     const v2 = A.store.addTrack('visual');
     A.store.addClip(v2, {
@@ -106,13 +116,14 @@ test('特效链 UI：新建特效片段 + 添加实例 + 渲染无报错', async
   page.on('pageerror', (e) => errors.push(String(e)));
   await boot(page);
   await page.getByTestId('add-visual-track').click();
-  await page.locator('.side-row').nth(2).getByTestId('add-effect').click();
+  await page.locator('.side-row').nth(5).getByTestId('add-effect').click(); // 新轨道（demo 有 5 轨）
   await page.getByTestId('add-effect-instance').click(); // 默认 channel-split
   const chainLen = await page.evaluate(() => {
     const A = (window as never as {
       __artmatic: { store: { project: { tracks: { clips: { kind: string; chain?: unknown[] }[] }[] } } };
     }).__artmatic;
-    const clips = A.store.project.tracks[2]!.clips;
+    const tracks = A.store.project.tracks;
+    const clips = tracks[tracks.length - 1]!.clips;
     return clips[0]?.kind === 'effect' ? (clips[0].chain?.length ?? 0) : -1;
   });
   expect(chainLen).toBe(1);

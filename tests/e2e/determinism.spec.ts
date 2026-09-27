@@ -8,20 +8,29 @@ import { expect, test } from '@playwright/test';
 test('同一工程同一 t，连续求值 100 次逐像素一致（M0 验收）', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  // demo 含 bake 型生成器（Rule 110）：被动等烘焙落地，否则中途从「缺席」
+  // 切到「在场」会被误判成非确定（这不是非确定，是异步就绪）。
+  await page.waitForTimeout(2500);
 
   const result = await page.evaluate(() => {
     const A = (window as never as {
       __artmatic: {
         renderFrame: (t: number) => void;
         readPixels: () => { data: number[] };
+        renderer: { onSeek: () => void };
       };
     }).__artmatic;
     const t = 0.5;
+    // 反馈类特效（echo）的历史是时间状态：每次求值前清历史（等价于
+    // 「同一历史状态下，同一 t 必须同帧」——这才是确定性契约；
+    // 连渲同一 t 不清历史是在泵历史，本身就不该一致）。
+    A.renderer.onSeek();
     A.renderFrame(t);
     const first = A.readPixels().data;
     let maxDiff = 0;
     let diffPixels = 0;
     for (let round = 0; round < 100; round++) {
+      A.renderer.onSeek();
       A.renderFrame(t);
       const cur = A.readPixels().data;
       for (let i = 0; i < cur.length; i++) {

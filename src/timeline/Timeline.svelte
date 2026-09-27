@@ -387,7 +387,7 @@
   .scroll {
     flex: 1;
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: auto;
   }
   .canvas-wrap {
     position: relative;

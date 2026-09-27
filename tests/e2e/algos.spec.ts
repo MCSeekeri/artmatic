@@ -87,12 +87,21 @@ test('生命游戏：seek 回退再前进与顺序播放逐像素一致', async 
         store: {
           addTrack: (k: 'visual') => string;
           addClip: (t: string, c: unknown) => void;
+          commit: (label: string, fn: (p: { tracks: { clips: { kind: string }[]; enabled: boolean }[] }) => void) => void;
         };
         algo: { defaultParams: (id: string) => Record<string, number | string> };
         renderFrame: (t: number) => void;
         readPixels: () => { data: number[] };
+        renderer: { onSeek: () => void };
       };
     }).__artmatic;
+    // demo 的 echo 是有历史的全屏特效，会污染整帧对比——本测试只看生命游戏，
+    // 把所有特效轨关掉（其余生成器都是无状态的，不影响对比）。
+    A.store.commit('关闭特效轨', (p) => {
+      for (const tr of p.tracks) {
+        if (tr.clips.some((c) => c.kind === 'effect')) tr.enabled = false;
+      }
+    });
     const trackId = A.store.addTrack('visual');
     A.store.addClip(trackId, {
       kind: 'source',
@@ -112,6 +121,7 @@ test('生命游戏：seek 回退再前进与顺序播放逐像素一致', async 
     for (let i = 0; i <= 40; i++) A.renderFrame(i / 30);
     const sequential = A.readPixels().data;
     // seek 回 t=10/30（走快照重放），再回到 t=40/30
+    A.renderer.onSeek();
     A.renderFrame(10 / 30);
     A.renderFrame(40 / 30);
     const replayed = A.readPixels().data;

@@ -119,6 +119,9 @@ class AppState {
 
   /** Preview 的 rAF 每帧调一次：播放中推进播放头，然后渲染当前帧。 */
   tick(): void {
+    // 导出期间预览循环停手：rAF 在预览尺寸下渲染会重排反馈历史
+    // （feedbackFor 按尺寸重建目标），污染正在进行的顺序导出。
+    if (this.exportProgress !== null) return;
     if (this.playing) {
       const t = this.player.currentT();
       if (t !== null) {
