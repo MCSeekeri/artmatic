@@ -1,9 +1,36 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Transport from './Transport.svelte';
   import Preview from './Preview.svelte';
   import Inspector from './Inspector.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import logoSmall from '../assets/brand/logo-small-with-fonttype.svg';
+  import { appState } from './app-state.svelte';
+
+  onMount(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const el = e.target as HTMLElement;
+      if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        appState.togglePlay();
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && appState.selectedClipId) {
+        appState.store.removeClip(appState.selectedClipId);
+        appState.selectedClipId = null;
+      } else if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        appState.store.undo();
+      } else if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && (e.key === 'Z' || e.key === 'z'))) {
+        e.preventDefault();
+        appState.store.redo();
+      } else if (e.key === 's' && appState.selectedClipId) {
+        const f = appState.store.findClip(appState.selectedClipId);
+        if (f) appState.store.splitClipAt(f.track.id, f.clip.id, appState.playT);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 </script>
 
 <div class="shell">

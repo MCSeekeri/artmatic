@@ -20,8 +20,11 @@ import {
   type VisualTrack,
 } from './schema';
 import {
+  MIN_CLIP_LENGTH,
+  freeRangeAt,
   moveSpan,
   resizeSpan,
+  spanAt,
   splitSpan,
   type Span,
 } from './clips';
@@ -67,8 +70,22 @@ export class ProjectStore {
     this.stack.beginTx();
   }
 
+  /**
+   * 手势事务内的实时变更通知：version++ 但不产生撤销记录。
+   * 拖拽中每帧调用，让 UI 跟上鼠标的实时位置。
+   */
+  touch(): void {
+    this.bump();
+  }
+
   endTx(label: string): boolean {
     return this.stack.endTx(label);
+  }
+
+  /** 手势中止：回滚到事务起点。 */
+  cancelTx(): void {
+    this.stack.cancelTx();
+    this.bump();
   }
 
   undo(): boolean {
@@ -128,7 +145,22 @@ export class ProjectStore {
     this.commit('新建片段', (p) => {
       const track = p.tracks.find((t) => t.id === trackId);
       if (!track) return;
-      (track.clips as AnyClip[]).push(clip);
+      // 落点被占时先尝试裁进所在空档；起点本身压在片段上时顺延到它的
+      // 末尾再找空档（否则「新建」在占用区静默失败，用户会以为按钮坏了）。
+      let start = clip.start;
+      let free = freeRangeAt(track.clips as Span[], start, p.duration);
+      if (!free) {
+        const covering = spanAt(track.clips as Span[], start);
+        if (covering) {
+          start = covering.end + 1e-6;
+          free = freeRangeAt(track.clips, start, p.duration);
+        }
+      }
+      if (!free) return;
+      const s = Math.max(start, free.start);
+      const e = Math.min(clip.end + (s - clip.start), free.end);
+      if (e - s < MIN_CLIP_LENGTH) return;
+      (track.clips as AnyClip[]).push({ ...clip, start: s, end: e });
       track.clips.sort((a, b) => a.start - b.start);
     });
   }

@@ -4,7 +4,14 @@
   import { SNAP_MODES, type SnapMode } from '../core/time';
   import type { OverlapBehavior } from '../core/schema';
 
-  const grid = $derived(appState.store?.project.beatGrid);
+  const grid = $derived.by(() => {
+    void appState.version;
+    return appState.store?.project.beatGrid;
+  });
+  const overlapBehavior = $derived.by(() => {
+    void appState.version;
+    return appState.store?.project.overlapBehavior;
+  });
   const playT = $derived(appState.playT);
   const beatPos = $derived(grid ? beatAtTime(playT, grid) : 0);
   const barBeat = $derived.by(() => {
@@ -82,7 +89,7 @@
   <label title="同轨重叠策略（可配置：挤开邻居 / 拒绝落点 / 吃掉邻居重叠部分）">
     重叠
     <select
-      value={appState.project?.overlapBehavior}
+      value={overlapBehavior}
       onchange={(e) =>
         appState.store.setOverlapBehavior(e.currentTarget.value as OverlapBehavior)}
     >
