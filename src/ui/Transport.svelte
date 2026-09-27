@@ -3,6 +3,31 @@
   import { beatAtTime } from '../core/time';
   import { SNAP_MODES, type SnapMode } from '../core/time';
   import type { OverlapBehavior } from '../core/schema';
+  import { runExport, ExportCancelled } from '../exporters/export-runner';
+  import { PngSequenceSink } from '../exporters/png-sequence';
+  import { browserPlatform } from '../platform/browser';
+
+  async function exportPng(): Promise<void> {
+    if (appState.exportProgress !== null) return;
+    const ctrl = new AbortController();
+    appState.exportAbort = ctrl;
+    appState.exportProgress = 0;
+    try {
+      const blob = await runExport(appState.renderer, appState.store.project, {
+        sink: new PngSequenceSink(),
+        onProgress: (f) => {
+          appState.exportProgress = f;
+        },
+        signal: ctrl.signal,
+      });
+      await browserPlatform.download(blob as Blob, `${appState.store.project.name || 'artmatic'}-png.zip`);
+    } catch (e) {
+      if (!(e instanceof ExportCancelled)) throw e;
+    } finally {
+      appState.exportProgress = null;
+      appState.exportAbort = null;
+    }
+  }
 
   const grid = $derived.by(() => {
     void appState.version;
@@ -103,6 +128,17 @@
     <i class="fa-solid fa-magnifying-glass"></i>
     <input type="range" min="6" max="96" step="1" bind:value={appState.pxPerBeat} />
   </label>
+
+  {#if appState.exportProgress !== null}
+    <span class="exporting">
+      导出中 {Math.round(appState.exportProgress * 100)}%
+      <button onclick={() => appState.exportAbort?.abort()}>取消</button>
+    </span>
+  {:else}
+    <button data-testid="export-png" class="primary" title="确定性逐帧导出 PNG 序列 (zip)" onclick={() => void exportPng()}>
+      <i class="fa-solid fa-download"></i> 导出 PNG
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -137,5 +173,12 @@
   }
   .zoom input {
     width: 110px;
+  }
+  .exporting {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--accent);
+    font-family: var(--font-mono);
   }
 </style>

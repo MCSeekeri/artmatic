@@ -278,7 +278,7 @@ export class ProjectStore {
 
   setDuration(sec: number): void {
     this.commit('修改时长', (p) => {
-      p.duration = Math.max(1, sec);
+      p.duration = Math.max(0.1, sec);
     });
   }
 

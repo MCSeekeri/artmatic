@@ -6,6 +6,9 @@ import { createDemoProject, DEMO_ASSET_ID } from './core/demo-project';
 import { renderDemoAudio } from './audio/demo-audio';
 import { computeWaveform } from './audio/decode';
 import { appState } from './ui/app-state.svelte';
+import { runExport } from './exporters/export-runner';
+import { PngSequenceSink } from './exporters/png-sequence';
+import { unzipSync } from 'fflate';
 
 /* 装配顺序：store 先于 mount（组件挂载即读工程），渲染服务在
    Preview.onMount → appState.attachPreview 里随 canvas 惰性创建。 */
@@ -32,6 +35,15 @@ appState.renderer.renderFrame(store.project, appState.playT);
   readPixels: () => {
     const { data, w, h } = appState.renderer.readPixels();
     return { data: Array.from(data), w, h };
+  },
+  /** E2E 专用：跑一遍真实导出管线并把 zip 解开——大像素数据不出 page。 */
+  exportFrames: async () => {
+    const blob = (await runExport(appState.renderer, store.project, {
+      sink: new PngSequenceSink(),
+    })) as Blob;
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const files = unzipSync(buf);
+    return Object.fromEntries(Object.entries(files).map(([k, v]) => [k, Array.from(v)]));
   },
 };
 

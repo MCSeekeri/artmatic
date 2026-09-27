@@ -29,6 +29,8 @@ class AppState {
   beatAnchorNewKeys = $state(true);
   /** 导出进行中的进度（null = 没在导出）。 */
   exportProgress = $state<number | null>(null);
+  /** 导出的取消器（非响应式）。 */
+  exportAbort: AbortController | null = null;
 
   /* 服务（非响应式，装配见 init / attachPreview） */
   store!: ProjectStore;
