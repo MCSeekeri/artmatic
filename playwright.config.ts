@@ -14,10 +14,7 @@ export default defineConfig({
     headless: true,
     baseURL: 'http://localhost:4173',
   },
-  webServer: {
-    command: 'npm run preview',
-    port: 4173,
-    reuseExistingServer: true,
-    timeout: 60_000,
-  },
+  // 注意：不用 webServer 配置。它经 shell spawn 长驻进程，在某些沙箱里
+  // 整个进程树会收到 SIGTERM（test runner 零输出暴毙）。统一走
+  // `npm run test:e2e`（scripts/e2e.mjs），由它负责 build + preview。
 });
