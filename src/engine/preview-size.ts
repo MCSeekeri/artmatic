@@ -1,0 +1,48 @@
+/**
+ * preview-size.ts — 预览分辨率与输出分辨率的解耦。
+ *
+ * 移植自 openmosh gl/preview-size.ts（MIT，见 CREDITS.md）。
+ * 预览画布按输出宽高比适配到显示区域（设备像素），永不超过输出尺寸；
+ * 导出时渲染器切到真实输出分辨率，导完切回。
+ *
+ * UNMEASURED_MAX_PIXELS：显示尺寸还量不到时（元素隐藏也算 0），
+ * 绝不能退回输出分辨率——4K 输出会在此刻按 8 兆像素分配画布、
+ * ping-pong、present 和每个反馈缓冲，这是全应用最大的一笔 GPU 分配，
+ * 偏偏发生在最不了解需求的时刻。
+ */
+
+export interface PreviewSize {
+  width: number;
+  height: number;
+}
+
+const UNMEASURED_MAX_PIXELS = 1280 * 720;
+
+export function fitPreviewSize(
+  outputWidth: number | undefined,
+  outputHeight: number | undefined,
+  displayWidth: number,
+  displayHeight: number,
+): PreviewSize | null {
+  if (!outputWidth || !outputHeight || outputWidth <= 0 || outputHeight <= 0) {
+    return null;
+  }
+  const scale =
+    displayWidth <= 0 || displayHeight <= 0
+      ? Math.sqrt(UNMEASURED_MAX_PIXELS / (outputWidth * outputHeight))
+      : Math.min(displayWidth / outputWidth, displayHeight / outputHeight);
+  const k = Math.min(1, scale);
+  return {
+    width: Math.max(2, Math.round(outputWidth * k)),
+    height: Math.max(2, Math.round(outputHeight * k)),
+  };
+}
+
+export function measureDisplaySize(el: Element): { width: number; height: number } {
+  const r = el.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  return {
+    width: Math.round(r.width * dpr),
+    height: Math.round(r.height * dpr),
+  };
+}
