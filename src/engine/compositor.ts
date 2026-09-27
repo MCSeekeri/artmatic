@@ -20,7 +20,9 @@ import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
 import { buildStack, type ResolvedSource } from './stack';
 import type { Kit, Program, Target } from './kit';
+import type { BeatGrid } from '../core/time';
 import type {
+  EffectClip,
   EffectInstance,
   Project,
   SourceClip,
@@ -41,6 +43,9 @@ export interface EffectCtx {
   w: number;
   h: number;
   compositor: Compositor;
+  /** 特效片段本体（曲线的宿主）：曲线键 `${instanceId}.${paramKey}`。 */
+  clip: EffectClip;
+  grid: BeatGrid;
 }
 
 /** 特效执行器：B8 由 effects/registry 装配；之前特效片段是 no-op。 */
@@ -99,7 +104,6 @@ export class Compositor {
     acc.bind();
     this.kit.clear();
 
-    const ctx: EffectCtx = { t, frame, w, h, compositor: this };
     for (const op of ops) {
       if (op.type === 'source') {
         this.drawSource(op.source, acc, buf, w, h, t, frame);
@@ -108,6 +112,7 @@ export class Compositor {
         acc = buf;
         buf = tmp;
       } else {
+        const ctx: EffectCtx = { t, frame, w, h, compositor: this, clip: op.clip, grid: project.beatGrid };
         for (const inst of op.clip.chain) {
           if (!inst.enabled) continue;
           this.runEffect(inst, acc, buf, ctx);

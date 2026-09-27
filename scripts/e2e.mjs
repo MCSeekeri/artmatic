@@ -31,7 +31,8 @@ async function waitForPort(url, timeoutMs = 30_000) {
   throw new Error(`等待 ${url} 超时`);
 }
 
-// 已有 preview 在跑就直接复用（本地反复调试用）。
+// 已有 preview 在跑就复用（省一次起服务的时间），但**构建永远要做**——
+// 否则复用的是一个给旧代码服务的服务器（实测踩过：测试对着旧 dist 跑）。
 let reuse = false;
 try {
   const r = await fetch(`http://localhost:${PORT}/`);
@@ -40,9 +41,9 @@ try {
 
 let server = null;
 try {
+  console.log('[e2e] vite build …');
+  await run(node, ['node_modules/vite/bin/vite.js', 'build']);
   if (!reuse) {
-    console.log('[e2e] vite build …');
-    await run(node, ['node_modules/vite/bin/vite.js', 'build']);
     console.log('[e2e] 启动 vite preview …');
     server = spawn(node, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'ignore' });
     await waitForPort(`http://localhost:${PORT}/`);

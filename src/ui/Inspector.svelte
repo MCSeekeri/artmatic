@@ -1,10 +1,78 @@
 <script lang="ts">
   import { appState } from './app-state.svelte';
   import KeyableField from './KeyableField.svelte';
-  import { BLEND_MODES, type AnyClip, type BlendMode, type SourceClip } from '../core/schema';
+  import { BLEND_MODES, newId, type AnyClip, type BlendMode, type EffectInstance, type SourceClip } from '../core/schema';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { getGenerator } from '../algos/registry';
+  import { defaultEffectValues, getEffect, listEffects } from '../effects/registry';
   import type { RangeParam } from '../effects/types';
+
+  const effectsList = listEffects();
+  let addChoice = $state(effectsList[0]?.id ?? '');
+
+  function addEffectInstance(clip: AnyClip): void {
+    if (!addChoice) return;
+    upd(clip, '添加特效', (c) => {
+      if (c.kind !== 'effect') return;
+      c.chain.push({
+        instanceId: newId(),
+        defId: addChoice,
+        enabled: true,
+        values: defaultEffectValues(addChoice),
+      });
+    });
+  }
+
+  function removeInstance(clip: AnyClip, instanceId: string): void {
+    upd(clip, '删除特效', (c) => {
+      if (c.kind === 'effect') c.chain = c.chain.filter((i) => i.instanceId !== instanceId);
+    });
+  }
+
+  function moveInstance(clip: AnyClip, instanceId: string, dir: -1 | 1): void {
+    upd(clip, '调整特效顺序', (c) => {
+      if (c.kind !== 'effect') return;
+      const idx = c.chain.findIndex((i) => i.instanceId === instanceId);
+      const to = idx + dir;
+      if (idx < 0 || to < 0 || to >= c.chain.length) return;
+      const [it] = c.chain.splice(idx, 1);
+      c.chain.splice(to, 0, it!);
+    });
+  }
+
+  function setEffectParam(clip: AnyClip, inst: EffectInstance, key: string, v: number | string): void {
+    upd(clip, '修改特效参数', (c) => {
+      if (c.kind !== 'effect') return;
+      const it = c.chain.find((i) => i.instanceId === inst.instanceId);
+      if (it) it.values[key] = v;
+    });
+  }
+
+  function effectParamProps(clip: AnyClip, inst: EffectInstance, p: RangeParam) {
+    const curveKey = `${inst.instanceId}.${p.key}`;
+    return {
+      base: Number(inst.values[p.key] ?? p.defaultValue),
+      curve: clip.curves[curveKey],
+      clipStart: clip.start,
+      onBase: (v: number) => setEffectParam(clip, inst, p.key, v),
+      onKey: (v: number, anchor: { beat: number } | null) =>
+        upd(clip, '打关键帧', (c) => upsertCurveKey(c, curveKey, v, appState.playT, anchor, appState.project.beatGrid)),
+      onRemoveKey: (i: number) =>
+        upd(clip, '删除关键帧', (c) => {
+          const cv = c.curves[curveKey];
+          if (cv) cv.keys = cv.keys.filter((_, k) => k !== i);
+        }),
+      onAnchorChange: (anchor: { beat: number } | null) =>
+        upd(clip, '切换锚到拍', (c) => {
+          const cv = c.curves[curveKey];
+          if (cv) cv.beatAnchor = anchor;
+        }),
+      onClearCurve: () =>
+        upd(clip, '清除曲线', (c) => {
+          delete c.curves[curveKey];
+        }),
+    };
+  }
 
   /**
    * 可关键帧的算法参数：realtime 生成器的全部 range 参数 +
@@ -248,21 +316,74 @@
         <p class="note">图片素材：{appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId}</p>
       {/if}
     {:else if clip.kind === 'effect'}
-      <p class="note">特效链（B8 接入）：{clip.chain.length} 个实例</p>
-      {#each clip.chain as inst (inst.instanceId)}
-        <div class="line">
-          <input
-            type="checkbox"
-            checked={inst.enabled}
-            onchange={(e) =>
-              upd(clip, '切换特效', (c) => {
-                if (c.kind === 'effect') {
-                  const it = c.chain.find((x) => x.instanceId === inst.instanceId);
-                  if (it) it.enabled = e.currentTarget.checked;
-                }
-              })}
-          />
-          <span>{inst.defId}</span>
+      <div class="line">
+        <select bind:value={addChoice} title="选择要添加的特效">
+          {#each effectsList as e (e.id)}
+            <option value={e.id}>{e.name}</option>
+          {/each}
+        </select>
+        <button data-testid="add-effect-instance" onclick={() => addEffectInstance(clip)}>
+          <i class="fa-solid fa-plus"></i> 添加
+        </button>
+      </div>
+      {#if clip.chain.length === 0}
+        <p class="note">空链：从上面添加特效。特效只作用于 z 序在它之下的画面（adjustment layer）。</p>
+      {/if}
+      {#each clip.chain as inst, idx (inst.instanceId)}
+        {@const entry = getEffect(inst.defId)}
+        <div class="fx">
+          <div class="fx-head">
+            <input
+              type="checkbox"
+              checked={inst.enabled}
+              title="启用/禁用"
+              onchange={(e) =>
+                upd(clip, '切换特效', (c) => {
+                  if (c.kind === 'effect') {
+                    const it = c.chain.find((x) => x.instanceId === inst.instanceId);
+                    if (it) it.enabled = e.currentTarget.checked;
+                  }
+                })}
+            />
+            <span class="fx-name">{entry?.name ?? inst.defId}</span>
+            <button title="上移" disabled={idx === 0} onclick={() => moveInstance(clip, inst.instanceId, -1)}>
+              <i class="fa-solid fa-arrow-up"></i>
+            </button>
+            <button title="下移" disabled={idx === clip.chain.length - 1} onclick={() => moveInstance(clip, inst.instanceId, 1)}>
+              <i class="fa-solid fa-arrow-down"></i>
+            </button>
+            <button title="删除" onclick={() => removeInstance(clip, inst.instanceId)}>
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          {#if entry}
+            {#each entry.params as p (p.key)}
+              {#if p.type === 'range'}
+                <KeyableField label={p.label} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
+              {:else if p.type === 'select'}
+                <label class="line">
+                  {p.label}
+                  <select
+                    value={inst.values[p.key] ?? p.defaultValue}
+                    onchange={(e) => setEffectParam(clip, inst, p.key, e.currentTarget.value)}
+                  >
+                    {#each p.options as o (o.value)}
+                      <option value={o.value}>{o.label}</option>
+                    {/each}
+                  </select>
+                </label>
+              {:else if p.type === 'color'}
+                <label class="line">
+                  {p.label}
+                  <input
+                    type="color"
+                    value={String(inst.values[p.key] ?? p.defaultValue)}
+                    oninput={(e) => setEffectParam(clip, inst, p.key, e.currentTarget.value)}
+                  />
+                </label>
+              {/if}
+            {/each}
+          {/if}
         </div>
       {/each}
     {:else}
@@ -361,6 +482,30 @@
   }
   .danger {
     color: var(--danger);
+  }
+  .fx {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    background: var(--bg-2);
+  }
+  .fx-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .fx-name {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-0);
+  }
+  .fx-head button {
+    padding: 1px 5px;
+    font-size: 9px;
+    background: transparent;
+    border-color: transparent;
   }
   .kf {
     margin-bottom: 4px;

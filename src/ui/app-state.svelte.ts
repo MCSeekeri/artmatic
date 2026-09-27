@@ -15,6 +15,7 @@ import { SourceManager } from '../engine/sources';
 import { AudioPlayer } from '../audio/player';
 import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
+import { createEffectRunner } from '../effects/runner';
 import type { WaveformData } from '../audio/decode';
 import { snapTime, type SnapMode } from '../core/time';
 
@@ -71,6 +72,7 @@ class AppState {
         ),
       );
       this.renderer.setResolver(this.sources.resolve);
+      this.renderer.setEffectRunner(createEffectRunner(this.renderer.kit, () => this.store.project.seed));
       this.player = new AudioPlayer();
       this.servicesReady = true;
     }
