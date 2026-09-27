@@ -1,53 +1,36 @@
 import { mount } from 'svelte';
 import App from './ui/App.svelte';
 import './app.css';
-import { Renderer } from './engine/renderer';
-import { SourceManager } from './engine/sources';
-import { defaultProject, newId, type Project, type SourceClip } from './core/schema';
+import { ProjectStore } from './core/project-store';
+import { createDemoProject, DEMO_ASSET_ID } from './core/demo-project';
+import { renderDemoAudio } from './audio/demo-audio';
+import { computeWaveform } from './audio/decode';
+import { appState } from './ui/app-state.svelte';
+
+/* 装配顺序：store 先于 mount（组件挂载即读工程），渲染服务在
+   Preview.onMount → appState.attachPreview 里随 canvas 惰性创建。 */
+const store = new ProjectStore(createDemoProject());
+appState.init(store);
 
 const app = mount(App, { target: document.getElementById('app')! });
 
-/* B2 最小渲染验证：两层 solid 合成一帧。后续批次会换成完整应用装配。 */
-const canvas = document.getElementById('gl') as HTMLCanvasElement;
-const host = document.getElementById('preview-host')!;
-const renderer = new Renderer(canvas, () => null, () => {});
-const sources = new SourceManager(renderer.kit);
-renderer.setResolver(sources.resolve);
-renderer.attachDisplay(host);
+// 演示音频：程序生成（无外部文件依赖），解码/波形都在后台完成。
+const demoBuffer = await renderDemoAudio();
+appState.player.register(DEMO_ASSET_ID, demoBuffer);
+appState.waveforms = {
+  ...appState.waveforms,
+  [DEMO_ASSET_ID]: await computeWaveform(demoBuffer),
+};
+appState.renderer.renderFrame(store.project, appState.playT);
 
-function solid(id: string, color: string, blend: SourceClip['blend'], opacity: number): SourceClip {
-  return {
-    kind: 'source',
-    id,
-    start: 0,
-    end: 4,
-    label: color,
-    fadeSec: 0,
-    curves: {},
-    source: { type: 'solid', color },
-    blend,
-    opacity,
-    transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
-    fit: 'stretch',
-  };
-}
-
-const project: Project = defaultProject('b2-smoke');
-project.duration = 4;
-project.tracks = [
-  { kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [solid('a', '#123a6e', 'normal', 1)] },
-  { kind: 'visual', id: newId(), name: 'V2', enabled: true, clips: [solid('b', '#ff3b30', 'add', 0.6)] },
-];
-
-renderer.renderFrame(project, 0.5);
-
-// 调试 / E2E 钩子：同一工程同一 t 反复 renderFrame 必须逐像素一致。
+// 调试 / E2E 钩子。
 (window as unknown as Record<string, unknown>).__artmatic = {
-  renderer,
-  project,
-  renderFrame: (t: number) => renderer.renderFrame(project, t),
+  renderer: appState.renderer,
+  store,
+  appState,
+  renderFrame: (t: number) => appState.renderer.renderFrame(store.project, t),
   readPixels: () => {
-    const { data, w, h } = renderer.readPixels();
+    const { data, w, h } = appState.renderer.readPixels();
     return { data: Array.from(data), w, h };
   },
 };

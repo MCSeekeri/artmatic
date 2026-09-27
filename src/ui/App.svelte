@@ -1,15 +1,25 @@
 <script lang="ts">
+  import Transport from './Transport.svelte';
+  import Preview from './Preview.svelte';
+  import Inspector from './Inspector.svelte';
+  import Timeline from '../timeline/Timeline.svelte';
   import logoSmall from '../assets/brand/logo-small-with-fonttype.svg';
 </script>
 
 <div class="shell">
   <header>
-    <img src={logoSmall} alt="Artmatic" height="24" />
-    <span class="hint">B2 渲染管线验证</span>
+    <img src={logoSmall} alt="Artmatic" height="22" />
+    <Transport />
   </header>
-  <div id="preview-host">
-    <canvas id="gl"></canvas>
-  </div>
+  <main>
+    <Preview />
+    <aside>
+      <Inspector />
+    </aside>
+  </main>
+  <footer>
+    <Timeline />
+  </footer>
 </div>
 
 <style>
@@ -21,24 +31,27 @@
   header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 12px;
+    gap: 16px;
+    padding: 6px 12px;
     background: var(--bg-1);
     border-bottom: 1px solid var(--line);
   }
-  .hint {
-    color: var(--text-1);
-  }
-  #preview-host {
+  main {
     flex: 1;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
+    min-height: 0;
   }
-  #gl {
-    max-width: 100%;
-    max-height: 100%;
-    background: #000;
+  aside {
+    width: 300px;
+    flex-shrink: 0;
+    background: var(--bg-1);
+    border-left: 1px solid var(--line);
+    overflow-y: auto;
+  }
+  footer {
+    height: 240px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--line);
+    background: var(--bg-1);
   }
 </style>
