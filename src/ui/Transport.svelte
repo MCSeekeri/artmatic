@@ -37,6 +37,11 @@
     void appState.version;
     return appState.store?.project.overlapBehavior;
   });
+  /** 工程时长不是素材长度的函数，是一个可以随便改的独立参数。 */
+  const duration = $derived.by(() => {
+    void appState.version;
+    return appState.store?.project.duration ?? 0;
+  });
   const playT = $derived(appState.playT);
   const beatPos = $derived(grid ? beatAtTime(playT, grid) : 0);
   const barBeat = $derived.by(() => {
@@ -111,6 +116,26 @@
     </select>
   </label>
 
+  <label title="工程时长（秒）：决定导出帧数范围。与素材长度无关，可以随便改；片段被拖出末尾时会自动把工程撑长">
+    时长
+    <input
+      data-testid="duration-input"
+      type="number"
+      min="0.1"
+      step="0.5"
+      value={+duration.toFixed(2)}
+      onchange={(e) => appState.store.setDuration(+e.currentTarget.value || 0.1)}
+    />
+    <button
+      data-testid="fit-duration"
+      class="mini"
+      title="时长收到内容末尾"
+      onclick={() => appState.store.fitDurationToContent()}
+    >
+      <i class="fa-solid fa-compress"></i>
+    </button>
+  </label>
+
   <label title="同轨重叠策略（可配置：挤开邻居 / 拒绝落点 / 吃掉邻居重叠部分）">
     重叠
     <select
@@ -128,6 +153,10 @@
     <i class="fa-solid fa-magnifying-glass"></i>
     <input type="range" min="6" max="96" step="1" bind:value={appState.pxPerBeat} />
   </label>
+
+  {#if appState.notice}
+    <span class="notice" data-testid="notice"><i class="fa-solid fa-circle-info"></i> {appState.notice}</span>
+  {/if}
 
   {#if appState.exportProgress !== null}
     <span class="exporting">
@@ -171,6 +200,15 @@
   input[type='number'] {
     width: 64px;
   }
+  .mini {
+    padding: 1px 5px;
+    font-size: 10px;
+    background: transparent;
+    border-color: transparent;
+  }
+  .mini:hover {
+    background: var(--line);
+  }
   .zoom input {
     width: 110px;
   }
@@ -180,5 +218,13 @@
     gap: 8px;
     color: var(--accent);
     font-family: var(--font-mono);
+  }
+  .notice {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--danger);
   }
 </style>

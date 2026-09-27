@@ -27,6 +27,11 @@ class AppState {
   snap = $state<SnapMode>('beat');
   pxPerBeat = $state(28);
   selectedClipId = $state<string | null>(null);
+  /**
+   * 拖拽中的落点是否会被 reject 策略拒收（给被拖片段加「不可落」样式）。
+   * 只读，由 timeline/drag.ts 的 onHint 写入——拖动结束时必须归 false。
+   */
+  dragIllegal = $state(false);
   waveforms = $state<Record<string, WaveformData>>({});
   /** 新关键帧默认锚到拍（Inspector 的 ◆ 按钮读这个）。 */
   beatAnchorNewKeys = $state(true);
@@ -34,6 +39,9 @@ class AppState {
   exportProgress = $state<number | null>(null);
   /** 导出的取消器（非响应式）。 */
   exportAbort: AbortController | null = null;
+  /** 一次性操作提示（当前只服务 Alt+↑↓：被策略挡住时要说明原因，不然就是静默失灵）。 */
+  notice = $state<string | null>(null);
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
   /* 服务（非响应式，装配见 init / attachPreview） */
   store!: ProjectStore;
@@ -83,6 +91,16 @@ class AppState {
 
   get project() {
     return this.store.project;
+  }
+
+  /** 显示一条短提示（自动消失）。 */
+  flash(text: string): void {
+    this.notice = text;
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => {
+      this.notice = null;
+      this.noticeTimer = null;
+    }, 2600);
   }
 
   seek(t: number, opts: { snap?: boolean } = {}): void {

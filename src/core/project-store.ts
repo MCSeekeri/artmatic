@@ -22,8 +22,10 @@ import {
 import {
   MIN_CLIP_LENGTH,
   freeRangeAt,
-  moveSpan,
+  placeSpan,
+  replaceSpan,
   resizeSpan,
+  sortSpans,
   spanAt,
   splitSpan,
   type Span,
@@ -110,6 +112,19 @@ export class ProjectStore {
     return this.project.tracks.find((t) => t.id === id) ?? null;
   }
 
+  /**
+   * 该轨道能不能装这个片段：音频片段只进音频轨，画面/特效片段只进视觉轨。
+   * 跨轨拖拽与 Alt+↑↓ 共用这一条判据。
+   */
+  canHost(track: Track, clip: AnyClip): boolean {
+    return track.kind === 'audio' ? clip.kind === 'audio' : clip.kind !== 'audio';
+  }
+
+  /** 轨道在工程里的下标（跨轨拖动判方向用）。 */
+  trackIndex(id: string): number {
+    return this.project.tracks.findIndex((t) => t.id === id);
+  }
+
   findClip(clipId: string): { track: Track; clip: AnyClip } | null {
     for (const track of this.project.tracks) {
       const clip = (track.clips as AnyClip[]).find((c) => c.id === clipId);
@@ -147,13 +162,15 @@ export class ProjectStore {
       if (!track) return;
       // 落点被占时先尝试裁进所在空档；起点本身压在片段上时顺延到它的
       // 末尾再找空档（否则「新建」在占用区静默失败，用户会以为按钮坏了）。
+      // 注意上界传 Infinity：工程时长不是片段的天花板（见 setDuration 注释），
+      // 新片段超出当前时长就把工程撑长。
       let start = clip.start;
-      let free = freeRangeAt(track.clips as Span[], start, p.duration);
+      let free = freeRangeAt(track.clips as Span[], start, Number.POSITIVE_INFINITY);
       if (!free) {
         const covering = spanAt(track.clips as Span[], start);
         if (covering) {
           start = covering.end + 1e-6;
-          free = freeRangeAt(track.clips, start, p.duration);
+          free = freeRangeAt(track.clips, start, Number.POSITIVE_INFINITY);
         }
       }
       if (!free) return;
@@ -162,6 +179,7 @@ export class ProjectStore {
       if (e - s < MIN_CLIP_LENGTH) return;
       (track.clips as AnyClip[]).push({ ...clip, start: s, end: e });
       track.clips.sort((a, b) => a.start - b.start);
+      if (e > p.duration) p.duration = e;
     });
   }
 
@@ -175,36 +193,159 @@ export class ProjectStore {
     });
   }
 
+  /* ------------------------------------------------ 手势：实时 vs 结算 */
+
   /**
-   * 移动片段（通常在手势事务里反复调用）。
-   * trim 策略可能让邻居裂出 `#r` 后缀的临时 id——这里统一换成真正的 newId。
+   * 拖拽期间的实时移动：**不套用重叠策略**，允许视觉重叠。
+   *
+   * 为什么分两段（见 core/clips.ts 的时序约定）：trim/push 在 pointermove 里
+   * 就生效的话，拖过去的瞬间邻居就被吃掉了，拖回来也恢复不了。
+   * 策略统一由 settlePlacement 在松手时结算。
+   *
+   * 跨轨也走这里：目标轨不兼容（音频片段拖到视觉轨等）时原地不动。
+   * 拖出工程末尾会把时长撑长——时长只增不减，缩短走 setDuration。
    */
-  moveClip(trackId: string, clipId: string, newStart: number): void {
-    const track = this.track(trackId);
-    if (!track) return;
-    const moved = moveSpan(
-      track.clips as Span[],
-      clipId,
-      newStart,
-      this.project.duration,
-      this.project.overlapBehavior,
-    ) as AnyClip[];
-    for (const c of moved) {
-      if (c.id.endsWith('#r')) c.id = newId();
+  liveMoveClip(toTrackId: string, clipId: string, newStart: number): void {
+    const found = this.findClip(clipId);
+    const target = this.track(toTrackId);
+    if (!found || !target || !this.canHost(target, found.clip)) return;
+    const len = found.clip.end - found.clip.start;
+    const start = Math.max(0, newStart);
+    const end = start + len;
+    if (end > this.project.duration) this.project.duration = end;
+    const moved = { ...found.clip, start, end };
+    if (found.track.id === target.id) {
+      target.clips = replaceSpan(target.clips as AnyClip[], moved) as typeof target.clips;
+      return;
     }
-    track.clips = moved as typeof track.clips;
+    found.track.clips = (found.track.clips as AnyClip[]).filter((c) => c.id !== clipId) as typeof found.track.clips;
+    target.clips = sortSpans([...(target.clips as AnyClip[]), moved]) as typeof target.clips;
   }
 
-  resizeClip(trackId: string, clipId: string, edge: 'start' | 'end', time: number): void {
+  /** 拖拽期间的实时缩放：只在 0 / 末尾 / MIN_CLIP_LENGTH 上钳，不碰邻居。 */
+  liveResizeClip(trackId: string, clipId: string, edge: 'start' | 'end', time: number): void {
     const track = this.track(trackId);
     if (!track) return;
-    track.clips = resizeSpan(
+    const clip = (track.clips as AnyClip[]).find((c) => c.id === clipId);
+    if (!clip) return;
+    if (edge === 'start') {
+      clip.start = Math.max(0, Math.min(time, clip.end - MIN_CLIP_LENGTH));
+      return;
+    }
+    const end = Math.max(time, clip.start + MIN_CLIP_LENGTH);
+    if (end > this.project.duration) this.project.duration = end;
+    clip.end = end;
+  }
+
+  /**
+   * 松手结算：把片段按重叠策略落到 targetTrack 的 newStart。
+   * 返回 false 表示落点被策略拒绝（调用方此时应整次手势作废）。
+   */
+  settlePlacement(targetTrackId: string, clipId: string, newStart: number): boolean {
+    const found = this.findClip(clipId);
+    const target = this.track(targetTrackId);
+    if (!found || !target || !this.canHost(target, found.clip)) return false;
+    const len = found.clip.end - found.clip.start;
+    const start = Math.max(0, Math.min(newStart, Math.max(0, this.project.duration - len)));
+    const cand = { ...found.clip, start, end: start + len };
+    // placeSpan 自己会剔掉同 id 的旧几何，所以实时预览造成的重叠不影响结算
+    const lane = placeSpan(target.clips as Span[], cand as Span, this.project.duration, this.project.overlapBehavior);
+    if (!lane) return false;
+    this.writeLane(target, lane as AnyClip[]);
+    if (found.track.id !== target.id) {
+      found.track.clips = (found.track.clips as AnyClip[]).filter((c) => c.id !== clipId) as typeof found.track.clips;
+    }
+    return true;
+  }
+
+  /** 松手结算：按重叠策略定下这条边。缩放没有「拒绝」，最差也是钳制。 */
+  settleResize(trackId: string, clipId: string, edge: 'start' | 'end', time: number): boolean {
+    const track = this.track(trackId);
+    if (!track) return false;
+    if (!(track.clips as AnyClip[]).some((c) => c.id === clipId)) return false;
+    const lane = resizeSpan(
       track.clips as Span[],
       clipId,
       edge,
       time,
       this.project.duration,
-    ) as typeof track.clips;
+      this.project.overlapBehavior,
+    ) as AnyClip[];
+    this.writeLane(track, lane);
+    return true;
+  }
+
+  /**
+   * 实时预览的落点合法性：给被拖片段加「不可落」样式用。
+   * 只对 reject 有信息量——push/trim 总能把落点解决掉。
+   */
+  placementAccepted(targetTrackId: string, clipId: string, newStart: number): boolean {
+    const found = this.findClip(clipId);
+    const target = this.track(targetTrackId);
+    if (!found || !target || !this.canHost(target, found.clip)) return false;
+    const len = found.clip.end - found.clip.start;
+    const start = Math.max(0, Math.min(newStart, Math.max(0, this.project.duration - len)));
+    const cand = { ...found.clip, start, end: start + len };
+    return placeSpan(target.clips as Span[], cand as Span, this.project.duration, this.project.overlapBehavior) !== null;
+  }
+
+  /**
+   * 把几何层产出的 lane 写回轨道：`#r` 后缀是 trim 裂段的临时 id（见 clips.ts），
+   * 在这里换成真正的 id，免得同一个片段被拆出两半后 id 撞车。
+   */
+  private writeLane(track: Track, lane: AnyClip[]): void {
+    track.clips = lane.map((c) => (c.id.endsWith('#r') ? { ...c, id: newId() } : c)) as typeof track.clips;
+  }
+
+  /* ------------------------------------------------------------ 跨轨 */
+
+  /**
+   * 上/下移一轨（Alt+↑↓）：跳过装不下的轨道，起点保持不变。
+   * 与拖拽共用 canHost 判据——两处都不能各写一套兼容规则。
+   *
+   * 返回值刻意区分「没轨可去」与「目标轨被占」，因为这两件事对用户
+   * 意味完全不同的下一步动作（前者无解，后者改策略或先挪开邻居）。
+   */
+  shiftClipTrack(clipId: string, dir: -1 | 1): 'ok' | 'no-track' | 'blocked' {
+    const found = this.findClip(clipId);
+    if (!found) return 'no-track';
+    const from = this.project.tracks.indexOf(found.track);
+    let j = from + dir;
+    while (j >= 0 && j < this.project.tracks.length) {
+      if (this.canHost(this.project.tracks[j]!, found.clip)) break;
+      j += dir;
+    }
+    if (j < 0 || j >= this.project.tracks.length) return 'no-track';
+    const target = this.project.tracks[j]!;
+    const start = found.clip.start;
+    let moved = false;
+    this.commit(dir < 0 ? '上移一轨' : '下移一轨', () => {
+      // settlePlacement 被拒时不会改动任何状态，片段留在原轨
+      moved = this.settlePlacement(target.id, clipId, start);
+    });
+    return moved ? 'ok' : 'blocked';
+  }
+
+  /* ------------------------------------------------------------ 时长 */
+
+  /**
+   * 工程时长（秒）**不是**由素材长度决定的：它只约束画布导出的帧数范围，
+   * 片段可以把它撑长（addClip / liveMoveClip / liveResizeClip），
+   * 也可以由用户直接改小（setDuration）。音频长度只是新片段的默认长度。
+   */
+  setDuration(sec: number): void {
+    this.commit('修改时长', (p) => {
+      p.duration = Math.max(0.1, sec);
+    });
+  }
+
+  /** 时长收齐到内容末尾（只收不放：内容为空时保留 1 秒）。 */
+  fitDurationToContent(): void {
+    this.commit('时长贴合内容', (p) => {
+      let end = 0;
+      for (const t of p.tracks) for (const c of t.clips) end = Math.max(end, c.end);
+      p.duration = Math.max(0.1, end);
+    });
   }
 
   /**
@@ -273,12 +414,6 @@ export class ProjectStore {
   setBeatGrid(grid: Partial<BeatGrid>): void {
     this.commit('修改拍网格', (p) => {
       Object.assign(p.beatGrid, grid);
-    });
-  }
-
-  setDuration(sec: number): void {
-    this.commit('修改时长', (p) => {
-      p.duration = Math.max(0.1, sec);
     });
   }
 

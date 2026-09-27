@@ -291,7 +291,26 @@ function buildStack(project: Project, t: number): Stack {
 **EffectClip 的语义**：只作用于**z 序在它之下的所有 SourceClip 的合成结果**。
 → "调色放最顶层" = 作用于整幅画面；"故障放在两层之间" = 只坏一层。这是 AE 的 adjustment layer 语义。
 
-**同轨不重叠**，需要叠就加轨道。拖动策略（2026-09-27 用户拍板）：**可配置项** `overlapBehavior: 'push' | 'reject' | 'trim'`（挤开邻居 / 拒绝落点 / 吃掉邻居重叠部分），默认 `'reject'`。注意 reject 的语义是「落点非法就整次不动」（落点碰撞检测），**不是** openmosh `moveClip` 的「钳在当前空档里」——后者永远拖不过邻居，与本工具的 NLE 直觉不符。缩放（resize）永远只做钳制，不触发 push/trim 级联。
+**同轨不重叠**，需要叠就加轨道。拖动策略（2026-09-27 用户拍板）：**可配置项** `overlapBehavior: 'push' | 'reject' | 'trim'`（挤开邻居 / 拒绝落点 / 吃掉邻居重叠部分），默认 `'reject'`。注意 reject 的语义是「落点非法就整次不动」（落点碰撞检测），**不是** openmosh `moveClip` 的「钳在当前空档里」——后者永远拖不过邻居，与本工具的 NLE 直觉不符。
+
+**策略结算的时序（2026-09-27 用户反馈后定死，改之前先读这段）**：
+
+| 阶段 | 做什么 |
+|---|---|
+| `pointermove` | 只做**自由移动**（`liveMoveClip` / `liveResizeClip`）：被拖片段跟着鼠标走、可以压在邻居身上、跨轨也在这时实时生效。**策略一律不动。** |
+| `pointerup` | 调 `settlePlacement` / `settleResize` **结算一次**：push 挤开、trim 吃掉、reject 拒绝（非法则 `cancelTx` 整次手势作废，回到起点） |
+
+理由：策略如果在 pointermove 里生效，trim 会在拖过去的瞬间毁掉邻居——拖回来也回不来。拖动期间允许视觉重叠，但落点会被 reject 拒收时给红框预告（`appState.dragIllegal`），免得「松手弹回去」显得莫名其妙。
+
+- **例外**：`resize` + `reject` 是单边钳制、非破坏性，仍然实时生效（拖不过去）。
+- **resize 遵守全部三种策略**（`resizeSpan` 有 `behavior` 参数）。旧约定「缩放永远只做钳制」已作废：用户明确反馈三种策略在缩放时全退化成了拒绝落点。push 左边界往左推、右边界往右推，级联顶到工程两端时退回钳制（缩放不该改动被拖片段自己不动的另一条边）。
+- 几何层的入口统一是 `placeSpan(干净 lane, 候选几何片段, duration, behavior)`。**lane 必须是干净的**：拖拽期间被拖片段已经压在邻居身上，把脏 lane 直接丢进策略函数会让 push 的扫掠把锚点自己推走。
+
+**工程时长与素材长度无关**：`Project.duration` 只决定导出帧数范围与时间轴宽度；片段可以把它撑长（`addClip` / `liveMoveClip` / `liveResizeClip` 只增不减），用户也可以直接用工具条上的「时长」改小或用「贴合内容」收回。导入音频只是新片段的默认长度，**不许**被 `duration` 截断。
+
+**跨轨**：`track.clips` 的兼容判据只有一条 `ProjectStore.canHost(track, clip)`（音频片段只进音频轨，画面/特效片段只进视觉轨），拖拽与 Alt+↑↓ 共用，不许各写一套。拖拽期间实时搬家（因此指针监听挂在 `window` 而不是 `setPointerCapture`——元素会在两个 `{#each}` 块之间重建，捕获随之失效）。
+
+**布局约定**：针对时间轴的操作（播放、拍网格、吸附、重叠策略、时长、缩放、导出）一律放在**轨道正上方**的工具条里，不要挪回窗口顶部。
 
 ### 关键帧要锚在拍上
 
@@ -426,7 +445,7 @@ follower(attack, release)                            // 非对称攻放包络
 ```bash
 # 开发（纯浏览器，不需要 Electron）
 npm run dev                 # Vite dev server
-npm run test                # vitest，只测纯逻辑
+npm run test                # vitest，只测纯逻辑（配置里限死 tests/unit，不收 e2e）
 npm run test:e2e            # scripts/e2e.mjs：自 build + 自起 preview + Playwright（系统 Chrome）
 npm run build               # 生产构建
 npm run electron            # 起 Electron 壳（M5 才有）
@@ -440,6 +459,10 @@ npm run dist                # electron-builder 打包（M5 才有）
 
 - **单测只测纯函数**：曲线求值、时间换算、命令栈、schema 迁移、颜色/合成数学。不测 DOM、不测 WebGL。
 - **E2E 走 Playwright + 系统 Chrome/Edge**（`channel: 'chrome'`），不需要 `playwright install`。E2E 服务器要正确返回 `.mjs` 的 `text/javascript` MIME，否则 ESM import 会被拦掉。
+- **E2E 选择器两条坑**（都实测踩过）：
+  1. 检查器里的 `.kf > .row` 与时间轴的 `.row` **同名**，而检查器在 DOM 里更靠前 —— 选轨道行一律写 `.tl .row`；选具体行用 `[data-track-id]`。
+  2. 轨道行数多时轨道区会出纵向滚动条，用 `boundingBox()` 拿到的行可能落在视口外（鼠标事件会被钳到视口边界，`elementFromPoint` 返回 `html`）。要么把 `viewport` 开高，要么先 `scrollTop = scrollHeight` 再量。
+- **手势类断言必须走 `page.mouse`**，不要直接调 store：策略结算时序、跨轨、右键菜单这些问题全在手势层，直接调 store 会把它们整个绕过去。
 - **确定性测试是对本项目最有价值的一类测试**：
   - 同一工程 + 同一 `t` → 逐像素一致
   - 导出帧 vs 预览帧 → 差异在噪声级
@@ -455,7 +478,7 @@ npm run dist                # electron-builder 打包（M5 才有）
 
 ## 8. 未决问题
 
-1. ~~**UI 框架**~~（2026-09-27 已决）：**Svelte 5 runes**。时间轴本体 Canvas2D 自绘，框架只管面板。落地时注意：Svelte 5 的 `$derived` 靠 `===` 判断传播，store 原地改的对象必须「订阅 version + 派生返回新引用」，否则静默断更（MVP 实测踩过两次：轨道列表、片段位置）。
+1. ~~**UI 框架**~~（2026-09-27 已决）：**Svelte 5 runes**。时间轴本体 Canvas2D 自绘，框架只管面板。落地时注意：Svelte 5 的 `$derived` 靠 `===` 判断传播，store 原地改的对象必须「订阅 version + 派生返回新引用」，否则静默断更（MVP 实测踩过三次：轨道列表、片段位置、**检查器**）。第三次的形态最阴：`found = $derived(() => ({ track, clip }))` 外层包装是新对象，但 `{@const clip = found.clip}` 编译成 `$.derived(() => found.clip)`，**内层 clip 引用没变 → 整块模板 effect 不再重跑**，表现是「加/删特效链只改 store、右侧面板纹丝不动，重选片段才刷新」。判据：**模板里凡是 `{@const}` 取的嵌套对象，来源派生就必须让它换引用**（Inspector 现在是浅拷 track + 深拷 clip）。
 2. **`texElementImage2D` 的正确签名**：本机 Chromium 154 上试过的 12 种组合全失败。值得读 `github.com/WICG/html-in-canvas` 当前规范，或在 Chrome Canary 上再试。若通了，排版后端可以直接换掉。
 3. **`texElementSubImage2D` 是否可用于"只更新变化的子区域"**：存在但未验证。如果可用，配合 `paint` 事件的 `changedElements` 可以做增量上传。
 4. **长时导出稳定性**：数千帧连续截图的显存与缓存行为未测。

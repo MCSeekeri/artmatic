@@ -20,8 +20,12 @@
     return Math.max(4, xOfTime(clip.end, appState.pxPerBeat, grid) - xOfTime(clip.start, appState.pxPerBeat, grid));
   });
   const selected = $derived(appState.selectedClipId === clip.id);
+  /** 拖拽中且当前落点会被拒收（reject 策略）：红框预告，避免「松手弹回去」的困惑。 */
+  const illegal = $derived(selected && appState.dragIllegal);
 
   function down(e: PointerEvent, mode: 'move' | 'resize-l' | 'resize-r'): void {
+    // 只有主键起手势：右键归自绘菜单（Timeline 的 contextmenu），中键归浏览器
+    if (e.button !== 0) return;
     appState.selectedClipId = clip.id;
     startClipDrag(e, appState.store, {
       track,
@@ -29,6 +33,7 @@
       mode,
       pxPerBeat: appState.pxPerBeat,
       snapMode: appState.snap,
+      onHint: (illegal) => (appState.dragIllegal = illegal),
     });
   }
 
@@ -45,6 +50,7 @@
 <div
   class="clip"
   class:selected
+  class:illegal
   class:effect={clip.kind === 'effect'}
   class:audio={clip.kind === 'audio'}
   data-clip-id={clip.id}
@@ -82,6 +88,11 @@
   .clip.selected {
     outline: 2px solid #fff;
     z-index: 3;
+  }
+  /* 落点会被 reject 策略拒收：松手会整次弹回，先在这里预告 */
+  .clip.illegal {
+    outline: 2px dashed var(--danger);
+    opacity: 0.7;
   }
   .clip.effect {
     background: #4a3a6e;

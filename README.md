@@ -21,9 +21,17 @@
 | engine | WebGL2 合成管线（ping-pong + placement + 8 种混合模式）、预览尺寸解耦、确定性时钟 |
 | algos | Rule 30/90/110（bake·Worker）、生命游戏（sim·固定步长+快照+seek 重放）、Mandelbrot（realtime·参数关键帧） |
 | effects | channel-split / slices / pixelate / echo(feedback) / scanlines，「新增特效 = 两个文件」（defs + glsl，glob 自动配对） |
-| timeline | Canvas2D 网格/波形、拖拽/拍吸附/双击切分/多轨增删、检查器 + 关键帧打点（可锚拍） |
+| timeline | Canvas2D 网格/波形、拖拽/拍吸附/双击切分/多轨增删、**跨轨拖拽**、**右键在鼠标位置新建**、检查器 + 关键帧打点（可锚拍） |
 | exporters | FrameSink 接口 + PNG 序列（fflate zip）紧循环导出，进度/取消 |
 | 音频 | 导入音频（波形 min/max 可视化）、播放与工程时间同步 |
+
+两条容易误解的交互约定：
+
+- **拖动期间不结算重叠策略**：拖拽中被拖片段自由跟随鼠标（允许视觉重叠，非法落点红框预告），
+  松手才按 `reject / push / trim` 结算一次。否则 trim 会在拖过去的瞬间毁掉邻居，拖回来也回不去。
+  例外是缩放 + reject（单边钳制、非破坏性，实时生效）。
+- **工程时长与素材长度无关**：工具条上的「时长」可任意改，片段拖出末尾会自动把工程撑长；
+  导入音频只是新片段的默认长度，不会被工程时长截断。
 
 明确不做（路线图上排在后面）：BPM 自动估计（手动拍网格已可用）、video/text 源、typography、Electron/ffmpeg、WebCodecs 视频导出、曲线编辑器画布。
 
@@ -51,10 +59,13 @@ E2E 用本机 Chrome（`channel: 'chrome'`），**不需要** `playwright instal
 | Space | 播放 / 暂停 |
 | S | 在播放头处切分选中片段 |
 | Delete / Backspace | 删除选中片段 |
+| Alt + ↑ / ↓ | 选中片段上移 / 下移一轨（跳过装不下的轨道） |
+| Esc | 中止正在进行的拖拽 |
 | Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y | 撤销 / 重做 |
 | Ctrl + 滚轮 | 以鼠标为锚缩放时间轴 |
 
-双击片段 = 在该处切分；标尺拖动 = scrub 播放头。
+双击片段 = 在该处切分；标尺拖动 = scrub 播放头；拖片段可跨轨（音频片段只进音频轨）；
+右键轨道 = 在鼠标位置新建片段（原生右键菜单已禁用，文本输入框除外）。
 
 ## 确定性（本项目的立身之本）
 

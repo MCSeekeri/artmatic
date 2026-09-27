@@ -116,9 +116,26 @@
     };
   }
 
+  /**
+   * 必须返回**新的引用**，不能只返回 store 里的原对象。
+   *
+   * Svelte 5 把 `{@const clip = found.clip}` 编译成 `$.derived(() => found.clip)`，
+   * 而 derived 靠 `===` 判等决定是否向模板 effect 传播。store 里的 clip 是原地改的，
+   * `found.clip` 每次都是同一个引用 → clip 派生视为「没变」→ 整块模板 effect 不重跑。
+   * 症状：加/删特效链只改 store，右侧面板纹丝不动；换选中再换回来才刷新
+   * （`{#if found}` 换分支 → 子树重建 → 读到新值）。
+   *
+   * 所以：包装对象每次新建，clip 深拷一份，track 浅拷即可（模板只读 name / id）。
+   * 深拷的代价是一次片段级别的 structuredClone，可忽略；换来的是面板里任何一层
+   * 嵌套读（chain / values / curves.keys）都必然拿到最新值。
+   */
   const found = $derived.by(() => {
     void appState.version;
-    return appState.selectedClipId ? appState.store.findClip(appState.selectedClipId) : null;
+    const id = appState.selectedClipId;
+    if (!id) return null;
+    const f = appState.store.findClip(id);
+    if (!f) return null;
+    return { track: { ...f.track }, clip: structuredClone(f.clip) as AnyClip };
   });
   const playT = $derived(appState.playT);
 
