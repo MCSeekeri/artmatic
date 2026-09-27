@@ -3,6 +3,50 @@
   import KeyableField from './KeyableField.svelte';
   import { BLEND_MODES, type AnyClip, type BlendMode, type SourceClip } from '../core/schema';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
+  import { getGenerator } from '../algos/registry';
+  import type { RangeParam } from '../effects/types';
+
+  /**
+   * 可关键帧的算法参数：realtime 生成器的全部 range 参数 +
+   * bake 型的渲染期 speed。烘焙入参（width/rule/…）打关键帧 = 每帧重烘，禁止。
+   */
+  function keyframable(kind: string, key: string): boolean {
+    return kind === 'realtime' || (kind === 'bake' && key === 'speed');
+  }
+
+  function setAlgoParam(clip: AnyClip, key: string, v: number | string): void {
+    upd(clip, '修改参数', (c) => {
+      if (c.kind === 'source' && c.source.type === 'algo') c.source.params[key] = v;
+    });
+  }
+
+  function paramKeyableProps(clip: AnyClip, p: RangeParam) {
+    return {
+      base:
+        clip.kind === 'source' && clip.source.type === 'algo'
+          ? Number(clip.source.params[p.key] ?? p.defaultValue)
+          : p.defaultValue,
+      curve: clip.curves[p.key],
+      clipStart: clip.start,
+      onBase: (v: number) => setAlgoParam(clip, p.key, v),
+      onKey: (v: number, anchor: { beat: number } | null) =>
+        upd(clip, '打关键帧', (c) => upsertCurveKey(c, p.key, v, appState.playT, anchor, appState.project.beatGrid)),
+      onRemoveKey: (i: number) =>
+        upd(clip, '删除关键帧', (c) => {
+          const cv = c.curves[p.key];
+          if (cv) cv.keys = cv.keys.filter((_, idx) => idx !== i);
+        }),
+      onAnchorChange: (anchor: { beat: number } | null) =>
+        upd(clip, '切换锚到拍', (c) => {
+          const cv = c.curves[p.key];
+          if (cv) cv.beatAnchor = anchor;
+        }),
+      onClearCurve: () =>
+        upd(clip, '清除曲线', (c) => {
+          delete c.curves[p.key];
+        }),
+    };
+  }
 
   const found = $derived.by(() => {
     void appState.version;
@@ -145,7 +189,61 @@
           />
         </label>
       {:else if clip.source.type === 'algo'}
-        <p class="note">算法生成器：{clip.source.generator}（参数面板在 B7/B8 接入）</p>
+        {@const def = getGenerator(clip.source.generator)}
+        <p class="note">算法生成器：{def?.name ?? clip.source.generator}</p>
+        {#if def}
+          {#each def.params as p (p.key)}
+            {#if p.type === 'range'}
+              {#if keyframable(def.kind, p.key)}
+                <KeyableField label={p.label} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
+              {:else}
+                <div class="kf">
+                  <div class="row">
+                    <span class="lbl" title={`${p.label}（烘焙入参，不可打关键帧）`}>{p.label}</span>
+                    <input
+                      type="range"
+                      min={p.min}
+                      max={p.max}
+                      step={p.step}
+                      value={Number(clip.source.params[p.key] ?? p.defaultValue)}
+                      oninput={(e) => setAlgoParam(clip, p.key, +e.currentTarget.value)}
+                    />
+                    <input
+                      class="num"
+                      type="number"
+                      min={p.min}
+                      max={p.max}
+                      step={p.step}
+                      value={Number(clip.source.params[p.key] ?? p.defaultValue)}
+                      onchange={(e) => setAlgoParam(clip, p.key, +e.currentTarget.value)}
+                    />
+                  </div>
+                </div>
+              {/if}
+            {:else if p.type === 'select'}
+              <label class="line">
+                {p.label}
+                <select
+                  value={clip.source.params[p.key] ?? p.defaultValue}
+                  onchange={(e) => setAlgoParam(clip, p.key, e.currentTarget.value)}
+                >
+                  {#each p.options as o (o.value)}
+                    <option value={o.value}>{o.label}</option>
+                  {/each}
+                </select>
+              </label>
+            {:else if p.type === 'color'}
+              <label class="line">
+                {p.label}
+                <input
+                  type="color"
+                  value={String(clip.source.params[p.key] ?? p.defaultValue)}
+                  oninput={(e) => setAlgoParam(clip, p.key, e.currentTarget.value)}
+                />
+              </label>
+            {/if}
+          {/each}
+        {/if}
       {:else if clip.source.type === 'image'}
         <p class="note">图片素材：{appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId}</p>
       {/if}
@@ -263,5 +361,30 @@
   }
   .danger {
     color: var(--danger);
+  }
+  .kf {
+    margin-bottom: 4px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .lbl {
+    width: 64px;
+    flex-shrink: 0;
+    color: var(--text-1);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .row input[type='range'] {
+    flex: 1;
+    min-width: 0;
+  }
+  .num {
+    width: 60px;
+    font-size: 11px;
   }
 </style>

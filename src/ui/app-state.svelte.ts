@@ -13,6 +13,8 @@ import { ProjectStore } from '../core/project-store';
 import { Renderer } from '../engine/renderer';
 import { SourceManager } from '../engine/sources';
 import { AudioPlayer } from '../audio/player';
+import { BakeClient } from '../algos/bake-client';
+import { AlgoRuntime } from '../algos/runtime';
 import type { WaveformData } from '../audio/decode';
 import { snapTime, type SnapMode } from '../core/time';
 
@@ -55,6 +57,19 @@ class AppState {
     if (!this.servicesReady) {
       this.renderer = new Renderer(canvas, () => null, () => {});
       this.sources = new SourceManager(this.renderer.kit);
+      const bake = new BakeClient(this.renderer.kit, () => this.store.touch());
+      const algos = new AlgoRuntime(this.renderer.kit, bake);
+      this.sources.setAlgoResolver((clip, t, frame) =>
+        algos.resolve(
+          clip,
+          t,
+          frame,
+          this.store.project.beatGrid,
+          this.store.project.seed,
+          this.renderer.kit.w,
+          this.renderer.kit.h,
+        ),
+      );
       this.renderer.setResolver(this.sources.resolve);
       this.player = new AudioPlayer();
       this.servicesReady = true;

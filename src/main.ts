@@ -9,6 +9,7 @@ import { appState } from './ui/app-state.svelte';
 import { runExport } from './exporters/export-runner';
 import { PngSequenceSink } from './exporters/png-sequence';
 import { unzipSync } from 'fflate';
+import { defaultParams, listGenerators } from './algos/registry';
 
 /* 装配顺序：store 先于 mount（组件挂载即读工程），渲染服务在
    Preview.onMount → appState.attachPreview 里随 canvas 惰性创建。 */
@@ -45,6 +46,7 @@ appState.renderer.renderFrame(store.project, appState.playT);
     const files = unzipSync(buf);
     return Object.fromEntries(Object.entries(files).map(([k, v]) => [k, Array.from(v)]));
   },
+  algo: { listGenerators, defaultParams },
 };
 
 export default app;

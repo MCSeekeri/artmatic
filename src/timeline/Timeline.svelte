@@ -13,6 +13,33 @@
     type Track,
   } from '../core/schema';
   import { beatDur, snapTime } from '../core/time';
+  import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
+
+  const generators = listGenerators();
+  let algoMenuFor = $state<string | null>(null);
+
+  function addAlgo(trackId: string, genId: string): void {
+    const def = getGenerator(genId);
+    if (!def) return;
+    algoMenuFor = null;
+    const start = startAtPlayhead();
+    const clip: SourceClip = {
+      kind: 'source',
+      id: newId(),
+      start,
+      end: Math.min(duration, start + twoBeats() * 2),
+      label: def.name,
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'algo', generator: genId, params: defaultParams(genId) },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'stretch',
+    };
+    appState.store.addClip(trackId, clip);
+    appState.selectedClipId = clip.id;
+  }
 
   let rulerCanvas: HTMLCanvasElement;
   let gridCanvas: HTMLCanvasElement;
@@ -215,6 +242,24 @@
             <button data-testid="add-solid" title="新建纯色片段" onclick={() => addSolid(track.id)}>
               <i class="fa-solid fa-square"></i>
             </button>
+            <span class="algo-wrap">
+              <button
+                data-testid="add-algo"
+                title="新建算法片段"
+                onclick={() => (algoMenuFor = algoMenuFor === track.id ? null : track.id)}
+              >
+                <i class="fa-solid fa-flask"></i>
+              </button>
+              {#if algoMenuFor === track.id}
+                <span class="algo-menu">
+                  {#each generators as g (g.id)}
+                    <button data-testid={`add-algo-${g.id}`} onclick={() => addAlgo(track.id, g.id)}>
+                      {g.name}
+                    </button>
+                  {/each}
+                </span>
+              {/if}
+            </span>
             <button data-testid="add-effect" title="新建特效片段" onclick={() => addEffect(track.id)}>
               <i class="fa-solid fa-wand-magic-sparkles"></i>
             </button>
@@ -311,6 +356,33 @@
   }
   .tbtns button:hover {
     background: var(--line);
+  }
+  .algo-wrap {
+    position: relative;
+  }
+  .algo-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    min-width: 140px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  }
+  .algo-menu button {
+    text-align: left;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+  .algo-menu button:hover {
+    background: var(--accent-dim);
   }
   .scroll {
     flex: 1;
