@@ -116,7 +116,18 @@ export function createDemoProject(): Project {
     curves: {},
   };
 
+  /**
+   * 轨道顺序 = **从前景到背景**（列表自上而下）。
+   *
+   * `buildStack` 把列表顶部映射成最大 z，所以这里必须「全屏调色在最上、
+   * 底图在最下」——这正是 Premiere 的惯例（V4 压 V3 压 V2 压 V1）。
+   * 音频轨与视觉栈无关，放最后由它去。
+   */
   p.tracks = [
+    { kind: 'visual', id: newId(), name: 'V4 全屏调色', enabled: true, clips: [grade] },
+    { kind: 'visual', id: newId(), name: 'V3 局部故障', enabled: true, clips: [glitch] },
+    { kind: 'visual', id: newId(), name: 'V2 纹理', enabled: true, clips: [rule110] },
+    { kind: 'visual', id: newId(), name: 'V1 底图', enabled: true, clips: [mandelbrot] },
     {
       kind: 'audio',
       id: newId(),
@@ -132,10 +143,6 @@ export function createDemoProject(): Project {
         },
       ],
     },
-    { kind: 'visual', id: newId(), name: 'V1 底图', enabled: true, clips: [mandelbrot] },
-    { kind: 'visual', id: newId(), name: 'V2 纹理', enabled: true, clips: [rule110] },
-    { kind: 'visual', id: newId(), name: 'V3 局部故障', enabled: true, clips: [glitch] },
-    { kind: 'visual', id: newId(), name: 'V4 全屏调色', enabled: true, clips: [grade] },
   ];
   return p;
 }

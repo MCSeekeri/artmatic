@@ -4,27 +4,30 @@
  * 网格间距与吸附步长同源：都读 core/time.ts 的 SNAP_MODES 步长
  * （splitter 的双表债在这里没有生存空间）。
  * 波形画在网格 canvas 的音频轨行区域里，片段 DOM 之上是透明的。
+ *
+ * **颜色全部来自 palette 参数**（`ui/tokens.ts` 的 `canvasPalette(spec)`）。
+ * 这里曾经内联着一份与 CSS 变量同值的调色板副本——Canvas 写不了 `var(--x)`，
+ * 于是改一次配色要改两处，改漏就是「面板变了、网格没变」的偏色。现在传参进来，
+ * 物理上不可能不同步。
  */
 
 import { beatDur, barDur, type BeatGrid } from '../core/time';
 import type { Project } from '../core/schema';
 import type { WaveformData } from '../audio/decode';
+import type { CanvasPalette } from '../ui/tokens';
 import { xOfTime, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
-
-const COLOR_BAR = 'rgba(232, 235, 240, 0.28)';
-const COLOR_BEAT = 'rgba(232, 235, 240, 0.08)';
-const COLOR_TEXT = '#aab2c0';
-const COLOR_WAVE = 'rgba(91, 157, 255, 0.55)';
-const COLOR_WAVE_CENTER = 'rgba(91, 157, 255, 0.18)';
 
 export function drawRuler(
   canvas: HTMLCanvasElement,
   project: Project,
   pxPerBeat: number,
   dpr: number,
+  palette: CanvasPalette,
+  /** 画布至少这么宽（= 滚动视口宽），否则工程末尾右侧会露一条底色空档。 */
+  minWidth = 0,
 ): void {
   const g = project.beatGrid;
-  const w = Math.ceil(xOfTime(project.duration, pxPerBeat, g)) + 2;
+  const w = Math.max(minWidth, Math.ceil(xOfTime(project.duration, pxPerBeat, g)) + 2);
   if (canvas.width !== w * dpr || canvas.height !== RULER_HEIGHT * dpr) {
     canvas.width = w * dpr;
     canvas.height = RULER_HEIGHT * dpr;
@@ -34,7 +37,7 @@ export function drawRuler(
   const ctx = canvas.getContext('2d')!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, RULER_HEIGHT);
-  ctx.fillStyle = '#16191f';
+  ctx.fillStyle = palette.rulerBg;
   ctx.fillRect(0, 0, w, RULER_HEIGHT);
 
   const bpb = g.beatsPerBar;
@@ -53,18 +56,18 @@ export function drawRuler(
     if (t > project.duration) break;
     const x = Math.round(xOfTime(t, pxPerBeat, g)) + 0.5;
     const isBar = b % bpb === 0;
-    ctx.strokeStyle = isBar ? COLOR_BAR : COLOR_BEAT;
+    ctx.strokeStyle = isBar ? palette.barLine : palette.beatLine;
     ctx.beginPath();
     ctx.moveTo(x, isBar ? 6 : 16);
     ctx.lineTo(x, RULER_HEIGHT);
     ctx.stroke();
     if (isBar) {
-      ctx.fillStyle = COLOR_TEXT;
+      ctx.fillStyle = palette.rulerText;
       ctx.fillText(String(Math.round(b / bpb) + 1), x + 4, 4);
     }
   }
   // 工程起点（t=0 可能在第 0 拍之后，如果 offset<0）
-  ctx.strokeStyle = 'rgba(81, 207, 138, 0.7)';
+  ctx.strokeStyle = palette.originLine;
   const x0 = Math.round(xOfTime(0, pxPerBeat, g)) + 0.5;
   ctx.beginPath();
   ctx.moveTo(x0, 0);
@@ -85,9 +88,12 @@ export function drawGrid(
   rows: GridTrackRow[],
   waveforms: Record<string, WaveformData>,
   dpr: number,
+  palette: CanvasPalette,
+  /** 同 drawRuler：至少铺满滚动视口。 */
+  minWidth = 0,
 ): void {
   const g = project.beatGrid;
-  const w = Math.ceil(xOfTime(project.duration, pxPerBeat, g)) + 2;
+  const w = Math.max(minWidth, Math.ceil(xOfTime(project.duration, pxPerBeat, g)) + 2);
   const h = rows.length * ROW_HEIGHT;
   if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
     canvas.width = w * dpr;
@@ -98,15 +104,15 @@ export function drawGrid(
   const ctx = canvas.getContext('2d')!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = '#101216';
+  ctx.fillStyle = palette.gridBg;
   ctx.fillRect(0, 0, w, h);
 
   // 行底色与分隔线
   rows.forEach((row, i) => {
     const y = i * ROW_HEIGHT;
-    ctx.fillStyle = row.kind === 'audio' ? 'rgba(38, 43, 54, 0.45)' : 'rgba(29, 33, 41, 0.45)';
+    ctx.fillStyle = row.kind === 'audio' ? palette.rowAudio : palette.rowVisual;
     ctx.fillRect(0, y, w, ROW_HEIGHT);
-    ctx.strokeStyle = 'rgba(50, 57, 72, 0.8)';
+    ctx.strokeStyle = palette.rowLine;
     ctx.beginPath();
     ctx.moveTo(0, y + ROW_HEIGHT - 0.5);
     ctx.lineTo(w, y + ROW_HEIGHT - 0.5);
@@ -123,9 +129,9 @@ export function drawGrid(
       if (!wf) continue;
       const x0 = xOfTime(clip.start, pxPerBeat, g);
       const x1 = xOfTime(clip.end, pxPerBeat, g);
-      ctx.fillStyle = COLOR_WAVE_CENTER;
+      ctx.fillStyle = palette.waveCenter;
       ctx.fillRect(x0, yMid, x1 - x0, 1);
-      ctx.strokeStyle = COLOR_WAVE;
+      ctx.strokeStyle = palette.waveBody;
       ctx.beginPath();
       for (let x = Math.max(0, Math.floor(x0)); x < x1; x++) {
         const t = clip.srcIn + (x - x0) / (pxPerBeat / beatDur(g));
@@ -150,7 +156,7 @@ export function drawGrid(
     const t = b * beatD;
     if (t > project.duration) break;
     const x = Math.round(xOfTime(t, pxPerBeat, g)) + 0.5;
-    ctx.strokeStyle = b % bpb === 0 ? COLOR_BAR : COLOR_BEAT;
+    ctx.strokeStyle = b % bpb === 0 ? palette.barLine : palette.beatLine;
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, h);

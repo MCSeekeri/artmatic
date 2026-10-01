@@ -44,7 +44,7 @@ async function seed(page: Page): Promise<void> {
     a.store.addTrack('visual', 'DROP');
   }, MK);
   await page.evaluate(() => {
-    const el = document.querySelector('.scroll');
+    const el = document.querySelector('[data-testid=tl-scroll]');
     if (el) el.scrollTop = el.scrollHeight;
   });
 }
@@ -108,15 +108,15 @@ test('检查器：增删特效实例立即刷新，不必重选片段', async ({
     return null;
   });
   await page.locator(`[data-clip-id="${fxId}"]`).click();
-  await expect(page.locator('.fx')).toHaveCount(2); // demo 的 V3 带两个实例
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(2); // demo 的 V3 带两个实例
 
   await page.getByTestId('add-effect-instance').click();
-  await expect(page.locator('.fx')).toHaveCount(3);
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(3);
   await page.getByTestId('add-effect-instance').click();
-  await expect(page.locator('.fx')).toHaveCount(4);
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(4);
 
-  await page.locator('.fx').first().locator('button[title="删除"]').click();
-  await expect(page.locator('.fx')).toHaveCount(3);
+  await page.locator('[data-testid=effect-instance]').first().locator('[data-testid=effect-remove]').click();
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(3);
 });
 
 test('检查器：拖滑杆时同行的数字输入框实时跟随', async ({ page }) => {
@@ -129,10 +129,12 @@ test('检查器：拖滑杆时同行的数字输入框实时跟随', async ({ pa
     return null;
   }) as string;
   await page.locator(`[data-clip-id="${clipId}"]`).click();
-  const row = page.locator('.kf', { has: page.locator('.lbl', { hasText: '不透明度' }) }).first();
-  const range = row.locator('input[type=range]');
-  const num = row.locator('input.num');
-  await expect(num).toHaveValue('1');
+  const row = page.locator('[data-testid=param-row]', { has: page.locator('[data-testid=param-label]', { hasText: '不透明度' }) }).first();
+  const range = row.locator('[data-testid=param-slider]');
+  const num = row.locator('[data-testid=param-number]');
+  // 数字框按 step 精度定宽显示（step=0.01 → '1.00'）。固定小数位是刻意的：
+  // 拖动时字段宽度不会来回跳。
+  await expect(num).toHaveValue('1.00');
 
   const box = (await range.boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2);
@@ -169,7 +171,7 @@ test('拖拽：reject 策略下非法落点松手弹回，拖动中给出提示'
   await policy(page, 'reject');
   let hinted = false;
   await drag(page, 'A', 140, 0, async () => {
-    hinted = (await page.locator('.clip.illegal').count()) > 0;
+    hinted = (await page.locator('[data-testid=clip][data-illegal=true]').count()) > 0;
   });
   expect(hinted).toBe(true);
   const after = await geom(page);
@@ -205,8 +207,8 @@ test('跨轨：拖到其它轨道 + Alt+↑↓', async ({ page }) => {
   await seed(page);
   await policy(page, 'reject');
 
-  const rows = await page.locator('.tl .row').count();
-  const drop = (await page.locator('.tl .row').nth(rows - 1).boundingBox())!;
+  const rows = await page.locator('[data-testid=tl-row]').count();
+  const drop = (await page.locator('[data-testid=tl-row]').nth(rows - 1).boundingBox())!;
   const box = (await page.locator('[data-clip-id="A"]').boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
@@ -230,20 +232,21 @@ test('右键：自绘菜单在鼠标位置新建片段，原生菜单被禁用',
 
   const preventedOnRow = await page.evaluate(() => {
     const e = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
-    document.querySelector('.tl .row')!.dispatchEvent(e);
+    document.querySelector('[data-testid=tl-row]')!.dispatchEvent(e);
     return e.defaultPrevented;
   });
   expect(preventedOnRow).toBe(true);
 
-  const rows = await page.locator('.tl .row').count();
-  const row = (await page.locator('.tl .row').nth(rows - 1).boundingBox())!; // DROP 轨，空的
+  const rows = await page.locator('[data-testid=tl-row]').count();
+  const row = (await page.locator('[data-testid=tl-row]').nth(rows - 1).boundingBox())!; // DROP 轨，空的
   await page.mouse.move(row.x + 224, row.y + row.height / 2);
   await page.mouse.down({ button: 'right' });
   await page.mouse.up({ button: 'right' });
-  await expect(page.locator('.ctx')).toHaveCount(1);
+  await expect(page.locator('[data-testid=ctx-menu]')).toHaveCount(1);
 
+  // 右键菜单与轨道行菜单同构，新建项是一级项（只有算法会再展开一级）
   await page.getByTestId('ctx-solid').click();
-  await expect(page.locator('.ctx')).toHaveCount(0);
+  await expect(page.locator('[data-testid=ctx-menu]')).toHaveCount(0);
   const created = await page.evaluate(() => {
     const a = (window as never as { __artmatic: AnyA }).__artmatic;
     const tr = a.store.project.tracks[a.store.project.tracks.length - 1]!;
@@ -262,7 +265,7 @@ test('时长：与素材长度解耦，可任意改也能被片段撑长', async
   await page.getByTestId('duration-input').fill('30');
   await page.getByTestId('duration-input').press('Enter');
   await expect.poll(dur).toBe(30);
-  const width30 = await page.evaluate(() => document.querySelector('.canvas-wrap')!.getBoundingClientRect().width);
+  const width30 = await page.evaluate(() => document.querySelector('[data-testid=tl-canvas-wrap]')!.getBoundingClientRect().width);
   expect(width30).toBeGreaterThan(d0 * 50); // 30s @56px/s ≈ 1680px
 
   await page.getByTestId('fit-duration').click();
@@ -272,8 +275,8 @@ test('时长：与素材长度解耦，可任意改也能被片段撑长', async
   // 片段拖到内容末尾之外 → 工程跟着变长
   await seed(page);
   await policy(page, 'reject');
-  const rows = await page.locator('.tl .row').count();
-  const drop = (await page.locator('.tl .row').nth(rows - 1).boundingBox())!;
+  const rows = await page.locator('[data-testid=tl-row]').count();
+  const drop = (await page.locator('[data-testid=tl-row]').nth(rows - 1).boundingBox())!;
   const box = (await page.locator('[data-clip-id="A"]').boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();

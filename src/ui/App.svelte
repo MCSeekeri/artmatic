@@ -1,17 +1,58 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import TopBar from './TopBar.svelte';
+  import Rail from './Rail.svelte';
   import Transport from './Transport.svelte';
   import Preview from './Preview.svelte';
-  import Inspector from './Inspector.svelte';
-  import Brand from './Brand.svelte';
+  import InspectorDrawer from './InspectorDrawer.svelte';
+  import StatusBar from './StatusBar.svelte';
+  import Tip from './Tip.svelte';
+  import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import { appState } from './app-state.svelte';
+  import { theme } from './theme.svelte';
+  import { installTheme } from './theme-apply';
+  import { activeElementOwnsSpace, isExempt } from './focus';
+
+  /**
+   * 主题的唯一写入口。main.ts 在 mount 前已经装过一次（防首帧闪默认值），
+   * 这里负责**后续变更**：runtime 改 mode/accent 后重新注入 :root。
+   * 用 $effect 而不是 store 订阅，因为它天然读到哪些 rune 就订阅哪些。
+   */
+  $effect(() => {
+    installTheme(theme.spec);
+  });
 
   onMount(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const el = e.target as HTMLElement;
-      if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return;
+      // 控件自己处理键盘的（自研控件带 data-exempt）一律让路，
+      // 否则在下拉上按 Space 会「打开下拉 + 开始播放」同时发生。
+      if (isExempt(e.target)) return;
+
+      // —— 覆盖浏览器原生快捷键 ——
+      // 这几组在浏览器里有默认行为（保存网页 / 打印 / 查找 / 前进后退），
+      // 在一个浏览器内应用里它们全是误触。刻意**不**拦 Ctrl+滚轮（浏览器缩放）
+      // 与 F5 / Ctrl+R / Ctrl+Shift+I：那是无障碍与开发的逃生舱，拦了只有坏处。
+      if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+        const k = e.key.toLowerCase();
+        if (k === 's') {
+          e.preventDefault();
+          appState.flash('工程文件系统未实现（M5）；导出请用左侧栏的导出面板');
+          return;
+        }
+        if (k === 'p' || k === 'f') {
+          e.preventDefault();
+          return;
+        }
+      }
+      if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        return;
+      }
+
       if (e.code === 'Space') {
+        // 聚焦在按钮/role 控件上时 Space 归它们——否则会「激活按钮 + 播放」双触发
+        if (activeElementOwnsSpace()) return;
         e.preventDefault();
         appState.togglePlay();
       } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && appState.selectedClipId) {
@@ -36,13 +77,11 @@
     };
 
     /**
-     * 原生右键菜单全应用禁用（轨道区用自绘菜单，见 timeline/Timeline.svelte）。
-     * 输入框例外：那里的复制/粘贴/拼写检查是系统能力，禁掉只会让人难受。
+     * 原生右键菜单全应用禁用（轨道区与菜单都用自绘 div 菜单）。
+     * 文本类输入例外：那里的复制/粘贴/拼写检查是系统能力，禁掉只会让人难受。
      */
     const onContextMenu = (e: MouseEvent): void => {
-      const el = e.target as HTMLElement | null;
-      const tag = el?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return;
+      if (isExempt(e.target)) return;
       e.preventDefault();
     };
 
@@ -56,70 +95,92 @@
 </script>
 
 <div class="shell">
-  <header>
-    <Brand height={20} />
-  </header>
-  <main>
-    <Preview />
-    <aside>
-      <Inspector />
-    </aside>
-  </main>
-  <footer>
-    <!-- 工具条放在轨道正上方：这些都是针对时间轴的操作，不该跑到窗口最顶上 -->
-    <div class="toolbar">
-      <Transport />
+  <TopBar />
+
+  <div
+    class="body"
+    style={`--drawer-w: ${appState.drawerOpen ? `${appState.drawerWidth}px` : '0px'}`}
+  >
+    <Rail />
+
+    <div class="stage">
+      <Preview />
+      <div class="toolbar">
+        <Transport />
+        <span class="toolbar-tail">
+          <IconButton
+            icon="panel-right"
+            label="检查器"
+            tipPlacement="top"
+            testid="drawer-open"
+            active={appState.drawerOpen}
+            onclick={() => appState.toggleDrawer()}
+          />
+        </span>
+      </div>
+      <div class="tracks">
+        <Timeline />
+      </div>
     </div>
-    <div class="tracks">
-      <Timeline />
-    </div>
-  </footer>
+
+    {#if appState.drawerOpen}
+      <InspectorDrawer />
+    {/if}
+  </div>
+
+  <StatusBar />
 </div>
+
+<Tip />
 
 <style>
   .shell {
     height: 100%;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
+    background: var(--surface-0);
   }
-  header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 4px 12px;
-    background: var(--bg-1);
-    border-bottom: 1px solid var(--line);
-    flex-shrink: 0;
-  }
-  main {
-    flex: 1;
-    display: flex;
+  .body {
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--drawer-w);
     min-height: 0;
+    min-width: 0;
   }
-  aside {
-    width: 300px;
-    flex-shrink: 0;
-    background: var(--bg-1);
-    border-left: 1px solid var(--line);
-    overflow-y: auto;
-  }
-  footer {
-    height: 320px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    border-top: 1px solid var(--line);
-    background: var(--bg-1);
+  .stage {
+    display: grid;
+    /* 预览吃满剩余高度；工具条与轨道区按内容/固定高度排在下面 */
+    grid-template-rows: minmax(0, 1fr) auto auto;
+    /*
+     * 必须显式约束列宽。隐式列默认是 `auto`，会被子项的**最小内容宽度**撑开——
+     * 工具条里几乎所有控件都是 flex-shrink:0，实测在 1280 宽的窗口下把这一列
+     * 撑到 1058px，而 stage 本身只有 936px：preview / toolbar / tracks 三个子项
+     * 一起溢出到右侧抽屉底下，并把预览宿主撑成一个不受网格约束的尺寸。
+     */
+    grid-template-columns: minmax(0, 1fr);
     min-height: 0;
+    min-width: 0;
   }
   .toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
     flex-shrink: 0;
-    padding: 5px 10px;
-    border-bottom: 1px solid var(--line);
-    background: var(--bg-2);
+    min-width: 0;
+    padding: 3px var(--sp-4);
+    background: var(--surface-2);
+    border-top: 1px solid var(--tl-border);
+    border-bottom: 1px solid var(--tl-border);
+  }
+  .toolbar-tail {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
   }
   .tracks {
-    flex: 1;
+    height: 320px;
     min-height: 0;
+    min-width: 0;
+    border-top: none;
   }
 </style>

@@ -3,7 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/brand/logo-main.svg" />
+    <!--
+      favicon 同样按亮/暗两版：文件名的含义是「墨色」（同 Button 用的那套资源），
+      深墨配浅色浏览器界面，浅墨配深色界面。用 media 让浏览器自己挑。
+    -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/brand/artmatic-small-dark.svg"
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/brand/artmatic-small-light.svg"
+      media="(prefers-color-scheme: dark)"
+    />
     <title>Artmatic</title>
   </head>
   <body>

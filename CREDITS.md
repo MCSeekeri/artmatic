@@ -21,7 +21,7 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | 包 | 许可 | 用途 |
 |---|---|---|
 | `fflate` | MIT | PNG 序列导出打 zip |
-| Font Awesome Free | 图标 CC BY 4.0 / 字体 SIL OFL 1.1 / 代码 MIT | UI 图标 |
+| Lucide | ISC | UI 图标（`@lucide/svelte`，按组件 tree-shaking） |
 
 ## 明确不使用（许可冲突）
 

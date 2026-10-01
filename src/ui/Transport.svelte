@@ -1,51 +1,37 @@
 <script lang="ts">
+  /**
+   * Transport — 轨道正上方的工具条。
+   *
+   * 只放**逐帧/逐拍**的操作（播放、拍网格、吸附、时长、缩放、重叠策略）。
+   * 导出属于工程级动作，已搬去窄侧栏的面板；一次性提示（notice）搬去了底栏。
+   * 这条划分见 AGENTS.md §5 的布局约定。
+   */
+  import Icon from './Icon.svelte';
+  import IconButton from './controls/IconButton.svelte';
+  import NumberInput from './controls/NumberInput.svelte';
+  import Select from './controls/Select.svelte';
+  import Slider from './controls/Slider.svelte';
   import { appState } from './app-state.svelte';
-  import { beatAtTime } from '../core/time';
-  import { SNAP_MODES, type SnapMode } from '../core/time';
+  import { beatAtTime, SNAP_MODES, type SnapMode } from '../core/time';
   import type { OverlapBehavior } from '../core/schema';
-  import { runExport, ExportCancelled } from '../exporters/export-runner';
-  import { PngSequenceSink } from '../exporters/png-sequence';
-  import { browserPlatform } from '../platform/browser';
-
-  async function exportPng(): Promise<void> {
-    if (appState.exportProgress !== null) return;
-    const ctrl = new AbortController();
-    appState.exportAbort = ctrl;
-    appState.exportProgress = 0;
-    try {
-      const blob = await runExport(appState.renderer, appState.store.project, {
-        sink: new PngSequenceSink(),
-        onProgress: (f) => {
-          appState.exportProgress = f;
-        },
-        signal: ctrl.signal,
-      });
-      await browserPlatform.download(blob as Blob, `${appState.store.project.name || 'artmatic'}-png.zip`);
-    } catch (e) {
-      if (!(e instanceof ExportCancelled)) throw e;
-    } finally {
-      appState.exportProgress = null;
-      appState.exportAbort = null;
-    }
-  }
+  import { tip } from './tip';
 
   const grid = $derived.by(() => {
     void appState.version;
-    return appState.store?.project.beatGrid;
+    return { ...appState.store.project.beatGrid };
   });
   const overlapBehavior = $derived.by(() => {
     void appState.version;
-    return appState.store?.project.overlapBehavior;
+    return appState.store.project.overlapBehavior;
   });
   /** 工程时长不是素材长度的函数，是一个可以随便改的独立参数。 */
   const duration = $derived.by(() => {
     void appState.version;
-    return appState.store?.project.duration ?? 0;
+    return appState.store.project.duration;
   });
   const playT = $derived(appState.playT);
-  const beatPos = $derived(grid ? beatAtTime(playT, grid) : 0);
+  const beatPos = $derived(beatAtTime(playT, grid));
   const barBeat = $derived.by(() => {
-    if (!grid) return '--';
     const b = Math.max(0, beatPos);
     const bar = Math.floor(b / grid.beatsPerBar) + 1;
     const beat = Math.floor(b % grid.beatsPerBar) + 1;
@@ -58,173 +44,188 @@
     return `${m}:${s}`;
   }
 
-  function setGrid(patch: Parameters<typeof appState.store.setBeatGrid>[0]) {
-    appState.store.setBeatGrid(patch);
-  }
+  const snapOptions = Object.entries(SNAP_MODES).map(([mode, def]) => ({
+    value: mode as SnapMode,
+    label: def.label,
+  }));
+
+  const barOptions = [2, 3, 4, 6].map((n) => ({ value: n, label: String(n) }));
+
+  const overlapOptions: { value: OverlapBehavior; label: string }[] = [
+    { value: 'reject', label: '拒绝落点' },
+    { value: 'push', label: '挤开邻居' },
+    { value: 'trim', label: '吃掉重叠' },
+  ];
 </script>
 
 <div class="transport">
-  <button class="play" onclick={() => appState.togglePlay()} title="播放/暂停 (Space)">
-    <i class="fa-solid" class:fa-play={!appState.playing} class:fa-pause={appState.playing}></i>
-  </button>
-  <button onclick={() => appState.stop()} title="停止">
-    <i class="fa-solid fa-stop"></i>
-  </button>
+  <IconButton
+    icon={appState.playing ? 'pause' : 'play'}
+    label={appState.playing ? '暂停' : '播放'}
+    shortcut="Space"
+    size="lg"
+    tipPlacement="top"
+    testid="play-toggle"
+    onclick={() => appState.togglePlay()}
+  />
+  <IconButton
+    icon="square"
+    label="停止"
+    tipPlacement="top"
+    testid="stop"
+    onclick={() => appState.stop()}
+  />
 
-  <span class="time" title="工程时间 / 小节.拍">{fmt(playT)} <em>{barBeat}</em></span>
+  <span class="time" use:tip={{ placement: 'top', text: '工程时间 / 小节.拍' }}>
+    {fmt(playT)}<em>{barBeat}</em>
+  </span>
 
-  {#if grid}
-    <label title="BPM（手动拍网格；自动估计在后续里程碑）">
-      BPM
-      <input
-        type="number"
-        min="20"
-        max="300"
-        step="0.1"
-        value={grid.bpm}
-        onchange={(e) => setGrid({ bpm: Math.max(20, Math.min(300, +e.currentTarget.value || 120)) })}
-      />
-    </label>
-    <label title="offset：第 0 拍的秒数（ADR-002，独立参数）">
-      offset
-      <input
-        type="number"
-        step="0.01"
-        value={grid.offset}
-        onchange={(e) => setGrid({ offset: +e.currentTarget.value || 0 })}
-      />
-    </label>
-    <label title="每小节拍数">
-      拍/小节
-      <select
-        value={grid.beatsPerBar}
-        onchange={(e) => setGrid({ beatsPerBar: +e.currentTarget.value })}
-      >
-        {#each [2, 3, 4, 6] as n (n)}
-          <option value={n}>{n}</option>
-        {/each}
-      </select>
-    </label>
-  {/if}
+  <span class="sep"></span>
 
-  <label title="吸附档位（网格间距与吸附步长同源：core/time.ts 一张表）">
-    吸附
-    <select bind:value={appState.snap}>
-      {#each Object.entries(SNAP_MODES) as [mode, def] (mode)}
-        <option value={mode as SnapMode}>{def.label}</option>
-      {/each}
-    </select>
-  </label>
-
-  <label title="工程时长（秒）：决定导出帧数范围。与素材长度无关，可以随便改；片段被拖出末尾时会自动把工程撑长">
-    时长
-    <input
-      data-testid="duration-input"
-      type="number"
-      min="0.1"
-      step="0.5"
-      value={+duration.toFixed(2)}
-      onchange={(e) => appState.store.setDuration(+e.currentTarget.value || 0.1)}
+  <span class="ctl" use:tip={{ placement: 'top', text: 'BPM（手动拍网格；自动估计在后续里程碑）' }}>
+    <span class="lbl">BPM</span>
+    <NumberInput
+      value={grid.bpm}
+      min={20}
+      max={300}
+      step={0.1}
+      width={58}
+      ariaLabel="BPM"
+      testid="bpm-input"
+      onchange={(v) => appState.store.setBeatGrid({ bpm: Math.max(20, Math.min(300, v || 120)) })}
     />
-    <button
-      data-testid="fit-duration"
-      class="mini"
-      title="时长收到内容末尾"
+  </span>
+
+  <span class="ctl" use:tip={{ placement: 'top', text: 'offset：第 0 拍的秒数（ADR-002，独立参数）' }}>
+    <span class="lbl">offset</span>
+    <NumberInput
+      value={grid.offset}
+      step={0.01}
+      width={58}
+      ariaLabel="offset"
+      testid="offset-input"
+      onchange={(v) => appState.store.setBeatGrid({ offset: v })}
+    />
+  </span>
+
+  <span class="ctl" use:tip={{ placement: 'top', text: '每小节拍数' }}>
+    <span class="lbl">拍/小节</span>
+    <Select
+      value={grid.beatsPerBar}
+      options={barOptions}
+      onchange={(v) => appState.store.setBeatGrid({ beatsPerBar: v })}
+      testid="beats-per-bar"
+      optionTestidPrefix="beats-per-bar-opt"
+      minWidth={56}
+    />
+  </span>
+
+  <span class="ctl" use:tip={{ placement: 'top', text: '吸附档位（网格间距与吸附步长同源：core/time.ts 一张表）' }}>
+    <span class="lbl">吸附</span>
+    <Select
+      value={appState.snap}
+      options={snapOptions}
+      onchange={(v) => (appState.snap = v)}
+      testid="snap-mode"
+      optionTestidPrefix="snap-mode-opt"
+      minWidth={88}
+    />
+  </span>
+
+  <span class="sep"></span>
+
+  <span class="ctl" use:tip={{ placement: 'top', text: '工程时长（秒）：决定导出帧数范围。与素材长度无关，可以随便改；片段被拖出末尾时会自动把工程撑长' }}>
+    <span class="lbl">时长</span>
+    <NumberInput
+      value={+duration.toFixed(2)}
+      min={0.1}
+      step={0.5}
+      width={62}
+      suffix="s"
+      ariaLabel="工程时长"
+      testid="duration-input"
+      onchange={(v) => appState.store.setDuration(v || 0.1)}
+    />
+    <IconButton
+      icon="minimize-2"
+      label="时长收到内容末尾"
+      size="sm"
+      tipPlacement="top"
+      testid="fit-duration"
       onclick={() => appState.store.fitDurationToContent()}
-    >
-      <i class="fa-solid fa-compress"></i>
-    </button>
-  </label>
+    />
+  </span>
 
-  <label title="同轨重叠策略（可配置：挤开邻居 / 拒绝落点 / 吃掉邻居重叠部分）">
-    重叠
-    <select
+  <span class="ctl" use:tip={{ placement: 'top', text: '同轨重叠策略（可配置：挤开邻居 / 拒绝落点 / 吃掉邻居重叠部分）' }}>
+    <span class="lbl">重叠</span>
+    <Select
       value={overlapBehavior}
-      onchange={(e) =>
-        appState.store.setOverlapBehavior(e.currentTarget.value as OverlapBehavior)}
-    >
-      <option value="reject">拒绝落点</option>
-      <option value="push">挤开邻居</option>
-      <option value="trim">吃掉重叠</option>
-    </select>
-  </label>
+      options={overlapOptions}
+      onchange={(v) => appState.store.setOverlapBehavior(v)}
+      testid="overlap-behavior"
+      optionTestidPrefix="overlap-behavior-opt"
+      minWidth={96}
+    />
+  </span>
 
-  <label class="zoom" title="时间轴缩放">
-    <i class="fa-solid fa-magnifying-glass"></i>
-    <input type="range" min="6" max="96" step="1" bind:value={appState.pxPerBeat} />
-  </label>
-
-  {#if appState.notice}
-    <span class="notice" data-testid="notice"><i class="fa-solid fa-circle-info"></i> {appState.notice}</span>
-  {/if}
-
-  {#if appState.exportProgress !== null}
-    <span class="exporting">
-      导出中 {Math.round(appState.exportProgress * 100)}%
-      <button onclick={() => appState.exportAbort?.abort()}>取消</button>
-    </span>
-  {:else}
-    <button data-testid="export-png" class="primary" title="确定性逐帧导出 PNG 序列 (zip)" onclick={() => void exportPng()}>
-      <i class="fa-solid fa-download"></i> 导出 PNG
-    </button>
-  {/if}
+  <span class="ctl zoom" use:tip={{ placement: 'top', text: '时间轴缩放（也可 Ctrl+滚轮，以鼠标为锚）' }}>
+    <Icon name="search" size={12} />
+    <Slider
+      value={appState.pxPerBeat}
+      min={6}
+      max={96}
+      step={1}
+      ariaLabel="时间轴缩放"
+      testid="zoom-slider"
+      oninput={(v) => (appState.pxPerBeat = v)}
+    />
+  </span>
 </div>
 
 <style>
   .transport {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--sp-3);
+    /* 允许换行：窄窗口下宁可工具条高一行，也不要它把 stage 的列撑宽
+       （那会让 preview/toolbar/tracks 一起溢出到抽屉底下）。 */
     flex-wrap: wrap;
-  }
-  .play {
-    width: 34px;
+    row-gap: var(--sp-2);
+    min-width: 0;
   }
   .time {
-    font-family: var(--font-mono);
-    color: var(--text-0);
-    min-width: 110px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--sp-3);
+    flex-shrink: 0;
+    color: var(--text-primary);
+    font-family: 'Cascadia Code', Consolas, monospace;
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
   }
   .time em {
     font-style: normal;
     color: var(--accent);
-    margin-left: 6px;
   }
-  label {
-    display: flex;
+  .sep {
+    width: 1px;
+    height: 14px;
+    flex-shrink: 0;
+    background: var(--tl-border);
+  }
+  .ctl {
+    display: inline-flex;
     align-items: center;
-    gap: 5px;
-    color: var(--text-1);
+    gap: var(--sp-2);
+    flex-shrink: 0;
+    min-width: 0;
+  }
+  .lbl {
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
     white-space: nowrap;
   }
-  input[type='number'] {
-    width: 64px;
-  }
-  .mini {
-    padding: 1px 5px;
-    font-size: 10px;
-    background: transparent;
-    border-color: transparent;
-  }
-  .mini:hover {
-    background: var(--line);
-  }
-  .zoom input {
-    width: 110px;
-  }
-  .exporting {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--accent);
-    font-family: var(--font-mono);
-  }
-  .notice {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;
-    font-size: 11px;
-    color: var(--danger);
+  .zoom {
+    min-width: 140px;
   }
 </style>

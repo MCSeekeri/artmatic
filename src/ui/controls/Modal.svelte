@@ -1,0 +1,125 @@
+<script lang="ts">
+  /**
+   * Modal — 覆盖全屏的模态面板。窄侧栏的四个入口（关于 / 快捷键 / 导出 / 设置）
+   * 都用它，而不是浮在图标旁边的 popover。
+   *
+   * 为什么改成 modal：flyout 只有两百来像素宽，塞下快捷键清单或导出历史就会被
+   * 挤成一个带滚动条的小盒子；而这几块以后只会继续长（导出格式、更多设置项）。
+   * 现在留白多一点没关系。
+   */
+  import type { Snippet } from 'svelte';
+  import IconButton from './IconButton.svelte';
+
+  interface Props {
+    title: string;
+    onclose: () => void;
+    testid?: string;
+    /** 可选的内容宽度：'wide' 给两栏内容用。 */
+    width?: 'normal' | 'wide';
+    /** 顶部徽标区（如大 logo）。 */
+    hero?: Snippet;
+    children: Snippet;
+  }
+  const { title, onclose, testid, width = 'normal', hero, children }: Props = $props();
+
+  function onkeydown(e: KeyboardEvent): void {
+    if (e.key !== 'Escape') return;
+    // 阻止冒泡：否则会顺带关掉底下的菜单 / 触发其它 Esc 处理
+    e.preventDefault();
+    e.stopPropagation();
+    onclose();
+  }
+
+  $effect(() => {
+    window.addEventListener('keydown', onkeydown, true);
+    return () => window.removeEventListener('keydown', onkeydown, true);
+  });
+</script>
+
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="backdrop" data-testid={testid ? `${testid}-backdrop` : undefined} onclick={onclose}>
+  <div
+    class="modal {width}"
+    role="dialog"
+    aria-modal="true"
+    aria-label={title}
+    tabindex="-1"
+    data-testid={testid}
+    onclick={(e) => e.stopPropagation()}
+  >
+    <header class="modal-head">
+      <h2>{title}</h2>
+      <IconButton
+        icon="x"
+        label="关闭"
+        testid={testid ? `${testid}-close` : 'modal-close'}
+        onclick={onclose}
+      />
+    </header>
+    {#if hero}
+      <div class="modal-hero">{@render hero()}</div>
+    {/if}
+    <div class="modal-body">
+      {@render children()}
+    </div>
+  </div>
+</div>
+
+<style>
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 纯色半透明遮罩，不用模糊/渐变（视觉纪律：零阴影零渐变） */
+    background: var(--overlay);
+  }
+  .modal {
+    display: flex;
+    flex-direction: column;
+    width: min(760px, 88vw);
+    max-height: 84vh;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .modal.wide {
+    width: min(1080px, 92vw);
+  }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-4);
+    flex-shrink: 0;
+    height: 40px;
+    padding: 0 var(--sp-3) 0 var(--sp-5);
+    border-bottom: 1px solid var(--border);
+  }
+  h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: var(--fs-md);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .modal-hero {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-5);
+    flex-shrink: 0;
+    padding: var(--sp-6) 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--sp-5);
+  }
+</style>

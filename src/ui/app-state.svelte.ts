@@ -18,6 +18,47 @@ import { AlgoRuntime } from '../algos/runtime';
 import { createEffectRunner } from '../effects/runner';
 import type { WaveformData } from '../audio/decode';
 import { snapTime, type SnapMode } from '../core/time';
+import { DENSITY } from './tokens';
+
+/* ------------------------------------------------------------ UI 偏好持久化
+ *
+ * 只存「跟内容无关、丢了只是回到默认值」的东西。工程真相永远只在磁盘
+ * （AGENTS §1.7），所以这里绝不能放工程数据。
+ */
+const UI_KEY = 'artmatic.ui';
+
+interface UiPrefs {
+  drawerOpen: boolean;
+  drawerWidth: number;
+}
+
+function loadUiPrefs(): UiPrefs {
+  const fallback: UiPrefs = { drawerOpen: true, drawerWidth: DENSITY.drawerW };
+  try {
+    const raw = localStorage.getItem(UI_KEY);
+    if (!raw) return fallback;
+    const p = JSON.parse(raw) as Partial<UiPrefs>;
+    return {
+      drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : fallback.drawerOpen,
+      drawerWidth: clampDrawerWidth(Number(p.drawerWidth) || fallback.drawerWidth),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function clampDrawerWidth(w: number): number {
+  if (!Number.isFinite(w)) return DENSITY.drawerW;
+  return Math.min(DENSITY.drawerMaxW, Math.max(DENSITY.drawerMinW, Math.round(w)));
+}
+
+function saveUiPrefs(p: UiPrefs): void {
+  try {
+    localStorage.setItem(UI_KEY, JSON.stringify(p));
+  } catch {
+    /* 存不下不中断操作 */
+  }
+}
 
 class AppState {
   /* 响应式 */
@@ -42,6 +83,46 @@ class AppState {
   /** 一次性操作提示（当前只服务 Alt+↑↓：被策略挡住时要说明原因，不然就是静默失灵）。 */
   notice = $state<string | null>(null);
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * 预览帧率。**只用于 UI 展示**，不参与任何渲染求值——AGENTS §1.1 规定渲染
+   * 时间的唯一来源是 t，这里读 performance.now() 仅仅是统计显示，不喂给 renderFrame。
+   */
+  fps = $state(0);
+  private fpsFrames = 0;
+  private fpsAt = 0;
+
+  /** 右侧检查器抽屉。默认展开，宽度可拖，两者都持久化。 */
+  drawerOpen = $state(true);
+  // 显式标注 number：DENSITY 是 as const，不标注会推成字面量类型 300。
+  drawerWidth = $state<number>(DENSITY.drawerW);
+
+  constructor() {
+    const prefs = loadUiPrefs();
+    this.drawerOpen = prefs.drawerOpen;
+    this.drawerWidth = prefs.drawerWidth;
+  }
+
+  setDrawerOpen(open: boolean): void {
+    if (this.drawerOpen === open) return;
+    this.drawerOpen = open;
+    this.persistUi();
+  }
+
+  toggleDrawer(): void {
+    this.setDrawerOpen(!this.drawerOpen);
+  }
+
+  setDrawerWidth(w: number): void {
+    const next = clampDrawerWidth(w);
+    if (this.drawerWidth === next) return;
+    this.drawerWidth = next;
+    this.persistUi();
+  }
+
+  private persistUi(): void {
+    saveUiPrefs({ drawerOpen: this.drawerOpen, drawerWidth: this.drawerWidth });
+  }
 
   /* 服务（非响应式，装配见 init / attachPreview） */
   store!: ProjectStore;
@@ -152,6 +233,24 @@ class AppState {
       }
     }
     this.renderer.renderFrame(this.store.project, this.playT);
+    this.countFrame();
+  }
+
+  /** FPS 统计。用 performance.now() 只是为了算频率，不进渲染求值路径。 */
+  private countFrame(): void {
+    this.fpsFrames += 1;
+    const now = performance.now();
+    if (this.fpsAt === 0) {
+      this.fpsAt = now;
+      return;
+    }
+    const dt = now - this.fpsAt;
+    if (dt >= 500) {
+      const next = Math.round((this.fpsFrames * 1000) / dt);
+      if (next !== this.fps) this.fps = next;
+      this.fpsFrames = 0;
+      this.fpsAt = now;
+    }
   }
 }
 

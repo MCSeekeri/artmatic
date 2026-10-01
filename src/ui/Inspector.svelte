@@ -1,13 +1,31 @@
 <script lang="ts">
   import { appState } from './app-state.svelte';
   import KeyableField from './KeyableField.svelte';
-  import { BLEND_MODES, newId, type AnyClip, type BlendMode, type EffectInstance, type SourceClip } from '../core/schema';
+  import Button from './controls/Button.svelte';
+  import Checkbox from './controls/Checkbox.svelte';
+  import Field from './controls/Field.svelte';
+  import IconButton from './controls/IconButton.svelte';
+  import NumberInput from './controls/NumberInput.svelte';
+  import Select from './controls/Select.svelte';
+  import Slider from './controls/Slider.svelte';
+  import {
+    BLEND_MODES,
+    newId,
+    type AnyClip,
+    type BlendMode,
+    type EffectInstance,
+    type SourceClip,
+  } from '../core/schema';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { getGenerator } from '../algos/registry';
   import { defaultEffectValues, getEffect, listEffects } from '../effects/registry';
   import type { RangeParam } from '../effects/types';
 
   const effectsList = listEffects();
+  const effectOptions = effectsList.map((e) => ({ value: e.id, label: e.name }));
+  const blendOptions = BLEND_MODES.map((m) => ({ value: m.id, label: m.label }));
+  const fitOptions = ['contain', 'cover', 'stretch'].map((v) => ({ value: v as SourceClip['fit'], label: v }));
+
   let addChoice = $state(effectsList[0]?.id ?? '');
 
   function addEffectInstance(clip: AnyClip): void {
@@ -121,13 +139,11 @@
    *
    * Svelte 5 把 `{@const clip = found.clip}` 编译成 `$.derived(() => found.clip)`，
    * 而 derived 靠 `===` 判等决定是否向模板 effect 传播。store 里的 clip 是原地改的，
-   * `found.clip` 每次都是同一个引用 → clip 派生视为「没变」→ 整块模板 effect 不重跑。
-   * 症状：加/删特效链只改 store，右侧面板纹丝不动；换选中再换回来才刷新
-   * （`{#if found}` 换分支 → 子树重建 → 读到新值）。
+   * found.clip 每次都是同一引用 → clip 派生视为「没变」→ 整块模板 effect 不重跑。
+   * 症状：加/删特效链只改 store，右侧面板纹丝不动；换选中再换回来才刷新。
    *
-   * 所以：包装对象每次新建，clip 深拷一份，track 浅拷即可（模板只读 name / id）。
-   * 深拷的代价是一次片段级别的 structuredClone，可忽略；换来的是面板里任何一层
-   * 嵌套读（chain / values / curves.keys）都必然拿到最新值。
+   * 所以包装对象每次新建、clip 深拷一份；track 浅拷即可（模板只读 name）。
+   * 代价是一次片段级 structuredClone，可忽略。
    */
   const found = $derived.by(() => {
     void appState.version;
@@ -178,81 +194,75 @@
       <span class="track-name">{track.name}</span>
     </h3>
 
-    <label class="line">
-      名称
-      <input value={clip.label} onchange={(e) => upd(clip, '重命名', (c) => (c.label = e.currentTarget.value))} />
-    </label>
+    <Field label="名称">
+      <input
+        class="txt"
+        data-testid="clip-label"
+        value={clip.label}
+        onchange={(e) => upd(clip, '重命名', (c) => (c.label = e.currentTarget.value))}
+      />
+    </Field>
 
-    <div class="line nums">
-      <label>
-        起点
-        <input
-          type="number"
-          step="0.01"
-          min="0"
-          value={+clip.start.toFixed(3)}
-          onchange={(e) =>
-            upd(clip, '改起点', (c) => {
-              c.start = Math.max(0, Math.min(+e.currentTarget.value || 0, c.end - 0.05));
-            })}
-        />
-      </label>
-      <label>
-        终点
-        <input
-          type="number"
-          step="0.01"
-          min="0"
-          value={+clip.end.toFixed(3)}
-          onchange={(e) =>
-            upd(clip, '改终点', (c) => {
-              c.end = Math.min(appState.project.duration, Math.max(+e.currentTarget.value || 0, c.start + 0.05));
-            })}
-        />
-      </label>
-      <label>
-        淡变
-        <input
-          type="number"
-          step="0.05"
-          min="0"
-          value={+clip.fadeSec.toFixed(2)}
-          onchange={(e) => upd(clip, '改淡变', (c) => (c.fadeSec = Math.max(0, +e.currentTarget.value || 0)))}
-        />
-      </label>
-    </div>
+    <Field label="起点">
+      <NumberInput
+        value={clip.start}
+        min={0}
+        step={0.01}
+        width={64}
+        suffix="s"
+        testid="clip-start"
+        onchange={(v) => upd(clip, '改起点', (c) => (c.start = Math.max(0, Math.min(v, c.end - 0.05))))}
+      />
+      <span class="dim">终点</span>
+      <NumberInput
+        value={clip.end}
+        min={0}
+        step={0.01}
+        width={64}
+        suffix="s"
+        testid="clip-end"
+        onchange={(v) =>
+          upd(clip, '改终点', (c) => (c.end = Math.min(appState.project.duration, Math.max(v, c.start + 0.05))))}
+      />
+    </Field>
+
+    <Field label="淡变">
+      <NumberInput
+        value={clip.fadeSec}
+        min={0}
+        step={0.05}
+        width={64}
+        suffix="s"
+        testid="clip-fade"
+        onchange={(v) => upd(clip, '改淡变', (c) => (c.fadeSec = Math.max(0, v)))}
+      />
+    </Field>
 
     {#if clip.kind === 'source'}
-      <div class="line">
-        <label>
-          混合
-          <select
-            value={clip.blend}
-            onchange={(e) =>
-              upd(clip, '改混合模式', (c) => {
-                if (c.kind === 'source') c.blend = e.currentTarget.value as BlendMode;
-              })}
-          >
-            {#each BLEND_MODES as m (m.id)}
-              <option value={m.id}>{m.label}</option>
-            {/each}
-          </select>
-        </label>
-        <label>
-          适配
-          <select
-            value={clip.fit}
-            onchange={(e) =>
-              upd(clip, '改适配', (c) => {
-                if (c.kind === 'source') c.fit = e.currentTarget.value as SourceClip['fit'];
-              })}
-          >
-            <option value="contain">contain</option>
-            <option value="cover">cover</option>
-            <option value="stretch">stretch</option>
-          </select>
-        </label>
-      </div>
+      <Field label="混合">
+        <Select
+          value={clip.blend}
+          options={blendOptions}
+          testid="clip-blend"
+          optionTestidPrefix="clip-blend-opt"
+          onchange={(v) =>
+            upd(clip, '改混合模式', (c) => {
+              if (c.kind === 'source') c.blend = v as BlendMode;
+            })}
+        />
+      </Field>
+      <Field label="适配">
+        <Select
+          value={clip.fit}
+          options={fitOptions}
+          testid="clip-fit"
+          optionTestidPrefix="clip-fit-opt"
+          onchange={(v) =>
+            upd(clip, '改适配', (c) => {
+              if (c.kind === 'source') c.fit = v;
+            })}
+        />
+      </Field>
 
       <KeyableField label="不透明度" min={0} max={1} step={0.01} {...keyableProps(clip, 'opacity')} />
       <KeyableField label="位置 X" min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.x')} />
@@ -262,17 +272,19 @@
       <KeyableField label="旋转" min={-3.1416} max={3.1416} step={0.01} {...keyableProps(clip, 'transform.rot')} />
 
       {#if clip.source.type === 'solid'}
-        <label class="line">
-          颜色
+        <Field label="颜色">
           <input
+            class="color"
             type="color"
+            data-testid="clip-color"
             value={clip.source.color}
             oninput={(e) =>
               upd(clip, '改颜色', (c) => {
                 if (c.kind === 'source' && c.source.type === 'solid') c.source.color = e.currentTarget.value;
               })}
           />
-        </label>
+          <span class="dim mono">{clip.source.color}</span>
+        </Field>
       {:else if clip.source.type === 'algo'}
         {@const def = getGenerator(clip.source.generator)}
         <p class="note">算法生成器：{def?.name ?? clip.source.generator}</p>
@@ -282,50 +294,48 @@
               {#if keyframable(def.kind, p.key)}
                 <KeyableField label={p.label} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
               {:else}
-                <div class="kf">
-                  <div class="row">
-                    <span class="lbl" title={`${p.label}（烘焙入参，不可打关键帧）`}>{p.label}</span>
-                    <input
-                      type="range"
-                      min={p.min}
-                      max={p.max}
-                      step={p.step}
-                      value={Number(clip.source.params[p.key] ?? p.defaultValue)}
-                      oninput={(e) => setAlgoParam(clip, p.key, +e.currentTarget.value)}
-                    />
-                    <input
-                      class="num"
-                      type="number"
-                      min={p.min}
-                      max={p.max}
-                      step={p.step}
-                      value={Number(clip.source.params[p.key] ?? p.defaultValue)}
-                      onchange={(e) => setAlgoParam(clip, p.key, +e.currentTarget.value)}
-                    />
-                  </div>
-                </div>
+                <!-- 烘焙入参：改了要重烘，所以不能打关键帧（每帧重烘会卡死） -->
+                <Field label={p.label} tipText={`${p.label}（烘焙入参，不可打关键帧）`}>
+                  <Slider
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    value={Number(clip.source.params[p.key] ?? p.defaultValue)}
+                    ariaLabel={p.label}
+                    testid="bake-param-slider"
+                    oninput={(v) => setAlgoParam(clip, p.key, v)}
+                  />
+                  <NumberInput
+                    value={Number(clip.source.params[p.key] ?? p.defaultValue)}
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    width={64}
+                    testid="bake-param-number"
+                    oninput={(v) => setAlgoParam(clip, p.key, v)}
+                    onchange={(v) => setAlgoParam(clip, p.key, v)}
+                  />
+                </Field>
               {/if}
             {:else if p.type === 'select'}
-              <label class="line">
-                {p.label}
-                <select
-                  value={clip.source.params[p.key] ?? p.defaultValue}
-                  onchange={(e) => setAlgoParam(clip, p.key, e.currentTarget.value)}
-                >
-                  {#each p.options as o (o.value)}
-                    <option value={o.value}>{o.label}</option>
-                  {/each}
-                </select>
-              </label>
+              <Field label={p.label}>
+                <Select
+                  value={String(clip.source.params[p.key] ?? p.defaultValue)}
+                  options={p.options.map((o) => ({ value: o.value, label: o.label }))}
+                  testid={`algo-param-${p.key}`}
+                  optionTestidPrefix={`algo-param-${p.key}-opt`}
+                  onchange={(v) => setAlgoParam(clip, p.key, v)}
+                />
+              </Field>
             {:else if p.type === 'color'}
-              <label class="line">
-                {p.label}
+              <Field label={p.label}>
                 <input
+                  class="color"
                   type="color"
                   value={String(clip.source.params[p.key] ?? p.defaultValue)}
                   oninput={(e) => setAlgoParam(clip, p.key, e.currentTarget.value)}
                 />
-              </label>
+              </Field>
             {/if}
           {/each}
         {/if}
@@ -333,220 +343,208 @@
         <p class="note">图片素材：{appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId}</p>
       {/if}
     {:else if clip.kind === 'effect'}
-      <div class="line">
-        <select bind:value={addChoice} title="选择要添加的特效">
-          {#each effectsList as e (e.id)}
-            <option value={e.id}>{e.name}</option>
-          {/each}
-        </select>
-        <button data-testid="add-effect-instance" onclick={() => addEffectInstance(clip)}>
-          <i class="fa-solid fa-plus"></i> 添加
-        </button>
-      </div>
+      <Field label="添加特效">
+        <Select
+          value={addChoice}
+          options={effectOptions}
+          testid="effect-picker"
+          optionTestidPrefix="effect-picker-opt"
+          onchange={(v) => (addChoice = v)}
+        />
+        <Button
+          label="添加"
+          icon="plus"
+          testid="add-effect-instance"
+          onclick={() => addEffectInstance(clip)}
+        />
+      </Field>
+
       {#if clip.chain.length === 0}
         <p class="note">空链：从上面添加特效。特效只作用于 z 序在它之下的画面（adjustment layer）。</p>
       {/if}
+
       {#each clip.chain as inst, idx (inst.instanceId)}
         {@const entry = getEffect(inst.defId)}
-        <div class="fx">
+        <div class="fx" data-testid="effect-instance">
           <div class="fx-head">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={inst.enabled}
-              title="启用/禁用"
-              onchange={(e) =>
+              tipText="启用 / 禁用这个特效实例"
+              testid="effect-enabled"
+              onchange={(v) =>
                 upd(clip, '切换特效', (c) => {
                   if (c.kind === 'effect') {
                     const it = c.chain.find((x) => x.instanceId === inst.instanceId);
-                    if (it) it.enabled = e.currentTarget.checked;
+                    if (it) it.enabled = v;
                   }
                 })}
             />
             <span class="fx-name">{entry?.name ?? inst.defId}</span>
-            <button title="上移" disabled={idx === 0} onclick={() => moveInstance(clip, inst.instanceId, -1)}>
-              <i class="fa-solid fa-arrow-up"></i>
-            </button>
-            <button title="下移" disabled={idx === clip.chain.length - 1} onclick={() => moveInstance(clip, inst.instanceId, 1)}>
-              <i class="fa-solid fa-arrow-down"></i>
-            </button>
-            <button title="删除" onclick={() => removeInstance(clip, inst.instanceId)}>
-              <i class="fa-solid fa-xmark"></i>
-            </button>
+            <IconButton
+              icon="arrow-up"
+              label="上移"
+              size="sm"
+              disabled={idx === 0}
+              testid="effect-move-up"
+              onclick={() => moveInstance(clip, inst.instanceId, -1)}
+            />
+            <IconButton
+              icon="arrow-down"
+              label="下移"
+              size="sm"
+              disabled={idx === clip.chain.length - 1}
+              testid="effect-move-down"
+              onclick={() => moveInstance(clip, inst.instanceId, 1)}
+            />
+            <IconButton
+              icon="x"
+              label="删除特效"
+              size="sm"
+              variant="danger"
+              testid="effect-remove"
+              onclick={() => removeInstance(clip, inst.instanceId)}
+            />
           </div>
           {#if entry}
             {#each entry.params as p (p.key)}
               {#if p.type === 'range'}
                 <KeyableField label={p.label} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
               {:else if p.type === 'select'}
-                <label class="line">
-                  {p.label}
-                  <select
-                    value={inst.values[p.key] ?? p.defaultValue}
-                    onchange={(e) => setEffectParam(clip, inst, p.key, e.currentTarget.value)}
-                  >
-                    {#each p.options as o (o.value)}
-                      <option value={o.value}>{o.label}</option>
-                    {/each}
-                  </select>
-                </label>
+                <Field label={p.label}>
+                  <Select
+                    value={String(inst.values[p.key] ?? p.defaultValue)}
+                    options={p.options.map((o) => ({ value: o.value, label: o.label }))}
+                    testid={`effect-param-${p.key}`}
+                    optionTestidPrefix={`effect-param-${p.key}-opt`}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                  />
+                </Field>
               {:else if p.type === 'color'}
-                <label class="line">
-                  {p.label}
+                <Field label={p.label}>
                   <input
+                    class="color"
                     type="color"
                     value={String(inst.values[p.key] ?? p.defaultValue)}
                     oninput={(e) => setEffectParam(clip, inst, p.key, e.currentTarget.value)}
                   />
-                </label>
+                </Field>
               {/if}
             {/each}
           {/if}
         </div>
       {/each}
     {:else}
-      <label class="line">
-        源内偏移 srcIn
-        <input
-          type="number"
-          step="0.01"
-          min="0"
+      <Field label="源内偏移">
+        <NumberInput
           value={clip.srcIn}
-          onchange={(e) =>
+          min={0}
+          step={0.01}
+          width={70}
+          suffix="s"
+          testid="clip-srcin"
+          onchange={(v) =>
             upd(clip, '改 srcIn', (c) => {
-              if (c.kind === 'audio') c.srcIn = Math.max(0, +e.currentTarget.value || 0);
+              if (c.kind === 'audio') c.srcIn = Math.max(0, v);
             })}
         />
-      </label>
+      </Field>
     {/if}
 
     <div class="actions">
-      <button
-        data-testid="split-at-playhead"
-        title="在播放头处切分 (S)"
+      <Button
+        label="在播放头切分"
+        icon="scissors"
+        shortcut="S"
+        testid="split-at-playhead"
         onclick={() => appState.store.splitClipAt(track.id, clip.id, playT)}
-      >
-        <i class="fa-solid fa-scissors"></i> 在播放头切分
-      </button>
-      <button
-        data-testid="delete-clip"
-        class="danger"
-        title="删除片段 (Del)"
+      />
+      <Button
+        label="删除"
+        icon="trash"
+        variant="danger"
+        shortcut="Del"
+        testid="delete-clip"
         onclick={() => {
           appState.store.removeClip(clip.id);
           appState.selectedClipId = null;
         }}
-      >
-        <i class="fa-solid fa-trash"></i> 删除
-      </button>
+      />
     </div>
   {:else}
     <h3>检查器</h3>
-    <p class="placeholder">选中一个片段查看属性</p>
+    <p class="placeholder">
+      选中一个片段查看属性。
+      <br />空白处右键可以在鼠标位置新建片段。
+    </p>
   {/if}
 </div>
 
 <style>
   .inspector {
-    padding: 10px 12px;
+    padding: var(--sp-3) var(--sp-4);
   }
   h3 {
-    margin: 0 0 8px;
-    font-size: 12px;
-    color: var(--text-1);
-    text-transform: uppercase;
+    margin: 0 0 var(--sp-3);
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
     letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
   .track-name {
-    margin-left: 6px;
-    color: var(--text-2);
+    margin-left: var(--sp-2);
+    color: var(--text-muted);
     text-transform: none;
+    letter-spacing: 0;
   }
   .placeholder,
   .note {
-    color: var(--text-2);
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    margin: 0 0 var(--sp-2);
   }
-  .note {
-    font-size: 11px;
+  .dim {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
   }
-  .line {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
-    color: var(--text-1);
-    font-size: 12px;
+  .mono {
+    font-family: 'Cascadia Code', Consolas, monospace;
   }
-  .line input:not([type='checkbox']) {
+  .txt {
     flex: 1;
     min-width: 0;
+    height: var(--control-h);
   }
-  .nums {
-    flex-wrap: wrap;
-  }
-  .nums label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-  }
-  .nums input {
-    width: 62px;
-  }
-  .actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 12px;
-  }
-  .danger {
-    color: var(--danger);
+  .color {
+    width: 32px;
+    height: var(--control-h);
+    padding: 1px;
+    cursor: pointer;
   }
   .fx {
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 6px 8px;
-    margin-bottom: 8px;
-    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--sp-2) var(--sp-3);
+    margin-bottom: var(--sp-3);
+    background: var(--surface-2);
   }
   .fx-head {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin-bottom: 4px;
+    gap: var(--sp-1);
+    margin-bottom: var(--sp-2);
   }
   .fx-name {
     flex: 1;
-    font-size: 12px;
-    color: var(--text-0);
-  }
-  .fx-head button {
-    padding: 1px 5px;
-    font-size: 9px;
-    background: transparent;
-    border-color: transparent;
-  }
-  .kf {
-    margin-bottom: 4px;
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .lbl {
-    width: 64px;
-    flex-shrink: 0;
-    color: var(--text-1);
-    font-size: 11px;
-    white-space: nowrap;
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .row input[type='range'] {
-    flex: 1;
-    min-width: 0;
-  }
-  .num {
-    width: 60px;
-    font-size: 11px;
+  .actions {
+    display: flex;
+    gap: var(--sp-3);
+    margin-top: var(--sp-4);
   }
 </style>

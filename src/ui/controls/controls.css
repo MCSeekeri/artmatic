@@ -1,0 +1,520 @@
+/*
+ * controls.css — 自研控件族的统一外观。
+ *
+ * 这里是**全局**样式（不是组件 scoped），因为同一套类要在多个组件里复用，
+ * 而 Svelte 的 <style> 是作用域隔离的，用它就必须把每个控件包成组件。
+ *
+ * 视觉纪律（全部来自本项目的取向，加新控件时照抄）：
+ *   1. 纯色表面分层，**零阴影零渐变**。层次靠 surface-0→3 的深度 + 1px 实线。
+ *   2. 圆角 4px（--radius-sm）为主，容器到 6px（--radius-md）。
+ *   3. 纯图标按钮永远 background: transparent，**hover 只变图标颜色**。
+ *   4. 主题色只出现在选中/激活/焦点三处，其余一律中性灰。
+ *   5. 中性色近零饱和；所有颜色走 token，不写颜色字面量。
+ */
+
+/* ------------------------------------------------------------ 按钮 */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: 1px solid var(--btn-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--btn-bg-hover);
+}
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  color: var(--btn-disabled);
+  cursor: default;
+}
+/* 主操作才用主题色填充——这是「主题色仅出现在极少场景」里的一处例外。 */
+.btn.accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-on);
+}
+.btn.accent:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+.btn.danger {
+  color: var(--danger);
+}
+.btn.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+.btn.outline {
+  background: transparent;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--btn-ghost-fg);
+}
+.btn.ghost:hover:not(:disabled) {
+  color: var(--btn-ghost-fg-hover);
+  background: var(--btn-bg-hover);
+}
+.btn.lg {
+  height: 26px;
+}
+
+/*
+ * 纯图标按钮：**永远透明底**。hover 靠图标颜色变化表达，不加色块。
+ * 这是本项目明确要求的交互（也省掉一大片灰底按钮的视觉噪声）。
+ */
+.ic-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--btn-ghost-fg);
+  cursor: pointer;
+}
+.ic-btn:hover:not(:disabled) {
+  color: var(--btn-ghost-fg-hover);
+}
+.ic-btn:disabled {
+  color: var(--btn-disabled);
+  cursor: default;
+}
+/* 激活态（eye 开、关键帧已打点之类）：主题色只在这一处出现。 */
+.ic-btn[aria-pressed='true'] {
+  color: var(--accent);
+}
+.ic-btn.danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+.ic-btn.sm {
+  width: 18px;
+  height: 18px;
+}
+.ic-btn.lg {
+  width: 26px;
+  height: 26px;
+}
+
+/* ------------------------------------------------------------ 参数行 */
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--control-h);
+  margin-bottom: var(--sp-1);
+}
+.field > .field-label {
+  flex-shrink: 0;
+  width: var(--field-label-w, 66px);
+  color: var(--field-label);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.field > .field-control {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.field.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
+}
+
+/* ------------------------------------------------------------ 复选框 */
+
+.cbx {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--field-label);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.cbx-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  color: var(--accent-on);
+}
+.cbx:hover .cbx-box {
+  border-color: var(--input-border-hover);
+}
+/* 勾选 = 主题色填充。空/实两态一眼可辨，不靠颜色深浅区分。 */
+.cbx[aria-checked='true'] .cbx-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cbx[aria-disabled='true'] {
+  color: var(--btn-disabled);
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ 下拉 */
+
+.sel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.sel:hover {
+  border-color: var(--input-border-hover);
+}
+.sel[aria-expanded='true'] {
+  border-color: var(--border-focus);
+}
+.sel-label {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sel-arrow {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transform: rotate(90deg);
+}
+.sel[aria-expanded='true'] .sel-arrow {
+  color: var(--accent);
+}
+
+.sel-pop {
+  position: fixed;
+  z-index: var(--z-menu);
+  min-width: 100%;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
+  border-radius: var(--radius-md);
+}
+.sel-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 3px var(--sp-3);
+  /* 选项是列表项不是按钮：无背景无边框，只有 hover/高亮态。
+     （app.css 给 button 的兜底样式会把它画成按钮，这里显式覆盖掉。） */
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--menu-item-fg);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sel-opt[data-active='true'] {
+  background: var(--menu-item-hover);
+}
+.sel-opt[aria-selected='true'] {
+  color: var(--accent);
+}
+.sel-opt[aria-disabled='true'] {
+  color: var(--btn-disabled);
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ 滑杆 */
+
+.sld {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  display: flex;
+  align-items: center;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.sld-track {
+  width: 100%;
+  height: 3px;
+  background: var(--input-border);
+  border-radius: 2px;
+}
+.sld-fill {
+  position: absolute;
+  left: 0;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.sld-thumb {
+  position: absolute;
+  width: 9px;
+  height: 13px;
+  margin-left: -4.5px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.sld:hover .sld-thumb {
+  background: var(--accent-strong);
+}
+.sld[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ------------------------------------------------------------ 数字框（可拖拽改值） */
+
+.num {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  /* 横向拖动改值 → 光标本身就是可发现性的一部分 */
+  cursor: ew-resize;
+  touch-action: none;
+}
+.num:hover {
+  border-color: var(--input-border-hover);
+}
+.num.dragging {
+  border-color: var(--border-focus);
+  cursor: ew-resize;
+}
+.num input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--input-fg);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: var(--fs-sm);
+  text-align: right;
+  cursor: inherit;
+}
+.num input:focus {
+  outline: none;
+}
+.num-suffix {
+  flex-shrink: 0;
+  margin-left: 2px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+/* ------------------------------------------------------------ 菜单（含二级） */
+
+.menu {
+  position: fixed;
+  z-index: var(--z-menu);
+  min-width: 168px;
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
+  padding: var(--sp-1);
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
+  border-radius: var(--radius-md);
+}
+.menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 3px var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--menu-separator);
+  margin-bottom: var(--sp-1);
+  color: var(--menu-item-fg-muted);
+  font-size: var(--fs-xs);
+}
+.menu-head-v {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  color: var(--accent);
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 3px var(--sp-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--menu-item-fg);
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.menu-item[data-active='true']:not(:disabled) {
+  background: var(--menu-item-hover);
+}
+.menu-item:disabled {
+  color: var(--btn-disabled);
+  cursor: default;
+}
+.menu-item.danger {
+  color: var(--menu-item-danger);
+}
+.menu-item-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: inherit;
+  opacity: 0.85;
+}
+.menu-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-item-shortcut {
+  flex-shrink: 0;
+  color: var(--menu-item-fg-muted);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: var(--fs-xs);
+}
+.menu-item-caret {
+  flex-shrink: 0;
+  color: var(--menu-item-fg-muted);
+}
+.menu-sep {
+  height: 1px;
+  margin: var(--sp-1) var(--sp-2);
+  background: var(--menu-separator);
+}
+
+/* ------------------------------------------------------------ 通用浮层 */
+
+.pop {
+  position: fixed;
+  z-index: var(--z-menu);
+  min-width: 200px;
+  max-height: min(80vh, 560px);
+  overflow-y: auto;
+  padding: var(--sp-4);
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-md);
+}
+.pop-title {
+  margin: 0 0 var(--sp-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--control-h);
+  font-size: var(--fs-sm);
+  color: var(--field-label);
+}
+.pop-row > .grow {
+  flex: 1;
+  min-width: 0;
+}
+.pop-sep {
+  height: 1px;
+  margin: var(--sp-3) 0;
+  background: var(--menu-separator);
+}
+
+/* ------------------------------------------------------------ 提示气泡 */
+
+.tip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  max-width: 280px;
+  padding: 3px var(--sp-3);
+  background: var(--tip-bg);
+  color: var(--tip-fg);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.tip-key {
+  margin-left: var(--sp-3);
+  padding: 0 3px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  opacity: 0.7;
+}
+
+/* ------------------------------------------------------------ 小工具 */
+
+.swatch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.swatch[aria-pressed='true'] {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 1px;
+}
+.kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--input-border);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: var(--fs-xs);
+  text-align: center;
+}

@@ -1,63 +1,122 @@
-@import '@fortawesome/fontawesome-free/css/all.min.css';
+/*
+ * 这里**没有** :root 变量块，是刻意的。
+ *
+ * Design Token 的唯一真源是 src/ui/tokens.ts，由 ui/theme-apply.ts 在 mount 前
+ * 写成 :root 的内联自定义属性。原因是时间轴是 Canvas2D 自绘，ctx.fillStyle
+ * 写不了 var(--x)——只写 CSS 的话，Canvas 那边必然出现一份同值的影子副本，
+ * 改配色要改两处。现在两边都从 tokens.ts 取，物理上不可能不同步。
+ *
+ * 所以：**不要在这里加 --xxx 定义**。要加 token 就加在 tokens.ts。
+ */
 
-:root {
-  --bg-0: #101216;
-  --bg-1: #16191f;
-  --bg-2: #1d2129;
-  --bg-3: #262b36;
-  --line: #323948;
-  --text-0: #e8ebf0;
-  --text-1: #aab2c0;
-  --text-2: #6b7485;
-  --accent: #5b9dff;
-  --accent-dim: #2c4d80;
-  --danger: #ff6b6b;
-  --ok: #51cf8a;
-  --radius: 6px;
-  --font-ui: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  --font-mono: 'Cascadia Code', Consolas, monospace;
+* {
+  box-sizing: border-box;
 }
 
-* { box-sizing: border-box; }
-
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--bg-0);
-  color: var(--text-0);
-  font-family: var(--font-ui);
-  font-size: 13px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: var(--fs-md);
+  line-height: 1.35;
   overflow: hidden;
+  /*
+   * UI 文本一律不可选中：这是桌面应用的观感，也避免拖拽时整片文字变蓝。
+   * 真正需要选中的只有输入类元素，下面单独放行。
+   */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-#app { height: 100%; }
+input,
+textarea,
+select,
+[contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
 
+#app {
+  height: 100%;
+}
+
+/* ------------------------------------------------------------ 滚动条
+ * 窄、无圆角、无阴影——属于「层次靠纯色表面」的一部分。
+ */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------ 焦点环
+ * 主题色只出现在少数场景，焦点环是其中之一——键盘用户必须看得见。
+ */
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------ 原生控件兜底
+ * 只是「迁移期间别看起来是坏的」的兜底样式。真正的组件外观在
+ * ui/controls/controls.css，那里用类选择器覆盖这里。
+ * 本项目的取向：纯图标按钮永远 background: transparent，靠图标变色表达 hover。
+ */
 button {
-  background: var(--bg-3);
-  color: var(--text-0);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 4px 10px;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: 1px solid var(--btn-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
   font: inherit;
   cursor: pointer;
 }
-button:hover { background: var(--line); }
-button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: var(--accent-dim); border-color: var(--accent); }
-button.primary:hover { background: var(--accent); color: #fff; }
+button:hover:not(:disabled) {
+  background: var(--btn-bg-hover);
+}
+button:disabled {
+  color: var(--btn-disabled);
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-on);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
 
-input, select {
-  background: var(--bg-1);
-  color: var(--text-0);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 3px 6px;
+input,
+select,
+textarea {
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
   font: inherit;
 }
-input[type='number'] { width: 72px; font-family: var(--font-mono); }
-input[type='range'] { padding: 0; }
-
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
+input:hover,
+select:hover {
+  border-color: var(--input-border-hover);
+}
+input::placeholder {
+  color: var(--input-placeholder);
+}

@@ -7,6 +7,7 @@
  */
 
 import { beatDur, type BeatGrid } from '../core/time';
+import { DENSITY } from '../ui/tokens';
 
 export function pxPerSec(pxPerBeat: number, grid: BeatGrid): number {
   return pxPerBeat / beatDur(grid);
@@ -20,5 +21,9 @@ export function timeAtX(x: number, pxPerBeat: number, grid: BeatGrid): number {
   return x / pxPerSec(pxPerBeat, grid);
 }
 
-export const RULER_HEIGHT = 26;
-export const ROW_HEIGHT = 40;
+/**
+ * 行高与标尺高。数值来自 ui/tokens.ts 的 DENSITY——Canvas 数学要的是数字，
+ * CSS 要的是 `--row-h: 28px`，两边必须同一个源，否则网格线和片段 DOM 会错位。
+ */
+export const RULER_HEIGHT = DENSITY.rulerH;
+export const ROW_HEIGHT = DENSITY.rowH;

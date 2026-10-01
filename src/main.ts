@@ -1,17 +1,27 @@
 import { mount } from 'svelte';
 import App from './ui/App.svelte';
 import './app.css';
+// 控件族样式必须在 app.css 的兜底样式**之后**载入，否则同特异度的
+// `button:hover` 会盖掉 `.ic-btn:hover`（纯图标按钮要保持透明底）。
+import './ui/controls/controls.css';
 import { ProjectStore } from './core/project-store';
 import { createDemoProject, DEMO_ASSET_ID } from './core/demo-project';
 import { renderDemoAudio } from './audio/demo-audio';
 import { computeWaveform } from './audio/decode';
 import { appState } from './ui/app-state.svelte';
+import { theme } from './ui/theme.svelte';
+import { installTheme } from './ui/theme-apply';
 import { runExport } from './exporters/export-runner';
 import { PngSequenceSink } from './exporters/png-sequence';
 import { unzipSync } from 'fflate';
 import { defaultParams, listGenerators } from './algos/registry';
 
-/* 装配顺序：store 先于 mount（组件挂载即读工程），渲染服务在
+/* 装配顺序：主题 → store → mount。
+   主题必须最先注入：它是内联 style，写在 :root 上，任何时候注入都生效，
+   但放在 mount 前可以避免第一帧用默认值闪一下。 */
+installTheme(theme.spec);
+
+/* store 先于 mount（组件挂载即读工程），渲染服务在
    Preview.onMount → appState.attachPreview 里随 canvas 惰性创建。 */
 const store = new ProjectStore(createDemoProject());
 appState.init(store);
@@ -32,6 +42,7 @@ appState.renderer.renderFrame(store.project, appState.playT);
   renderer: appState.renderer,
   store,
   appState,
+  theme,
   renderFrame: (t: number) => appState.renderer.renderFrame(store.project, t),
   readPixels: () => {
     const { data, w, h } = appState.renderer.readPixels();

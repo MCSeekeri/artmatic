@@ -17,7 +17,10 @@
   });
   const width = $derived.by(() => {
     void appState.version;
-    return Math.max(4, xOfTime(clip.end, appState.pxPerBeat, grid) - xOfTime(clip.start, appState.pxPerBeat, grid));
+    return Math.max(
+      4,
+      xOfTime(clip.end, appState.pxPerBeat, grid) - xOfTime(clip.start, appState.pxPerBeat, grid),
+    );
   });
   const selected = $derived(appState.selectedClipId === clip.id);
   /** 拖拽中且当前落点会被拒收（reject 策略）：红框预告，避免「松手弹回去」的困惑。 */
@@ -50,10 +53,11 @@
 <div
   class="clip"
   class:selected
-  class:illegal
   class:effect={clip.kind === 'effect'}
   class:audio={clip.kind === 'audio'}
   data-clip-id={clip.id}
+  data-testid="clip"
+  data-illegal={illegal ? 'true' : undefined}
   style:left={`${left}px`}
   style:width={`${width}px`}
   role="button"
@@ -63,6 +67,7 @@
 >
   <span class="label">{clip.label || clip.kind}</span>
   {#if clip.fadeSec > 0}
+    <!-- 淡入淡出标记：纯几何形状，不引图标（这里只有 10px 见方） -->
     <i class="fade" title="淡入淡出"></i>
   {/if}
   <i class="edge l" role="presentation" onpointerdown={(e) => down(e, 'resize-l')}></i>
@@ -70,13 +75,18 @@
 </div>
 
 <style>
+  /*
+   * 片段色走 content 层（--clip-*），它随亮暗变但**不随主题色变**：
+   * 这里的颜色编码的是「这是哪类数据」，不是界面角色。详见 ui/tokens.ts。
+   */
   .clip {
     position: absolute;
-    top: 4px;
-    bottom: 4px;
-    background: var(--accent-dim);
-    border: 1px solid var(--accent);
-    border-radius: 4px;
+    top: 3px;
+    bottom: 3px;
+    background: var(--clip-source-bg);
+    border: 1px solid var(--clip-source-border);
+    border-radius: var(--radius-sm);
+    color: var(--clip-source-text);
     cursor: grab;
     overflow: hidden;
     user-select: none;
@@ -86,29 +96,34 @@
     cursor: grabbing;
   }
   .clip.selected {
-    outline: 2px solid #fff;
-    z-index: 3;
+    /* 选中用主题色描边——这是「主题色只出现在当前/激活态」的一处。 */
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    z-index: var(--z-clip-selected);
   }
   /* 落点会被 reject 策略拒收：松手会整次弹回，先在这里预告 */
-  .clip.illegal {
+  .clip[data-illegal='true'] {
     outline: 2px dashed var(--danger);
+    outline-offset: -1px;
     opacity: 0.7;
   }
   .clip.effect {
-    background: #4a3a6e;
-    border-color: #9a7ee8;
+    background: var(--clip-effect-bg);
+    border-color: var(--clip-effect-border);
+    color: var(--clip-effect-text);
   }
   .clip.audio {
-    background: #1e4a38;
-    border-color: #51cf8a;
+    background: var(--clip-audio-bg);
+    border-color: var(--clip-audio-border);
+    color: var(--clip-audio-text);
   }
   .label {
     position: absolute;
-    left: 6px;
-    top: 2px;
-    right: 14px;
-    font-size: 10px;
-    color: rgba(255, 255, 255, 0.85);
+    left: 5px;
+    top: 1px;
+    right: 12px;
+    font-size: var(--fs-xs);
+    line-height: 14px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -120,16 +135,17 @@
     top: 2px;
     width: 0;
     height: 0;
-    border-left: 8px solid transparent;
-    border-bottom: 8px solid rgba(255, 255, 255, 0.5);
+    border-left: 7px solid transparent;
+    border-bottom: 7px solid currentColor;
+    opacity: 0.5;
   }
   .edge {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 7px;
+    width: 6px;
     cursor: ew-resize;
-    z-index: 2;
+    z-index: var(--z-edge);
   }
   .edge.l {
     left: 0;
@@ -137,7 +153,8 @@
   .edge.r {
     right: 0;
   }
+  /* 纯图标/纯热区 hover 不用底色块，只提亮——与全局「图标按钮 hover 只变色」一致 */
   .edge:hover {
-    background: rgba(255, 255, 255, 0.25);
+    background: color-mix(in srgb, currentColor 22%, transparent);
   }
 </style>

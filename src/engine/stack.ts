@@ -48,8 +48,33 @@ export function paramWithCurve(
 
 export function buildStack(project: Project, t: number): RenderOp[] {
   const ops: RenderOp[] = [];
-  project.tracks.forEach((track, z) => {
+
+  /**
+   * 轨道序 → z 序。
+   *
+   * `tracks[0]` 渲染在**轨道列表最顶部**，而列表顶部按 NLE 惯例就是「最前景」，
+   * 所以它的 z 必须最大：`z = last - 视觉轨下标`。
+   *
+   * 这里曾经是 `z = index`（z 直接等于数组下标），后果是「列表越靠下的轨道
+   * 画面越靠上」——与 Premiere / AE / DaVinci 的直觉完全相反，用户实测报上来
+   * 说「z 轴好像是轨道越往下越大，不符合直觉」。
+   *
+   * 编号只数**视觉轨**：音频轨不参与合成，若把它们也算进下标，z 就会出现
+   * 空洞（4 条视觉轨 + 1 条音频会得到 1..4 而不是 0..3）。现在 op.z 只用于排序，
+   * 空洞不会出错，但让「z 就是栈的层号」这件事成立，后来人才不会误解。
+   * 改这里时必须同步把 demo 工程的 tracks 顺序一起倒过来，否则原本的叠加关系
+   * 会被整个翻掉。
+   */
+  let visualCount = 0;
+  const visualIndex = new Map<string, number>();
+  for (const track of project.tracks) {
+    if (track.kind === 'visual') visualIndex.set(track.id, visualCount++);
+  }
+  const last = visualCount - 1;
+
+  project.tracks.forEach((track) => {
     if (!track.enabled || track.kind !== 'visual') return;
+    const z = last - visualIndex.get(track.id)!;
     for (const clip of track.clips) {
       if (t < clip.start || t >= clip.end) continue;
       if (clip.kind === 'effect') {
@@ -69,6 +94,7 @@ export function buildStack(project: Project, t: number): RenderOp[] {
       ops.push({ type: 'source', z, source: { clip, opacity, transform, blend: clip.blend } });
     }
   });
-  // 轨道序即 z 序；同轨不重叠，轨道内相对顺序无所谓，保持稳定即可。
+  // z 升序输出，compositor 顺序合成 → z 大者盖在上，与「列表顶部 = 前景」一致。
+  // 同轨不重叠，轨道内相对顺序无所谓，保持稳定即可。
   return ops.sort((a, b) => a.z - b.z);
 }

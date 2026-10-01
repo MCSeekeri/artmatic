@@ -154,6 +154,37 @@ export class ProjectStore {
     });
   }
 
+  /* ------------------------------------------------------- 轨道属性写入
+   *
+   * 这三个方法存在的原因是一个真 bug：轨道行的开关原来在组件里写
+   * `track.enabled = …`，而那个 `track` 是 `$derived` 里 `.map(t => ({...t}))`
+   * 出来的**浅拷贝**。commit 对比真实 project 的快照判定「无变化」，
+   * 于是既不 bump version 也不入撤销栈——开关看着能点，其实从未落库。
+   * 写库必须改 `commit(p => …)` 里的真实对象，这是唯一的正道。
+   */
+
+  setTrackEnabled(id: string, enabled: boolean): void {
+    this.commit(enabled ? '启用轨道' : '禁用轨道', (p) => {
+      const t = p.tracks.find((x) => x.id === id);
+      if (t) t.enabled = enabled;
+    });
+  }
+
+  toggleTrackEnabled(id: string): void {
+    const t = this.track(id);
+    if (t) this.setTrackEnabled(id, !t.enabled);
+  }
+
+  /** 改名。空名字不写库（否则轨道会变成一个点不到的空行）。 */
+  renameTrack(id: string, name: string): void {
+    const next = name.trim();
+    if (!next) return;
+    this.commit('重命名轨道', (p) => {
+      const t = p.tracks.find((x) => x.id === id);
+      if (t) t.name = next;
+    });
+  }
+
   /* ------------------------------------------------------------ 片段 */
 
   addClip(trackId: string, clip: AnyClip): void {

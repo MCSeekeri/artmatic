@@ -98,6 +98,8 @@ Electron 只在两件事上出现：**读写工程目录**、**跑 ffmpeg 子进
 | 导出编码 | **捆绑 `ffmpeg.exe` 子进程** | 见 ADR-001 |
 | 音频分析 | 自研 TS 离线 FFT（对齐 `AnalyserNode` 的 dB 映射） | 见 ADR-002 |
 | 排版出图 | **snapDOM + 字体子集化**（`dom-snap` 后端） | 见 ADR-003 |
+| 图标 | **Lucide（`@lucide/svelte`）**（2026-10-01 换） | 描边风格与本项目视觉一致；ISC；按组件导出可 tree-shaking |
+| 样式 | **Design Token 单一真源在 TS**（`ui/tokens.ts`） | 见 ADR-005 |
 | 测试 | Playwright（E2E）+ vitest（纯逻辑单测） | 单测只测纯函数 |
 
 ---
@@ -220,6 +222,52 @@ interface TextRasterizer {
 
 ---
 
+### ADR-005 · Design Token 用 TS 当唯一真源，而不是只写 CSS 变量
+
+**决定**：`src/ui/tokens.ts` 是 token 的唯一真源（纯数据 + 纯函数，**不碰 DOM**），
+`src/ui/theme-apply.ts` 把它写成 `:root` 的内联自定义属性，`src/ui/theme.svelte.ts`
+管运行时态（亮暗 + 品牌色 + 自定义 hex，持久化到 localStorage）。`app.css` **不再有
+`:root` 变量块**。
+
+**理由**：时间轴是 Canvas2D 自绘，`ctx.fillStyle` 写不了 `var(--x)`。改版前 `grid-draw.ts`
+因此在 TS 里完整重抄了一份调色板（9 个字面量与 CSS 变量同值一一对应）——改一次配色要改
+两处，改漏就是「面板变了、网格没变」这种极难定位的偏色。现在两边都从 `tokens.ts` 取
+（Canvas 走 `canvasPalette(spec)`），物理上不可能不同步。
+
+**四层**：primitive（`--p-*`，只描述值）→ semantic（`--surface-*` 等，描述用途，不含颜色词）
+→ component（`--btn-*` 等，值必须是 `SemanticKey`，写错层直接编译报错）→
+**content**（`--clip-*`，数据类别色，随亮暗变但**永不随品牌变**）。
+最后一层是为解一个具体问题：片段类型色编码的是「这是哪类数据」，不是界面角色；挂进品牌组
+的话用户换主题色时特效片段的样貌会跟着变，破坏对内容的心智映射。
+
+**边界**：生成器默认色（`#3a6ea5` 之类）**不是 token**，那是 Project 文档内容（schema 字段）。
+Inspector 里颜色控件的**外观**走 component 层，**值**走内容。
+
+**视觉纪律**：零阴影零渐变，层次只靠 surface-0→3 的纯色深度 + 1px 实线；圆角 4/6px；
+纯图标按钮永远 `background: transparent`，hover 只改图标颜色；主题色只出现在**选中/激活、
+焦点环、播放头、底栏数字**这几处。默认**亮色**。
+
+### ADR-006 · 轨道 z 序 = 列表位置取反（列表顶部 = 前景）
+
+**决定**：`engine/stack.ts` 的 `buildStack` 里 `z = 视觉轨数 - 1 - 视觉轨下标`。
+**编号只数视觉轨**（音频轨不参与合成，算进去会让 z 出现空洞）。
+
+**理由**：`tracks[0]` 渲染在轨道列表最顶部，而列表顶部按 NLE 惯例就是最前景，所以它的 z
+必须最大。这里原来是 `z = index`，后果是「列表越靠下的轨道画面越靠上」——与 Premiere / AE /
+DaVinci 的直觉完全相反（用户实测报上来：「z 轴好像是轨道越往下越大，不符合直觉」）。
+
+**配套**：`core/demo-project.ts` 的 tracks 数组必须一起倒序（现在是 V4→V3→V2→V1→A1），
+否则原本的叠加关系会被整个翻掉。改这里时 `tests/unit/stack.test.ts` 会挡住。
+
+### ADR-007 · 密度压紧到 28px 行高
+
+**决定**：轨道行高 40 → 28px，标尺 26 → 24px，字号阶梯只留 10/11/12。数值在
+`tokens.ts` 的 `DENSITY` 里，CSS 与 Canvas 数学（`timeline/view-model.ts`）都从它取，
+不许各写一份。
+
+**理由**：Terminal-Native 取向是「密度即特性」——同屏能多出 40% 的轨道，信息密度本身就是
+这类工具的价值。
+
 ## 5. 数据模型
 
 **音频单独成轨**（已确认）。视觉轨道里混放画面来源与特效。
@@ -310,7 +358,9 @@ function buildStack(project: Project, t: number): Stack {
 
 **跨轨**：`track.clips` 的兼容判据只有一条 `ProjectStore.canHost(track, clip)`（音频片段只进音频轨，画面/特效片段只进视觉轨），拖拽与 Alt+↑↓ 共用，不许各写一套。拖拽期间实时搬家（因此指针监听挂在 `window` 而不是 `setPointerCapture`——元素会在两个 `{#each}` 块之间重建，捕获随之失效）。
 
-**布局约定**：针对时间轴的操作（播放、拍网格、吸附、重叠策略、时长、缩放、导出）一律放在**轨道正上方**的工具条里，不要挪回窗口顶部。
+**布局约定**：针对时间轴的操作（播放、拍网格、吸附、重叠策略、时长、缩放）一律放在**轨道正上方**的工具条里，不要挪回窗口顶部。
+
+**例外——工程级动作归窄侧栏**（2026-10-01 调整）：保存、导出这类「对整份工程」的动作放在最左侧的窄图标栏里，与「逐帧/逐拍」的时间轴操作分开。导出的**触发入口**因此从工具条搬进了侧栏的导出面板（`[data-testid=rail-export]` → `[data-testid=export-png]`）；工具条里只剩播放头与拍网格相关的东西。
 
 ### 关键帧要锚在拍上
 
@@ -459,9 +509,102 @@ npm run dist                # electron-builder 打包（M5 才有）
 
 - **单测只测纯函数**：曲线求值、时间换算、命令栈、schema 迁移、颜色/合成数学。不测 DOM、不测 WebGL。
 - **E2E 走 Playwright + 系统 Chrome/Edge**（`channel: 'chrome'`），不需要 `playwright install`。E2E 服务器要正确返回 `.mjs` 的 `text/javascript` MIME，否则 ESM import 会被拦掉。
-- **E2E 选择器两条坑**（都实测踩过）：
-  1. 检查器里的 `.kf > .row` 与时间轴的 `.row` **同名**，而检查器在 DOM 里更靠前 —— 选轨道行一律写 `.tl .row`；选具体行用 `[data-track-id]`。
+- **选择器一律优先 `data-testid`**，不要绑 CSS 类名。所有自研控件都暴露了稳定 testid
+  （`param-row` / `param-label` / `param-slider` / `param-number` / `select` / `menu-item-*` /
+  `track-side-row` / `tl-row` / `tl-scroll` / `ctx-menu` …）。迁移前那批「绑 `.kf`、`.lbl`、
+  `input[type=range]`、`button[title=删除]`」的断言在换控件时全碎了一次，不值得再来一遍。
+  - 约定：`NumberInput` 的 `testid` 落在**内部 `<input>`** 上（保住 `fill()` / `inputValue()`），
+    拖拽热区的 testid 是 `testid + '-wrap'`。
+- **E2E 选择器两条坑**：
+  1. ~~检查器的 `.kf > .row` 与时间轴的 `.row` 同名~~ —— 已由 `Field` 组件消除（参数行不再用 `.row`）。选轨道行仍写 `[data-testid=tl-row]`。
   2. 轨道行数多时轨道区会出纵向滚动条，用 `boundingBox()` 拿到的行可能落在视口外（鼠标事件会被钳到视口边界，`elementFromPoint` 返回 `html`）。要么把 `viewport` 开高，要么先 `scrollTop = scrollHeight` 再量。
+- **⚠️ 已知 flaky（2026-10-01 实测确认，非本次改动引入）**：`determinism.spec.ts`、
+  `algos.spec.ts`、`effects.spec.ts` 里凡是断言「同一 t 多次求值逐像素一致」的用例，
+  **约 60–75% 的失败率**，且**与代码版本无关**——用 `git worktree` 检出改动前的提交
+  实测同样失败（基线 8 次：通过 3 失败 5；当前 8 次：通过 2 失败 6，统计上无差别）。
+  症状固定：**个别 1–2 个像素**（如 (279,17) 由 `[47,58,72]` 变 `[109,156,182]`），
+  差值量级 ~110，与预览尺寸无关（同尺寸下 HEAD 布局也不复现）。怀疑是 demo 特效栈
+  （`echo` 反馈 + `glitch`）在 GPU 侧的边界采样竞态，未定位到确切层。
+  **排查时注意**：用探针包一层 `renderer.kit.size` / `syncSize` 会让它「变得通过」——
+  时序敏感，别被这个假象骗到。
+  ```bash
+  # 复现（跑 8 次看通过率）
+  for i in $(seq 1 8); do node scripts/e2e.mjs determinism; done
+  ```
+
+### 前端实现坑（2026-10-01 UI 改版实测，条条都真咬过）
+
+1. **别把变量命名成 `state`。** `let state = $state(initial())` 会让 svelte2tsx 把 `$state`
+   当成「订阅名为 `state` 的 store」，报 `Block-scoped variable '$state' used before its
+   declaration` + `Cannot use 'state' as a store`。改叫 `menu` / `panel` 之类即可。同理避开
+   `$props` / `$derived` / `$effect` 这几个名字。
+2. **`use:` action 的 `destroy` 与 `pointerleave` 都可能跑在卸载流程里。** 组件被移除时
+   浏览器会**被动触发** `pointerleave`，那一刻仍在 Svelte 的 flush 内，同步写 rune 会抛
+   `state_unsafe_mutation`（实测「关掉检查器抽屉」必现）。tooltip 的 `clear()` 因此把状态
+   写入挪进了 `queueMicrotask`，并用代际号防止迟到的 clear 抹掉新 hint。
+3. **grid 子项要显式约束列。** `.stage { grid-template-rows: ... }` 的**隐式列默认是 `auto`**，
+   会被子项的**最小内容宽度**撑开：工具条里几乎全是 `flex-shrink: 0` 的控件，实测在 1280 宽
+   窗口下把这一列撑到 1058px 而父格只有 936px——preview / toolbar / tracks 一起溢出到右侧
+   抽屉底下，还会把预览宿主撑成一个不受网格约束的尺寸。修法是 `grid-template-columns:
+   minmax(0, 1fr)`（必要时再让工具条 `flex-wrap: wrap`）。
+4. **自研控件必须带 `data-exempt`。** 全局快捷键（Space / Delete / Ctrl+Z…）原来只对
+   `INPUT/SELECT/TEXTAREA` 放行，而自研下拉、滑杆、数字框都不是原生元素——在它们上面按
+   Space 会「打开下拉 + 开始播放」同时发生。判据统一在 `ui/focus.ts` 的 `isExempt()`；
+   另外 `ownsSpaceKey()` 处理「聚焦在 `<button>` 上时 Space 会激活按钮」的二重触发。
+5. **`NumberInput` 键入的值不要做 step 量化。** 时长 `min=0.1 step=0.5` 时，键入 30 会被
+   吸附成 30.1（30 不在 `0.1 + k*0.5` 网格上）。`commitValue(raw, cfg, { quantize: false })`
+   用于键入，量化只留给拖动/方向键。
+6. **`rm` 掉组件再新建同名文件，Vite dev server 会继续提供旧模块。** 实测：删掉
+   `Rail.svelte` 重写后，页面拿到的仍是旧版本（`curl http://localhost:5173/src/ui/Rail.svelte`
+   里搜不到新字符串），HMR 日志也不报错，表现为「改了半天界面纹丝不动」。
+   验证方法就是 curl 那个 URL 搜新代码里的字符串。**修法是重启 dev server**
+   （必要时连 `node_modules/.vite` 一起删）。正常编辑不会这样，只有删+建同路径才会。
+
+### 视觉与交互约定（2026-10-01 补充）
+
+- **菜单不要无谓地加层级。** 一级平铺能放下的就平铺（`+ 纯色片段` / `+ 特效片段` /
+  `+ 算法片段`），只有**会变长**的列表（算法生成器）才收进子菜单。曾经把三个都塞进
+  「添加片段」二级，反而多一次悬停才点得到。
+- **窄侧栏的四个入口用全屏 modal，不是 flyout。** flyout 只有两百多像素宽，快捷键清单
+  或导出信息塞进去就成了带滚动条的小盒子。
+- **工具条的 tooltip 朝上**（`tipPlacement="top"`）：工具条紧贴轨道区，下方没空间。
+  另外 `tip.ts` 在 `pointerdown` 时会收起气泡——否则点开的下拉会被悬停气泡挡住第一项。
+- **UI 文本一律 `user-select: none`**（`app.css` 在 `html,body` 上设，输入类元素单独放行）。
+- **drag-to-tweak 撞到视口边缘时上 Pointer Lock。** 检查器在屏幕右侧，往右拖几下鼠标就撞到
+  窗口边缘、位移不再增加，值卡住。达芬奇那类工具靠光标回绕解决，浏览器里做不到（拿不到
+  屏幕外的位移），但 Pointer Lock 等价：光标隐藏后 `movementX` 不受屏幕边界约束。
+  只在 `clientX` 贴边（3px 内）时才启用，所以普通拖动的手感完全不变；
+  锁定被解除（Esc / 失焦）＝取消这次拖动，与 Esc 的语义一致。
+- **音频片段的底色必须半透明。** 波形画在 `canvas.grid` 上，而那张画布在片段 DOM **下面**；
+  填充不透明就会把波形整个盖住，看起来是纯色块——只有片段自己变半透明时才「忽然」露出来
+  （拖动被拒的 0.7、轨道静音的 0.5），用户就是这么报的。
+
+### 品牌资源（brand/）
+
+六个文件，三组形状 × 亮暗两版，`Brand.svelte` 按 `variant` + 当前主题取用：
+
+| 形状 | 文件 | viewBox | 用在哪 |
+|---|---|---|---|
+| 2×2 标记 | `artmatic-small-{light,dark}.svg` | 143×163 | 侧栏（<44px） |
+| 3×3 标记 | `artmatic-main-{light,dark}.svg` | 1280×1251 | 「关于」里的大图（≥44px） |
+| 字标 | `artmatic-fonttype-{light,dark}.svg` | 1218×260 | 顶栏 |
+
+`switchMode` 的判据只有一个：`Brand.svelte` 按 `theme.mode` 选文件，`size >= largeFrom` 决定
+标记用大版还是小版（20px 的位子放 3×3 会糊成一团）。加新变体就照着改 `SOURCES` 那张表。
+
+> ⚠️ **文件名说的是「墨色」，不是「目标模式」**——这里极容易搞反：
+> `-dark` 里的墨是 `rgb(47,47,47)` 深灰，配**亮背景**（亮色主题）；
+> `-light` 里的墨是 `rgb(248,248,248)` 近白，配**暗背景**（暗色主题）。
+> 也就是 `mode === 'light'` 取 `-dark` 文件，反之亦然。
+> 搞反的后果不是「颜色不太对」而是 **logo 整块隐形**（只剩那点紫色），肉眼验收很容易放过，
+> 所以有 `tests/e2e/brand.spec.ts` 钉着（查墨色取值 + 与底色的对比度）。
+
+`Brand.svelte` 内联而不是 `<img src>`（`<img>` 是独立文档，页面 CSS 进不去），
+并把资源里写死的品牌紫 `rgb(111,100,239)` 换成 `var(--accent)`，好跟着可换主题色走；
+**墨色保持资源原值**——那正是成对导出的意义。
+
+favicon 同样成对（`public/brand/`），用 `media="(prefers-color-scheme: …)"` 让浏览器自己挑。
+
 - **手势类断言必须走 `page.mouse`**，不要直接调 store：策略结算时序、跨轨、右键菜单这些问题全在手势层，直接调 store 会把它们整个绕过去。
 - **确定性测试是对本项目最有价值的一类测试**：
   - 同一工程 + 同一 `t` → 逐像素一致

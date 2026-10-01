@@ -23,9 +23,19 @@ function clipCount(page: Page, trackIndex: number): Promise<number> {
   }, trackIndex);
 }
 
-/** demo 工程：A1 音乐 + V1 底图 + V2 纹理 + V3 局部故障 + V4 全屏调色 = 5 轨 5 片段。 */
+/** demo 工程：V4 + V3 + V2 + V1 + A1 = 5 轨 5 片段（视觉轨在前景到背景排列，音频在最后）。 */
 const DEMO_TRACKS = 5;
 const DEMO_CLIPS = 5;
+
+/**
+ * 轨道行的「新建片段」按钮已收进 ⋯ 菜单（一行 4 个小按钮区分度不够，且素材类型
+ * 变多会挤爆）。菜单是一级平铺：+ 纯色片段 / + 特效片段 / + 算法片段（算法再展开
+ * 一级列具体生成器）。所以测试走「开 ⋯ → 点目标项」。
+ */
+async function addClipViaMenu(page: Page, trackIndex: number, item: string): Promise<void> {
+  await page.locator('[data-testid=track-side-row]').nth(trackIndex).getByTestId('track-menu').click();
+  await page.getByTestId(item).click();
+}
 
 test('新建视觉轨与纯色片段', async ({ page }) => {
   await boot(page);
@@ -33,7 +43,7 @@ test('新建视觉轨与纯色片段', async ({ page }) => {
   await page.getByTestId('add-visual-track').click();
   expect(await trackCount(page)).toBe(DEMO_TRACKS + 1);
 
-  await page.locator('.side-row').nth(DEMO_TRACKS).getByTestId('add-solid').click();
+  await addClipViaMenu(page, DEMO_TRACKS, 'add-solid');
   expect(await clipCount(page, DEMO_TRACKS)).toBe(1);
   await expect(page.locator('.clip')).toHaveCount(DEMO_CLIPS + 1);
 });
@@ -41,7 +51,7 @@ test('新建视觉轨与纯色片段', async ({ page }) => {
 test('拖拽移动片段（reject 语义 + 拍吸附）', async ({ page }) => {
   await boot(page);
   await page.getByTestId('add-visual-track').click();
-  await page.locator('.side-row').nth(DEMO_TRACKS).getByTestId('add-solid').click();
+  await addClipViaMenu(page, DEMO_TRACKS, 'add-solid');
 
   const before = await page.evaluate(() => {
     const A = (window as never as {
@@ -74,7 +84,7 @@ test('拖拽移动片段（reject 语义 + 拍吸附）', async ({ page }) => {
 test('切分 + 撤销回到切分前', async ({ page }) => {
   await boot(page);
   await page.getByTestId('add-visual-track').click();
-  await page.locator('.side-row').nth(DEMO_TRACKS).getByTestId('add-solid').click();
+  await addClipViaMenu(page, DEMO_TRACKS, 'add-solid');
   const newIdx = DEMO_TRACKS;
   expect(await clipCount(page, newIdx)).toBe(1);
 

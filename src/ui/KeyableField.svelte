@@ -2,13 +2,26 @@
   /**
    * KeyableField — 可打关键帧的数值参数行。
    *
-   * 行为约定：
-   *   无曲线：滑杆改基值。
-   *   有曲线：滑杆在播放头处打点（upsertKey）。
+   * 行为约定（沿用原实现，语义未改）：
+   *   无曲线：滑杆/数字框改基值。
+   *   有曲线：它们改的是**播放头处那个关键帧**（upsertKey）。
    *   ◆ 按钮：播放头处有 key 就删，没有就打（值取当前求值结果）。
    *   「锚到拍」勾选切换 beatAnchor——锚定后曲线的 t=0 对齐 anchor 拍，
    *   改 BPM / offset 时卡点自动跟随（AGENTS.md §5）。
+   *
+   * 硬契约：滑杆拖动时数字框必须与 store 逐帧一致（|shown - stored| < 1e-6）。
+   * 两者读同一个 `value` 派生，所以天然 lock-step；别在这里给滑杆加节流。
+   * 控件已全部换成自研件（原生 range/number/checkbox 在本项目禁用）。
+   *
+   * 数字框的 `oninput` 与 `onchange` 都接到 slide：拖拽时要有实时反馈（否则
+   * 松手才出结果，drag-to-tweak 的手感就没了），松手再提交一次是幂等的
+   * （updateClip 比对快照，值没变就不入撤销栈）。
    */
+  import Checkbox from './controls/Checkbox.svelte';
+  import Field from './controls/Field.svelte';
+  import IconButton from './controls/IconButton.svelte';
+  import NumberInput from './controls/NumberInput.svelte';
+  import Slider from './controls/Slider.svelte';
   import { appState } from './app-state.svelte';
   import { evalCurve, type Curve } from '../core/curve';
   import { beatAtTime, snapBeat, timeAtBeat } from '../core/time';
@@ -26,6 +39,8 @@
     onRemoveKey: (index: number) => void;
     onAnchorChange: (anchor: { beat: number } | null) => void;
     onClearCurve: () => void;
+    /** 额外的说明，进 tooltip 与底栏。 */
+    tipText?: string;
   }
   const {
     label,
@@ -40,6 +55,7 @@
     onRemoveKey,
     onAnchorChange,
     onClearCurve,
+    tipText,
   }: Props = $props();
 
   const grid = $derived(appState.project.beatGrid);
@@ -59,139 +75,121 @@
 
   function toggleKey(): void {
     if (!curve) {
-      onKey(value, appState.beatAnchorNewKeys ? { beat: snapBeat(beatAtTime(playT, grid), 'beat', grid.beatsPerBar) } : null);
+      onKey(
+        value,
+        appState.beatAnchorNewKeys
+          ? { beat: snapBeat(beatAtTime(playT, grid), 'beat', grid.beatsPerBar) }
+          : null,
+      );
       return;
     }
     if (keyHereIndex >= 0) onRemoveKey(keyHereIndex);
     else onKey(value, curve.beatAnchor ?? null);
   }
+
+  const keyTip = $derived(
+    curve
+      ? keyHereIndex >= 0
+        ? '删除播放头处的关键帧'
+        : '在播放头处打关键帧'
+      : '创建曲线并打第一个关键帧',
+  );
 </script>
 
-<div class="kf">
-  <div class="row">
-    <span class="lbl" title={label}>{label}</span>
-    <input
-      type="range"
-      {min}
-      {max}
-      {step}
-      value={Math.max(min, Math.min(max, value))}
-      oninput={(e) => slide(+e.currentTarget.value)}
-    />
-    <input
-      class="num"
-      type="number"
-      {min}
-      {max}
-      {step}
-      value={+value.toFixed(4)}
-      onchange={(e) => slide(+e.currentTarget.value)}
-    />
-    <button
-      class="dia"
-      class:active={keyHereIndex >= 0}
-      title={curve ? (keyHereIndex >= 0 ? '删除播放头处的关键帧' : '在播放头处打关键帧') : '创建曲线并打第一个关键帧'}
+<Field label={label} tipText={tipText ?? label}>
+  <Slider
+    {min}
+    {max}
+    {step}
+    value={Math.max(min, Math.min(max, value))}
+    ariaLabel={label}
+    oninput={slide}
+  />
+  <NumberInput
+    value={value}
+    {min}
+    {max}
+    {step}
+    width={58}
+    ariaLabel={`${label} 数值`}
+    oninput={slide}
+    onchange={slide}
+  />
+  {#snippet trailing()}
+    <IconButton
+      icon="diamond"
+      label={keyTip}
+      size="sm"
+      active={keyHereIndex >= 0}
+      testid="keyframe-toggle"
       onclick={toggleKey}
-    >
-      <i class="fa-solid fa-diamond"></i>
-    </button>
-  </div>
-  {#if curve}
-    <div class="keys">
-      <label class="anchor" title="锚到拍：改 BPM/offset 时卡点自动跟随">
-        <input
-          type="checkbox"
-          checked={!!curve.beatAnchor}
-          onchange={(e) =>
-            onAnchorChange(
-              e.currentTarget.checked
-                ? { beat: snapBeat(beatAtTime(playT, grid), 'beat', grid.beatsPerBar) }
-                : null,
-            )}
-        />
-        锚到拍
-      </label>
-      <span class="list">
-        {#each curve.keys as k, i (i)}
-          <button class="key" title="跳到此关键帧；× 删除" onclick={() => onRemoveKey(i)}>
-            {k.t.toFixed(2)}s={k.v.toFixed(2)} <i class="fa-solid fa-xmark"></i>
-          </button>
-        {/each}
-        <button class="clear" title="删除整条曲线（回到固定基值）" onclick={onClearCurve}>
-          <i class="fa-solid fa-trash"></i>
+    />
+  {/snippet}
+</Field>
+
+{#if curve}
+  <div class="keys">
+    <Checkbox
+      checked={!!curve.beatAnchor}
+      label="锚到拍"
+      tipText="锚到拍：改 BPM/offset 时卡点自动跟随"
+      testid="anchor-beat"
+      onchange={(v) =>
+        onAnchorChange(
+          v ? { beat: snapBeat(beatAtTime(playT, grid), 'beat', grid.beatsPerBar) } : null,
+        )}
+    />
+    <span class="list">
+      {#each curve.keys as k, i (i)}
+        <button
+          type="button"
+          class="key"
+          data-testid="curve-key"
+          title="点击删除这个关键帧"
+          onclick={() => onRemoveKey(i)}
+        >
+          {k.t.toFixed(2)}s={k.v.toFixed(2)}
         </button>
-      </span>
-    </div>
-  {/if}
-</div>
+      {/each}
+      <IconButton
+        icon="trash"
+        label="删除整条曲线（回到固定基值）"
+        size="sm"
+        variant="danger"
+        testid="curve-clear"
+        onclick={onClearCurve}
+      />
+    </span>
+  </div>
+{/if}
 
 <style>
-  .kf {
-    margin-bottom: 4px;
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .lbl {
-    width: 64px;
-    flex-shrink: 0;
-    color: var(--text-1);
-    font-size: 11px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  input[type='range'] {
-    flex: 1;
-    min-width: 0;
-  }
-  .num {
-    width: 60px;
-    font-size: 11px;
-  }
-  .dia {
-    padding: 2px 6px;
-    font-size: 9px;
-    color: var(--text-2);
-    background: transparent;
-    border-color: transparent;
-  }
-  .dia.active {
-    color: var(--accent);
-  }
   .keys {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin: 2px 0 4px 70px;
+    gap: var(--sp-3);
+    margin: 0 0 var(--sp-2) var(--sp-6);
     flex-wrap: wrap;
-  }
-  .anchor {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-    font-size: 10px;
-    color: var(--text-2);
-    white-space: nowrap;
   }
   .list {
     display: flex;
-    gap: 3px;
+    gap: var(--sp-1);
     flex-wrap: wrap;
+    align-items: center;
   }
   .key {
-    font-size: 9px;
-    font-family: var(--font-mono);
-    padding: 1px 4px;
-    color: var(--text-1);
-  }
-  .clear {
-    font-size: 9px;
-    padding: 1px 4px;
-    color: var(--danger);
+    height: 16px;
+    padding: 0 var(--sp-1);
     background: transparent;
-    border-color: transparent;
+    border: 1px solid var(--input-border);
+    border-radius: 3px;
+    color: var(--text-secondary);
+    font-family: 'Cascadia Code', Consolas, monospace;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .key:hover {
+    color: var(--danger);
+    border-color: var(--danger);
   }
 </style>

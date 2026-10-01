@@ -116,7 +116,9 @@ test('特效链 UI：新建特效片段 + 添加实例 + 渲染无报错', async
   page.on('pageerror', (e) => errors.push(String(e)));
   await boot(page);
   await page.getByTestId('add-visual-track').click();
-  await page.locator('.side-row').nth(5).getByTestId('add-effect').click(); // 新轨道（demo 有 5 轨）
+  // 新建片段的按钮已收进 ⋯ 菜单（见 Timeline 侧栏行）：开菜单 → 点「+ 特效片段」
+  await page.locator('[data-testid=track-side-row]').nth(5).getByTestId('track-menu').click();
+  await page.getByTestId('add-effect').click(); // 新轨道（demo 有 5 轨）
   await page.getByTestId('add-effect-instance').click(); // 默认 channel-split
   const chainLen = await page.evaluate(() => {
     const A = (window as never as {
