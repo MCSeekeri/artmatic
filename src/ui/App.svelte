@@ -15,6 +15,7 @@
   import { theme } from './theme.svelte';
   import { installTheme } from './theme-apply';
   import { activeElementOwnsSpace, isExempt } from './focus';
+  import { saveProjectAs, saveProjectNow } from './project-actions';
 
   /**
    * 主题的唯一写入口。main.ts 在 mount 前已经装过一次（防首帧闪默认值），
@@ -39,13 +40,20 @@
         const k = e.key.toLowerCase();
         if (k === 's') {
           e.preventDefault();
-          appState.flash('工程文件系统未实现（M5）；导出请用左侧栏的导出面板');
+          // 位置未知时 saveProjectNow 会自己转成「另存为」——
+          // 第一次保存本来就要问路径，没必要分成两个快捷键。
+          void saveProjectNow();
           return;
         }
         if (k === 'p' || k === 'f') {
           e.preventDefault();
           return;
         }
+      }
+      if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void saveProjectAs();
+        return;
       }
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
@@ -97,11 +105,30 @@
       e.preventDefault();
     };
 
+    /**
+     * 关页面 / F5 / 关标签时的保护。
+     *
+     * 弹的是**浏览器自己的**确认框（文案我们控制不了，也不该控制 ——
+     * 伪造一个页面内的对话框会撒谎，因为它挡不住真正的离开）。我们能决定的
+     * 只有「有没有这个框」，而这正是需要的：F5 一下全部烟消云散是最糟的形态。
+     *
+     * 判据是 `anyDirty` 而不是当前那份 —— 关页面会把**所有**打开的工程一起丢掉。
+     */
+    const onBeforeUnload = (e: BeforeUnloadEvent): void => {
+      if (!appState.anyDirty) return;
+      e.preventDefault();
+      // 老浏览器看 returnValue 的内容；现代浏览器只看「有没有赋值」，
+      // 赋值本身才是触发条件（赋任何非空串都一样）。
+      e.returnValue = '';
+    };
+
     window.addEventListener('keydown', onKey);
     window.addEventListener('contextmenu', onContextMenu);
+    window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('contextmenu', onContextMenu);
+      window.removeEventListener('beforeunload', onBeforeUnload);
     };
   });
 </script>

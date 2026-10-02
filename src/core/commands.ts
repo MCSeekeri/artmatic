@@ -60,6 +60,18 @@ export class CommandStack {
     return this.txSnapshot !== null;
   }
 
+  /**
+   * 清空两个栈。**载入另一份工程时必须调**：
+   * 「撤销回上一个打开过的工程」是没人想要的行为，而且栈里躺的是
+   * 上一份工程的快照，撤销会把两份工程的片段混在一起 ——
+   * 那种损坏很难归因，因为每一步看起来都合法。
+   */
+  reset(): void {
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.txSnapshot = null;
+  }
+
   canUndo(): boolean {
     return this.undoStack.length > 0;
   }

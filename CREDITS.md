@@ -23,7 +23,19 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | `fflate` | MIT | PNG 序列导出打 zip |
 | Lucide | ISC | UI 图标（`@lucide/svelte`，按组件 tree-shaking） |
 | `@zumer/snapdom` | MIT | 排版层光栅化（ADR-003 的 `dom-snap` 后端）。把 DOM 子树序列化并栅格化为位图 |
+| `mediabunny` | **MPL-2.0** | MP4 封装（ADR-001 的 `webcodecs` 后端）。见下方说明 |
+| `harfbuzzjs` | MIT | 字体子集化（ADR-010）。按文档用到的字形集裁字体，中文字体 9.5 MB → KB 量级 |
 | Inter（`public/fonts/inter-latin-{400,700}.woff2`） | OFL-1.1 | 内置西文字体。随软件分发，许可原文见 `public/fonts/OFL.txt` |
+
+> **`mediabunny` 的许可要点**：MPL-2.0 是**文件级弱 copyleft**，不是 AGPL 那种
+> 「传染整个程序」的网络 copyleft。
+> - 自用、本地工具、闭源分发：**零义务**。
+> - 唯一的触发条件是「修改了它的源文件并把改动分发出去」——本项目不这么做。
+> - MPL-2.0 不在 AGENTS.md §1.8 的禁止清单里（那里禁 AGPL / GPL）。
+>
+> 之所以专门写一段：AGENTS.md 早先把它的许可**误记为 MIT**（2026-10-02 更正）。
+> **「不在禁止清单」不等于「查过」**——这条是查 `npm view mediabunny license`
+> 之后写的，不是推断。
 
 > **字体许可**：系统字体（simhei / msyh 等）通常**不允许**随软件分发，所以
 > 内置的只有 OFL 的 Inter；中文字体由用户自行导入，字节只存在用户本机。

@@ -93,13 +93,14 @@ test('双击排版片段打开编辑页；关闭后回到时间轴', async ({ pa
 
   // 双击 = 打开（不再是切分）
   await openEditor(page, clipId);
-  await expect(page.getByTestId(`shell-tab-${clipId}`)).toBeVisible();
+  // 排版视图不是独立的 tab —— 顶栏的 tab 是工程，这里出现的是「回到时间轴」。
+  await expect(page.getByTestId('project-tab-timeline-0')).toBeVisible();
 
   // 主界面只是被隐藏，没有卸载
   await expect(page.getByTestId('tl-scroll')).toBeHidden();
 
-  // 关闭 tab → 回到时间轴
-  await page.getByTestId(`shell-tab-close-${clipId}`).click();
+  // 回到时间轴
+  await page.getByTestId('project-tab-timeline-0').click();
   await expect(page.getByTestId('typo-editor')).toHaveCount(0);
   await expect(page.getByTestId('tl-scroll')).toBeVisible();
 });
@@ -115,7 +116,7 @@ test('切页不丢 WebGL 上下文，也不动播放头', async ({ page }) => {
   });
 
   await openEditor(page, clipId);
-  await page.getByTestId('shell-tab-timeline').click();
+  await page.getByTestId('project-tab-timeline-0').click();
   await expect(page.getByTestId('tl-scroll')).toBeVisible();
 
   const after = await page.evaluate(() => {

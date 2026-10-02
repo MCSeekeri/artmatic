@@ -24,6 +24,7 @@ import AlignStartHorizontal from '@lucide/svelte/icons/align-start-horizontal';
 import AlignStartVertical from '@lucide/svelte/icons/align-start-vertical';
 import AlignVerticalSpaceBetween from '@lucide/svelte/icons/align-vertical-space-between';
 import ArrowDown from '@lucide/svelte/icons/arrow-down';
+import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 import ArrowUp from '@lucide/svelte/icons/arrow-up';
 import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
@@ -42,7 +43,11 @@ import Droplet from '@lucide/svelte/icons/droplet';
 import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 import Eye from '@lucide/svelte/icons/eye';
 import EyeOff from '@lucide/svelte/icons/eye-off';
+import FilePlus from '@lucide/svelte/icons/file-plus';
 import FlaskConical from '@lucide/svelte/icons/flask-conical';
+import Folder from '@lucide/svelte/icons/folder';
+import FolderOpen from '@lucide/svelte/icons/folder-open';
+import HardDrive from '@lucide/svelte/icons/hard-drive';
 import Hexagon from '@lucide/svelte/icons/hexagon';
 import ImageIcon from '@lucide/svelte/icons/image';
 import ImagePlus from '@lucide/svelte/icons/image-plus';
@@ -89,6 +94,7 @@ import TextAlignStart from '@lucide/svelte/icons/text-align-start';
 import Timer from '@lucide/svelte/icons/timer';
 import Trash from '@lucide/svelte/icons/trash';
 import Triangle from '@lucide/svelte/icons/triangle';
+import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 import Type from '@lucide/svelte/icons/type';
 import Underline from '@lucide/svelte/icons/underline';
 import Upload from '@lucide/svelte/icons/upload';
@@ -107,6 +113,7 @@ export const ICONS = {
   'align-start-vertical': AlignStartVertical,
   'align-vertical-space-between': AlignVerticalSpaceBetween,
   'arrow-down': ArrowDown,
+  'arrow-left': ArrowLeft,
   'arrow-up': ArrowUp,
   'arrow-up-down': ArrowUpDown,
   'audio-lines': AudioLines,
@@ -125,7 +132,11 @@ export const ICONS = {
   'ellipsis-vertical': EllipsisVertical,
   eye: Eye,
   'eye-off': EyeOff,
+  'file-plus': FilePlus,
   'flask-conical': FlaskConical,
+  folder: Folder,
+  'folder-open': FolderOpen,
+  'hard-drive': HardDrive,
   hexagon: Hexagon,
   image: ImageIcon,
   'image-plus': ImagePlus,
@@ -172,6 +183,7 @@ export const ICONS = {
   timer: Timer,
   trash: Trash,
   triangle: Triangle,
+  'triangle-alert': TriangleAlert,
   type: Type,
   underline: Underline,
   upload: Upload,

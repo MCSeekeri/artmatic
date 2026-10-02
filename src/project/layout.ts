@@ -1,0 +1,133 @@
+/**
+ * layout.ts — 工程目录格式（M5a）。
+ *
+ * ```
+ * <工程目录>/
+ * ├── project.json        工程本体（§5 的 Project），真相的唯一载体
+ * ├── project.json.bak    上一版成功保存的副本（writeProject 自动维护）
+ * ├── assets.json         素材台账（引用路径 + 内容哈希 + 原始文件名）
+ * ├── assets/             素材字节（M5a 只有 bundled / generated 两种模式）
+ * ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
+ * └── thumbs/             缩略图缓存（可丢弃，删了只是重新生成）
+ * ```
+ *
+ * **本文件是纯函数，不许 import DOM / WebGL / store。** 路径规则一旦
+ * 掺进副作用就没法单测了，而路径拼错的表现是「保存成功但下次打开找不到素材」
+ * ——那种 bug 在 UI 上完全看不出来。
+ *
+ * 路径一律按**段数组**处理，不在内部拼字符串再拆。理由：File System Access
+ * 的 `getDirectoryHandle/getFileHandle` 逐级取名字，而 `name` 里不允许出现
+ * 分隔符；拿 'a/b' 去 getFileHandle 一定失败。相对路径字符串只用于
+ * 台账记录与展示（`assetRelPath`）。
+ */
+
+/** 目录格式自身的版本，与 `Project.schemaVersion` 独立。 */
+export const LAYOUT_VERSION = 1;
+
+export const PROJECT_FILE = 'project.json';
+export const PROJECT_BACKUP = 'project.json.bak';
+export const ASSET_LEDGER_FILE = 'assets.json';
+
+export const ASSETS_DIR = 'assets';
+export const ANALYSIS_DIR = 'analysis';
+export const AUDIO_ANALYSIS_DIR = 'audio';
+export const THUMBS_DIR = 'thumbs';
+
+/** 打开/新建工程时要确保存在的目录（按层级顺序）。 */
+export const PROJECT_DIRS: readonly (readonly string[])[] = [
+  [ASSETS_DIR],
+  [ANALYSIS_DIR],
+  [ANALYSIS_DIR, AUDIO_ANALYSIS_DIR],
+  [THUMBS_DIR],
+];
+
+/* ------------------------------------------------------------ 名字清洗 */
+
+/**
+ * 单段名字的最大长度。Windows 单段上限 255 字节，留足余量；
+ * 超长名字在部分文件系统上会被静默截断或直接报错，宁可我们自己截。
+ */
+const MAX_SEGMENT = 96;
+
+/**
+ * 从用户给的原始文件名里取一个**安全的**扩展名（含点，小写）。
+ *
+ * 拒绝的几种情况都写在这里，因为它们的后果是「写进 assets/ 的文件名
+ * 带着路径分隔符或 `..`」—— 那是目录穿越，不是命名风格问题：
+ *  - 先取 basename，丢掉用户文件里可能带的任何目录部分
+ *  - `dot <= 0` 同时排除「没有扩展名」与「.gitignore 这种点开头的名字」
+ *  - 扩展名只允许 `[a-z0-9]`，长度 1–8；`tar.gz` 只取 `gz`（够用了）
+ */
+export function safeExt(name: string): string {
+  const base = String(name ?? '').split(/[\\/]/).pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return '';
+  const ext = base.slice(dot + 1).toLowerCase();
+  if (!/^[a-z0-9]{1,8}$/.test(ext)) return '';
+  return `.${ext}`;
+}
+
+/** 去掉原始文件名里的目录部分，只留文件名本身（展示与台账记录用）。 */
+export function baseName(name: string): string {
+  return String(name ?? '').split(/[\\/]/).pop() ?? '';
+}
+
+/**
+ * 把 assetId 清洗成可安全用作文件名的形式。
+ *
+ * 正常路径下 assetId 是 uuid，本来就是 `[0-9a-f-]`，清洗是空操作。
+ * 但 assetId 会进 JSON、会被手改、也可能来自将来某个别的生成器，
+ * 所以落盘前必须过一遍。
+ *
+ * ⚠️ 清洗**可能产生碰撞**（`a/b` 与 `a:b` 都变成 `ab`）。调用方
+ * （`ledger.ts` 的 `detectPathConflicts`）负责检出并报错，这里不静默去重
+ * ——去重会让两个素材共用一个文件，症状是「换了素材但画面没变」。
+ */
+export function safeAssetId(id: string, fallback = 'asset'): string {
+  const s = String(id ?? '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, MAX_SEGMENT);
+  return s || fallback;
+}
+
+/* ------------------------------------------------------------ 路径推导 */
+
+/** 素材在 `assets/` 下的段数组。 */
+export function assetPathSegments(assetId: string, originName: string): string[] {
+  return [ASSETS_DIR, safeAssetId(assetId) + safeExt(originName)];
+}
+
+/** 素材相对工程根的路径，用于台账记录与 UI 展示。POSIX 分隔符。 */
+export function assetRelPath(assetId: string, originName: string): string {
+  return assetPathSegments(assetId, originName).join('/');
+}
+
+/** 音频分析缓存在 `analysis/audio/` 下的段数组。 */
+export function audioAnalysisSegments(assetId: string): string[] {
+  return [ANALYSIS_DIR, AUDIO_ANALYSIS_DIR, `${safeAssetId(assetId)}.json`];
+}
+
+/** 缩略图在 `thumbs/` 下的段数组。key 通常是片段 id。 */
+export function thumbSegments(key: string): string[] {
+  return [THUMBS_DIR, `${safeAssetId(key, 'thumb')}.png`];
+}
+
+/** 拆相对路径串为段数组。只认 `/`，`..` 与空段直接丢掉（不接受上跳）。 */
+export function splitRelPath(rel: string): string[] {
+  return String(rel ?? '')
+    .split('/')
+    .filter((s) => s && s !== '.' && s !== '..');
+}
+
+/* ------------------------------------------------------------ 判定 */
+
+/** 该名字是不是本格式的工程目录标志文件。 */
+export function isProjectFile(name: string): boolean {
+  return name === PROJECT_FILE;
+}
+
+/**
+ * 备份文件要不要参与「这是什么目录」的判定：不要。
+ * 一个只有 .bak 的目录不是一个可打开的工程。
+ */
+export function isBackupFile(name: string): boolean {
+  return name === PROJECT_BACKUP;
+}

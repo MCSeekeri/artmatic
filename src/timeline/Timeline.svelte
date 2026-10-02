@@ -245,6 +245,14 @@
     const assetId = newId();
     appState.player.register(assetId, buf);
     appState.waveforms = { ...appState.waveforms, [assetId]: await computeWaveform(buf) };
+    // 素材字节进仓（**当前工程**的仓）。不存的话保存工程只留下一个 assetId
+    // —— 引用还在、文件没有，重开就是一段哑音。用独立拷贝：decode 那一支
+    // 已经吃掉了自己的 slice，剩下这份要留给保存，不能被任何下游 detach。
+    appState.assets.put(assetId, new Uint8Array(picked.data.slice(0)), {
+      kind: 'audio',
+      name: picked.name,
+      originName: picked.name,
+    });
     appState.store.commit('导入音频', (p) => {
       p.assets[assetId] = { id: assetId, kind: 'audio', name: picked.name, durationSec: buf.duration };
     });

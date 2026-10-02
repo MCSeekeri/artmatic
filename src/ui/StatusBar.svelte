@@ -2,7 +2,7 @@
   /**
    * StatusBar — 底栏（高 22px）。
    *
-   * 四段：项目名 · 工具提示 · 快捷键 · FPS。
+   * 四段：工程名 · 工具提示 · 快捷键 · FPS。
    * 「工具提示」这一段就是自研 tooltip 取代原生 title 的第二个理由：原生
    * 气泡只能悬浮在指针旁，鼠标一移开就没了；底栏能在指针停在任何控件上时
    * 持续显示「这是什么、按什么键」，与 Photoshop / Blender 的状态栏同构。
@@ -27,9 +27,17 @@
   </span>
 
   {#if appState.notice}
-    <!-- 一次性提示（如 Alt+↑↓ 被策略挡住）：优先级最高，压过工具提示 -->
-    <span class="seg notice" data-testid="notice">
-      <Icon name="info" size={11} />
+    <!-- 一次性提示（保存结果、Alt+↑↓ 被策略挡住…）：优先级最高，压过工具提示。
+         三级颜色：中性 / 成功（绿）/ 失败（红）—— 见下面 .notice 的注释。 -->
+    <span class="seg notice" data-testid="notice" data-level={appState.noticeLevel}>
+      <Icon
+        name={appState.noticeLevel === 'success'
+          ? 'check'
+          : appState.noticeLevel === 'error'
+            ? 'triangle-alert'
+            : 'info'}
+        size={11}
+      />
       {appState.notice}
     </span>
   {:else if exporting}
@@ -84,7 +92,20 @@
     flex-shrink: 0;
     color: var(--bar-fg-strong);
   }
+  /*
+   * 提示分三级。
+   *
+   * 原来只有红色一种 —— 于是「已保存 · 3 个素材 · 12 ms」也是红的，
+   * 用户第一眼会以为保存失败了。默认走中性色，只有真的失败了才红，
+   * 成功才绿。
+   */
   .notice {
+    color: var(--bar-fg);
+  }
+  .notice[data-level='success'] {
+    color: var(--success);
+  }
+  .notice[data-level='error'] {
     color: var(--danger);
   }
   .hint {

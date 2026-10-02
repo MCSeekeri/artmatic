@@ -80,7 +80,13 @@ Electron 只在两件事上出现：**读写工程目录**、**跑 ffmpeg 子进
 ### 1.8 不引 AGPL / GPL 代码
 
 - 禁止：`hydra-synth`（AGPL-3.0）、`Coollab`（GPL-3.0）
-- 可用：`gl-transitions`（MIT）、`mediabunny`（MIT）、openmosh 全部（MIT）、`lucide`（ISC）
+- 可用：`gl-transitions`（MIT）、openmosh 全部（MIT）、`lucide`（ISC）
+- **`mediabunny`（MPL-2.0，不是 MIT —— 原先记错了，2026-10-02 更正）**：
+  MP4 封装。**MPL-2.0 属文件级弱 copyleft**：本地工具/自用分发零义务，
+  只在「你改了它的源文件并分发改了的那部分」时才需开源。本项目按 `npm` 装、
+  不改其源、不分发它，因此不受影响。
+  > 之所以专门记一笔：MPL 不在 §1.8 的禁止清单里（那里禁的是 AGPL/GPL），
+  > 但「不在禁止清单」不等于「查过」。**这条是查过 `npm view` 之后写的。**
 
 移植 MIT 代码必须登记到 `CREDITS.md`（含二级移植的来源）。这个账越拖越贵。
 
@@ -100,6 +106,7 @@ Electron 只在两件事上出现：**读写工程目录**、**跑 ffmpeg 子进
 | 排版出图 | **snapDOM + 字体子集化**（`dom-snap` 后端） | 见 ADR-003 |
 | 图标 | **Lucide（`@lucide/svelte`）**（2026-10-01 换） | 描边风格与本项目视觉一致；ISC；按组件导出可 tree-shaking |
 | 样式 | **Design Token 单一真源在 TS**（`ui/tokens.ts`） | 见 ADR-005 |
+| 工程持久化 | **File System Access API**（`src/project/`），E2E 跑在 OPFS 上 | 见 ADR-011 |
 | 测试 | Playwright（E2E）+ vitest（纯逻辑单测） | 单测只测纯函数 |
 
 ---
@@ -116,6 +123,7 @@ renderer/                     标准 Web 应用，可在 Chrome 里独立运行
 ├── typography/               TypographyDocument 模型 + 光栅化后端
 ├── timeline/                 UI（Canvas2D 绘制 + DOM 片段）
 ├── exporters/                逐帧驱动 + FrameSink 抽象
+├── project/                  工程目录格式 · 素材台账 · 原子写 · 句柄持久化（见 ADR-011）
 └── platform/                 Platform 接口（浏览器实现 ↔ Electron 实现）
 
 electron/
@@ -144,17 +152,54 @@ shared/
 2. 都上 Electron 了就不必计较体积。
 3. NVENC 让编码快到不是瓶颈；顺带白送 ProRes / DNxHR / H.265 / PNG 序列导出。
 
-**强制配套**：所有导出走统一的 `FrameSink` 接口，三个实现共存——`ffmpeg-pipe`（主）、`webcodecs`（若实测可用则启用，作为无依赖快路径）、`png-sequence`（永远可用的兜底）。
+> **⚠️ 2026-10-02 补注：上面第 1 条的因果关系写反了一半，且结论已被实测推翻。**
+>
+> 「WebCodecs 的 `avc1` 可用性有矛盾证据」这个说法本身是错的 —— 矛盾来自
+> **运行环境不同**，不是证据互相打架：Chrome 品牌构建**带** H.264，
+> Chromium / Electron 构建**不带**（Dale Curtis 在 chromium-media-dev 的原话：
+> 编解码都要 `proprietary_codecs=true ffmbranding="Chrome"`，且「无法只挑硬件编解码器」）。
+>
+> **实测结论（2026-10-02，本机 Chrome，headless）**：
+> - `avc1.4d0028`（**H.264 Main L4**）在 1920×1080@60 下**可用**，实编出真实码流；
+> - `mp4a.40.2`（AAC-LC）**可用**，实编 0.25 s 出 12 帧；
+> - ⇒ **ADR 原文的「捆绑 ffmpeg + Electron 壳」不再必要，M5b 已取消。**
+>
+> > **⚠️ 上面补注里引用的探测串 `avc1.42001f` 本身是错的。**
+> > baseline **3.1 的 coded area 上限是 921600（= 1280×720）**，1080p 直接被拒：
+> > `the maximum coded area (921600) supported by the AVC level (3.1)`。
+> > **看到这条不要误判成「H.264 不支持」。** 正确探测串用 `avc1.4d0028`。
+> > 本项目已经因为这个串误判过一次「本机 Chrome 不带 H.264」。
+> >
+> > 附带坑：`about:blank` 里 `VideoEncoder` 压根不存在 —— WebCodecs 只在
+> > secure context 暴露，探测必须起 `http://localhost`。
+>
+> 另外**无头环境里硬件编解码会失效** —— E2E 只能断言产物可解析，不能断言编码速度。
+
+**强制配套**：所有导出走统一的 `FrameSink` 接口，两个实现共存——`webcodecs`（**主路径**，已落地）、`png-sequence`（**永远可用的逃生舱**）。`ffmpeg-pipe` 已随 M5b 取消。
 
 ```ts
 interface FrameSink {
-  configure(size: {w:number;h:number}, fps: number, codec: string): Promise<void>
-  submit(frameIndex: number, source: HTMLCanvasElement | VideoFrame): Promise<void>
+  configure(
+    size: { w: number; h: number },
+    fps: number,
+    codec: string,
+    opts?: { canvas: HTMLCanvasElement },   // 2026-10-02 加，见 M5c
+  ): Promise<void>
+  submit(frameIndex: number, source: HTMLCanvasElement): Promise<void>
   finalize(): Promise<Blob | string>
+  cancel?(): Promise<void>                    // 2026-10-02 加：不放编码器会泄漏硬件会话
 }
 ```
 
-**打包注意**：二进制在 asar 里无法执行，必须 `asarUnpack`，运行期路径做 `.replace('app.asar','app.asar.unpacked')`。挑带 `nvenc` 的构建（`ffmpeg -encoders | findstr nvenc` 验证）。
+> **`configure` 为什么多了 `canvas`**：`Output` 只有 `addVideoTrack`、**没有
+> `removeVideoTrack`**，而 mediabunny 的 `CanvasSource` 在**构造时**读 canvas 尺寸
+> 并缓存 `VideoFrame` 工厂。所以不可能「先建源、事后再换 canvas」。
+> 连带纪律：`runExport` 里 **`setExportSize` 必须早于 `configure`**，
+> 否则产出错尺寸文件且控制台无提示。
+
+**打包注意**（**已随 M5b 取消而作废**）：二进制在 asar 里无法执行，必须 `asarUnpack`，
+运行期路径做 `.replace('app.asar','app.asar.unpacked')`。留档是因为将来若走 PWA 打包
+会再遇到同类问题。
 
 ### ADR-002 · 音频分析与预览共用同一份实现
 
@@ -285,15 +330,18 @@ DaVinci 的直觉完全相反（用户实测报上来：「z 轴好像是轨道�
 ### ADR-008 · 排版编辑器 = 顶栏选项卡宿主，双击 Source 片段打开
 
 **决定**：
-1. 编辑器是**顶栏的一个临时页**（`appState.shellTabs`），不是 modal、也不是抽屉。
-   时间轴页常驻且**永不卸载**（卸载 `Preview` 的 `<canvas>` 会丢 WebGL 上下文，
-   `kit` 里所有 `Program`/`Target`/纹理一起失效，且无法恢复），所以切页只是
+1. 编辑器是一个**工程视图**（`OpenProject.view = { kind: 'typography', clipId }`），
+   不是 modal、也不是抽屉。**顶栏的 tab 是工程，不是页面**（见 ADR-012）；
+   排版视图是工程内部的第二个视图，跟着工程走 —— 切到别的工程再切回来，
+   还停在这一页。
+   时间轴视图常驻且**永不卸载**（卸载 `Preview` 的 `<canvas>` 会丢 WebGL 上下文，
+   `kit` 里所有 `Program`/`Target`/纹理一起失效，且无法恢复），所以切视图只是
    `display:none`，并配 `appState.tick()` 早退。
 2. **双击片段 = 打开它自己的编辑器，一律不切分。** 目前只有 `text` 源有独立页面，
    其余类型聚焦检查器。切分保留 `S` 键与检查器的「在播放头切分」两个入口。
-3. **M4 不做 per-editor 脏标记。** 排版编辑全程直写工程（可撤销），编辑器内不存在
-   「未提交的本地状态」，没有「关 tab 会丢」的东西。需要脏标记的是「工程 vs 磁盘」，
-   那是 M5 的事。
+3. **编辑器内不做脏标记。** 排版编辑全程直写工程（可撤销），编辑器内不存在
+   「未提交的本地状态」，没有「切走就丢」的东西。需要脏标记的是「工程 vs 磁盘」，
+   已经落地（每个 `OpenProject` 上的 `savedVersion`，见 ADR-011 §9 与 ADR-012）。
 4. 快捷键按**分流**处理而不是逐条加判断：`App.svelte` 的 `onKey` 在编辑器打开时
    整段交给 `ui/typography/keys.ts`。于是 `S`（切分）与 `Alt+↑↓`（移轨）在排版页
    **自然失效**，不需要在时间轴的每条分支上加 `if (!editorOpen)`。
@@ -374,6 +422,260 @@ v=0 是**底部**；而 `texImage2D` 默认把图像首行放到 v=0。排版纹
 `typography-export.spec.ts` 有一条**方向断言**钉着它（把图形放在文档顶部，断言它在
 readPixels 里落在 y 靠后的位置）。⚠️ `SourceManager.setImage` 与 algo 的 R8 上传路径
 **没有** flip —— 前者目前零调用方，后者只测过确定性、没测过方向，都值得复核。
+
+### ADR-011 · 工程持久化走 File System Access，Electron 不是必需品
+
+**背景**：M5 原计划把「工程文件」和 Electron 壳绑在一起。实测下来这个绑定不必要 ——
+渲染件本来就是标准 Web 应用（硬约束 1.5），持久化也应该是。
+
+**决定**：
+
+#### 1. 工程是一个磁盘目录，格式固定
+
+```
+<工程目录>/
+├── project.json        工程本体（§5 的 Project），真相的唯一载体
+├── project.json.bak    上一版成功保存的副本
+├── assets.json         素材台账（引用路径 + 内容哈希 + 原始文件名）
+├── assets/             素材字节（文件名 = <assetId>.<原始扩展名>）
+├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
+└── thumbs/             缩略图缓存（可丢弃）
+```
+
+`src/project/layout.ts` 是路径规则的唯一真源。路径一律按**段数组**处理，
+不在内部拼字符串再拆 —— FSA 的 `name` 里不允许出现分隔符，拿 `'a/b'` 去
+`getFileHandle` 一定失败。
+
+**`project.json` 里不写 `savedAt`**：写进去会让「内容没变 → 字节没变」失效，
+git diff 永远有噪声，也失去了「序列化结果相同就跳过写入」的可能。
+保存时间属于会话状态，不属于工程内容。
+
+#### 2. 「原子写」靠浏览器，不靠 `tmp → fsync → rename`
+
+原计划写的 `project.json.tmp → fsync → rename` 是 Node 的思路，在 Web 上既做不到
+（**没有 fsync API**）也没必要：Chromium 的 `createWritable()` 默认就是 siloed 模式 ——
+先在同目录写 `.crswap`，`close()` 时才 rename 到目标（Chromium 官方说明这是为了给
+系统安全扫描留窗口）。也就是说**原子性由浏览器直接提供**，而且写 `.tmp` 再 `move()`
+反而要赌 `FileSystemHandle.move()` 的可用性。
+
+我们能自己做的只有两件：
+- **`.bak`** ── 写入前把旧内容另存一份（浏览器不提供历史版本）。
+- **写回校验** ── `close()` 之后读回来比一遍。它抓不到断电，但能抓到
+  「磁盘满而 `close()` 没报错」这类静默损坏，代价是几毫秒。
+
+多标签页并发写用 `createWritable({mode:'exclusive'})`（Chrome 121+）挡住第二个写者。
+降级重试**只认 TypeError** —— 把「已经有 writer」这类真错误一起吞掉的话，
+并发写就退化成静默互相覆盖。
+
+#### 3. 素材用「工程根相对路径 + sha256」，不是绝对路径
+
+M5 原文写的「绝对路径 + 内容哈希」在 Web 上做不到：**FSA 不向页面暴露真实路径**
+（句柄是不透明引用，这是安全设计）。改成相对路径反而更好 —— 整个工程目录可以搬走，
+不绑机器。
+
+随之而来的翻转：**「引用而非拷贝」在 Web 上变成「拷贝进 `assets/`」**。原因是 API 边界：
+- `<input type=file>` 只给字节，不给句柄 → 不拷就没法留
+- `showOpenFilePicker()` / 拖放给的句柄**不能被序列化成可移植路径**
+  → 存进工程就绑死这台机器
+
+所以 Web 上的「引用」只剩两种，都不是原方案想的那个：(a) 素材本来就在工程目录里；
+(b) 句柄存 IndexedDB、工程不可移植。**当前实现走 (a)**，(b) 留给大文件（视频）。
+
+#### 4. `ProjectFs` 单实现 × 三个根来源
+
+`src/project/fs.ts` 定义最小句柄接口，三个根来源提供它：
+
+| 根来源 | 用途 | 授权 |
+|---|---|---|
+| `fsaRoot`（用户选的目录） | 生产 | 首次需点一次 |
+| `opfsRoot`（OPFS） | **E2E 与 dev** | 无，自动 |
+| `memoryRoot` | 单测 | 无 |
+
+`memoryRoot` **模拟了 swap 语义**（写入进临时缓冲，`close()` 才提交），
+所以「写到一半失败不损坏原文件」这条在单测里是真的被测到，而不是靠祈祷。
+
+句柄存 IndexedDB（`handles.ts`），跨会话保留；**权限不一定跟着** ——
+新会话里 `queryPermission()` 返回 `'prompt'` 是常态，要 `requestPermission()`
+一次且那一下必须有用户手势。所以「打开最近工程」天然只能由点击触发，
+页面加载时**不能**自动恢复。Chromium 122 起用户可以选「每次访问时都允许」，
+装成 PWA 的站点权限自动保持 —— 这两条不需要我们做任何事。
+
+同名目录靠 `isSameEntry()` 区分（没有路径可用的前提下，这是唯一的办法）。
+
+#### 5. E2E 跑在 OPFS 上 —— 这不是 mock
+
+`navigator.storage.getDirectory()` 返回的**就是一个 `FileSystemDirectoryHandle`**，
+与 `showDirectoryPicker()` 给的是同类对象。所以测试跑的是真实文件系统、真实的
+`createWritable` swap 语义、真实的目录遍历。
+
+生产与测试走**同一条代码路径**，唯一差别是「根句柄从哪来」。`showDirectoryPicker()`
+是系统对话框、Playwright 驱动不了 —— 这是绕开它的唯一诚实办法：不假装，只换一个真根。
+
+这条是硬约束 1.5 的直接兑现：「任何只能在 Electron 里跑起来才能测的功能设计，
+都应当视为设计错误」—— 现在连装 Electron 都不需要。
+
+#### 6. 写入顺序就是全部的安全性
+
+`project.json` 与 `assets.json` 没法做成一次原子提交（没有事务），所以只能选
+「崩在哪一步损失最小」：
+
+| 崩在 | 磁盘状态 | 后果 |
+|---|---|---|
+| 写素材后、写台账前 | `assets/` 里多几个文件 | **无害**（下次当成 untracked 提示） |
+| 写台账后、写工程前 | 台账新、工程旧 | **无害**（旧工程引用的素材都还在） |
+| 写工程后、删旧素材前 | 有孤儿文件 | **无害**（只占空间） |
+
+删旧素材放最后是刻意的：先删文件再写工程，一旦写失败就留下「工程引用了已经删掉的
+素材」——那是**有害**的，用户打开就是一堆 missing。孤儿文件只是浪费空间，
+缺失引用是数据丢失，两者不对等。
+
+另外：**只有台账里被显式移除的素材才删文件**。仅仅「没被片段引用」不算 ——
+那多半是临时从时间轴上拿下来的。
+
+#### 7. 台账是可以丢的
+
+素材文件名就是 `<assetId>.<ext>`，所以**从 `assets/` 目录本身就能重建台账**（哈希现场算）。
+因此 `parseLedger` 对损坏输入一律降级成空台账 + 警告，而不是抛错 ——
+为一份可重建的派生数据挡住用户打开工程，是错的取舍。
+
+`assets/` 里的未跟踪文件**只提示不删**。用户手动放进去的东西不是我们的垃圾。
+
+#### 8. 素材哈希是增量的
+
+首次保存给所有素材算一遍 sha256，之后复用。哈希缓存的键是**字节对象的引用**
+（`asset-store.ts`）—— `put()` 换掉字节就自然失效，不需要任何显式的 invalidate 调用，
+那种调用迟早会有人忘记加。
+
+超出 `MAX_HASH_BYTES`（256 MB）的素材记 `hash: null`，退化成「大小 + 修改时间」的弱指纹。
+这是刻意的降级：`crypto.subtle.digest` 无法流式，GB 级素材叠上浏览器已经持有的
+ArrayBuffer，峰值能破 5 GB。`auditLedger` 会把这类素材标成 `unhashed` 提醒用户。
+
+**不做纯 JS 的 sha256 回退**：回退一个非密码学哈希会悄悄改变「文件被改过」的判据，
+那比直接报错危险。`crypto.subtle` 只在安全上下文存在，而本项目只跑在
+`localhost` / Electron（都算 trustworthy origin）。
+
+#### 9. 脏标记是近似，但方向安全
+
+`savedVersion`（保存时的 `store.version`）与当前 `version` 不同即视为有未保存改动。
+改完再撤销回原样仍然算脏 —— 假阳性只是多问一句「要保存吗」，假阴性才是丢工作。
+
+`ProjectStore.replaceProject()`（打开/新建工程）**会清空撤销栈**，
+`loadFrom()`（在工程内换内容）不会。撤销回上一个打开过的工程是错的：
+栈里躺着上一份工程的快照，撤销会把两份工程的片段混在一起，
+而每一步看起来都合法，极难归因。
+
+---
+
+### ADR-012 · 顶栏的选项卡是**工程**，一个网页里可以同时开多份
+
+**背景**：最初顶栏的 tab 是「页面」（时间轴页 + 排版编辑页），而且只有一份工程 ——
+新建工程会把当前那份顶掉。结果是顶栏看起来像个摆设：一个网页里就两个页面，
+而「新建」是个覆盖操作。真实需求是**在同一页里开几份工程来回切**（比对两版剪辑、
+把 A 的片段搬到 B），这正是一个选项卡条该解决的问题。
+
+**决定**：
+
+#### 1. `OpenProject` 承载所有「跟这一份工程走」的状态
+
+```ts
+interface OpenProject {
+  id: string; store: ProjectStore; assets: AssetStore;
+  view: ProjectView;                       // 时间轴 / 某个排版片段
+  dir: FsDirHandle | null; key: string | null;
+  savedVersion: number; savedAt: number; issues: AssetIssue[];
+  playT: number; selectedClipId: string | null;   // ← 这两个**也是工程级**的
+}
+```
+
+`appState.projects` 是列表，`activeProjectId` 指向当前那份。
+切换工程 = 换一个 id，**不是**把一堆散落的状态逐个同步一遍 ——
+后者的 bug 形态是「切过去以后播放头还停在上一个工程的位置」，
+而且每加一个工程级状态就多一个漏同步的机会。
+
+#### 2. 素材仓按工程隔离
+
+`AssetStore` 从模块级单例改成 `createAssetStore()`，每个 `OpenProject` 持一个。
+**共用一份的实际后果不是「看起来不对」，是数据损坏**：保存 A 时 `buildLedger()`
+会把 B 导入的素材一起写进 A 的 `assets/`，台账里凭空多出几条不属于这份工程的记录。
+
+取当前那份的入口统一是 `appState.assets`（getter）。**任何地方都不许再 import
+模块级的素材仓** —— 没有那个单例了，这条是编译期强制的。
+
+#### 3. `appState.store` / `appState.assets` 是 getter
+
+这是本次改动能这么小的原因：所有写库代码本来就写 `appState.store.xxx`，
+没有别处持有 store 引用。把它们从字段改成 getter 之后，**调用点一行都不用动**，
+而语义自动从「那份固定的工程」变成「当前前台那份」。
+
+代价是一条新纪律：**`const store = appState.store` 之后不能跨越工程切换**。
+需要跨切换的话，每次重新取。
+
+#### 4. 切换工程的顺序有讲究
+
+```
+if (playing) pause()          ← 必须最先：pause 会把播放位置写回「当前工程」，
+                                而 getter 在改完 id 之后就指向新工程了
+pendingGestureCancel?.()      ← 绝不能让 beginTx 悬空，否则撤销栈错乱
+activeProjectId = id
+subscribeActive()             ← version 是 per-工程的，必须换订阅
+refreshPreview()              ← 两份工程分辨率可能不同，必须重同步显示尺寸
+player?.stop()                ← 音频位置属于上一份工程
+```
+
+`subscribeActive()` 的必要性：每份工程有自己的 `version` 计数，
+不换订阅的话后台工程的改动会去刷新前台界面，而前台自己的改动反而看不见。
+
+#### 5. 新建 / 打开 = **再开一份**，不是替换
+
+两者都走 `appState.adoptProject()`：装配出一份新的 `OpenProject` 挂上去并激活。
+装配顺序是「**先把素材读进来，再登记**」—— 读盘失败时不会在顶栏留下一个半成品 tab。
+
+于是顶栏加号**不需要脏检查**：它不覆盖任何东西。（这与「关闭工程」正好相反 ——
+关闭会丢内容，所以脏的一律拒绝。）
+
+#### 6. 关闭工程：脏的**弹确认**，不是拒绝
+
+`closeProject(id, { force })` 返回 `'ok' | 'dirty' | 'missing'`。
+
+脏的返回 `'dirty'`，由 UI 弹 `ConfirmDialog`，确认后才带 `force` 再调一次。
+第一版写的是「直接拒绝 + 提示去保存」，被 O9 打回来了 —— 原话是
+「有时候我就是单纯想测试东西或者放弃改动」。**拒绝等于给了用户一个死胡同**：
+关不掉，又不知道该干什么。而确认框把决定权交回去，并且能说清后果是**丢失**。
+
+（`shell-tab-close-*` → `project-tab-close-*`；确认框的 testid 是
+`confirm-close-project`，按钮是 `-ok` / `-cancel`。）
+
+#### 6b. 关页面 / F5 也要拦
+
+`App.svelte` 挂了 `beforeunload`，判据是 `anyDirty` —— **任何一份**工程脏就拦，
+因为关页面会把**所有**打开的工程一起丢掉。
+
+弹的是**浏览器自己的**确认框。页面内伪造一个会撒谎：它挡不住真正的离开。
+文案控制不了，但「有没有这个框」正是需要的部分。
+
+#### 6c. 关掉最后一份会补一个空白工程
+
+工作区不允许 0 份工程 —— 否则所有 `activeProject` 的读取者都要处理空集，
+代价远大于收益。补出来的是一份**崭新的空白**（`createBlankProject()`），
+不是「原来那个又回来了」，所以不会误导。关闭按钮因此**总是渲染**。
+
+#### 7. 排版视图的退出入口用「箭头」而不是「×」
+
+工程 tab 里可能同时有「回到时间轴」与「关闭工程」两个动作，
+两个 `×` 会让人分不清哪个是哪个。所以前者用 `arrow-left`
+（`project-tab-timeline-N`），后者用 `x`（`project-tab-close-N`）。
+
+#### 8. 仍然共享的（刻意）
+
+`renderer` / `player` / `fonts` / 排版运行时都是**进程级**的：它们渲染「当前工程」，
+不持有任何工程数据。撤销栈是 **per-store** 的（每份工程一个 `CommandStack`），
+所以切工程不会把两份工程的快照混在一起。
+
+`waveforms` 与图片的 objectURL 表是全局的、按 `assetId` 索引，而 assetId 是 uuid
+（demo 音频 id 固定但内容由代码确定，多份 demo 共用同一条是正确的），
+所以跨工程共用不会串。
+
+---
 
 ## 5. 数据模型
 
@@ -467,14 +769,27 @@ function buildStack(project: Project, t: number): Stack {
 
 **布局约定**：针对时间轴的操作（播放、拍网格、吸附、重叠策略、时长、缩放）一律放在**轨道正上方**的工具条里，不要挪回窗口顶部。
 
-**页面宿主（2026-10-01 补）**：顶栏的选项卡是**页面**级的容器（时间轴页常驻 + 排版编辑页临时）。
+**页面宿主（2026-10-01 补，2026-10-02 修订）**：顶栏的选项卡是**工程**（ADR-012），
+`.page` 是**工程内部的视图**宿主。
 `.shell` 之下多了一层 `.content`，它有两列：**左侧是常驻的窄侧栏**（工程级动作、设置、
-明暗切换不该随页面消失），右侧的 `.page` 才是页面宿主，用 `display:none` 在
-「时间轴主界面」与「排版编辑页」之间切换（**主界面绝不卸载**，ADR-008 第 1 条）。
-新增页面级编辑器时照这个形状加：`appState.shellTabs` 里一个判别联合分支 +
-`.page` 里一个 `{#if}`。
+明暗切换不该随工程消失），右侧的 `.page` 用 `display:none` 在「时间轴视图」与
+「排版编辑页」之间切换（**时间轴视图绝不卸载**，ADR-008 第 1 条）。
+新增编辑器时照这个形状加：`ProjectView` 里一个判别联合分支 + `.page` 里一个 `{#if}`。
 
 **例外——工程级动作归窄侧栏**（2026-10-01 调整）：保存、导出这类「对整份工程」的动作放在最左侧的窄图标栏里，与「逐帧/逐拍」的时间轴操作分开。导出的**触发入口**因此从工具条搬进了侧栏的导出面板（`[data-testid=rail-export]` → `[data-testid=export-png]`）；工具条里只剩播放头与拍网格相关的东西。
+
+**顶栏加号是这个划分的一个受控例外**（2026-10-02）：选项卡条末尾的加号 = **再开一份工程**
+（`[data-testid=topbar-new-project]`）。放在那儿是因为它紧挨着以工程名为标题的那些页签，
+「再开一个」是这个位置的通用惯例；而侧栏的「工程」面板管的是**当前这份**
+（新建 / 打开 / 另存为 / 最近）—— 两者是「快开」与「管理」的分工，不是重复入口。
+
+加号**不做脏检查**：多开不覆盖任何东西。需要拦的是**关闭**（会丢内容，
+`closeProject()` 对脏的一律拒绝），那条在 TopBar 的 `onCloseProject` 里。
+
+> **用词约定（2026-10-02）：Artmatic 产出的那个目录一律叫「工程」，不叫「项目」。**
+> 「项目」只用于指代**这个软件本身**（「本项目」「参考项目」）。
+> 代码标识符仍是 `project` / `Project`（`ProjectStore`、`project.json`、`appState.projectName`），
+> 那是英语里没有歧义的唯一写法，不要为了对齐中文去改它。
 
 ### 关键帧要锚在拍上
 
@@ -601,15 +916,121 @@ Tab / 分组 / 按钮，含 Contextual Tab 与横向滚动）。原文「只做�
 
 ### M5 · Electron 壳与工程文件
 
-- [ ] 工程目录格式（`project.json` + `assets.json` + `analysis/` + `thumbs/`）
-- [ ] **原子写**：`project.json.tmp` → `fsync` → `rename`；保留 `.bak`
-- [ ] `schemaVersion` + 迁移函数表（第一天就有，不要事后打补丁）
-- [ ] **素材用引用而非拷贝**：绝对路径 + 内容哈希；路径失效提示重定位，哈希不符提示文件被改
-- [ ] preload + 类型化 IPC；大块数据走 SAB
-- [ ] ffmpeg 打包（`asarUnpack`）+ `ffmpeg-pipe` 后端 + NVENC
-- [ ] 音频解码 → 离线 FFT → 喂给依赖音频的参数
+**2026-10-02 拆成两段。** 起因是一个具体问题：「不打包 Electron 能不能实现
+本地保存的独立工程文件」。核查下来 M5 的六条里，**四条照做、一条要改写、
+只有 ffmpeg 那条真的不行** —— 于是把与 Electron 无关的部分独立成 M5a。
 
-**验收**：保存 / 重开工程内容一致；素材改路径后能重定位；导出 5 秒 1080p MP4，音画同步。
+### M5a · 工程文件与持久化 ✅（2026-10-02 完成）
+
+- [x] 工程目录格式（`project.json` + `assets.json` + `assets/` + `analysis/` + `thumbs/`）
+  - 「原子写」改为靠 `createWritable()` 的 siloed swap 语义 + 自己维护 `.bak`（ADR-011 §2）
+  - `schemaVersion` + 迁移函数表：M0 就已落地，M5a 只是接上 `migrateProject` 的调用
+- [x] **素材用引用而非拷贝** → **改写为**「工程根相对路径 + sha256，字节拷进 `assets/`」
+  - 绝对路径在 Web 上拿不到（FSA 不暴露真实路径），且相对路径本来就更可移植
+  - 代价：视频素材要占一份空间（(b) 句柄模式留给后续）
+- [x] `ProjectFs` 抽象 + 三个根来源（fsa / opfs / memory）
+- [x] 素材台账 `assets.json` + 完整性审计（missing / changed / unhashed / untracked）
+- [x] 句柄持久化（IndexedDB）+ 最近工程 + 脏标记
+- [x] UI：侧栏「工程」面板、`Ctrl+S` / `Ctrl+Shift+S`
+- [x] **素材仓**（`project/asset-store.ts`）接上三个产生素材的地方：
+  导入音频、导入图片、排版「转为图片」
+
+**验收（实测 2026-10-02）**：
+- 单测 444 → **510**（新增 layout / ledger / io 三个文件 66 条）
+- E2E `project.spec.ts` **10 条全通过，14.1 s**，跑在 OPFS 上（真实文件系统，非 mock）
+- 覆盖到的：目录结构、`.bak` 逐字节等于上一版、重开后内容一致、
+  素材哈希与 Node 侧独立计算的一致、同长度内容替换被检出 `changed`、
+  删除素材被检出 `missing`、脏标记三态、侧栏保存按钮写进已连接目录
+
+- [ ] **素材重定位 UI**：`changed` 目前只报告不处理。缺的是「重选这个文件」
+  的动作（`showOpenFilePicker` → 比对哈希 → 更新台账）
+- [ ] `thumbs/` 只建了目录，还没往里写东西
+- [ ] `analysis/` 同理 —— 目录与路径规则就位，音频分析缓存还没落地
+- [ ] 打开工程时素材是**全量读进内存**的。素材多/大之后要改成懒加载
+  （现在是音频 + 图片量级，够用）
+
+### M5b · Electron 壳 —— **❌ 已取消（2026-10-02）**
+
+**原本只为一个 ffmpeg 存在。** M5c 实测证明纯浏览器能编 H.264 + AAC，
+于是这个壳失去了唯一的存在理由。**不做。**
+
+剩下的「打包成 exe 给人用」是分发问题，不是架构问题：要解决它，
+正确做法是 PWA（`manifest` + service worker），而不是把内核塞进 Electron。
+内核留在 Web 层的判断已被 ADR-011 与本次实测两次验证。
+
+（若将来真要做打包，**别复活 Electron 壳**，走 PWA。理由见 ADR-001 补注：
+Chromium/Electron 构建不带 H.264，反而比 Chrome 品牌构建更受限。）
+
+### M5c · WebCodecs 快路径 —— **✅ 已落地（2026-10-02）**
+
+实测（`channel: 'chrome'`，headless）：
+
+| 探测串 | 1920×1080@60 |
+|---|---|
+| `avc1.42001f`（baseline 3.1） | **否** |
+| `avc1.4d0028`（main 4.0） | **是** |
+| `avc1.640028`（high 4.0） | **是** |
+| `mp4a.40.2`（AAC-LC） | **是**（实编 0.25 s 出 12 帧） |
+
+> **⚠️ 探测串必须是 L4，用 `avc1.42001f` 会得到假阴性。**
+> 报错原文：`the maximum coded area (921600) supported by the AVC level (3.1)`
+> —— 921600 = 1280×720。**baseline 3.1 的 coded area 上限就是 720p。**
+> 本项目已经因为这个串误判过一次「Chrome 不带 H.264」，ADR-001 原文引的就是它。
+>
+> 另一个坑：`about:blank` 里 `VideoEncoder` **压根不存在**（不是 undefined 语义问题，
+> 是 WebCodecs 只在 secure context 暴露）。探测必须起 `http://localhost`。
+
+落地：
+
+- [x] `exporters/mp4-sink.ts` —— mediabunny 封装 + WebCodecs 编码
+- [x] `exporters/mixdown.ts` —— 音频离线混流（`AudioClip` → 整段 PCM）
+- [x] `FrameSink.configure` 加第四参 `canvas`（见下）
+- [x] `Mp4Sink.cancel()` —— 不放编码器会泄漏硬件会话
+- [x] E2E：结构断言（ftyp/moov/avc1/mp4a）+ 真实下载路径
+- [x] **独立解码验证**：把产物喂给浏览器 `<video>`，读到
+      `duration 1.0027 / 640×360 / 209229 非黑像素 of 230400`（90.8%）
+- [x] PNG 序列保留为逃生舱（`export-png` 按钮仍在）
+
+**验收结果**：导出 1s 640×360 = 267 KB，音画双轨，浏览器可解码播放。
+
+#### `FrameSink` 签名为什么改了
+
+`configure` 多了 `opts.canvas`：**`Output` 只有 `addVideoTrack`、没有
+`removeVideoTrack`**，而 `CanvasSource` 在**构造时**读 canvas 尺寸并缓存
+`VideoFrame` 工厂。所以不可能「先建源、事后再换 canvas」——
+只能让调用方在 `setExportSize` 之后把真实 canvas 传进来。
+
+连带两条纪律：
+1. `runExport` 里 **`setExportSize` 必须早于 `configure`**（顺序反了会产出错尺寸文件且控制台无提示）。
+2. `Mp4Sink.configure` 会**交叉校验** `canvas.width/height` 与声明的 `size` 是否一致，不一致直接抛。
+
+#### mediabunny 的生命周期顺序（踩过）
+
+```
+加轨（addVideoTrack / addAudioTrack）→ output.start() → 源.add(样本) → finalize()
+```
+
+- 音频**建源 + 加轨**在 `configure`（start 前必须建好）
+- 音频**灌 PCM**在第一次 `submit` 之前（`add()` 断言已 started）
+- 灌早了的症状：`Output has not started`（踩过一次）
+
+#### 磁盘纪律（这个项目的导出是会产生真实大文件的）
+
+MP4 比 PNG 序列小一到两个数量级，但 16s/1080p 仍有 ~32 MB。三条防线：
+
+1. **UI 点之前显示预计体积**（`estimateMp4Bytes()`，与 sink 的码率分档同源）。
+2. **E2E 一律 320×180 / 0.5s（15 帧）**，产物几十 KB；落 `os.tmpdir()`；
+   `test.afterEach` 无条件删目录 —— **断言失败时也删**。
+3. E2E 里有**体积上限断言**（`< 1 MB`）。有人把测试分辨率调大时，这条会先失败
+   提醒，而不是安静地每次写 100 MB。
+
+> **不要为了「看得更清楚」把 E2E 时长调大。** 长时间导出稳定性是手工验一次的事
+> （`npm run dev` → 导出 → 看进度 → 手动删），不属于 CI。
+
+**M6 剩余**：稳定 Electron 版本（**已取消，见上**）、错误处理、
+长时导出稳定性、性能档位 UI。
+
+**验收**：导出 5 秒 1080p MP4，音画同步。**（待人工做，E2E 不做长时）**
 
 ### M6 · 打包与打磨（MVP 之后）
 
@@ -636,10 +1057,26 @@ npm run dist                # electron-builder 打包（M5 才有）
 
 - **单测只测纯函数**：曲线求值、时间换算、命令栈、schema 迁移、颜色/合成数学。不测 DOM、不测 WebGL。
 - **E2E 走 Playwright + 系统 Chrome/Edge**（`channel: 'chrome'`），不需要 `playwright install`。E2E 服务器要正确返回 `.mjs` 的 `text/javascript` MIME，否则 ESM import 会被拦掉。
+- **持久化的 E2E 跑在 OPFS 上，那不是 mock**（ADR-011 §5）。
+  `__artmatic.project.useOpfs(name)` 把 OPFS 下的一个子目录接成当前工程位置，
+  之后走的是与生产**完全同一条**保存/打开链路 —— 只有「根句柄从哪来」不同。
+  `showDirectoryPicker()` 是系统对话框，Playwright 驱动不了，这是绕开它的唯一诚实办法。
+  - ⚠️ **`scripts/e2e.mjs` 的位置参数是按「完整路径」做正则匹配的**，
+    而本机路径里有 `\Projects\` —— 所以 `node scripts/e2e.mjs project`
+    会匹配到**全部** spec 文件（实测踩过）。要限定文件就写 `project.spec`。
+- **单测里的文件系统是 `memoryRoot()`，它模拟了 swap 语义**（写入进临时缓冲、
+  `close()` 才提交）。所以「写到一半失败不损坏原文件」这条在单测里是被真测到的。
+  它还支持 `setFault(op => Error | null)` 注入失败、`inspect(path)` 直接看磁盘状态 ——
+  写这类测试时别去 mock `FileSystemDirectoryHandle`，用这个。
 - **选择器一律优先 `data-testid`**，不要绑 CSS 类名。所有自研控件都暴露了稳定 testid
   （`param-row` / `param-label` / `param-slider` / `param-number` / `select` / `menu-item-*` /
   `track-side-row` / `tl-row` / `tl-scroll` / `ctx-menu` …）。迁移前那批「绑 `.kf`、`.lbl`、
   `input[type=range]`、`button[title=删除]`」的断言在换控件时全碎了一次，不值得再来一遍。
+  - 顶栏的工程页签带**序号**：`project-tab-N`（切换）/ `project-tab-timeline-N`（回到时间轴）
+    / `project-tab-close-N`（关闭）/ `project-tab-dirty-N`（未保存圆点），
+    加上全局的 `topbar-new-project`。用序号而不是工程 id，因为 id 是运行时 uuid，
+    测试拿不到；而「第几份」在测试里本来就是明确的（先开 A 再开 B ⇒ A 是 0）。
+  - 排版视图**没有自己的 tab**（ADR-012）：`shell-tab-*` 那一套已经不存在了。
   - 约定：`NumberInput` 的 `testid` 落在**内部 `<input>`** 上（保住 `fill()` / `inputValue()`），
     拖拽热区的 testid 是 `testid + '-wrap'`。
 - **E2E 选择器两条坑**：
@@ -678,7 +1115,28 @@ bug，其中 4 个是同一个根因。
    却挂在 `.paper-wrap` 外面 ⇒ 整体偏移、把手点不中（拖拽变成框选）。
    `toBeVisible()` 抓不到 —— 它只要求元素在 DOM 里有尺寸。
 
-**配套的测试纪律（比上面两条更重要）**：
+**根因三：读的是「类实例」的字段 —— 那个读取压根不可追踪**（2026-10-02 立）。
+
+`$state` 只深代理**普通对象与数组**；类实例（`ProjectStore`、`AssetStore` 这类）
+原样留着。于是 `p.store.version` 是一次普普通通的属性访问，**不产生任何依赖**。
+
+真事：顶栏工程页签的「未保存圆点」原来写成
+`{@const dirty = p.savedVersion !== p.store.version}`。`p` 是可追踪的（数组元素），
+但 `p.store` 是 `ProjectStore` 实例 —— 于是这个派生**只在数组结构变化时**
+（新开 / 关闭工程让 `{#each}` 重跑）才重算。
+
+症状极具误导性：保存一次 → 改东西（圆点不出现）→ 新开一份工程（圆点出现了）
+→ 回去再保存一次（从此圆点再也不出现）。而**关闭时的未保存拦截一直是好的** ——
+那条读的是 `appState.version`，可追踪。同一个 `savedVersion` 字段，
+两处判据表现相反，很容易把人带到「数据错了」的方向上去。
+
+- **规则：派生里凡是要读类实例的字段，必须同时 `void` 一个可追踪的信号。**
+  本项目的标准信号是 `void appState.version` —— 它是「当前工程 version 的镜像」，
+  每次 commit 都变（`subscribeActive()` 维护）。
+- **判据**：问一句「这个字段变的时候，**谁会通知 Svelte**？」答不上来就是漏了。
+- 同族的还有 `p.store.project.name`：工程改名后页签标题不刷新，是同一个原因。
+
+**配套的测试纪律（比上面三条更重要）**：
 
 > **E2E 只负责「操作」，不看「UI 表现」—— 所以上面这一整类 bug 它一条都抓不到。**
 > 断言 store 是必要的，但**不等于验证了功能**：文档改了 ≠ 用户看得见。
@@ -788,6 +1246,22 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
    里搜不到新字符串），HMR 日志也不报错，表现为「改了半天界面纹丝不动」。
    验证方法就是 curl 那个 URL 搜新代码里的字符串。**修法是重启 dev server**
    （必要时连 `node_modules/.vite` 一起删）。正常编辑不会这样，只有删+建同路径才会。
+7. **样式没热更新时，别急着改选择器。**（2026-10-02 立）
+   判据是**同一个元素上「JS 驱动的部分变了、CSS 驱动的部分没变」**。
+   真事：底栏提示改成三级配色之后，O9 的截图里图标已经是 `success` 的 ✓、
+   字还是 `--danger` 的红，原话是「代码里是 success，但显示的字体颜色还是红的」。
+   图标更新 = 组件逻辑是新的；颜色没更新 = 样式表是旧的。**两者不一致本身就是结论。**
+
+   验证要 **dev 与 prod 各跑一遍**：Vite 的 dev 把 `<style>` 注入成 `<style>` 标签、
+   prod 走独立的 CSS 文件，两条路径的 scoping 类名都不一样
+   （实测 `s-iM0QW_HDj0rM` vs `svelte-1h7dsph`），**只验一边等于没验**。
+   这次两边都是 `rgb(48, 164, 108)`（= `--success`），说明问题在浏览器侧的
+   缓存 / HMR，硬刷新即恢复。
+
+   **顺带一个能定性的技巧：从截图取色可以区分「是哪一支红」。**
+   `--danger` 是 `#e5484d`，截图里量到 `#d25352` —— 正好是它混了抗锯齿的灰。
+   于是可以断定走的是**旧规则**，而不是「新规则生效了但颜色不对」。
+   这两者的修法完全不同，靠肉眼分不出来。
 
 ### 视觉与交互约定（2026-10-01 补充）
 
@@ -798,6 +1272,10 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   或导出信息塞进去就成了带滚动条的小盒子。
 - **工具条的 tooltip 朝上**（`tipPlacement="top"`）：工具条紧贴轨道区，下方没空间。
   另外 `tip.ts` 在 `pointerdown` 时会收起气泡——否则点开的下拉会被悬停气泡挡住第一项。
+- **操作提示分三级**：`appState.flash(text, level)`，`level` 取
+  `'info' | 'success' | 'error'`，默认中性。底栏那段的颜色与图标都跟着 level 走。
+  原来只有红色一种 —— 于是「已保存 · 3 个素材 · 12 ms」也是红的，
+  用户第一眼会以为保存失败了。
 - **UI 文本一律 `user-select: none`**（`app.css` 在 `html,body` 上设，输入类元素单独放行）。
 - **drag-to-tweak 撞到视口边缘时上 Pointer Lock。** 检查器在屏幕右侧，往右拖几下鼠标就撞到
   窗口边缘、位移不再增加，值卡住。达芬奇那类工具靠光标回绕解决，浏览器里做不到（拿不到
@@ -862,6 +1340,28 @@ favicon 同样成对（`public/brand/`），用 `media="(prefers-color-scheme: �
 8. **`SourceManager.setImage` 与 algo 的 R8 上传是否需要 `UNPACK_FLIP_Y_WEBGL`**：
    排版纹理已经确认需要（否则上下颠倒），这两条路径当时没测过方向。
    `setImage` 目前零调用方，R8 只测过确定性 —— 真要用它们之前先补一条方向断言。
+9. ~~**纯 Chrome 里 WebCodecs 的 H.264 到底通不通**~~（2026-10-02 **已实测关闭**）：
+   **通。** `avc1.4d0028`（Main **L4**）在 1920×1080@60 下可用并实编出真实码流；
+   `mp4a.40.2`（AAC-LC）同样。**⇒ M5b（Electron 壳）已取消，webcodecs 升为主路径。**
+   > 写这条的时候用错了探测串 —— ADR 补注里的 `avc1.42001f` 是 **baseline 3.1**，
+   > 其 coded area 上限 921600 = **720p**，1080p 直接被拒。报错原文含
+   > `maximum coded area (921600)`，很容易读成「H.264 不支持」。
+   > **正确串是 `avc1.4d0028`**。另：`about:blank` 非 secure context，
+   > `VideoEncoder` 压根不存在，必须起 `http://localhost` 再测。
+   >
+   > 完整落地记录见 §6 的 M5c。
+10. **素材重定位 UI**（2026-10-02 新增）：`auditLedger` 已经能检出 `missing` / `changed`
+    并在「工程」面板里列出来，但**只能报告不能修**。缺的动作是
+    「重选这个文件」→ `showOpenFilePicker()` → 比对哈希 → 更新台账并回写工程。
+    在它做出来之前，用户遇到素材丢失只能手动把文件放回 `assets/` 原位。
+11. **OPFS 的配额**（2026-10-02 新增）：E2E 跑在 OPFS 上，而 OPFS **受浏览器存储配额约束**
+    （用户选的目录不受限）。现在测试里只有几 KB 的假素材所以没碰到，
+    将来若要给 E2E 塞真实视频素材，得先看 `navigator.storage.estimate()`。
+12. **打开工程时素材是全量读进内存的**（2026-10-02 新增）：
+    `AssetStore.loadFrom()` 把每一条 bundled 素材都读了回来。音频 + 图片量级没问题，
+    素材一多或出现视频就会变成「打开工程要等十几秒 + 吃几 GB 内存」。
+    改成按需懒读（首次用到某素材时才读）需要让 `resolveImageAsset` / 音频解码
+    都能接受异步——不是小改动，但迟早要做。
 
 ---
 

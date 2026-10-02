@@ -1,7 +1,7 @@
 /**
- * demo-project.ts — 开箱 demo 工程。
+ * demo-project.ts — 内置工程工厂（开箱 demo + 空白）。
  *
- * 16 秒 @120BPM（8 小节）。M1 验收里的三层结构：
+ * 开箱 demo 工程：16 秒 @120BPM（8 小节）。M1 验收里的三层结构：
  *   V1 底图      Mandelbrot 缓慢推近（zoom 关键帧，验证 realtime 参数曲线）
  *   V2 纹理      Rule 110 生长（screen 混合叠在底图上）
  *   V3 局部故障  只在第 5–8 小节出现的 slices + channel-split（adjustment layer）
@@ -13,6 +13,21 @@ import { defaultProject, newId, type Project, type SourceClip, type EffectClip }
 
 export const DEMO_ASSET_ID = 'demo-song';
 export const DEMO_DURATION = 16;
+
+/**
+ * 空白工程：一视觉 + 一音频两条轨。
+ *
+ * **不留空轨道列表。** 没有轨道的话右键菜单出不来、片段也没地方放，
+ * 用户面对的是一块完全动不了的地方 —— 那不是「空白」，那是「坏了」。
+ */
+export function createBlankProject(name = '未命名工程'): Project {
+  const p = defaultProject(name);
+  p.tracks = [
+    { kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [] },
+    { kind: 'audio', id: newId(), name: 'A1', enabled: true, bus: 'master', clips: [] },
+  ];
+  return p;
+}
 
 function baseClip(id: string, start: number, end: number, label: string) {
   return { id, start, end, label, fadeSec: 0, curves: {} };

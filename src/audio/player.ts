@@ -25,6 +25,18 @@ export class AudioPlayer {
     return this.buffers.has(assetId);
   }
 
+  /**
+   * 取已解码的音频，供**导出离线混流**用（`exporters/mixdown.ts`）。
+   *
+   * 返回的是原始 buffer 的引用 —— 混流只读不写，所以共享是安全的。
+   * 没有这一条的话，导出侧只能从素材字节重新 `decodeAudio` 一遍，
+   * 而 demo 音频的字节是程序生成的（`putGenerated`，仓里没有字节），
+   * 根本无从解码 —— 那条路对 demo 是断的。
+   */
+  buffer(assetId: string): AudioBuffer | null {
+    return this.buffers.get(assetId) ?? null;
+  }
+
   get isPlaying(): boolean {
     return this.playing;
   }

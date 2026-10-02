@@ -1,23 +1,67 @@
 <script lang="ts">
   /**
-   * TopBar — 顶栏，页面选项卡宿主。
+   * TopBar — 顶栏，打开的**工程**的选项卡。
    *
-   * 两级结构：常驻的「时间轴」页 + 临时的「排版编辑」页（跟着片段走）。
-   * 数据源是 appState.shellTabs —— 这里是纯渲染，不持有页面状态，
-   * 所以「哪个页面是当前页」只有一个地方说了算。
+   * tab = 一份工程，不是一个网页里的「页面」。「时间轴 / 排版编辑」是工程
+   * **内部**的视图，跟着工程走：切回某份工程时，它上次停在哪个视图就回到哪里。
+   * 这样做的直接好处是「一个网页里同时开几份工程」变成免费的 ——
+   * 切换工程 = 换一个 `activeProjectId`（见 app-state 的 OpenProject）。
    *
-   * 时间轴页的标题跟着工程名走（M5 接入多工程后这里会自然变成多开）。
+   * 这里是纯渲染 + 少量动作转发，不持有任何状态：「哪份工程是当前」
+   * 只有 `appState.activeProjectId` 说了算。
    */
   import Icon from './Icon.svelte';
   import Brand from './Brand.svelte';
+  import ConfirmDialog from './ConfirmDialog.svelte';
   import { appState } from './app-state.svelte';
+  import { newProject } from './project-actions';
   import { tip } from './tip';
 
+  /** 待确认的关闭动作；非 null 时弹确认框。 */
+  let pendingClose = $state<{ id: string; name: string } | null>(null);
+
+  /**
+   * 选项卡数据。
+   *
+   * ⚠️ **必须走 `$derived.by` 并显式依赖 `appState.version`。**
+   *
+   * `dirty` 要读 `p.store.version`，而 `ProjectStore` 是**类实例** ——
+   * Svelte 的 `$state` 只深代理普通对象，类实例的字段读取**不可追踪**。
+   * 所以直接写在模板里（`{@const dirty = p.savedVersion !== p.store.version}`）
+   * 的表现是：只有「数组结构变化」（新开 / 关闭工程）才会重算，于是
+   * 「保存一次之后圆点就再也不出现」。
+   *
+   * 这是 AGENTS §7 那条硬规则的又一形态：**模板里凡是读嵌套对象字段的地方，
+   * 来源派生必须换引用**（这里是 `map` 出新对象 + 显式 `void` 那个可追踪的信号）。
+   */
   const tabs = $derived.by(() => {
-    void appState.version;
-    const name = appState.store.project.name || '未命名工程';
-    return appState.shellTabs.map((t) => (t.kind === 'timeline' ? { ...t, title: name } : t));
+    void appState.version; // 当前工程的改动靠它触发重算
+    void appState.activeProjectId; // 切工程时也要重算
+    return appState.projects.map((p, i) => ({
+      i,
+      id: p.id,
+      name: p.store.project.name || '未命名工程',
+      dirty: p.savedVersion !== p.store.version,
+      inTypo: p.view.kind === 'typography',
+      active: p.id === appState.activeProjectId,
+    }));
   });
+
+  /**
+   * 点关闭。脏的**弹确认**而不是拒绝 —— 拒绝之后用户既关不掉、
+   * 也不知道下一步该干什么（他常常只是想丢掉这次试验）。
+   */
+  function requestClose(id: string, name: string): void {
+    const r = appState.closeProject(id);
+    if (r === 'dirty') pendingClose = { id, name };
+    else if (r === 'missing') appState.flash('这份工程已经不在了', 'error');
+  }
+
+  function confirmClose(): void {
+    const target = pendingClose;
+    pendingClose = null;
+    if (target) appState.closeProject(target.id, { force: true });
+  }
 </script>
 
 <header class="topbar" data-testid="topbar">
@@ -25,50 +69,81 @@
     <Brand variant="word" size={15} />
   </span>
 
-  <div class="tabs" role="tablist" aria-label="页面">
-    {#each tabs as tab (tab.id)}
+  <div class="tabs" role="tablist" aria-label="打开的工程">
+    {#each tabs as t (t.id)}
       <div
         class="tab"
         role="tab"
-        aria-selected={tab.id === appState.activeTabId}
-        data-active={tab.id === appState.activeTabId ? 'true' : undefined}
+        aria-selected={t.active}
+        data-active={t.active ? 'true' : undefined}
       >
         <button
           type="button"
           class="tab-main"
-          data-testid={tab.kind === 'timeline' ? 'shell-tab-timeline' : `shell-tab-${tab.clipId}`}
-          onclick={() => appState.activateTab(tab.id)}
+          data-testid={`project-tab-${t.i}`}
+          onclick={() => appState.activateProject(t.id)}
         >
-          {#if tab.kind === 'typography'}<Icon name="type" size={11} />{/if}
-          <span class="tab-name">{tab.title}</span>
+          {#if t.inTypo}
+            <Icon name="type" size={11} />
+            <span class="sep">·</span>
+          {/if}
+          <span class="tab-name">{t.name}</span>
+          {#if t.dirty}
+            <span class="dot" title="有未保存改动" data-testid={`project-tab-dirty-${t.i}`}></span>
+          {/if}
         </button>
 
-        {#if tab.closable}
-          <!-- 关闭是独立的 button（不嵌套在 tab-main 里，避免 button 套 button）。 -->
+        {#if t.inTypo}
+          <!-- 回到时间轴。用箭头而不是 ×：同一行里还有「关闭工程」，
+               两个 × 会让人分不清哪个是哪个。 -->
           <button
             type="button"
-            class="tab-close"
-            aria-label={`关闭 ${tab.title}`}
-            data-testid={`shell-tab-close-${tab.clipId}`}
-            onclick={() => appState.closeTab(tab.id)}
+            class="tab-mini"
+            aria-label="回到时间轴"
+            data-testid={`project-tab-timeline-${t.i}`}
+            onclick={() => appState.closeTypographyView(t.id)}
           >
-            <Icon name="x" size={11} />
+            <Icon name="arrow-left" size={11} />
           </button>
         {/if}
+
+        <button
+          type="button"
+          class="tab-mini"
+          aria-label={`关闭 ${t.name}`}
+          data-testid={`project-tab-close-${t.i}`}
+          onclick={() => requestClose(t.id, t.name)}
+        >
+          <Icon name="x" size={11} />
+        </button>
       </div>
     {/each}
 
     <button
       type="button"
-      class="ic-btn sm"
-      aria-label="新建项目"
-      disabled
-      use:tip={{ text: '项目系统未实现（M5）', disabled: false }}
+      class="ic-btn sm new-project"
+      aria-label="新建工程"
+      data-testid="topbar-new-project"
+      use:tip={{ text: '新建工程（在同一页里再开一份）' }}
+      onclick={() => void newProject(false)}
     >
       <Icon name="plus" size={12} />
     </button>
   </div>
 </header>
+
+{#if pendingClose}
+  <ConfirmDialog
+    title="放弃未保存的改动？"
+    message={`「${pendingClose.name}」有未保存的改动。关闭之后这些改动就找不回来了。`}
+    confirmLabel="放弃改动并关闭"
+    cancelLabel="返回"
+    danger
+    testid="confirm-close-project"
+    onconfirm={confirmClose}
+    oncancel={() => (pendingClose = null)}
+  />
+{/if}
 
 <style>
   .topbar {
@@ -97,7 +172,7 @@
   .tab {
     display: inline-flex;
     align-items: center;
-    max-width: 200px;
+    max-width: 240px;
     border-bottom: 2px solid transparent;
     color: var(--text-muted);
   }
@@ -115,7 +190,7 @@
     gap: var(--sp-2);
     min-width: 0;
     height: 100%;
-    padding: 0 var(--sp-3) 0 var(--sp-4);
+    padding: 0 var(--sp-2) 0 var(--sp-4);
     background: transparent;
     border: none;
     border-radius: 0;
@@ -123,13 +198,12 @@
     font-size: var(--fs-sm);
     cursor: pointer;
   }
-  .tab-close {
+  .tab-mini {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 16px;
     height: 16px;
-    margin-right: var(--sp-2);
     padding: 0;
     background: transparent;
     border: none;
@@ -137,13 +211,40 @@
     color: var(--text-muted);
     cursor: pointer;
   }
-  /* 纯图标按钮：hover 只变图标色，不改底色 */
-  .tab-close:hover {
+  .tab-mini:hover {
     color: var(--text-primary);
+  }
+  /* 最后一个小按钮与 tab 右沿留一点空，否则紧贴下一个 tab。 */
+  .tab > .tab-mini:last-child {
+    margin-right: var(--sp-2);
   }
   .tab-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .sep {
+    color: var(--text-muted);
+  }
+  /* 未保存标记。用一个小圆点：它要能在 12px 的字号旁边被看见，
+     又不能抢过标题本身。 */
+  .dot {
+    flex-shrink: 0;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  /*
+   * 加号的垂直居中。
+   *
+   * `.tabs` 是 `align-items: stretch`（那是给 `.tab` 用的 —— 它的
+   * border-bottom 要贴到顶栏下沿）。而 stretch 对**有确定高度**的子项
+   * 等价于 `flex-start`，于是 `.ic-btn.sm` 一直顶着上沿。
+   * 显式 `align-self` 把它摘出这个规则。
+   */
+  .new-project {
+    align-self: center;
+    margin-left: var(--sp-2);
   }
 </style>

@@ -40,7 +40,7 @@ import {
   type AnimPreset,
   type AnimTiming,
 } from '../../typography/animation';
-import { putImageAsset, putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
+import { putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
 import type { ShapePreset } from '../../typography/shapes';
 
 /* ------------------------------------------------------------ 选择集工具 */
@@ -202,7 +202,19 @@ export function createTypographyActions(): TypographyActions {
         const picked = await browserPlatform.pickImageFile();
         if (!picked) return;
         const assetId = newId();
+        // ① 渲染期解引用：snapDOM 要能把 <img> 取下来内联进快照。
         putImageBytes(assetId, picked.data, mimeForImageFilename(picked.name));
+        // ② 持久化：字节进素材仓，并在工程的素材表里登记一条。
+        //    两个都要 —— 只有 ① 保存时找不到字节（重开丢图），
+        //    只有 ② 当时画面上就是空的。
+        appState.assets.put(assetId, new Uint8Array(picked.data.slice(0)), {
+          kind: 'image',
+          name: picked.name,
+          originName: picked.name,
+        });
+        appState.store.commit('登记图片素材', (p) => {
+          p.assets[assetId] = { id: assetId, kind: 'image', name: picked.name };
+        });
         editorState.commit('插入图片', (doc) => {
           const el = createImageElement(doc.size, assetId, { name: picked.name });
           doc.elements = [...doc.elements, el];
@@ -430,18 +442,27 @@ export function createTypographyActions(): TypographyActions {
         const canvas = await appState.textRaster.rasterizeOnce(doc, doc.size.w, doc.size.h, localSec);
         const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'));
         if (!blob) {
-          appState.flash('烘焙失败：浏览器没能把画布编码成 PNG');
+          appState.flash('烘焙失败：浏览器没能把画布编码成 PNG', 'error');
           return;
         }
         const assetId = newId();
-        putImageAsset(assetId, URL.createObjectURL(blob));
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        putImageBytes(assetId, bytes.buffer, 'image/png');
+        appState.assets.put(assetId, bytes, {
+          kind: 'image',
+          name: '排版烘焙.png',
+          originName: 'flatten.png',
+        });
         appState.store.updateClip(clipId, '排版转为图片', (clip) => {
           if (clip.kind === 'source' && clip.source.type === 'text') {
             clip.source = { type: 'image', assetId };
           }
         });
+        appState.store.commit('登记图片素材', (p) => {
+          p.assets[assetId] = { id: assetId, kind: 'image', name: '排版烘焙.png' };
+        });
         // 源已经不是 text 了，编辑页必须关掉 —— 留着会指向一个不存在的文档。
-        appState.closeTab(`typo:${clipId}`);
+        appState.closeTypographyView();
       })();
     },
   };

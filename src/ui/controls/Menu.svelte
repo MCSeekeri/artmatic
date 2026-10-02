@@ -63,7 +63,7 @@
 
   // $effect 在 DOM 更新之后运行，所以可以直接量元素尺寸，不需要 await tick。
   $effect(() => {
-    // 建立依赖：层的数量与每层的下标、项目树、锚点
+    // 建立依赖：层的数量与每层的下标、菜单项、锚点
     void menu.levels.join(',');
     void items;
     void at?.x;

@@ -65,12 +65,18 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    title: '工程',
+    items: [
+      { keys: 'Ctrl+S', label: '保存工程（没有位置时会先问目录）' },
+      { keys: 'Ctrl+Shift+S', label: '另存为（选一个新目录）' },
+    ],
+  },
+  {
     title: '通用',
     items: [
       { keys: 'Ctrl+Z', label: '撤销' },
       { keys: 'Ctrl+Shift+Z / Ctrl+Y', label: '重做' },
       { keys: 'Esc', label: '关闭当前弹层' },
-      { keys: 'Ctrl+S', label: '保存工程（待 M5 实现）' },
     ],
   },
 ];

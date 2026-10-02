@@ -41,16 +41,20 @@ export async function runExport(
 ): Promise<Blob | string> {
   const { w, h } = project.resolution;
   const total = Math.max(1, Math.ceil(project.duration * project.fps));
-  await opts.sink.configure({ w, h }, project.fps, opts.codec ?? 'png');
 
+  // 尺寸必须先切到导出分辨率，才能把正确尺寸的 canvas 交给 sink：
+  // mediabunny 的 CanvasSource 在构造时读尺寸并缓存 VideoFrame 工厂，
+  // 顺序反了会产出一个错尺寸的文件且控制台无提示（见 mp4-sink.ts）。
   renderer.setExportSize(w, h);
-  // 反馈历史（echo 类）从干净的起点顺序渲染，导出因此天然确定。
   renderer.onSeek();
   renderer.enterExportMode();
-  // ADR-003 规则 ③：字体没就绪就开渲，首帧会用回落字体量度，
-  // 导出与预览不一致，而且「看起来都正常」，极难定位。
-  await renderer.prewarmFonts(project);
   try {
+    await opts.sink.configure({ w, h }, project.fps, opts.codec ?? 'png', {
+      canvas: renderer.kit.canvas,
+    });
+    // ADR-003 规则 ③：字体没就绪就开渲，首帧会用回落字体量度，
+    // 导出与预览不一致，而且「看起来都正常」，极难定位。
+    await renderer.prewarmFonts(project);
     for (let i = 0; i < total; i++) {
       if (opts.signal?.aborted) throw new ExportCancelled();
       const t = timeOf(i, project.fps);
@@ -62,6 +66,10 @@ export async function runExport(
       opts.onProgress?.((i + 1) / total);
       if (i % 10 === 9) await new Promise((r) => setTimeout(r, 0));
     }
+  } catch (e) {
+    // 取消或抛错都要把编码器放掉，否则硬件会话不会归还（见 Mp4Sink.cancel）。
+    await opts.sink.cancel?.();
+    throw e;
   } finally {
     renderer.clearExportSize();
     renderer.onSeek();

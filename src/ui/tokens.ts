@@ -500,7 +500,7 @@ export function contrastRatio(a: string, b: string): number {
 
 /* ------------------------------------------------------------ accent 派生 */
 
-/** 正文级对比度门槛。accent 会出现在底栏项目名、选中描边旁的文字上，
+/** 正文级对比度门槛。accent 会出现在底栏工程名、选中描边旁的文字上，
  *  所以按正文标准（4.5:1）而不是图形标准（3:1）来要求。 */
 export const ACCENT_MIN_CONTRAST = 4.5;
 

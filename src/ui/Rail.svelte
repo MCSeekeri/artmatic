@@ -18,14 +18,55 @@
   import Checkbox from './controls/Checkbox.svelte';
   import Modal from './controls/Modal.svelte';
   import Brand from './Brand.svelte';
+  import Icon from './Icon.svelte';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
   import { ACCENT_PRESETS, BRAND_IDS, DENSITY, type BrandId } from './tokens';
   import { SHORTCUT_GROUPS } from './shortcuts';
-  import { cancelExport, exportPngSequence, totalFrames } from './export';
+  import {
+    cancelExport,
+    estimateMp4Bytes,
+    exportMp4,
+    exportPngSequence,
+    fmtSize,
+    mp4Supported,
+    totalFrames,
+  } from './export';
+  import {
+    newProject,
+    openProjectPicker,
+    openRecentProject,
+    saveProjectAs,
+    saveProjectNow,
+  } from './project-actions';
 
-  type PanelId = 'about' | 'shortcuts' | 'export' | 'settings';
+  type PanelId = 'about' | 'shortcuts' | 'export' | 'settings' | 'project';
   let panel = $state<PanelId | null>(null);
+
+  /**
+   * 当前工程的素材计数。`void` 那两行是为了让它在工程改动与面板重开时重算。
+   * 读的是 `appState.assets`（**当前工程**的素材仓），不是某个模块级单例。
+   */
+  const assetInfo = $derived.by(() => {
+    void appState.version;
+    void panel;
+    return { count: appState.assets.ids().length, bytes: appState.assets.totalBytes() };
+  });
+
+  function fmtBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function ago(ts: number): string {
+    if (!ts) return '—';
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return '刚刚';
+    if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+    if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+    return `${Math.floor(s / 86400)} 天前`;
+  }
 
   const exporting = $derived(appState.exportProgress !== null);
   const pct = $derived(Math.round((appState.exportProgress ?? 0) * 100));
@@ -37,6 +78,12 @@
     void appState.version;
     return appState.project.resolution;
   });
+  /** MP4 的预计体积。点之前就告诉用户要花多少磁盘。 */
+  const mp4Size = $derived.by(() => {
+    void appState.version;
+    return fmtSize(estimateMp4Bytes());
+  });
+  const canMp4 = $derived(mp4Supported());
   const fps = $derived.by(() => {
     void appState.version;
     return appState.project.fps;
@@ -59,15 +106,24 @@
     </button>
   </div>
 
-  <!-- ② 快捷键 · 保存 · 导出 -->
+  <!-- ② 快捷键 · 工程 · 保存 · 导出 -->
   <div class="rail-block">
     <IconButton icon="keyboard" label="快捷键" testid="rail-shortcuts" onclick={() => (panel = 'shortcuts')} />
     <IconButton
+      icon="folder"
+      label="工程"
+      tipText="新建 / 打开 / 最近工程"
+      testid="rail-project"
+      active={panel === 'project'}
+      onclick={() => (panel = 'project')}
+    />
+    <IconButton
       icon="save"
       label="保存工程"
-      tipText="保存工程（工程文件系统未实现，M5）"
-      disabled
+      tipText={appState.projectDir ? '保存到当前工程目录（Ctrl+S）' : '选择目录并保存（Ctrl+S）'}
       testid="rail-save"
+      disabled={appState.projectBusy}
+      onclick={() => void saveProjectNow()}
     />
     <IconButton
       icon="download"
@@ -132,7 +188,6 @@
 {#if panel === 'export'}
   <Modal title="导出" testid="modal-export" onclose={() => (panel = null)}>
     <div class="kv">
-      <span>格式</span><span class="mono">PNG 序列（.zip）</span>
       <span>范围</span><span class="mono">{frames} 帧</span>
       <span>分辨率</span><span class="mono">{res.w}×{res.h}</span>
       <span>帧率</span><span class="mono">{fps} fps</span>
@@ -149,14 +204,142 @@
         帧数 = 工程时长 × 帧率，时长可在轨道上方的工具条里改。
       </p>
       <Button
-        label="导出 PNG 序列"
+        label={`导出 MP4（约 ${mp4Size}）`}
         icon="download"
         variant="accent"
+        size="lg"
+        testid="export-mp4"
+        disabled={!canMp4}
+        onclick={() => void exportMp4()}
+      />
+      <p class="hint" data-testid="export-mp4-hint">
+        {#if canMp4}
+          H.264 + AAC，含工程里的音频轨。{fmtSize(estimateMp4Bytes())} 是按码率估的，
+          画面越复杂实际越大。
+        {:else}
+          本机浏览器不支持 WebCodecs（`VideoEncoder` 不存在），只能导出 PNG 序列。
+        {/if}
+      </p>
+      <Button
+        label="导出 PNG 序列（.zip）"
+        icon="download"
+        variant="outline"
         size="lg"
         testid="export-png"
         onclick={() => void exportPngSequence()}
       />
+      <p class="hint">
+        PNG 序列体积大得多，但它是逃生舱：任何浏览器都能出，
+        而且逐帧交给达芬奇 / Cavalry 精修本身是正当用途。
+      </p>
     {/if}
+  </Modal>
+{/if}
+
+{#if panel === 'project'}
+  <Modal title="工程" testid="modal-project" onclose={() => (panel = null)}>
+    <div class="kv">
+      <span>名称</span>
+      <span data-testid="project-name">{appState.projectName}</span>
+      <span>位置</span>
+      <span data-testid="project-location">
+        {appState.projectDir ? '已连接磁盘目录' : '尚未选择（首次保存时会问）'}
+      </span>
+      <span>状态</span>
+      <span data-testid="project-dirty">
+        {#if appState.projectDirty}
+          <span class="dirty">有未保存改动</span>
+        {:else if appState.savedAt}
+          已保存 · {ago(appState.savedAt)}
+        {:else}
+          尚未保存
+        {/if}
+      </span>
+      <span>素材</span>
+      <span class="mono" data-testid="project-assets">
+        {assetInfo.count} 个 · {fmtBytes(assetInfo.bytes)}
+      </span>
+    </div>
+
+    {#if appState.projectIssues.length}
+      <section class="setting">
+        <h3>素材检查</h3>
+        {#each appState.projectIssues as issue (issue.kind + ':' + issue.assetId + ':' + issue.path)}
+          <div class="issue" class:err={issue.severity === 'error'}>
+            <Icon name={issue.severity === 'error' ? 'triangle-alert' : 'info'} size={13} />
+            <span>{issue.message}</span>
+          </div>
+        {/each}
+      </section>
+    {/if}
+
+    <section class="setting">
+      <h3>动作</h3>
+      <div class="row wrap">
+        <Button
+          label="新建空白"
+          icon="file-plus"
+          variant="outline"
+          testid="project-new"
+          onclick={() => {
+            void newProject(false);
+            panel = null;
+          }}
+        />
+        <Button
+          label="载入演示"
+          icon="sparkles"
+          variant="outline"
+          testid="project-demo"
+          onclick={() => {
+            void newProject(true);
+            panel = null;
+          }}
+        />
+        <Button
+          label="打开工程…"
+          icon="folder-open"
+          variant="outline"
+          disabled={appState.projectBusy}
+          testid="project-open"
+          onclick={() => void openProjectPicker()}
+        />
+        <Button
+          label="另存为…"
+          icon="hard-drive"
+          variant="outline"
+          disabled={appState.projectBusy}
+          testid="project-save-as"
+          onclick={() => void saveProjectAs()}
+        />
+      </div>
+    </section>
+
+    {#if appState.recentProjects.length}
+      <section class="setting">
+        <h3>最近的工程</h3>
+        {#each appState.recentProjects as r (r.key)}
+          <button
+            type="button"
+            class="recent"
+            data-testid="project-recent"
+            disabled={appState.projectBusy}
+            onclick={() => void openRecentProject(r)}
+          >
+            <Icon name="folder" size={13} />
+            <span class="grow">{r.name}</span>
+            <span class="dim">{r.assetCount ?? 0} 素材</span>
+            <span class="dim">{ago(r.openedAt)}</span>
+          </button>
+        {/each}
+      </section>
+    {/if}
+
+    <p class="hint">
+      工程是一个磁盘目录：<code class="mono">project.json</code> 是内容，
+      <code class="mono">assets.json</code> 是素材台账，素材字节在
+      <code class="mono">assets/</code>。整个目录可以直接拷走。
+    </p>
   </Modal>
 {/if}
 
@@ -392,5 +575,57 @@
     display: flex;
     justify-content: flex-end;
     padding-top: var(--sp-5);
+  }
+
+  /* ------------------------------------------------ 工程面板 */
+  /* 未保存用主题色：它是「该做点什么」的提示，不是错误。 */
+  .dirty {
+    color: var(--accent);
+  }
+  .issue {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    padding: 3px 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    line-height: 1.45;
+  }
+  /* 图标跟随严重级上色；文字保持中性，免得整块面板变成一片红。 */
+  .issue.err {
+    color: var(--text-primary);
+  }
+  .issue.err > :global(svg) {
+    color: var(--danger);
+    flex-shrink: 0;
+  }
+  .wrap {
+    flex-wrap: wrap;
+  }
+  .recent {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    width: 100%;
+    padding: 6px var(--sp-2);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+  .recent:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+  .recent:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  code {
+    padding: 0 3px;
+    background: var(--surface-active);
+    border-radius: 3px;
   }
 </style>

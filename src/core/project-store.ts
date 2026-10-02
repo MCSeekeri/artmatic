@@ -380,6 +380,22 @@ export class ProjectStore {
   }
 
   /**
+   * 改工程分辨率。
+   *
+   * 同时约束到偶数：H.264 的 4:2:0 色度需要宽高都是偶数，
+   * 奇数尺寸在编码器侧会静默报错或被悄悄裁掉一列 —— 前者在
+   * `runExport` 里抛，后者更难查。UI 上没有改分辨率的入口
+   * （不在范围内），但导出 E2E 需要小分辨率来控制产物体积。
+   */
+  setResolution(w: number, h: number): void {
+    const W = Math.max(16, Math.round(w / 2) * 2);
+    const H = Math.max(16, Math.round(h / 2) * 2);
+    this.commit('修改分辨率', (p) => {
+      p.resolution = { w: W, h: H };
+    });
+  }
+
+  /**
    * 在 at（秒）处切分片段。曲线的处理：
    *   beatAnchor 曲线 —— 原样复制给两半（锚是绝对的，两半各自正确）；
    *   相对曲线 —— 左半保留 t ≤ 切点的 keys，右半 keys 平移 -切点，
@@ -458,6 +474,20 @@ export class ProjectStore {
     this.commit('载入工程', (p) => {
       Object.assign(p, cloneProject(project));
     });
+  }
+
+  /**
+   * 换掉整份工程（打开工程 / 新建工程）。
+   *
+   * 与 `loadFrom` 的区别只有一条，但是关键的：**清空撤销栈**。
+   * `loadFrom` 是「在当前工程里换内容」的语义（可撤销），
+   * 而打开另一份工程之后撤销回上一份是错的 —— 那会让两份工程的片段混在
+   * 一起，而且栈里的快照与 `savedVersion` 对不上，脏标记开始撒谎。
+   */
+  replaceProject(project: Project): void {
+    this.project = cloneProject(project);
+    this.stack.reset();
+    this.bump();
   }
 }
 
