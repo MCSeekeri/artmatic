@@ -74,7 +74,7 @@ export const media = {
   /* ------------------------------------------------ 混合模式（core/schema + typography/document） */
   'blend.normal': '正常',
   'blend.multiply': '正片叠底',
-  'blend.add': '线性加深(加)',
+  'blend.add': '线性加深',
   'blend.screen': '滤色',
   'blend.overlay': '叠加',
   'blend.difference': '差值',

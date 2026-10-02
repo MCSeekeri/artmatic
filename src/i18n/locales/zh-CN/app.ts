@@ -11,7 +11,7 @@ export const app = {
   'app.aboutLead': '把算法艺术与故障艺术按音乐结构编排起来的时间轴工具。',
   'app.version': '版本',
   'app.render': '渲染',
-  'app.icons': '图标',
+  'app.icons': '图标库',
   'app.compression': '压缩',
   /* 许可方括号用全角 —— 这本身就是排版约定，所以整串进语言文件。 */
   'app.licenseLucide': 'Lucide（ISC）',
@@ -35,14 +35,14 @@ export const app = {
   'app.resolution': '分辨率',
   'app.frameRate': '帧率',
   'app.exportHint':
-    '导出是确定性逐帧渲染：与预览走同一条求值路径，差别只在分辨率。帧数 = 工程时长 × 帧率，时长可在轨道上方的工具条里改。',
+    '导出 MP4 或 PNG 序列。',
   'app.exportMp4': '导出 MP4（约 {size}）',
   'app.exportMp4Hint':
-    'H.264 + AAC，含工程里的音频轨。{size} 是按码率估的，画面越复杂实际越大。',
+    '默认使用 H.264 + AAC。{size} 为估算值。',
   'app.exportMp4Unsupported': '本机浏览器不支持 WebCodecs（`VideoEncoder` 不存在），只能导出 PNG 序列。',
   'app.exportPng': '导出 PNG 序列（.zip）',
   'app.exportPngHint':
-    'PNG 序列体积大得多，但它是逃生舱：任何浏览器都能出，而且逐帧交给达芬奇 / Cavalry 精修本身是正当用途。',
+    'PNG 序列体积可能非常大。',
   'app.exporting': '导出中 {pct}%',
 
   /* ------------------------------------------------ 工程面板 */
@@ -51,7 +51,7 @@ export const app = {
   'app.status': '状态',
   'app.assets': '素材',
   'app.dirConnected': '已连接磁盘目录',
-  'app.dirNotChosen': '尚未选择（首次保存时会问）',
+  'app.dirNotChosen': '尚未选择',
   'app.savedAgo': '已保存 · {ago}',
   'app.notSavedYet': '尚未保存',
   'app.assetCount': '{n} 个 · {size}',
@@ -76,7 +76,7 @@ export const app = {
 
   /* ------------------------------------------------ 设置面板 */
   'app.accentColor': '主题色',
-  'app.accentHint': '主题色只用在「选中 / 激活 / 焦点 / 播放头」这几处，其余一律中性灰。',
+  'app.accentHint': '仅用于必要处。',
   'app.customAccent': '自定义主题色',
   'app.mode': '模式',
   'app.modeCurrent': '当前：{mode}',
@@ -96,20 +96,20 @@ export const app = {
   'app.backToTimeline': '回到时间轴',
   'app.closeProjectTab': '关闭 {name}',
   'app.newProject': '新建工程',
-  'app.newProjectTip': '新建工程（在同一页里再开一份）',
+  'app.newProjectTip': '新建工程',
   'app.discardTitle': '放弃未保存的改动？',
-  'app.discardMessage': '「{name}」有未保存的改动。关闭之后这些改动就找不回来了。',
+  'app.discardMessage': '「{name}」有未保存的改动，放弃改动会丢失工作内容。',
   'app.discardConfirm': '放弃改动并关闭',
   'app.back': '返回',
   'app.projectGone': '这份工程已经不在了',
 
   /* ------------------------------------------------ 底栏 */
-  'app.hoverHint': '悬停任意控件看说明',
-  'app.fpsTip': '预览帧率（仅统计，不参与渲染求值）',
+  'app.hoverHint': '悬停任意控件获取说明',
+  'app.fpsTip': '预览帧率',
 
   /* ------------------------------------------------ 快捷键冲突提示（App.svelte） */
   'app.noTrackFits': '上下都没有能装下这个片段的轨道了',
-  'app.targetOccupied': '目标轨该位置已被占据——换成「挤开邻居 / 吃掉重叠」策略，或先挪开邻居',
+  'app.targetOccupied': '目标轨没有多余空间',
 
   /* ------------------------------------------------ 品牌色预置名 */
   /* 只在设置面板的色块 aria-label 与「当前品牌」文字里出现。 */

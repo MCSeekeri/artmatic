@@ -47,11 +47,11 @@ export const errors = {
 
   /* ------------------------------------------------ 工程读写（project/io.ts） */
   /* 这些会经「打开失败：…」/「保存失败：…」进底栏，或进 SaveReport 的警告。 */
-  'err.io.notAProject': '「{name}」不是一个 Artmatic 工程目录（里面没有 {file}）',
+  'err.io.notAProject': '「{name}」不是一个 Artmatic 工程目录',
   'err.io.badJson': '{file} 不是合法 JSON：{detail}',
   'err.io.pathConflict': '素材文件名冲突，已中止保存：{detail}',
   'err.io.assetBytesMissing': '素材 {name}（{id}）在内存里没有字节，跳过写入',
-  'err.io.removeFailed': '删除旧素材失败（不影响工程）：{path}',
+  'err.io.removeFailed': '删除旧素材失败：{path}。这不影响您继续编辑工程。',
   'err.io.ledgerRebuilt': 'assets.json 缺失或不完整，已从 assets/ 目录重建台账',
   'err.io.untrackedFile': 'assets/{name} 不在工程的素材表里，已标为未跟踪',
   'err.io.openFailed': '打开失败：{detail}',
@@ -72,16 +72,16 @@ export const errors = {
   'err.ledger.versionTooNew': 'assets.json 的 layoutVersion {found} 高于本应用支持的 {supported}',
   'err.ledger.badEntry': 'assets.json 里的 {id} 形状不对，已忽略',
   'err.ledger.missing': '素材文件不在：{path}',
-  'err.ledger.changed': '{path} 的内容与工程记录不一致（文件被替换过）',
-  'err.ledger.sizeChanged': '{path} 的大小变了（{from} → {to} 字节）',
-  'err.ledger.unhashed': '{path} 没有内容哈希，只能靠大小判断有没有被改',
-  'err.ledger.untracked': 'assets/ 里有一份台账没记录的文件：{path}（不会自动删除）',
+  'err.ledger.changed': '文件可能被替换过，{path} 的内容与工程记录不一致',
+  'err.ledger.sizeChanged': '{path} 的大小是 {to} 字节，而非预期的 {from} 字节',
+  'err.ledger.unhashed': '{path} 没有可用的哈希值',
+  'err.ledger.untracked': 'assets/ 里有存在未被记录的文件：{path}',
 
   /* ------------------------------------------------ 导出（ui/export.ts、exporters/） */
   /* sink 抛出的错会经 `flash('导出失败：' + msg)` 进底栏，所以这些也要抽。 */
   'err.export.noWebCodecs': '本机浏览器不支持 WebCodecs，请改用 PNG 序列导出',
   'err.export.silentAudio': '音轨混流结果是静音，本次只导出画面',
-  'err.export.mp4Done': '已导出 MP4 · {size}',
+  'err.export.mp4Done': '已导出 MP4 ，共 {size}',
   'err.export.failed': '导出失败：{detail}',
   'err.export.sinkCodec': 'Mp4Sink 只支持 {want}，收到 {got}',
   'err.export.sinkNoCanvas': 'Mp4Sink.configure 需要真实 canvas（见 frame-sink 的 FrameSinkConfigureOptions）',

@@ -79,10 +79,10 @@ export const typography = {
   'typo.layerToggleVisible': '显示 / 隐藏',
   'typo.layerLock': '锁定',
   'typo.layerUnlock': '解锁',
-  'typo.layersEmpty': '还没有元素。用「开始 → 文本框」或「插入 → 图形」加一个。',
+  'typo.layersEmpty': '还没有元素。',
 
   /* ------------------------------------------------ 自定义 CSS 弹窗（CustomCssModal） */
-  'typo.customCssTitle': '自定义动画（@keyframes 的体）',
+  'typo.customCssTitle': '自定义动画（CSS @keyframes）',
   /*
    * 说明被 `@keyframes` / `from{…}to{…}` / `@import` / `position:fixed` 四个
    * 等宽代码块打断，没法整句存，所以按 app.projectHint* 那套约定拆成几段：
@@ -96,9 +96,9 @@ export const typography = {
   'typo.customCssHintF': '顶层选择器、',
   'typo.customCssHintG': '、',
   'typo.customCssHintH': ' 都不会生效（会被剥掉）。',
-  'typo.customCssUnbalanced': '花括号没配平 —— 少写或多写了一个 }。@keyframes 的体里只应有成对的 {}。',
+  'typo.customCssUnbalanced': '花括号未配平，请检查 CSS 语法。',
   'typo.customCssUnwritable': '这段 keyframes 无法写入，请检查语法。',
-  'typo.customCssEmpty': '当前内容为空或非法，不会写入。',
+  'typo.customCssEmpty': '当前内容为空或非法。',
   'typo.customCssResult': '结果：',
 
   /* ------------------------------------------------ 选择框（SelectionLayer） */

@@ -51,12 +51,12 @@ export const shortcuts = {
 
   /* ------------------------------------------------ 描述列 */
   'sc.playPause': '播放 / 暂停',
-  'sc.scrub': 'scrub 播放头（吸附到当前档位）',
-  'sc.zoomAtCursor': '以鼠标为锚缩放时间轴',
+  'sc.scrub': '移动播放头',
+  'sc.zoomAtCursor': '以鼠标为中心缩放时间轴',
   'sc.scrollTimeline': '时间轴横向滚动',
-  'sc.moveClip': '移动片段（可跨轨；松手时才套重叠策略）',
+  'sc.moveClip': '移动片段',
   'sc.resizeClip': '改变片段长度',
-  'sc.openClipEditor': '打开片段编辑器（排版片段打开排版页）',
+  'sc.openClipEditor': '打开片段编辑器',
   'sc.splitAtPlayhead': '在播放头处切分选中片段',
   'sc.shiftTrack': '把选中片段上移 / 下移一轨',
   'sc.deleteClip': '删除选中片段',
@@ -67,7 +67,7 @@ export const shortcuts = {
   'sc.nudgeElement': '移动 1px（Shift ×10）',
   'sc.selectAll': '全选元素',
   'sc.deselect': '取消选择',
-  'sc.playPauseAnim': '播放 / 暂停（驱动 CSS 动画）',
+  'sc.playPauseAnim': '播放 / 暂停',
   'sc.scrubValue': '连续改值',
   'sc.snapToStep': '吸附到步长整数倍',
   'sc.fineTune': '精细（灵敏度 ×0.1）',
@@ -78,5 +78,5 @@ export const shortcuts = {
   'sc.saveAs': '另存为（选一个新目录）',
   'sc.undo': '撤销',
   'sc.redo': '重做',
-  'sc.closeOverlay': '关闭当前弹层',
+  'sc.closeOverlay': '关闭弹窗',
 } as const;

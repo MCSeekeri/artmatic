@@ -12,7 +12,7 @@ export const inspector = {
   'insp.clipKindEffect': '特效片段',
   'insp.clipKindAudio': '音频片段',
   'insp.placeholderSelect': '选中一个片段查看属性。',
-  'insp.placeholderRightClick': '空白处右键可以在鼠标位置新建片段。',
+  'insp.placeholderRightClick': '空白处右键在鼠标位置新建片段。',
 
   /* ------------------------------------------------ 片段属性 */
   'insp.name': '名称',
@@ -49,11 +49,11 @@ export const inspector = {
   'insp.editEffectParam': '修改特效参数',
   'insp.toggleEffect': '切换特效',
   'insp.effectEnableTip': '启用 / 禁用这个特效实例',
-  'insp.emptyChain': '空链：从上面添加特效。特效只作用于 z 序在它之下的画面（adjustment layer）。',
+  'insp.emptyChain': '空链：从上面添加特效。特效只作用于它下方的轨道。',
 
   /* ------------------------------------------------ 片段动作 */
   'insp.editTypography': '编辑排版',
-  'insp.splitAtPlayhead': '在播放头切分',
+  'insp.splitAtPlayhead': '在播放头分割',
 
   /* ------------------------------------------------ 关键帧 / 曲线 */
   'insp.keyframe': '打关键帧',
