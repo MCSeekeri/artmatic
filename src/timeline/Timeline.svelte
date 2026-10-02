@@ -4,7 +4,7 @@
   import Menu from '../ui/controls/Menu.svelte';
   import { separator, submenu, type MenuItem } from '../ui/controls/menu-model';
   import ClipView from './ClipView.svelte';
-  import { drawGrid, drawRuler, type GridTrackRow } from './grid-draw';
+  import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
   import { xOfTime, timeAtX, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
   import { browserPlatform } from '../platform/browser';
   import { computeWaveform, decodeAudio } from '../audio/decode';
@@ -96,6 +96,123 @@
     }));
   }
 
+  /**
+   * 已绘制区间（**内容坐标** CSS px）。null = 整块位图都不可信。
+   *
+   * 每次重绘只覆盖可见那一段 —— 波形按像素走，整幅重绘的成本随工程时长超线性
+   * 增长（实测 315s 音频：17650px 的波形路径光栅化要 1096ms，摘掉波形只有 8.4ms）。
+   * 所以「已画到哪」必须记账：滚动时只补新露出来的那一条，其余保留位图里的旧像素
+   * （由浏览器合成器滚动，本来就是免费的）。
+   */
+  let painted: { from: number; to: number } | null = null;
+
+  /**
+   * 位图覆盖的窗口（**内容坐标**）。画布只占 `[winFrom, winFrom + winW)` 这一段，
+   * 不是整幅工程宽。
+   *
+   * 为什么必须这样做：整幅宽时内存 = 工程时长 × 缩放 × 轨道数 × dpr²，**无上界**。
+   * 实测 950s@28px/beat 是 64MB，950s@96px/beat 是 219MB，3000s@96px/beat 是 692MB；
+   * 再往上会撞浏览器的 canvas 面积上限（实测 2^28 像素），而**超限时
+   * `canvas.width = …` 是静默失败的** —— 留下「位图宽 ≠ style.width」的错位，
+   * 整幅画面被压扁，控制台一句话都没有。
+   *
+   * 改成窗口后是常数：3 个视口宽 ≈ 4MB（dpr 1.5 / 5 轨），与时长和缩放都无关。
+   * 窗口靠 `left` / `margin-left` 跟着滚动挪位置 —— 元素本身仍在滚动容器里正常
+   * 排布，所以合成器滚动时它和片段 DOM 一起动，不会错位。
+   */
+  let winFrom = 0;
+  let winW = 0;
+
+  /** 当前可见区间（内容坐标）。 */
+  function viewRange(): DrawRange {
+    const el = scrollEl;
+    if (!el) return { x0: 0, x1: 0 };
+    return { x0: el.scrollLeft, x1: el.scrollLeft + el.clientWidth };
+  }
+
+  /**
+   * 窗口宽度：3 个视口宽（上限是工程宽）。
+   * 取 3 而不是 1，是为了让窗口有 2 个视口的滑动余量 —— 少挪窗口 = 少一次整窗重画。
+   */
+  function windowWidth(viewW: number): number {
+    return Math.min(drawWidth, Math.max(viewW * 3, viewW));
+  }
+
+  /**
+   * 这次要补画的区间；返回 null 表示可见区已被覆盖，不用动。
+   *
+   * `painted` 恒为一段连续区间，所以「没覆盖」的情形只有两种：完全不相交
+   * （跳转），或者只缺左边 / 只缺右边一条。
+   */
+  function gapFor(view: DrawRange): DrawRange | null {
+    if (!painted || view.x1 <= painted.from || view.x0 >= painted.to) return view;
+    if (view.x0 < painted.from) return { x0: view.x0, x1: Math.min(view.x1, painted.from) };
+    if (view.x1 > painted.to) return { x0: Math.max(view.x0, painted.to), x1: view.x1 };
+    return null;
+  }
+
+  /**
+   * 重绘。
+   *
+   * @param invalidate 内容变了（version / 缩放 / 波形 / 主题 / 工程宽）→ 整块位图
+   *   都不可信；否则只是滚动，补画缺的那一条即可。
+   */
+  function paint(invalidate: boolean): void {
+    if (invalidate) painted = null;
+    if (!rulerCanvas || !gridCanvas) return;
+    const el = scrollEl;
+    if (!el) return;
+    const viewW = el.clientWidth;
+    if (viewW <= 0) return;
+    const view = viewRange();
+
+    // ① 窗口几何：宽度变了、或者可见区跑到窗口外面去了 → 重新定位 + 整窗重画
+    const want = windowWidth(viewW);
+    if (want !== winW) {
+      winW = want;
+      invalidate = true;
+    }
+    if (invalidate || view.x0 < winFrom || view.x1 > winFrom + winW) {
+      // 尽量让可见区居中，两端钳到工程范围内
+      const maxFrom = Math.max(0, drawWidth - winW);
+      winFrom = Math.min(maxFrom, Math.max(0, view.x0 - Math.round((winW - (view.x1 - view.x0)) / 2)));
+      invalidate = true;
+    }
+    if (invalidate) painted = null;
+
+    // 元素位置必须在画之前落定：画布就摆在那，绘制原点才不会和它对不上
+    if (rulerCanvas.style.marginLeft !== `${winFrom}px`) {
+      rulerCanvas.style.marginLeft = `${winFrom}px`;
+    }
+    if (gridCanvas.style.left !== `${winFrom}px`) {
+      gridCanvas.style.left = `${winFrom}px`;
+    }
+
+    const gap = gapFor(view);
+    if (!gap) return;
+    const pal = palette;
+    const project = appState.store.project;
+    const ppb = appState.pxPerBeat;
+    const r1 = drawRuler(rulerCanvas, project, ppb, dpr, pal, winW, winFrom, gap);
+    const r2 = drawGrid(
+      gridCanvas,
+      project,
+      ppb,
+      gridRows(),
+      appState.waveforms,
+      dpr,
+      pal,
+      winW,
+      winFrom,
+      gap,
+    );
+    // 画布被重建过 → 位图已经清空，之前画的统统不算，只认这次画到的
+    painted =
+      r1 || r2 || !painted
+        ? { from: gap.x0, to: gap.x1 }
+        : { from: Math.min(painted.from, gap.x0), to: Math.max(painted.to, gap.x1) };
+  }
+
   // 重绘订阅源：version / 缩放 / 吸附 / 波形 / 主题 / 视口宽。选中态刻意不在其中
   // （splitter 的教训：select 触发全量重建会在拖拽中换掉 DOM）。
   $effect(() => {
@@ -103,14 +220,17 @@
     void appState.pxPerBeat;
     void appState.snap;
     void appState.waveforms;
-    const pal = palette;
-    const minW = drawWidth;
-    if (rulerCanvas) {
-      drawRuler(rulerCanvas, appState.store.project, appState.pxPerBeat, dpr, pal, minW);
-    }
-    if (gridCanvas) {
-      drawGrid(gridCanvas, appState.store.project, appState.pxPerBeat, gridRows(), appState.waveforms, dpr, pal, minW);
-    }
+    /* activeProjectId 必须进依赖：切工程时 `subscribeActive` 只是把 version
+       换成新工程的计数，**两份工程的 version 撞号时这次赋值不产生变化**，
+       effect 就不会跑 —— 画布会停在上一份工程的内容上，而 `painted` 还声称
+       自己是新鲜的。切换工程是「内容整体换掉」，必须无条件重画。 */
+    void appState.activeProjectId;
+    void palette;
+    // 绘制本身直接读 store.project（不是响应式的），所以拍网格与工程宽这两个
+    // 决定画布几何的派生量必须在这里显式订阅，否则改了 BPM 网格不重画。
+    void grid;
+    void drawWidth;
+    paint(true);
   });
 
   /** 跟踪滚动视口宽度，供 drawWidth 使用。 */
@@ -119,9 +239,12 @@
     if (!el) return;
     const ro = new ResizeObserver(() => {
       if (el.clientWidth !== scrollW) scrollW = el.clientWidth;
+      // 视口变宽会让右侧露出没画过的区域（drawWidth 未必跟着变，所以不能只靠上面的 effect）
+      paint(false);
     });
     ro.observe(el);
     scrollW = el.clientWidth;
+    paint(false);
     return () => ro.disconnect();
   });
 
@@ -558,7 +681,7 @@
     </div>
   </div>
 
-  <div class="scroll" data-testid="tl-scroll" bind:this={scrollEl} onwheel={wheel}>
+  <div class="scroll" data-testid="tl-scroll" bind:this={scrollEl} onwheel={wheel} onscroll={() => paint(false)}>
     <div class="canvas-wrap" data-testid="tl-canvas-wrap" style:width={`${drawWidth}px`}>
       <canvas class="ruler" bind:this={rulerCanvas} onpointerdown={scrub}></canvas>
       <div class="rows" role="presentation" onpointerdown={deselect}>
