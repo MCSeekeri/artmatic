@@ -19,6 +19,7 @@
  * 重建逻辑在 `io.ts`（它需要文件系统，本文件保持纯函数）。
  */
 
+import { tr } from '../i18n/index.svelte';
 import { LAYOUT_VERSION, assetRelPath } from './layout';
 
 export type AssetMode = 'bundled' | 'generated';
@@ -69,22 +70,24 @@ export function parseLedger(json: string | null | undefined): { ledger: AssetLed
   try {
     raw = JSON.parse(json);
   } catch {
-    warnings.push('assets.json 不是合法 JSON，已按空台账处理（将从 assets/ 重建）');
+    warnings.push(tr('err.ledger.badJson'));
     return { ledger: empty, warnings };
   }
   if (!raw || typeof raw !== 'object') {
-    warnings.push('assets.json 不是对象，已按空台账处理');
+    warnings.push(tr('err.ledger.notObject'));
     return { ledger: empty, warnings };
   }
   const obj = raw as { layoutVersion?: unknown; entries?: unknown };
   const lv = typeof obj.layoutVersion === 'number' ? obj.layoutVersion : 0;
-  if (lv > LAYOUT_VERSION) warnings.push(`assets.json 的 layoutVersion ${lv} 高于本应用支持的 ${LAYOUT_VERSION}`);
+  if (lv > LAYOUT_VERSION) {
+    warnings.push(tr('err.ledger.versionTooNew', { found: lv, supported: LAYOUT_VERSION }));
+  }
   const entries: Record<string, AssetEntry> = {};
   const src = obj.entries && typeof obj.entries === 'object' ? (obj.entries as Record<string, unknown>) : {};
   for (const [id, v] of Object.entries(src)) {
     const e = normalizeEntry(id, v);
     if (e) entries[id] = e;
-    else warnings.push(`assets.json 里的 ${id} 形状不对，已忽略`);
+    else warnings.push(tr('err.ledger.badEntry', { id }));
   }
   return { ledger: { layoutVersion: LAYOUT_VERSION, entries }, warnings };
 }
@@ -239,7 +242,7 @@ export async function auditLedger(
         kind: 'missing',
         severity: 'error',
         path: e.path,
-        message: `素材文件不在：${e.path}`,
+        message: tr('err.ledger.missing', { path: e.path }),
       });
       continue;
     }
@@ -250,7 +253,7 @@ export async function auditLedger(
           kind: 'changed',
           severity: 'warning',
           path: e.path,
-          message: `${e.path} 的内容与工程记录不一致（文件被替换过）`,
+          message: tr('err.ledger.changed', { path: e.path }),
         });
       }
       continue;
@@ -261,7 +264,7 @@ export async function auditLedger(
         kind: 'changed',
         severity: 'warning',
         path: e.path,
-        message: `${e.path} 的大小变了（${e.bytes} → ${found.bytes} 字节）`,
+        message: tr('err.ledger.sizeChanged', { path: e.path, from: e.bytes, to: found.bytes }),
       });
       continue;
     }
@@ -271,7 +274,7 @@ export async function auditLedger(
         kind: 'unhashed',
         severity: 'info',
         path: e.path,
-        message: `${e.path} 没有内容哈希，只能靠大小判断有没有被改`,
+        message: tr('err.ledger.unhashed', { path: e.path }),
       });
     }
   }
@@ -283,7 +286,7 @@ export async function auditLedger(
       kind: 'untracked',
       severity: 'info',
       path: p,
-      message: `assets/ 里有一份台账没记录的文件：${p}（不会自动删除）`,
+      message: tr('err.ledger.untracked', { path: p }),
     });
   }
 

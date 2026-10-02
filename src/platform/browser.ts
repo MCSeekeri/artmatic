@@ -5,6 +5,7 @@
  * saveProject 优先 File System Access（Chromium），回退 anchor 下载。
  */
 
+import { tr } from '../i18n/index.svelte';
 import type { PickedFile, Platform } from './types';
 
 function pick(accept: string): Promise<PickedFile | null> {
@@ -65,7 +66,7 @@ export const browserPlatform: Platform = {
       try {
         const handle = await picker({
           suggestedName,
-          types: [{ description: 'Artmatic 工程', accept: { 'application/json': ['.json'] } }],
+          types: [{ description: tr('proj.filePickerDescription'), accept: { 'application/json': ['.json'] } }],
         });
         const w = await handle.createWritable();
         await w.write(blob);

@@ -16,6 +16,7 @@
   import { installTheme } from './theme-apply';
   import { activeElementOwnsSpace, isExempt } from './focus';
   import { saveProjectAs, saveProjectNow } from './project-actions';
+  import { tr } from '../i18n/index.svelte';
 
   /**
    * 主题的唯一写入口。main.ts 在 mount 前已经装过一次（防首帧闪默认值），
@@ -79,8 +80,8 @@
         // alt-up / alt-down：抬一轨 / 降一轨（剪辑软件的通用手势）
         e.preventDefault();
         const r = appState.store.shiftClipTrack(appState.selectedClipId, e.key === 'ArrowUp' ? -1 : 1);
-        if (r === 'no-track') appState.flash('上下都没有能装下这个片段的轨道了');
-        else if (r === 'blocked') appState.flash('目标轨该位置已被占据——换成「挤开邻居 / 吃掉重叠」策略，或先挪开邻居');
+        if (r === 'no-track') appState.flash(tr('app.noTrackFits'));
+        else if (r === 'blocked') appState.flash(tr('app.targetOccupied'));
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && appState.selectedClipId) {
         appState.store.removeClip(appState.selectedClipId);
         appState.selectedClipId = null;
@@ -162,7 +163,7 @@
             <span class="toolbar-tail">
               <IconButton
                 icon="panel-right"
-                label="检查器"
+                label={tr('app.inspector')}
                 tipPlacement="top"
                 testid="drawer-open"
                 active={appState.drawerOpen}

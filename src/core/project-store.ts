@@ -33,6 +33,7 @@ import {
 import { evalCurve, type Curve } from './curve';
 import type { BeatGrid } from './time';
 import { CommandStack } from './commands';
+import { tr } from '../i18n/index.svelte';
 
 export class ProjectStore {
   project: Project;
@@ -137,7 +138,8 @@ export class ProjectStore {
 
   addTrack(kind: Track['kind'], name?: string): string {
     const id = newId();
-    this.commit(`新建${kind === 'visual' ? '视觉' : '音频'}轨`, (p) => {
+    const kindLabel = kind === 'visual' ? tr('tl.trackKindVisual') : tr('tl.trackKindAudio');
+    this.commit(tr('tl.newTrack', { kind: kindLabel }), (p) => {
       const n = p.tracks.filter((t) => t.kind === kind).length + 1;
       if (kind === 'visual') {
         p.tracks.push({ kind, id, name: name ?? `V${n}`, enabled: true, clips: [] } as VisualTrack);
@@ -149,7 +151,7 @@ export class ProjectStore {
   }
 
   removeTrack(id: string): void {
-    this.commit('删除轨道', (p) => {
+    this.commit(tr('tl.removeTrack'), (p) => {
       p.tracks = p.tracks.filter((t) => t.id !== id);
     });
   }
@@ -164,7 +166,7 @@ export class ProjectStore {
    */
 
   setTrackEnabled(id: string, enabled: boolean): void {
-    this.commit(enabled ? '启用轨道' : '禁用轨道', (p) => {
+    this.commit(enabled ? tr('tl.enableTrack') : tr('tl.disableTrack'), (p) => {
       const t = p.tracks.find((x) => x.id === id);
       if (t) t.enabled = enabled;
     });
@@ -179,7 +181,7 @@ export class ProjectStore {
   renameTrack(id: string, name: string): void {
     const next = name.trim();
     if (!next) return;
-    this.commit('重命名轨道', (p) => {
+    this.commit(tr('tl.renameTrack'), (p) => {
       const t = p.tracks.find((x) => x.id === id);
       if (t) t.name = next;
     });
@@ -188,7 +190,7 @@ export class ProjectStore {
   /* ------------------------------------------------------------ 片段 */
 
   addClip(trackId: string, clip: AnyClip): void {
-    this.commit('新建片段', (p) => {
+    this.commit(tr('tl.addClip'), (p) => {
       const track = p.tracks.find((t) => t.id === trackId);
       if (!track) return;
       // 落点被占时先尝试裁进所在空档；起点本身压在片段上时顺延到它的
@@ -215,7 +217,7 @@ export class ProjectStore {
   }
 
   removeClip(clipId: string): void {
-    this.commit('删除片段', (p) => {
+    this.commit(tr('tl.removeClip'), (p) => {
       for (const t of p.tracks) {
         const before = t.clips.length;
         t.clips = t.clips.filter((c) => c.id !== clipId) as typeof t.clips;
@@ -350,7 +352,7 @@ export class ProjectStore {
     const target = this.project.tracks[j]!;
     const start = found.clip.start;
     let moved = false;
-    this.commit(dir < 0 ? '上移一轨' : '下移一轨', () => {
+    this.commit(dir < 0 ? tr('tl.moveTrackUp') : tr('tl.moveTrackDown'), () => {
       // settlePlacement 被拒时不会改动任何状态，片段留在原轨
       moved = this.settlePlacement(target.id, clipId, start);
     });
@@ -365,14 +367,14 @@ export class ProjectStore {
    * 也可以由用户直接改小（setDuration）。音频长度只是新片段的默认长度。
    */
   setDuration(sec: number): void {
-    this.commit('修改时长', (p) => {
+    this.commit(tr('tl.setDuration'), (p) => {
       p.duration = Math.max(0.1, sec);
     });
   }
 
   /** 时长收齐到内容末尾（只收不放：内容为空时保留 1 秒）。 */
   fitDurationToContent(): void {
-    this.commit('时长贴合内容', (p) => {
+    this.commit(tr('tl.fitDuration'), (p) => {
       let end = 0;
       for (const t of p.tracks) for (const c of t.clips) end = Math.max(end, c.end);
       p.duration = Math.max(0.1, end);
@@ -390,7 +392,7 @@ export class ProjectStore {
   setResolution(w: number, h: number): void {
     const W = Math.max(16, Math.round(w / 2) * 2);
     const H = Math.max(16, Math.round(h / 2) * 2);
-    this.commit('修改分辨率', (p) => {
+    this.commit(tr('tl.setResolution'), (p) => {
       p.resolution = { w: W, h: H };
     });
   }
@@ -407,7 +409,7 @@ export class ProjectStore {
     const clip = (track.clips as AnyClip[]).find((c) => c.id === clipId);
     if (!clip) return false;
     const atRel = at - clip.start;
-    return this.commit('切分片段', () => {
+    return this.commit(tr('tl.splitClip'), () => {
       const curvesFor = (c: AnyClip, side: 'left' | 'right'): Record<string, Curve> => {
         const curves: Record<string, Curve> = {};
         for (const [k, curve] of Object.entries(c.curves)) {
@@ -453,13 +455,13 @@ export class ProjectStore {
   }
 
   setOverlapBehavior(b: OverlapBehavior): void {
-    this.commit('切换重叠策略', (p) => {
+    this.commit(tr('tl.setOverlapBehavior'), (p) => {
       p.overlapBehavior = b;
     });
   }
 
   setBeatGrid(grid: Partial<BeatGrid>): void {
-    this.commit('修改拍网格', (p) => {
+    this.commit(tr('tl.setBeatGrid'), (p) => {
       Object.assign(p.beatGrid, grid);
     });
   }
@@ -471,7 +473,7 @@ export class ProjectStore {
   }
 
   loadFrom(project: Project): void {
-    this.commit('载入工程', (p) => {
+    this.commit(tr('tl.loadProject'), (p) => {
       Object.assign(p, cloneProject(project));
     });
   }

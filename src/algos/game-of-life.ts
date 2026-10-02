@@ -98,14 +98,14 @@ export function createLife(params: Record<string, number | string>, seed: number
 
 export const gameOfLifeDef: GeneratorDef = {
   id: 'game-of-life',
-  name: '生命游戏',
+  nameKey: 'algo.gameOfLife',
   kind: 'sim',
   params: [
-    { key: 'size', label: '网格', type: 'range', min: 64, max: 256, step: 16, defaultValue: 112 },
-    { key: 'density', label: '种子密度', type: 'range', min: 0.1, max: 0.8, step: 0.01, defaultValue: 0.42 },
-    { key: 'rate', label: '步/秒', type: 'range', min: 1, max: 60, step: 1, defaultValue: 12 },
-    { key: 'colorBg', label: '背景色', type: 'color', defaultValue: '#050a08' },
-    { key: 'colorLive', label: '活细胞色', type: 'color', defaultValue: '#8affc1' },
+    { key: 'size', labelKey: 'algo.gameOfLife.grid', type: 'range', min: 64, max: 256, step: 16, defaultValue: 112 },
+    { key: 'density', labelKey: 'algo.gameOfLife.density', type: 'range', min: 0.1, max: 0.8, step: 0.01, defaultValue: 0.42 },
+    { key: 'rate', labelKey: 'algo.gameOfLife.speed', type: 'range', min: 1, max: 60, step: 1, defaultValue: 12 },
+    { key: 'colorBg', labelKey: 'algo.gameOfLife.colorBg', type: 'color', defaultValue: '#050a08' },
+    { key: 'colorLive', labelKey: 'algo.gameOfLife.colorLive', type: 'color', defaultValue: '#8affc1' },
   ],
   create: createLife,
 };

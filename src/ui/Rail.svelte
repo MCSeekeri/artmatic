@@ -23,6 +23,7 @@
   import { theme } from './theme.svelte';
   import { ACCENT_PRESETS, BRAND_IDS, DENSITY, type BrandId } from './tokens';
   import { SHORTCUT_GROUPS } from './shortcuts';
+  import { tr } from '../i18n/index.svelte';
   import {
     cancelExport,
     estimateMp4Bytes,
@@ -59,13 +60,17 @@
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  /**
+   * 相对时间。`Date.now()` 在这里是合规的：它是**界面显示**，不是渲染求值 ——
+   * 硬约束 1.1 管的是「任何渲染函数不得接收 Date.now()」，这条路径不参与出帧。
+   */
   function ago(ts: number): string {
     if (!ts) return '—';
     const s = Math.floor((Date.now() - ts) / 1000);
-    if (s < 60) return '刚刚';
-    if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-    if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-    return `${Math.floor(s / 86400)} 天前`;
+    if (s < 60) return tr('common.justNow');
+    if (s < 3600) return tr('common.minutesAgo', { n: Math.floor(s / 60) });
+    if (s < 86400) return tr('common.hoursAgo', { n: Math.floor(s / 3600) });
+    return tr('common.daysAgo', { n: Math.floor(s / 86400) });
   }
 
   const exporting = $derived(appState.exportProgress !== null);
@@ -98,7 +103,7 @@
     <button
       type="button"
       class="logo-btn"
-      aria-label="关于 Artmatic"
+      aria-label={tr('app.aboutArtmatic')}
       data-testid="rail-logo"
       onclick={() => (panel = 'about')}
     >
@@ -108,26 +113,31 @@
 
   <!-- ② 快捷键 · 工程 · 保存 · 导出 -->
   <div class="rail-block">
-    <IconButton icon="keyboard" label="快捷键" testid="rail-shortcuts" onclick={() => (panel = 'shortcuts')} />
+    <IconButton
+      icon="keyboard"
+      label={tr('app.shortcuts')}
+      testid="rail-shortcuts"
+      onclick={() => (panel = 'shortcuts')}
+    />
     <IconButton
       icon="folder"
-      label="工程"
-      tipText="新建 / 打开 / 最近工程"
+      label={tr('app.project')}
+      tipText={tr('app.projectPanelTip')}
       testid="rail-project"
       active={panel === 'project'}
       onclick={() => (panel = 'project')}
     />
     <IconButton
       icon="save"
-      label="保存工程"
-      tipText={appState.projectDir ? '保存到当前工程目录（Ctrl+S）' : '选择目录并保存（Ctrl+S）'}
+      label={tr('app.saveProject')}
+      tipText={tr(appState.projectDir ? 'app.saveToCurrentDir' : 'app.savePickDir')}
       testid="rail-save"
       disabled={appState.projectBusy}
       onclick={() => void saveProjectNow()}
     />
     <IconButton
       icon="download"
-      label="导出"
+      label={tr('app.export')}
       testid="rail-export"
       active={exporting}
       onclick={() => (panel = 'export')}
@@ -138,10 +148,15 @@
 
   <!-- ③ 设置 · 明暗 -->
   <div class="rail-block">
-    <IconButton icon="settings" label="设置" testid="rail-settings" onclick={() => (panel = 'settings')} />
+    <IconButton
+      icon="settings"
+      label={tr('app.settings')}
+      testid="rail-settings"
+      onclick={() => (panel = 'settings')}
+    />
     <IconButton
       icon={theme.mode === 'light' ? 'moon' : 'sun'}
-      label={theme.mode === 'light' ? '切到暗色' : '切到亮色'}
+      label={tr(theme.mode === 'light' ? 'app.toDark' : 'app.toLight')}
       testid="theme-toggle"
       active={theme.mode === 'dark'}
       onclick={() => theme.toggleMode()}
@@ -150,33 +165,33 @@
 </aside>
 
 {#if panel === 'about'}
-  <Modal title="关于 Artmatic" testid="modal-about" onclose={() => (panel = null)}>
+  <Modal title={tr('app.aboutArtmatic')} testid="modal-about" onclose={() => (panel = null)}>
     {#snippet hero()}
       <span class="hero-lockup">
         <Brand variant="mark" size={72} />
         <Brand variant="word" size={26} />
       </span>
     {/snippet}
-    <p class="lead">把算法艺术与故障艺术按音乐结构编排起来的时间轴工具。</p>
+    <p class="lead">{tr('app.aboutLead')}</p>
     <div class="kv">
-      <span>版本</span><span class="mono">0.1.0</span>
-      <span>渲染</span><span class="mono">WebGL2 + GLSL ES 3.00</span>
-      <span>图标</span><span class="mono">Lucide（ISC）</span>
-      <span>压缩</span><span class="mono">fflate（MIT）</span>
+      <span>{tr('app.version')}</span><span class="mono">0.1.0</span>
+      <span>{tr('app.render')}</span><span class="mono">WebGL2 + GLSL ES 3.00</span>
+      <span>{tr('app.icons')}</span><span class="mono">{tr('app.licenseLucide')}</span>
+      <span>{tr('app.compression')}</span><span class="mono">{tr('app.licenseFflate')}</span>
     </div>
   </Modal>
 {/if}
 
 {#if panel === 'shortcuts'}
-  <Modal title="快捷键" testid="modal-shortcuts" width="wide" onclose={() => (panel = null)}>
+  <Modal title={tr('app.shortcuts')} testid="modal-shortcuts" width="wide" onclose={() => (panel = null)}>
     <div class="sc-grid">
-      {#each SHORTCUT_GROUPS as group (group.title)}
+      {#each SHORTCUT_GROUPS as group (group.titleKey)}
         <section>
-          <h3>{group.title}</h3>
-          {#each group.items as s (s.label)}
+          <h3>{tr(group.titleKey)}</h3>
+          {#each group.items as s (s.labelKey)}
             <div class="sc-row">
-              <span class="grow">{s.label}</span>
-              <kbd class="kbd">{s.keys}</kbd>
+              <span class="grow">{tr(s.labelKey)}</span>
+              <kbd class="kbd">{tr(s.keysKey)}</kbd>
             </div>
           {/each}
         </section>
@@ -186,25 +201,22 @@
 {/if}
 
 {#if panel === 'export'}
-  <Modal title="导出" testid="modal-export" onclose={() => (panel = null)}>
+  <Modal title={tr('app.export')} testid="modal-export" onclose={() => (panel = null)}>
     <div class="kv">
-      <span>范围</span><span class="mono">{frames} 帧</span>
-      <span>分辨率</span><span class="mono">{res.w}×{res.h}</span>
-      <span>帧率</span><span class="mono">{fps} fps</span>
+      <span>{tr('app.range')}</span><span class="mono">{tr('app.frames', { n: frames })}</span>
+      <span>{tr('app.resolution')}</span><span class="mono">{res.w}×{res.h}</span>
+      <span>{tr('app.frameRate')}</span><span class="mono">{fps} fps</span>
     </div>
     {#if exporting}
       <div class="progress">
         <div class="progress-track"><div class="progress-fill" style:width={`${pct}%`}></div></div>
         <span class="mono">{pct}%</span>
-        <Button label="取消" variant="outline" testid="export-cancel" onclick={cancelExport} />
+        <Button label={tr('common.cancel')} variant="outline" testid="export-cancel" onclick={cancelExport} />
       </div>
     {:else}
-      <p class="hint">
-        导出是确定性逐帧渲染：与预览走同一条求值路径，差别只在分辨率。
-        帧数 = 工程时长 × 帧率，时长可在轨道上方的工具条里改。
-      </p>
+      <p class="hint">{tr('app.exportHint')}</p>
       <Button
-        label={`导出 MP4（约 ${mp4Size}）`}
+        label={tr('app.exportMp4', { size: mp4Size })}
         icon="download"
         variant="accent"
         size="lg"
@@ -214,56 +226,52 @@
       />
       <p class="hint" data-testid="export-mp4-hint">
         {#if canMp4}
-          H.264 + AAC，含工程里的音频轨。{fmtSize(estimateMp4Bytes())} 是按码率估的，
-          画面越复杂实际越大。
+          {tr('app.exportMp4Hint', { size: fmtSize(estimateMp4Bytes()) })}
         {:else}
-          本机浏览器不支持 WebCodecs（`VideoEncoder` 不存在），只能导出 PNG 序列。
+          {tr('app.exportMp4Unsupported')}
         {/if}
       </p>
       <Button
-        label="导出 PNG 序列（.zip）"
+        label={tr('app.exportPng')}
         icon="download"
         variant="outline"
         size="lg"
         testid="export-png"
         onclick={() => void exportPngSequence()}
       />
-      <p class="hint">
-        PNG 序列体积大得多，但它是逃生舱：任何浏览器都能出，
-        而且逐帧交给达芬奇 / Cavalry 精修本身是正当用途。
-      </p>
+      <p class="hint">{tr('app.exportPngHint')}</p>
     {/if}
   </Modal>
 {/if}
 
 {#if panel === 'project'}
-  <Modal title="工程" testid="modal-project" onclose={() => (panel = null)}>
+  <Modal title={tr('app.project')} testid="modal-project" onclose={() => (panel = null)}>
     <div class="kv">
-      <span>名称</span>
+      <span>{tr('app.name')}</span>
       <span data-testid="project-name">{appState.projectName}</span>
-      <span>位置</span>
+      <span>{tr('app.location')}</span>
       <span data-testid="project-location">
-        {appState.projectDir ? '已连接磁盘目录' : '尚未选择（首次保存时会问）'}
+        {tr(appState.projectDir ? 'app.dirConnected' : 'app.dirNotChosen')}
       </span>
-      <span>状态</span>
+      <span>{tr('app.status')}</span>
       <span data-testid="project-dirty">
         {#if appState.projectDirty}
-          <span class="dirty">有未保存改动</span>
+          <span class="dirty">{tr('app.unsavedChanges')}</span>
         {:else if appState.savedAt}
-          已保存 · {ago(appState.savedAt)}
+          {tr('app.savedAgo', { ago: ago(appState.savedAt) })}
         {:else}
-          尚未保存
+          {tr('app.notSavedYet')}
         {/if}
       </span>
-      <span>素材</span>
+      <span>{tr('app.assets')}</span>
       <span class="mono" data-testid="project-assets">
-        {assetInfo.count} 个 · {fmtBytes(assetInfo.bytes)}
+        {tr('app.assetCount', { n: assetInfo.count, size: fmtBytes(assetInfo.bytes) })}
       </span>
     </div>
 
     {#if appState.projectIssues.length}
       <section class="setting">
-        <h3>素材检查</h3>
+        <h3>{tr('app.assetAudit')}</h3>
         {#each appState.projectIssues as issue (issue.kind + ':' + issue.assetId + ':' + issue.path)}
           <div class="issue" class:err={issue.severity === 'error'}>
             <Icon name={issue.severity === 'error' ? 'triangle-alert' : 'info'} size={13} />
@@ -274,10 +282,10 @@
     {/if}
 
     <section class="setting">
-      <h3>动作</h3>
+      <h3>{tr('app.actions')}</h3>
       <div class="row wrap">
         <Button
-          label="新建空白"
+          label={tr('app.newBlank')}
           icon="file-plus"
           variant="outline"
           testid="project-new"
@@ -287,7 +295,7 @@
           }}
         />
         <Button
-          label="载入演示"
+          label={tr('app.loadDemo')}
           icon="sparkles"
           variant="outline"
           testid="project-demo"
@@ -297,7 +305,7 @@
           }}
         />
         <Button
-          label="打开工程…"
+          label={tr('app.openProjectEllipsis')}
           icon="folder-open"
           variant="outline"
           disabled={appState.projectBusy}
@@ -305,7 +313,7 @@
           onclick={() => void openProjectPicker()}
         />
         <Button
-          label="另存为…"
+          label={tr('app.saveAsEllipsis')}
           icon="hard-drive"
           variant="outline"
           disabled={appState.projectBusy}
@@ -317,7 +325,7 @@
 
     {#if appState.recentProjects.length}
       <section class="setting">
-        <h3>最近的工程</h3>
+        <h3>{tr('app.recentProjects')}</h3>
         {#each appState.recentProjects as r (r.key)}
           <button
             type="button"
@@ -328,33 +336,34 @@
           >
             <Icon name="folder" size={13} />
             <span class="grow">{r.name}</span>
-            <span class="dim">{r.assetCount ?? 0} 素材</span>
+            <span class="dim">{tr('app.assetCountShort', { n: r.assetCount ?? 0 })}</span>
             <span class="dim">{ago(r.openedAt)}</span>
           </button>
         {/each}
       </section>
     {/if}
 
+    <!-- 这句话被三个 <code> 打断，所以按段取词（见语言文件里的注释）。 -->
     <p class="hint">
-      工程是一个磁盘目录：<code class="mono">project.json</code> 是内容，
-      <code class="mono">assets.json</code> 是素材台账，素材字节在
-      <code class="mono">assets/</code>。整个目录可以直接拷走。
+      {tr('app.projectHintA')}<code class="mono">project.json</code>{tr('app.projectHintB')}<code
+        class="mono">assets.json</code
+      >{tr('app.projectHintC')}<code class="mono">assets/</code>{tr('app.projectHintD')}
     </p>
   </Modal>
 {/if}
 
 {#if panel === 'settings'}
-  <Modal title="设置" testid="modal-settings" onclose={() => (panel = null)}>
+  <Modal title={tr('app.settings')} testid="modal-settings" onclose={() => (panel = null)}>
     <section class="setting">
-      <h3>主题色</h3>
-      <p class="hint">主题色只用在「选中 / 激活 / 焦点 / 播放头」这几处，其余一律中性灰。</p>
+      <h3>{tr('app.accentColor')}</h3>
+      <p class="hint">{tr('app.accentHint')}</p>
       <div class="swatch-row">
         {#each BRAND_IDS as id (id)}
           <button
             type="button"
             class="swatch"
             style:background={ACCENT_PRESETS[id].hex}
-            aria-label={ACCENT_PRESETS[id].label}
+            aria-label={tr(ACCENT_PRESETS[id].labelKey)}
             aria-pressed={theme.accent.kind === 'preset' && theme.accent.id === id}
             data-testid={`brand-${id}`}
             onclick={() => theme.setPreset(id as BrandId)}
@@ -364,7 +373,7 @@
           class="hex"
           type="text"
           placeholder="#rrggbb"
-          aria-label="自定义主题色"
+          aria-label={tr('app.customAccent')}
           data-testid="brand-hex"
           bind:value={hexDraft}
           onchange={() => {
@@ -377,11 +386,13 @@
     </section>
 
     <section class="setting">
-      <h3>模式</h3>
+      <h3>{tr('app.mode')}</h3>
       <div class="row">
-        <span class="grow">当前：{theme.mode === 'light' ? '亮色' : '暗色'}</span>
+        <span class="grow">
+          {tr('app.modeCurrent', { mode: tr(theme.mode === 'light' ? 'app.light' : 'app.dark') })}
+        </span>
         <Button
-          label={theme.mode === 'light' ? '切到暗色' : '切到亮色'}
+          label={tr(theme.mode === 'light' ? 'app.toDark' : 'app.toLight')}
           icon={theme.mode === 'light' ? 'moon' : 'sun'}
           variant="outline"
           testid="setting-toggle-mode"
@@ -391,22 +402,22 @@
     </section>
 
     <section class="setting">
-      <h3>关键帧</h3>
+      <h3>{tr('app.keyframes')}</h3>
       <Checkbox
         checked={appState.beatAnchorNewKeys}
-        label="新关键帧默认锚到拍"
-        tipText="锚到拍：改 BPM / offset 时卡点自动跟随"
+        label={tr('app.beatAnchorNew')}
+        tipText={tr('app.beatAnchorTip')}
         testid="setting-beat-anchor"
         onchange={(v) => (appState.beatAnchorNewKeys = v)}
       />
     </section>
 
     <section class="setting">
-      <h3>检查器</h3>
+      <h3>{tr('app.inspector')}</h3>
       <div class="row">
-        <span class="grow">宽度 {appState.drawerWidth}px</span>
+        <span class="grow">{tr('app.drawerWidth', { px: appState.drawerWidth })}</span>
         <Button
-          label="重置为默认"
+          label={tr('app.resetDefault')}
           variant="outline"
           testid="setting-reset-drawer"
           onclick={() => appState.setDrawerWidth(DENSITY.drawerW)}
@@ -416,7 +427,7 @@
 
     <div class="modal-actions">
       <Button
-        label="恢复默认主题"
+        label={tr('app.resetTheme')}
         icon="trash"
         variant="outline"
         testid="setting-reset-theme"

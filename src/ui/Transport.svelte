@@ -15,6 +15,7 @@
   import { beatAtTime, SNAP_MODES, type SnapMode } from '../core/time';
   import type { OverlapBehavior } from '../core/schema';
   import { tip } from './tip';
+  import { tr } from '../i18n/index.svelte';
 
   const grid = $derived.by(() => {
     void appState.version;
@@ -44,24 +45,26 @@
     return `${m}:${s}`;
   }
 
-  const snapOptions = Object.entries(SNAP_MODES).map(([mode, def]) => ({
-    value: mode as SnapMode,
-    label: def.label,
-  }));
+  const snapOptions = $derived(
+    Object.entries(SNAP_MODES).map(([mode, def]) => ({
+      value: mode as SnapMode,
+      label: tr(def.labelKey),
+    })),
+  );
 
   const barOptions = [2, 3, 4, 6].map((n) => ({ value: n, label: String(n) }));
 
-  const overlapOptions: { value: OverlapBehavior; label: string }[] = [
-    { value: 'reject', label: '拒绝落点' },
-    { value: 'push', label: '挤开邻居' },
-    { value: 'trim', label: '吃掉重叠' },
-  ];
+  const overlapOptions = $derived<{ value: OverlapBehavior; label: string }[]>([
+    { value: 'reject', label: tr('tp.overlapReject') },
+    { value: 'push', label: tr('tp.overlapPush') },
+    { value: 'trim', label: tr('tp.overlapTrim') },
+  ]);
 </script>
 
 <div class="transport">
   <IconButton
     icon={appState.playing ? 'pause' : 'play'}
-    label={appState.playing ? '暂停' : '播放'}
+    label={appState.playing ? tr('tp.pause') : tr('tp.play')}
     shortcut="Space"
     size="lg"
     tipPlacement="top"
@@ -70,19 +73,19 @@
   />
   <IconButton
     icon="square"
-    label="停止"
+    label={tr('tp.stop')}
     tipPlacement="top"
     testid="stop"
     onclick={() => appState.stop()}
   />
 
-  <span class="time" use:tip={{ placement: 'top', text: '工程时间 / 小节.拍' }}>
+  <span class="time" use:tip={{ placement: 'top', text: tr('tp.timeTip') }}>
     {fmt(playT)}<em>{barBeat}</em>
   </span>
 
   <span class="sep"></span>
 
-  <span class="ctl" use:tip={{ placement: 'top', text: 'BPM（手动拍网格；自动估计在后续里程碑）' }}>
+  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.bpmTip') }}>
     <span class="lbl">BPM</span>
     <NumberInput
       value={grid.bpm}
@@ -96,7 +99,7 @@
     />
   </span>
 
-  <span class="ctl" use:tip={{ placement: 'top', text: 'offset：第 0 拍的秒数（ADR-002，独立参数）' }}>
+  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.offsetTip') }}>
     <span class="lbl">offset</span>
     <NumberInput
       value={grid.offset}
@@ -108,8 +111,8 @@
     />
   </span>
 
-  <span class="ctl" use:tip={{ placement: 'top', text: '每小节拍数' }}>
-    <span class="lbl">拍/小节</span>
+  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.beatsPerBarTip') }}>
+    <span class="lbl">{tr('tp.beatsPerBar')}</span>
     <Select
       value={grid.beatsPerBar}
       options={barOptions}
@@ -120,8 +123,8 @@
     />
   </span>
 
-  <span class="ctl" use:tip={{ placement: 'top', text: '吸附档位（网格间距与吸附步长同源：core/time.ts 一张表）' }}>
-    <span class="lbl">吸附</span>
+  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.snapTip') }}>
+    <span class="lbl">{tr('tp.snap')}</span>
     <Select
       value={appState.snap}
       options={snapOptions}
@@ -134,21 +137,21 @@
 
   <span class="sep"></span>
 
-  <span class="ctl" use:tip={{ placement: 'top', text: '工程时长（秒）：决定导出帧数范围。与素材长度无关，可以随便改；片段被拖出末尾时会自动把工程撑长' }}>
-    <span class="lbl">时长</span>
+  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.durationTip') }}>
+    <span class="lbl">{tr('tp.duration')}</span>
     <NumberInput
       value={+duration.toFixed(2)}
       min={0.1}
       step={0.5}
       width={62}
       suffix="s"
-      ariaLabel="工程时长"
+      ariaLabel={tr('tp.projectDuration')}
       testid="duration-input"
       onchange={(v) => appState.store.setDuration(v || 0.1)}
     />
     <IconButton
       icon="minimize-2"
-      label="时长收到内容末尾"
+      label={tr('tp.fitDuration')}
       size="sm"
       tipPlacement="top"
       testid="fit-duration"
@@ -156,8 +159,8 @@
     />
   </span>
 
-  <span class="ctl" use:tip={{ placement: 'top', text: '同轨重叠策略（可配置：挤开邻居 / 拒绝落点 / 吃掉邻居重叠部分）' }}>
-    <span class="lbl">重叠</span>
+  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.overlapTip') }}>
+    <span class="lbl">{tr('tp.overlap')}</span>
     <Select
       value={overlapBehavior}
       options={overlapOptions}
@@ -168,14 +171,14 @@
     />
   </span>
 
-  <span class="ctl zoom" use:tip={{ placement: 'top', text: '时间轴缩放（也可 Ctrl+滚轮，以鼠标为锚）' }}>
+  <span class="ctl zoom" use:tip={{ placement: 'top', text: tr('tp.zoomTip') }}>
     <Icon name="search" size={12} />
     <Slider
       value={appState.pxPerBeat}
       min={6}
       max={96}
       step={1}
-      ariaLabel="时间轴缩放"
+      ariaLabel={tr('tp.zoom')}
       testid="zoom-slider"
       oninput={(v) => (appState.pxPerBeat = v)}
     />

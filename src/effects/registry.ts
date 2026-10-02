@@ -8,17 +8,19 @@
 import type { ParamDef } from './types';
 import { defaultValues } from './types';
 import type { EffectShaderDef } from './shader-def';
+import type { MessageKey } from '../i18n/locales';
 
 export interface EffectEntry {
   id: string;
-  name: string;
+  /** 展示名。存文案键，由 UI 侧 `tr()` 解析（理由见 types.ts）。 */
+  nameKey: MessageKey;
   params: ParamDef[];
   shader: EffectShaderDef;
 }
 
 interface DefModule {
   id: string;
-  name: string;
+  nameKey: MessageKey;
   params: ParamDef[];
 }
 interface GlslModule {
@@ -39,7 +41,7 @@ for (const [path, def] of Object.entries(defModules)) {
   const glsl = glslModules[`./glsl/${key}.ts`];
   if (!glsl) throw new Error(`特效 ${key} 缺少 glsl/${key}.ts（两个文件纪律）`);
   if (def.id !== key) throw new Error(`特效文件名 ${key} 与 def.id ${def.id} 不一致`);
-  ENTRIES.set(key, { id: def.id, name: def.name, params: def.params, shader: glsl.shader });
+  ENTRIES.set(key, { id: def.id, nameKey: def.nameKey, params: def.params, shader: glsl.shader });
 }
 for (const path of Object.keys(glslModules)) {
   const key = basename(path);
@@ -50,8 +52,8 @@ export function getEffect(id: string): EffectEntry | null {
   return ENTRIES.get(id) ?? null;
 }
 
-export function listEffects(): { id: string; name: string }[] {
-  return [...ENTRIES.values()].map((e) => ({ id: e.id, name: e.name }));
+export function listEffects(): { id: string; nameKey: MessageKey }[] {
+  return [...ENTRIES.values()].map((e) => ({ id: e.id, nameKey: e.nameKey }));
 }
 
 export function defaultEffectValues(id: string): Record<string, number | string> {

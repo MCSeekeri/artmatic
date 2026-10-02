@@ -14,6 +14,7 @@
   import RibbonGroup from './RibbonGroup.svelte';
   import RibbonItem from './RibbonItem.svelte';
   import { resolveVisibleTabs, type RibbonTabDef } from './ribbon-model';
+  import { tr } from '../../i18n/index.svelte';
 
   interface Props {
     tabs: RibbonTabDef[];
@@ -62,7 +63,7 @@
 </script>
 
 <div class="ribbon" data-testid="ribbon">
-  <div class="ribbon-tabs" role="tablist" aria-label="排版工具" data-testid="ribbon-tabs">
+  <div class="ribbon-tabs" role="tablist" aria-label={tr('rib.ariaTools')} data-testid="ribbon-tabs">
     {#each resolved.visible as tab (tab.id)}
       <button
         type="button"

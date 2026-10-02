@@ -17,6 +17,7 @@ import {
   type ThemeMode,
   type ThemeSpec,
 } from './tokens';
+import { tr } from '../i18n/index.svelte';
 
 const STORAGE_KEY = 'artmatic.theme';
 
@@ -77,10 +78,10 @@ class ThemeState {
     return accentRampOf(this.accent, this.mode);
   }
 
-  /** 当前品牌的展示名。 */
+  /** 当前品牌的展示名。自定义色时直接显示 hex（它本身就是给人看的）。 */
   get accentLabel(): string {
     const a = this.accent;
-    if (a.kind === 'preset') return ACCENT_PRESETS[a.id].label;
+    if (a.kind === 'preset') return tr(ACCENT_PRESETS[a.id].labelKey);
     return a.hex;
   }
 

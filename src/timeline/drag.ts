@@ -22,6 +22,7 @@
 import { snapTime, beatDur, type BeatGrid, type SnapMode } from '../core/time';
 import type { ProjectStore } from '../core/project-store';
 import type { AnyClip, Track } from '../core/schema';
+import { tr } from '../i18n/index.svelte';
 
 export type DragMode = 'move' | 'resize-l' | 'resize-r';
 
@@ -121,7 +122,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
     // touch 不能省：结算可能把状态改回事务起点（例如 reject 被钳回原位），
     // 此时 endTx 判定「无变化」不会 bump，UI 就会停在被作废的实时预览上。
     store.touch();
-    store.endTx(mode === 'move' ? '移动片段' : '调整片段长度');
+    store.endTx(mode === 'move' ? tr('tl.moveClip') : tr('tl.resizeClip'));
   };
 
   const onCancel = (): void => {

@@ -14,6 +14,7 @@
   import Modal from '../controls/Modal.svelte';
   import Button from '../controls/Button.svelte';
   import { isValidKeyframeBody, sanitizeKeyframeBody } from '../../typography/animation';
+  import { tr } from '../../i18n/index.svelte';
 
   interface Props {
     /**
@@ -36,23 +37,19 @@
 
   function save(): void {
     if (!isValidKeyframeBody(text)) {
-      error = '花括号没配平 —— 少写或多写了一个 }。@keyframes 的体里只应有成对的 {}。';
+      error = tr('typo.customCssUnbalanced');
       return;
     }
     if (!onsave(body)) {
-      error = '这段 keyframes 无法写入，请检查语法。';
+      error = tr('typo.customCssUnwritable');
       return;
     }
     onclose();
   }
 </script>
 
-<Modal title="自定义动画（@keyframes 的体）" onclose={onclose} testid="typo-css-modal" width="wide">
-  <p class="hint">
-    只填 <code>@keyframes</code> 的<strong>体</strong>，例如
-    <code>from&#123;opacity:0&#125;to&#123;opacity:1&#125;</code>。
-    顶层选择器、<code>@import</code>、<code>position:fixed</code> 都不会生效（会被剥掉）。
-  </p>
+<Modal title={tr('typo.customCssTitle')} onclose={onclose} testid="typo-css-modal" width="wide">
+  <p class="hint">{tr('typo.customCssHintA')}<code>@keyframes</code>{tr('typo.customCssHintB')}<strong>{tr('typo.customCssHintC')}</strong>{tr('typo.customCssHintD')}<code>from&#123;opacity:0&#125;to&#123;opacity:1&#125;</code>{tr('typo.customCssHintE')}{tr('typo.customCssHintF')}<code>@import</code>{tr('typo.customCssHintG')}<code>position:fixed</code>{tr('typo.customCssHintH')}</p>
 
   <textarea
     class="code"
@@ -65,14 +62,14 @@
   {#if error}
     <p class="err" data-testid="typo-css-error">{error}</p>
   {:else if !body}
-    <p class="err">当前内容为空或非法，不会写入。</p>
+    <p class="err">{tr('typo.customCssEmpty')}</p>
   {:else}
-    <p class="ok">结果：<code>@keyframes …&#123;{body}&#125;</code></p>
+    <p class="ok">{tr('typo.customCssResult')}<code>@keyframes …&#123;{body}&#125;</code></p>
   {/if}
 
   <div class="acts">
-    <Button label="取消" testid="typo-css-cancel" onclick={onclose} />
-    <Button label="保存" variant="accent" testid="typo-css-save" onclick={save} />
+    <Button label={tr('common.cancel')} testid="typo-css-cancel" onclick={onclose} />
+    <Button label={tr('common.save')} variant="accent" testid="typo-css-save" onclick={save} />
   </div>
 </Modal>
 

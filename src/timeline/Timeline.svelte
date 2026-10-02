@@ -21,6 +21,7 @@
   import { canvasPalette } from '../ui/tokens';
   import { theme } from '../ui/theme.svelte';
   import { appState } from '../ui/app-state.svelte';
+  import { tr } from '../i18n/index.svelte';
 
   const generators = listGenerators();
 
@@ -157,7 +158,7 @@
       id: newId(),
       start,
       end: start + longLen(),
-      label: def.name,
+      label: tr(def.nameKey),
       fadeSec: 0,
       curves: {},
       source: { type: 'algo', generator: genId, params: defaultParams(genId) },
@@ -178,7 +179,7 @@
       id: newId(),
       start,
       end: start + solidLen(),
-      label: '纯色',
+      label: tr('tl.clipSolid'),
       fadeSec: 0,
       curves: {},
       source: { type: 'solid', color: '#3a6ea5' },
@@ -208,7 +209,7 @@
       id: newId(),
       start,
       end: start + longLen(),
-      label: '排版',
+      label: tr('tl.clipText'),
       fadeSec: 0,
       curves: {},
       source: { type: 'text', doc },
@@ -228,7 +229,7 @@
       id: newId(),
       start,
       end: start + longLen(),
-      label: '特效',
+      label: tr('tl.clipEffect'),
       fadeSec: 0,
       curves: {},
       chain: [],
@@ -253,7 +254,7 @@
       name: picked.name,
       originName: picked.name,
     });
-    appState.store.commit('导入音频', (p) => {
+    appState.store.commit(tr('tl.importAudio'), (p) => {
       p.assets[assetId] = { id: assetId, kind: 'audio', name: picked.name, durationSec: buf.duration };
     });
     const start = startFor(at);
@@ -305,7 +306,7 @@
   function generatorItems(at: number | undefined, prefix: string): MenuItem[] {
     return generators.map((g) => ({
       id: `${prefix}algo-${g.id}`,
-      label: g.name,
+      label: tr(g.nameKey),
       testid: `${prefix}algo-${g.id}`,
       onselect: () => addAlgo(currentTrackId!, g.id, at),
     }));
@@ -319,7 +320,7 @@
       return [
         {
           id: `${prefix}audio`,
-          label: '导入音频…',
+          label: tr('tl.importAudioMenu'),
           icon: 'music',
           testid: prefix === 'ctx-' ? `${prefix}audio` : 'import-audio',
           onselect: () => void addAudio(track.id, at),
@@ -336,26 +337,26 @@
     return [
       {
         id: `${prefix}solid`,
-        label: '纯色片段',
+        label: tr('tl.addSolid'),
         icon: 'palette',
         testid: `${prefix}solid`,
         onselect: () => addSolid(track.id, at),
       },
       {
         id: `${prefix}text`,
-        label: '排版片段',
+        label: tr('tl.addText'),
         icon: 'type',
         testid: `${prefix}text`,
         onselect: () => addText(track.id, at),
       },
       {
         id: `${prefix}effect`,
-        label: '特效片段',
+        label: tr('tl.addEffect'),
         icon: 'flask-conical',
         testid: `${prefix}effect`,
         onselect: () => addEffect(track.id, at),
       },
-      submenu(`${prefix}algo`, '算法片段', generatorItems(at, prefix), 'sigma'),
+      submenu(`${prefix}algo`, tr('tl.addAlgo'), generatorItems(at, prefix), 'sigma'),
     ];
   }
 
@@ -364,9 +365,9 @@
     return [
       ...clipItems(track, at, prefix),
       separator('s1'),
-      { id: 'rename', label: '重命名轨道', icon: 'pencil', testid: 'track-menu-rename', onselect: () => beginRename(track.id) },
+      { id: 'rename', label: tr('tl.renameTrack'), icon: 'pencil', testid: 'track-menu-rename', onselect: () => beginRename(track.id) },
       separator('s2'),
-      { id: 'remove', label: '删除轨道', icon: 'trash', danger: true, testid: 'track-menu-remove', onselect: () => removeTrack(track) },
+      { id: 'remove', label: tr('tl.removeTrack'), icon: 'trash', danger: true, testid: 'track-menu-remove', onselect: () => removeTrack(track) },
     ];
   }
 
@@ -463,7 +464,7 @@
 <div class="tl">
   <div class="side">
     <div class="side-head" style:height={`${RULER_HEIGHT}px`}>
-      <span class="side-title">轨道</span>
+      <span class="side-title">{tr('tl.sideTitle')}</span>
     </div>
 
     {#each tracks as track (track.id)}
@@ -486,11 +487,11 @@
               : 'eye-off'}
           label={track.kind === 'audio'
             ? track.enabled
-              ? '静音这条音频轨'
-              : '取消静音'
+              ? tr('tl.muteAudioTrack')
+              : tr('tl.unmuteAudioTrack')
             : track.enabled
-              ? '隐藏这条轨道'
-              : '显示这条轨道'}
+              ? tr('tl.hideTrack')
+              : tr('tl.showTrack')}
           size="sm"
           active={track.enabled}
           testid="track-enabled"
@@ -528,7 +529,7 @@
 
         <IconButton
           icon="ellipsis-vertical"
-          label="轨道菜单"
+          label={tr('tl.trackMenu')}
           size="sm"
           testid="track-menu"
           onclick={(e) => openRowMenu(e, track)}
@@ -537,14 +538,14 @@
     {/each}
 
     <div class="side-add" style:height={`${ROW_HEIGHT}px`}>
-      <span class="add-label">添加轨道</span>
+      <span class="add-label">{tr('tl.addTrack')}</span>
       <button
         type="button"
         class="add-btn"
         data-testid="add-visual-track"
         onclick={() => appState.store.addTrack('visual')}
       >
-        <Icon name="video" size={12} /> 视频
+        <Icon name="video" size={12} /> {tr('tl.addVisualTrack')}
       </button>
       <button
         type="button"
@@ -552,7 +553,7 @@
         data-testid="add-audio-track"
         onclick={() => appState.store.addTrack('audio')}
       >
-        <Icon name="audio-lines" size={12} /> 音频
+        <Icon name="audio-lines" size={12} /> {tr('tl.addAudioTrack')}
       </button>
     </div>
   </div>

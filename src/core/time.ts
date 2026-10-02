@@ -11,6 +11,8 @@
  * 单测把「snap 步长 = 网格步长」钉死。
  */
 
+import type { MessageKey } from '../i18n/locales';
+
 export interface BeatGrid {
   bpm: number;
   /** 第 0 拍的秒数（可以为负：音乐在 0 秒前就开始了）。 */
@@ -35,11 +37,11 @@ export function beatAtTime(t: number, g: BeatGrid): number {
 }
 
 export const SNAP_MODES = {
-  bar: { label: '小节', stepBeats: (bpb: number) => bpb },
-  beat: { label: '拍', stepBeats: () => 1 },
-  half: { label: '半拍', stepBeats: () => 0.5 },
-  free: { label: '自由', stepBeats: () => 0.01 },
-} as const;
+  bar: { labelKey: 'tl.snapBar', stepBeats: (bpb: number) => bpb },
+  beat: { labelKey: 'tl.snapBeat', stepBeats: () => 1 },
+  half: { labelKey: 'tl.snapHalf', stepBeats: () => 0.5 },
+  free: { labelKey: 'tl.snapFree', stepBeats: () => 0.01 },
+} as const satisfies Record<string, { labelKey: MessageKey; stepBeats: (bpb: number) => number }>;
 
 export type SnapMode = keyof typeof SNAP_MODES;
 

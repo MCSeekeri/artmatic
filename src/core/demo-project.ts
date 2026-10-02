@@ -10,6 +10,7 @@
  */
 
 import { defaultProject, newId, type Project, type SourceClip, type EffectClip } from './schema';
+import { tr } from '../i18n/index.svelte';
 
 export const DEMO_ASSET_ID = 'demo-song';
 export const DEMO_DURATION = 16;
@@ -20,7 +21,7 @@ export const DEMO_DURATION = 16;
  * **不留空轨道列表。** 没有轨道的话右键菜单出不来、片段也没地方放，
  * 用户面对的是一块完全动不了的地方 —— 那不是「空白」，那是「坏了」。
  */
-export function createBlankProject(name = '未命名工程'): Project {
+export function createBlankProject(name = tr('proj.unnamed')): Project {
   const p = defaultProject(name);
   p.tracks = [
     { kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [] },
@@ -36,18 +37,18 @@ function baseClip(id: string, start: number, end: number, label: string) {
 const transform = { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 };
 
 export function createDemoProject(): Project {
-  const p = defaultProject('Artmatic Demo');
+  const p = defaultProject(tr('tl.demoProjectName'));
   p.duration = DEMO_DURATION;
   p.beatGrid = { bpm: 120, offset: 0, beatsPerBar: 4 };
   p.assets[DEMO_ASSET_ID] = {
     id: DEMO_ASSET_ID,
     kind: 'audio',
-    name: '演示节拍 120 BPM',
+    name: tr('tl.demoAudioAsset'),
     durationSec: DEMO_DURATION,
   };
 
   const mandelbrot: SourceClip = {
-    ...baseClip(newId(), 0, DEMO_DURATION, 'Mandelbrot 推近'),
+    ...baseClip(newId(), 0, DEMO_DURATION, tr('tl.demoClipMandelbrot')),
     kind: 'source',
     source: {
       type: 'algo',
@@ -73,7 +74,7 @@ export function createDemoProject(): Project {
   };
 
   const rule110: SourceClip = {
-    ...baseClip(newId(), 0, DEMO_DURATION, 'Rule 110 生长'),
+    ...baseClip(newId(), 0, DEMO_DURATION, tr('tl.demoClipRule110')),
     kind: 'source',
     source: {
       type: 'algo',
@@ -91,7 +92,7 @@ export function createDemoProject(): Project {
   };
 
   const glitch: EffectClip = {
-    ...baseClip(newId(), 8, 12, '局部故障'),
+    ...baseClip(newId(), 8, 12, tr('tl.demoClipGlitch')),
     kind: 'effect',
     fadeSec: 0.25,
     chain: [
@@ -112,7 +113,7 @@ export function createDemoProject(): Project {
   };
 
   const grade: EffectClip = {
-    ...baseClip(newId(), 0, DEMO_DURATION, '回声 + 扫描线'),
+    ...baseClip(newId(), 0, DEMO_DURATION, tr('tl.demoClipGrade')),
     kind: 'effect',
     chain: [
       {
@@ -139,19 +140,19 @@ export function createDemoProject(): Project {
    * 音频轨与视觉栈无关，放最后由它去。
    */
   p.tracks = [
-    { kind: 'visual', id: newId(), name: 'V4 全屏调色', enabled: true, clips: [grade] },
-    { kind: 'visual', id: newId(), name: 'V3 局部故障', enabled: true, clips: [glitch] },
-    { kind: 'visual', id: newId(), name: 'V2 纹理', enabled: true, clips: [rule110] },
-    { kind: 'visual', id: newId(), name: 'V1 底图', enabled: true, clips: [mandelbrot] },
+    { kind: 'visual', id: newId(), name: tr('tl.demoTrackV4'), enabled: true, clips: [grade] },
+    { kind: 'visual', id: newId(), name: tr('tl.demoTrackV3'), enabled: true, clips: [glitch] },
+    { kind: 'visual', id: newId(), name: tr('tl.demoTrackV2'), enabled: true, clips: [rule110] },
+    { kind: 'visual', id: newId(), name: tr('tl.demoTrackV1'), enabled: true, clips: [mandelbrot] },
     {
       kind: 'audio',
       id: newId(),
-      name: 'A1 音乐',
+      name: tr('tl.demoTrackA1'),
       enabled: true,
       bus: 'master',
       clips: [
         {
-          ...baseClip(newId(), 0, DEMO_DURATION, '演示节拍'),
+          ...baseClip(newId(), 0, DEMO_DURATION, tr('tl.demoClipBeats')),
           kind: 'audio',
           assetId: DEMO_ASSET_ID,
           srcIn: 0,

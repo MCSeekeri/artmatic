@@ -1,0 +1,82 @@
+/**
+ * shortcuts.ts — 快捷键清单（分组标题 + 每条的按键列 + 描述列）。
+ *
+ * 前缀：`sc.*`
+ *
+ * 连**按键列**也进语言文件，是因为它不是纯组合键：'标尺拖动'、'拖边'、
+ * '空白处拖动' 这些是鼠标手势的名字，本来就是要翻译的。既然一列里有
+ * 两种东西，与其搞个 `keys: MessageKey | string` 的混合类型，不如统一成
+ * 展示字符串 —— 顺带让 macOS 版可以说 '⌘S'。
+ *
+ * 真正判定的仍是 `KeyboardEvent` 的 key/code（在 App.svelte 与
+ * typography/keys.ts 里），改这里的字**不会**改行为。
+ */
+
+export const shortcuts = {
+  /* ------------------------------------------------ 分组标题 */
+  'sc.group.playback': '播放与时间',
+  'sc.group.clip': '片段',
+  'sc.group.typo': '排版编辑器',
+  'sc.group.param': '参数控件',
+  'sc.group.project': '工程',
+  'sc.group.general': '通用',
+
+  /* ------------------------------------------------ 按键列（含鼠标手势名） */
+  'sc.key.space': 'Space',
+  'sc.key.rulerDrag': '标尺拖动',
+  'sc.key.ctrlWheel': 'Ctrl+滚轮',
+  'sc.key.wheel': '滚轮',
+  'sc.key.drag': '拖动',
+  'sc.key.dragEdge': '拖边',
+  'sc.key.dblClick': '双击片段',
+  'sc.key.s': 'S',
+  'sc.key.altArrows': 'Alt+↑ / Alt+↓',
+  'sc.key.delete': 'Delete',
+  'sc.key.rightClick': '右键',
+  'sc.key.clickShiftClick': '单击 / Shift+单击',
+  'sc.key.dragEmpty': '空白处拖动',
+  'sc.key.dragElement': '拖动元素',
+  'sc.key.arrows': '方向键',
+  'sc.key.ctrlA': 'Ctrl+A',
+  'sc.key.esc': 'Esc',
+  'sc.key.dragNumber': '拖动数字框',
+  'sc.key.ctrlDrag': 'Ctrl 拖动',
+  'sc.key.altDrag': 'Alt 拖动',
+  'sc.key.shiftDrag': 'Shift 拖动',
+  'sc.key.upDown': '↑ / ↓',
+  'sc.key.ctrlS': 'Ctrl+S',
+  'sc.key.ctrlShiftS': 'Ctrl+Shift+S',
+  'sc.key.ctrlZ': 'Ctrl+Z',
+  'sc.key.ctrlShiftZ': 'Ctrl+Shift+Z / Ctrl+Y',
+
+  /* ------------------------------------------------ 描述列 */
+  'sc.playPause': '播放 / 暂停',
+  'sc.scrub': 'scrub 播放头（吸附到当前档位）',
+  'sc.zoomAtCursor': '以鼠标为锚缩放时间轴',
+  'sc.scrollTimeline': '时间轴横向滚动',
+  'sc.moveClip': '移动片段（可跨轨；松手时才套重叠策略）',
+  'sc.resizeClip': '改变片段长度',
+  'sc.openClipEditor': '打开片段编辑器（排版片段打开排版页）',
+  'sc.splitAtPlayhead': '在播放头处切分选中片段',
+  'sc.shiftTrack': '把选中片段上移 / 下移一轨',
+  'sc.deleteClip': '删除选中片段',
+  'sc.newClipAtCursor': '在鼠标位置新建片段',
+  'sc.selectElement': '选中元素 / 加选',
+  'sc.marquee': '框选',
+  'sc.moveElement': '移动（自动吸附参考线；按住 Alt 临时关吸附）',
+  'sc.nudgeElement': '移动 1px（Shift ×10）',
+  'sc.selectAll': '全选元素',
+  'sc.deselect': '取消选择',
+  'sc.playPauseAnim': '播放 / 暂停（驱动 CSS 动画）',
+  'sc.scrubValue': '连续改值',
+  'sc.snapToStep': '吸附到步长整数倍',
+  'sc.fineTune': '精细（灵敏度 ×0.1）',
+  'sc.coarseTune': '粗调（灵敏度 ×10）',
+  'sc.cancelDrag': '取消这次拖动，恢复原值',
+  'sc.stepValue': '按步长增减（Shift ×10）',
+  'sc.saveProject': '保存工程（没有位置时会先问目录）',
+  'sc.saveAs': '另存为（选一个新目录）',
+  'sc.undo': '撤销',
+  'sc.redo': '重做',
+  'sc.closeOverlay': '关闭当前弹层',
+} as const;

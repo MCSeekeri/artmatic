@@ -11,6 +11,8 @@
  *      默认 4 字节对齐会把图剪成每行错一字节的斜纹。
  */
 
+import { tr } from '../i18n/index.svelte';
+
 export const VERT_QUAD = `#version 300 es
 layout(location = 0) in vec2 aPos;
 out vec2 vUv;
@@ -193,7 +195,7 @@ export class Kit {
       preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     });
-    if (!gl) throw new Error('此浏览器没有 WebGL2');
+    if (!gl) throw new Error(tr('err.platform.webgl2'));
     this.gl = gl;
     this.canvas = canvas;
 

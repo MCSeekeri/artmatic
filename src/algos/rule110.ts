@@ -46,35 +46,35 @@ export function elementary(
 
 export const rule110Def: GeneratorDef = {
   id: 'rule110',
-  name: '基本元胞自动机',
+  nameKey: 'algo.rule110',
   kind: 'bake',
   params: [
     {
       key: 'rule',
-      label: '规则',
+      labelKey: 'algo.rule110.rule',
       type: 'select',
       defaultValue: '110',
       options: [
-        { label: 'Rule 30（混沌）', value: '30' },
-        { label: 'Rule 90（分形）', value: '90' },
-        { label: 'Rule 110（图灵完备）', value: '110' },
+        { labelKey: 'algo.rule110.rule30', value: '30' },
+        { labelKey: 'algo.rule110.rule90', value: '90' },
+        { labelKey: 'algo.rule110.rule110', value: '110' },
       ],
     },
-    { key: 'width', label: '宽度', type: 'range', min: 128, max: 2048, step: 64, defaultValue: 1024 },
-    { key: 'height', label: '高度', type: 'range', min: 128, max: 2048, step: 64, defaultValue: 512 },
+    { key: 'width', labelKey: 'algo.rule110.width', type: 'range', min: 128, max: 2048, step: 64, defaultValue: 1024 },
+    { key: 'height', labelKey: 'algo.rule110.height', type: 'range', min: 128, max: 2048, step: 64, defaultValue: 512 },
     {
       key: 'seedMode',
-      label: '种子',
+      labelKey: 'algo.rule110.seedMode',
       type: 'select',
       defaultValue: 'single',
       options: [
-        { label: '单点', value: 'single' },
-        { label: '随机 50%', value: 'random' },
+        { labelKey: 'algo.rule110.seedSingle', value: 'single' },
+        { labelKey: 'algo.rule110.seedRandom', value: 'random' },
       ],
     },
-    { key: 'speed', label: '生长速度(行/秒)', type: 'range', min: 0, max: 400, step: 1, defaultValue: 96 },
-    { key: 'colorBg', label: '背景色', type: 'color', defaultValue: '#05070f' },
-    { key: 'colorLive', label: '活细胞色', type: 'color', defaultValue: '#7fd4ff' },
+    { key: 'speed', labelKey: 'algo.rule110.speed', type: 'range', min: 0, max: 400, step: 1, defaultValue: 96 },
+    { key: 'colorBg', labelKey: 'algo.rule110.colorBg', type: 'color', defaultValue: '#05070f' },
+    { key: 'colorLive', labelKey: 'algo.rule110.colorLive', type: 'color', defaultValue: '#7fd4ff' },
   ],
   bake(params, seed) {
     const w = Math.round(Number(params.width) || 1024);

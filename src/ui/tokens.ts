@@ -26,6 +26,9 @@
 
 /* ------------------------------------------------------------ 类型 */
 
+/** 只借类型，不引运行时 —— tokens 保持「纯数据 + 纯函数」的定位。 */
+import type { MessageKey } from '../i18n/locales';
+
 export type ThemeMode = 'light' | 'dark';
 
 /** 预置品牌色相。注意这是「色相」不是「某个 hex」——亮暗两套取不同明度步进。 */
@@ -153,11 +156,12 @@ export const PRIMITIVES: Record<string, string> = {
 /** 预置品牌的锚点 hex（= 该品牌 500 步）。亮暗模式各自派生到合适的明度，
  *  所以「品牌紫是 #6F64EF」不等于「亮色下 accent 就是 #6F64EF」——亮色下
  *  它会落到更暗的一档以满足对比度。这是设计系统的常规做法，不是笔误。 */
-export const ACCENT_PRESETS: Record<BrandId, { label: string; hex: string }> = {
-  violet: { label: '紫', hex: '#6f64ef' },
-  cyan: { label: '青', hex: '#2b9fd8' },
-  lime: { label: '黄绿', hex: '#6ba03a' },
-  amber: { label: '琥珀', hex: '#d99a1f' },
+/** 品牌名的展示文案走 i18n（`labelKey`），理由见 effects/types.ts 的注释。 */
+export const ACCENT_PRESETS: Record<BrandId, { labelKey: MessageKey; hex: string }> = {
+  violet: { labelKey: 'app.accentViolet', hex: '#6f64ef' },
+  cyan: { labelKey: 'app.accentCyan', hex: '#2b9fd8' },
+  lime: { labelKey: 'app.accentLime', hex: '#6ba03a' },
+  amber: { labelKey: 'app.accentAmber', hex: '#d99a1f' },
 };
 
 export const BRAND_IDS = Object.keys(ACCENT_PRESETS) as BrandId[];

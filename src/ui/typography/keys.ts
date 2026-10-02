@@ -14,6 +14,7 @@
 import { appState } from '../app-state.svelte';
 import { activeElementOwnsSpace } from '../focus';
 import { editorState } from './editor-state.svelte';
+import { tr } from '../../i18n/index.svelte';
 
 export function handleTypographyKey(e: KeyboardEvent): void {
   const ids = editorState.selectedIds;
@@ -32,7 +33,7 @@ export function handleTypographyKey(e: KeyboardEvent): void {
       if (!ids.length) return;
       e.preventDefault();
       const set = new Set(ids);
-      editorState.commit('删除元素', (doc) => {
+      editorState.commit(tr('typo.undo.delete'), (doc) => {
         doc.elements = doc.elements.filter((el) => !set.has(el.id) || el.locked);
       });
       editorState.clearSelection();

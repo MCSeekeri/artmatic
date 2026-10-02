@@ -29,6 +29,7 @@ import { Mp4Sink, MP4_CODEC } from '../exporters/mp4-sink';
 import { PngSequenceSink } from '../exporters/png-sequence';
 import { mixdown } from '../exporters/mixdown';
 import { browserPlatform } from '../platform/browser';
+import { tr } from '../i18n/index.svelte';
 
 export type ExportFormat = 'mp4' | 'png';
 
@@ -88,7 +89,7 @@ function baseName(): string {
 export async function exportMp4(): Promise<void> {
   if (appState.exportProgress !== null) return;
   if (!mp4Supported()) {
-    appState.flash('本机浏览器不支持 WebCodecs，请改用 PNG 序列导出', 'error');
+    appState.flash(tr('err.export.noWebCodecs'), 'error');
     return;
   }
 
@@ -96,7 +97,7 @@ export async function exportMp4(): Promise<void> {
   const audio = mixdown(project, (id) => appState.player.buffer(id));
   if (audio && audio.peak < 1e-4) {
     // 全静音还给用户一个带音轨的 MP4，会让人以为混流坏了。
-    appState.flash('音轨混流结果是静音，本次只导出画面', 'info');
+    appState.flash(tr('err.export.silentAudio'), 'info');
   }
 
   const ctrl = new AbortController();
@@ -114,11 +115,11 @@ export async function exportMp4(): Promise<void> {
       signal: ctrl.signal,
     })) as Blob;
     const size = fmtSize(blob.size);
-    appState.flash(`已导出 MP4 · ${size}`, 'success');
+    appState.flash(tr('err.export.mp4Done', { size }), 'success');
     await browserPlatform.download(blob, `${baseName()}.mp4`);
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
-      appState.flash(`导出失败：${e instanceof Error ? e.message : String(e)}`, 'error');
+      appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');
     }
   } finally {
     appState.exportProgress = null;
@@ -148,7 +149,7 @@ export async function exportPngSequence(): Promise<void> {
     );
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
-      appState.flash(`导出失败：${e instanceof Error ? e.message : String(e)}`, 'error');
+      appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');
     }
   } finally {
     appState.exportProgress = null;

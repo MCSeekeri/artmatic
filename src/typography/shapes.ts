@@ -15,6 +15,7 @@
  */
 
 import type { ShapeKind } from './document';
+import type { MessageKey } from '../i18n/locales';
 
 export interface ShapeGeometry {
   /** 与元素盒一致，所以缩放是 1:1。 */
@@ -120,23 +121,28 @@ export function shapeGeometry(shape: ShapeKind, box: ShapeBox): ShapeGeometry {
   }
 }
 
-/** Ribbon「插入 → 形状」下拉的内容。顺序即展示顺序。 */
+/**
+ * Ribbon「插入 → 形状」下拉的内容。顺序即展示顺序。
+ *
+ * `labelKey` 而不是 `label`：这是一张模块级常量表，直接存字符串等于把语言
+ * 冻结在导入那一刻（见 effects/types.ts 的注释）。
+ */
 export interface ShapePreset {
   key: string;
-  label: string;
+  labelKey: MessageKey;
   id: ShapeKind;
   sides?: number;
   radius?: number;
 }
 
 export const SHAPE_PRESETS: ShapePreset[] = [
-  { key: 'rect', label: '矩形', id: 'rect', radius: 0 },
-  { key: 'round-rect', label: '圆角矩形', id: 'rect', radius: 16 },
-  { key: 'ellipse', label: '椭圆', id: 'ellipse' },
-  { key: 'triangle', label: '三角形', id: 'triangle' },
-  { key: 'star', label: '五角星', id: 'star', sides: 5 },
-  { key: 'hexagon', label: '六边形', id: 'polygon', sides: 6 },
-  { key: 'line', label: '直线', id: 'line' },
+  { key: 'rect', labelKey: 'shape.rect', id: 'rect', radius: 0 },
+  { key: 'round-rect', labelKey: 'shape.roundRect', id: 'rect', radius: 16 },
+  { key: 'ellipse', labelKey: 'shape.ellipse', id: 'ellipse' },
+  { key: 'triangle', labelKey: 'shape.triangle', id: 'triangle' },
+  { key: 'star', labelKey: 'shape.star', id: 'star', sides: 5 },
+  { key: 'hexagon', labelKey: 'shape.hexagon', id: 'polygon', sides: 6 },
+  { key: 'line', labelKey: 'shape.line', id: 'line' },
 ];
 
 /** 判断某个图形是否只该描边（默认填充为 none）。 */

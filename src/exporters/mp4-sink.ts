@@ -29,6 +29,7 @@ import {
 import type { FrameSink, FrameSinkConfigureOptions } from './frame-sink';
 import type { MixedAudio } from './mixdown';
 import { EXPORT_SAMPLE_RATE, toAudioBuffer } from './mixdown';
+import { tr } from '../i18n/index.svelte';
 
 /**
  * 传给 mediabunny 的编码名。
@@ -93,12 +94,12 @@ export class Mp4Sink implements FrameSink {
     opts?: FrameSinkConfigureOptions,
   ): Promise<void> {
     if (codec !== MP4_CODEC) {
-      throw new Error(`Mp4Sink 只支持 ${MP4_CODEC}，收到 ${codec}`);
+      throw new Error(tr('err.export.sinkCodec', { want: MP4_CODEC, got: codec }));
     }
     if (!opts?.canvas) {
       // 不能静默建一个占位 canvas：CanvasSource 在构造时读尺寸并缓存
       // VideoFrame 工厂，尺寸错了症状是画面被 letterbox 或裁切，控制台无提示。
-      throw new Error('Mp4Sink.configure 需要真实 canvas（见 frame-sink 的 FrameSinkConfigureOptions）');
+      throw new Error(tr('err.export.sinkNoCanvas'));
     }
     this.fps = fps;
     this.target = new BufferTarget();
@@ -112,8 +113,12 @@ export class Mp4Sink implements FrameSink {
     // 不一致说明调用方忘了先 setExportSize —— 直接报，不产出一个错尺寸的文件。
     if (canvas.width !== size.w || canvas.height !== size.h) {
       throw new Error(
-        `canvas 尺寸 ${canvas.width}×${canvas.height} 与声明的 ${size.w}×${size.h} 不一致` +
-        `（是不是忘了先 renderer.setExportSize？）`,
+        tr('err.export.canvasSizeMismatch', {
+          cw: canvas.width,
+          ch: canvas.height,
+          dw: size.w,
+          dh: size.h,
+        }),
       );
     }
 
@@ -164,19 +169,19 @@ export class Mp4Sink implements FrameSink {
   }
 
   async submit(frameIndex: number, _source: HTMLCanvasElement): Promise<void> {
-    if (!this.video) throw new Error('configure 还没调用');
+    if (!this.video) throw new Error(tr('err.export.notConfigured'));
     await this.startIfNeeded();
     // 时间戳只在这里算一次：i / fps，duration 固定 1/fps。
     await this.video.add(frameIndex / this.fps, 1 / this.fps);
   }
 
   async finalize(): Promise<Blob> {
-    if (!this.output || !this.target) throw new Error('configure 还没调用');
+    if (!this.output || !this.target) throw new Error(tr('err.export.notConfigured'));
     // 零帧的工程（duration 极短）不会走到 submit，start 得在这里补上。
     await this.startIfNeeded();
     await this.output.finalize();
     const buffer = this.target.buffer;
-    if (!buffer) throw new Error('mediabunny 没有产出 buffer');
+    if (!buffer) throw new Error(tr('err.export.noBuffer'));
     return new Blob([buffer], { type: 'video/mp4' });
   }
 

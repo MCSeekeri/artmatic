@@ -42,6 +42,7 @@ import {
 } from '../../typography/animation';
 import { putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
 import type { ShapePreset } from '../../typography/shapes';
+import { tr } from '../../i18n/index.svelte';
 
 /* ------------------------------------------------------------ 选择集工具 */
 
@@ -139,25 +140,25 @@ export function createTypographyActions(): TypographyActions {
     /* ---------------------------------------------------------- 文本 */
 
     setTextProp(key, value) {
-      editorState.commit('修改文本属性', (doc) => {
+      editorState.commit(tr('typo.undo.textProp'), (doc) => {
         for (const el of onlyText(doc)) el.style = { ...el.style, [key]: value };
       });
     },
 
     setTextAlign(value) {
-      editorState.commit('修改对齐', (doc) => {
+      editorState.commit(tr('typo.undo.textAlign'), (doc) => {
         for (const el of onlyText(doc)) el.style = { ...el.style, align: value };
       });
     },
 
     setVAlign(value) {
-      editorState.commit('修改垂直对齐', (doc) => {
+      editorState.commit(tr('typo.undo.vAlign'), (doc) => {
         for (const el of onlyText(doc)) el.style = { ...el.style, vAlign: value };
       });
     },
 
     toggleTextFlag(flag) {
-      editorState.commit('修改字形', (doc) => {
+      editorState.commit(tr('typo.undo.fontStyle'), (doc) => {
         for (const el of onlyText(doc)) {
           const s = el.style;
           if (flag === 'bold') {
@@ -179,7 +180,7 @@ export function createTypographyActions(): TypographyActions {
     /* ---------------------------------------------------------- 插入 */
 
     addText() {
-      editorState.commit('添加文本框', (doc) => {
+      editorState.commit(tr('typo.undo.addText'), (doc) => {
         const el = createTextElement(doc.size);
         doc.elements = [...doc.elements, el];
         queueMicrotask(() => editorState.selectOnly(el.id));
@@ -187,7 +188,7 @@ export function createTypographyActions(): TypographyActions {
     },
 
     addShape(preset) {
-      editorState.commit('插入图形', (doc) => {
+      editorState.commit(tr('typo.undo.addShape'), (doc) => {
         const el = createShapeElement(doc.size, preset.id, {
           radius: preset.radius,
           sides: preset.sides,
@@ -212,10 +213,10 @@ export function createTypographyActions(): TypographyActions {
           name: picked.name,
           originName: picked.name,
         });
-        appState.store.commit('登记图片素材', (p) => {
+        appState.store.commit(tr('typo.undo.registerImageAsset'), (p) => {
           p.assets[assetId] = { id: assetId, kind: 'image', name: picked.name };
         });
-        editorState.commit('插入图片', (doc) => {
+        editorState.commit(tr('typo.undo.addImage'), (doc) => {
           const el = createImageElement(doc.size, assetId, { name: picked.name });
           doc.elements = [...doc.elements, el];
           queueMicrotask(() => editorState.selectOnly(el.id));
@@ -226,19 +227,19 @@ export function createTypographyActions(): TypographyActions {
     /* ---------------------------------------------------- 通用属性 */
 
     setBlend(value) {
-      editorState.commit('修改混合模式', (doc) => {
+      editorState.commit(tr('typo.undo.blend'), (doc) => {
         for (const el of anyElement(doc)) el.blend = value;
       });
     },
 
     setOpacity(value) {
-      editorState.commit('修改不透明度', (doc) => {
+      editorState.commit(tr('typo.undo.opacity'), (doc) => {
         for (const el of anyElement(doc)) el.opacity = Math.max(0, Math.min(1, value));
       });
     },
 
     toggleFlag(key) {
-      editorState.commit(key === 'locked' ? '切换锁定' : '切换隐藏', (doc) => {
+      editorState.commit(key === 'locked' ? tr('typo.undo.lock') : tr('typo.undo.hide'), (doc) => {
         for (const el of writable(doc)) el[key] = !el[key];
       });
     },
@@ -257,7 +258,7 @@ export function createTypographyActions(): TypographyActions {
         copy.animations = copy.animations.map((a) => ({ ...a, id: newId() }));
         fresh.push(copy);
       }
-      editorState.commit('复制元素', (doc) => {
+      editorState.commit(tr('typo.undo.duplicate'), (doc) => {
         doc.elements = [...doc.elements, ...fresh];
         queueMicrotask(() => editorState.setSelection(fresh.map((e) => e.id)));
       });
@@ -266,7 +267,7 @@ export function createTypographyActions(): TypographyActions {
     deleteSelection() {
       const ids = new Set(selectedIds());
       if (!ids.size) return;
-      editorState.commit('删除元素', (doc) => {
+      editorState.commit(tr('typo.undo.delete'), (doc) => {
         doc.elements = doc.elements.filter((el) => !ids.has(el.id) || el.locked);
       });
       editorState.clearSelection();
@@ -280,13 +281,13 @@ export function createTypographyActions(): TypographyActions {
     /* ---------------------------------------------------------- 图形 */
 
     setShapeFill(color) {
-      editorState.commit('修改填充', (doc) => {
+      editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
         for (const el of onlyShape(doc)) el.fill = { kind: 'solid', color };
       });
     },
 
     setShapeStroke(color) {
-      editorState.commit('修改描边', (doc) => {
+      editorState.commit(tr('typo.undo.shapeStroke'), (doc) => {
         for (const el of onlyShape(doc)) {
           el.stroke = el.stroke ? { ...el.stroke, color } : { color, width: 4, style: 'solid' };
         }
@@ -294,7 +295,7 @@ export function createTypographyActions(): TypographyActions {
     },
 
     setShapeStrokeWidth(width) {
-      editorState.commit('修改描边宽度', (doc) => {
+      editorState.commit(tr('typo.undo.strokeWidth'), (doc) => {
         for (const el of onlyShape(doc)) {
           if (!el.stroke) continue;
           el.stroke = { ...el.stroke, width: Math.max(0, width) };
@@ -303,7 +304,7 @@ export function createTypographyActions(): TypographyActions {
     },
 
     setShapeStrokeStyle(style) {
-      editorState.commit('修改线型', (doc) => {
+      editorState.commit(tr('typo.undo.strokeStyle'), (doc) => {
         for (const el of onlyShape(doc)) {
           el.stroke = el.stroke ? { ...el.stroke, style } : { color: '#ffffff', width: 4, style };
         }
@@ -311,7 +312,7 @@ export function createTypographyActions(): TypographyActions {
     },
 
     setShapeRadius(radius) {
-      editorState.commit('修改圆角', (doc) => {
+      editorState.commit(tr('typo.undo.radius'), (doc) => {
         for (const el of onlyShape(doc)) el.radius = Math.max(0, radius);
       });
     },
@@ -319,7 +320,7 @@ export function createTypographyActions(): TypographyActions {
     /* ---------------------------------------------------------- 图片 */
 
     setImageFit(value) {
-      editorState.commit('修改图片适配', (doc) => {
+      editorState.commit(tr('typo.undo.imageFit'), (doc) => {
         for (const el of onlyImage(doc)) el.fit = value;
       });
     },
@@ -334,7 +335,7 @@ export function createTypographyActions(): TypographyActions {
         const axisShort = axis === 'distribute-h' ? 'h' : 'v';
         const map = distribute(rects, axisShort);
         if (!map.size) return;
-        editorState.commit('分布元素', (doc) => {
+        editorState.commit(tr('typo.undo.distribute'), (doc) => {
           for (const el of anyElement(doc)) {
             const v = map.get(el.id);
             if (v === undefined) continue;
@@ -346,7 +347,7 @@ export function createTypographyActions(): TypographyActions {
       }
 
       const map = alignElements(rects, targetRect(), axis);
-      editorState.commit('对齐元素', (doc) => {
+      editorState.commit(tr('typo.undo.align'), (doc) => {
         for (const el of anyElement(doc)) {
           const p = map.get(el.id);
           if (!p) continue;
@@ -363,7 +364,7 @@ export function createTypographyActions(): TypographyActions {
     /* ---------------------------------------------------------- 动画 */
 
     applyPreset(preset) {
-      editorState.commit('添加动画', (doc) => {
+      editorState.commit(tr('typo.undo.addAnim'), (doc) => {
         for (const el of anyElement(doc)) {
           const anim = createPresetAnimation(preset, newId());
           el.animations = [...el.animations, anim];
@@ -372,13 +373,13 @@ export function createTypographyActions(): TypographyActions {
     },
 
     clearAnimations() {
-      editorState.commit('清除动画', (doc) => {
+      editorState.commit(tr('typo.undo.clearAnim'), (doc) => {
         for (const el of anyElement(doc)) el.animations = [];
       });
     },
 
     setAnimTiming(patch) {
-      editorState.commit('修改动画时序', (doc) => {
+      editorState.commit(tr('typo.undo.animTiming'), (doc) => {
         for (const el of anyElement(doc)) {
           el.animations = el.animations.map((a) => ({ ...a, ...patch }));
         }
@@ -390,7 +391,7 @@ export function createTypographyActions(): TypographyActions {
       // animationStyleSheet 会跳过它，但用户已经以为「保存成功」了。
       const body = sanitizeKeyframeBody(css);
       if (!body) return false;
-      editorState.commit('设置自定义动画', (doc) => {
+      editorState.commit(tr('typo.undo.customAnim'), (doc) => {
         for (const el of anyElement(doc)) {
           const prev = el.animations[0];
           // 继承上一段动画的时序，否则用户手写一段 keyframes 之后时长会跳回
@@ -428,8 +429,8 @@ export function createTypographyActions(): TypographyActions {
         appState.refreshFontFamilies();
         appState.flash(
           ok === picked.length
-            ? `已导入 ${ok} 个字体`
-            : `导入 ${ok}/${picked.length} 个字体（其余不是有效的字体文件）`,
+            ? tr('typo.fontsImported', { ok })
+            : tr('typo.fontsImportedPartial', { ok, total: picked.length }),
         );
       })();
     },
@@ -442,7 +443,7 @@ export function createTypographyActions(): TypographyActions {
         const canvas = await appState.textRaster.rasterizeOnce(doc, doc.size.w, doc.size.h, localSec);
         const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'));
         if (!blob) {
-          appState.flash('烘焙失败：浏览器没能把画布编码成 PNG', 'error');
+          appState.flash(tr('typo.bakeFailed'), 'error');
           return;
         }
         const assetId = newId();
@@ -450,16 +451,16 @@ export function createTypographyActions(): TypographyActions {
         putImageBytes(assetId, bytes.buffer, 'image/png');
         appState.assets.put(assetId, bytes, {
           kind: 'image',
-          name: '排版烘焙.png',
+          name: tr('typo.bakedName'),
           originName: 'flatten.png',
         });
-        appState.store.updateClip(clipId, '排版转为图片', (clip) => {
+        appState.store.updateClip(clipId, tr('typo.undo.flatten'), (clip) => {
           if (clip.kind === 'source' && clip.source.type === 'text') {
             clip.source = { type: 'image', assetId };
           }
         });
-        appState.store.commit('登记图片素材', (p) => {
-          p.assets[assetId] = { id: assetId, kind: 'image', name: '排版烘焙.png' };
+        appState.store.commit(tr('typo.undo.registerImageAsset'), (p) => {
+          p.assets[assetId] = { id: assetId, kind: 'image', name: tr('typo.bakedName') };
         });
         // 源已经不是 text 了，编辑页必须关掉 —— 留着会指向一个不存在的文档。
         appState.closeTypographyView();

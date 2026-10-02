@@ -16,6 +16,7 @@
   import { appState } from './app-state.svelte';
   import { newProject } from './project-actions';
   import { tip } from './tip';
+  import { tr } from '../i18n/index.svelte';
 
   /** 待确认的关闭动作；非 null 时弹确认框。 */
   let pendingClose = $state<{ id: string; name: string } | null>(null);
@@ -40,7 +41,7 @@
     return appState.projects.map((p, i) => ({
       i,
       id: p.id,
-      name: p.store.project.name || '未命名工程',
+      name: p.store.project.name || tr('proj.unnamed'),
       dirty: p.savedVersion !== p.store.version,
       inTypo: p.view.kind === 'typography',
       active: p.id === appState.activeProjectId,
@@ -54,7 +55,7 @@
   function requestClose(id: string, name: string): void {
     const r = appState.closeProject(id);
     if (r === 'dirty') pendingClose = { id, name };
-    else if (r === 'missing') appState.flash('这份工程已经不在了', 'error');
+    else if (r === 'missing') appState.flash(tr('app.projectGone'), 'error');
   }
 
   function confirmClose(): void {
@@ -69,7 +70,7 @@
     <Brand variant="word" size={15} />
   </span>
 
-  <div class="tabs" role="tablist" aria-label="打开的工程">
+  <div class="tabs" role="tablist" aria-label={tr('app.openProjects')}>
     {#each tabs as t (t.id)}
       <div
         class="tab"
@@ -89,7 +90,7 @@
           {/if}
           <span class="tab-name">{t.name}</span>
           {#if t.dirty}
-            <span class="dot" title="有未保存改动" data-testid={`project-tab-dirty-${t.i}`}></span>
+            <span class="dot" title={tr('app.unsavedChanges')} data-testid={`project-tab-dirty-${t.i}`}></span>
           {/if}
         </button>
 
@@ -99,7 +100,7 @@
           <button
             type="button"
             class="tab-mini"
-            aria-label="回到时间轴"
+            aria-label={tr('app.backToTimeline')}
             data-testid={`project-tab-timeline-${t.i}`}
             onclick={() => appState.closeTypographyView(t.id)}
           >
@@ -110,7 +111,7 @@
         <button
           type="button"
           class="tab-mini"
-          aria-label={`关闭 ${t.name}`}
+          aria-label={tr('app.closeProjectTab', { name: t.name })}
           data-testid={`project-tab-close-${t.i}`}
           onclick={() => requestClose(t.id, t.name)}
         >
@@ -122,9 +123,9 @@
     <button
       type="button"
       class="ic-btn sm new-project"
-      aria-label="新建工程"
+      aria-label={tr('app.newProject')}
       data-testid="topbar-new-project"
-      use:tip={{ text: '新建工程（在同一页里再开一份）' }}
+      use:tip={{ text: tr('app.newProjectTip') }}
       onclick={() => void newProject(false)}
     >
       <Icon name="plus" size={12} />
@@ -134,10 +135,10 @@
 
 {#if pendingClose}
   <ConfirmDialog
-    title="放弃未保存的改动？"
-    message={`「${pendingClose.name}」有未保存的改动。关闭之后这些改动就找不回来了。`}
-    confirmLabel="放弃改动并关闭"
-    cancelLabel="返回"
+    title={tr('app.discardTitle')}
+    message={tr('app.discardMessage', { name: pendingClose.name })}
+    confirmLabel={tr('app.discardConfirm')}
+    cancelLabel={tr('app.back')}
     danger
     testid="confirm-close-project"
     onconfirm={confirmClose}

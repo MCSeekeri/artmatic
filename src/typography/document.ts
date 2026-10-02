@@ -16,6 +16,8 @@
 
 import { newId } from '../core/schema';
 import type { ElementAnimation } from './animation';
+import { tr } from '../i18n/index.svelte';
+import type { MessageKey } from '../i18n/locales';
 
 /**
  * 元素动画的类型定义在 animation.ts —— 那边需要 TypographyDocument，两边
@@ -62,23 +64,24 @@ export type MixBlend =
   | 'color'
   | 'luminosity';
 
-export const MIX_BLENDS: { id: MixBlend; label: string }[] = [
-  { id: 'normal', label: '正常' },
-  { id: 'multiply', label: '正片叠底' },
-  { id: 'screen', label: '滤色' },
-  { id: 'overlay', label: '叠加' },
-  { id: 'darken', label: '变暗' },
-  { id: 'lighten', label: '变亮' },
-  { id: 'color-dodge', label: '颜色减淡' },
-  { id: 'color-burn', label: '颜色加深' },
-  { id: 'hard-light', label: '强光' },
-  { id: 'soft-light', label: '柔光' },
-  { id: 'difference', label: '差值' },
-  { id: 'exclusion', label: '排除' },
-  { id: 'hue', label: '色相' },
-  { id: 'saturation', label: '饱和度' },
-  { id: 'color', label: '颜色' },
-  { id: 'luminosity', label: '明度' },
+/** 混合模式表。存文案键而非字符串 —— 理由见 effects/types.ts 的注释。 */
+export const MIX_BLENDS: { id: MixBlend; labelKey: MessageKey }[] = [
+  { id: 'normal', labelKey: 'blend.normal' },
+  { id: 'multiply', labelKey: 'blend.multiply' },
+  { id: 'screen', labelKey: 'blend.screen' },
+  { id: 'overlay', labelKey: 'blend.overlay' },
+  { id: 'darken', labelKey: 'blend.darken' },
+  { id: 'lighten', labelKey: 'blend.lighten' },
+  { id: 'color-dodge', labelKey: 'blend.colorDodge' },
+  { id: 'color-burn', labelKey: 'blend.colorBurn' },
+  { id: 'hard-light', labelKey: 'blend.hardLight' },
+  { id: 'soft-light', labelKey: 'blend.softLight' },
+  { id: 'difference', labelKey: 'blend.difference' },
+  { id: 'exclusion', labelKey: 'blend.exclusion' },
+  { id: 'hue', labelKey: 'blend.hue' },
+  { id: 'saturation', labelKey: 'blend.saturation' },
+  { id: 'color', labelKey: 'blend.color' },
+  { id: 'luminosity', labelKey: 'blend.luminosity' },
 ];
 
 export interface TextureFrame {
@@ -269,10 +272,10 @@ export function createTextElement(size: Size, over: Partial<TextElement> = {}): 
   const base = baseDefaults(size, over);
   return {
     ...base,
-    name: over.name ?? '文本',
+    name: over.name ?? tr('typo.defaultTextName'),
     frame: over.frame ?? defaultTextFrame(size),
     kind: 'text',
-    text: over.text ?? '双击编辑文本',
+    text: over.text ?? tr('typo.defaultText'),
     style: over.style ?? defaultTextStyle(size),
     autoHeight: over.autoHeight ?? true,
   };
@@ -290,7 +293,7 @@ export function createShapeElement(
   const line = defaultShapeFrame(size);
   return {
     ...base,
-    name: over.name ?? 'shape',
+    name: over.name ?? tr('typo.defaultShapeName'),
     frame:
       over.frame ??
       (strokeOnly ? { ...line, y: Math.round(size.h / 2) - 1, h: 2 } : line),
@@ -312,7 +315,7 @@ export function createImageElement(
   const base = baseDefaults(size, over);
   return {
     ...base,
-    name: over.name ?? '图片',
+    name: over.name ?? tr('typo.defaultImageName'),
     kind: 'image',
     assetId,
     fit: over.fit ?? 'cover',

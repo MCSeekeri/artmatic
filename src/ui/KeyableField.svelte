@@ -25,6 +25,7 @@
   import { appState } from './app-state.svelte';
   import { evalCurve, type Curve } from '../core/curve';
   import { beatAtTime, snapBeat, timeAtBeat } from '../core/time';
+  import { tr } from '../i18n/index.svelte';
 
   interface Props {
     label: string;
@@ -90,9 +91,9 @@
   const keyTip = $derived(
     curve
       ? keyHereIndex >= 0
-        ? '删除播放头处的关键帧'
-        : '在播放头处打关键帧'
-      : '创建曲线并打第一个关键帧',
+        ? tr('ctl.keyframeTipDelete')
+        : tr('ctl.keyframeTipAdd')
+      : tr('ctl.keyframeTipCreate'),
   );
 </script>
 
@@ -111,7 +112,7 @@
     {max}
     {step}
     width={58}
-    ariaLabel={`${label} 数值`}
+    ariaLabel={tr('ctl.valueAria', { label })}
     oninput={slide}
     onchange={slide}
   />
@@ -131,8 +132,8 @@
   <div class="keys">
     <Checkbox
       checked={!!curve.beatAnchor}
-      label="锚到拍"
-      tipText="锚到拍：改 BPM/offset 时卡点自动跟随"
+      label={tr('insp.anchorBeat')}
+      tipText={tr('insp.anchorTip')}
       testid="anchor-beat"
       onchange={(v) =>
         onAnchorChange(
@@ -145,7 +146,7 @@
           type="button"
           class="key"
           data-testid="curve-key"
-          title="点击删除这个关键帧"
+          title={tr('ctl.keyframeDeleteTip')}
           onclick={() => onRemoveKey(i)}
         >
           {k.t.toFixed(2)}s={k.v.toFixed(2)}
@@ -153,7 +154,7 @@
       {/each}
       <IconButton
         icon="trash"
-        label="删除整条曲线（回到固定基值）"
+        label={tr('ctl.clearCurve')}
         size="sm"
         variant="danger"
         testid="curve-clear"

@@ -23,6 +23,7 @@ import {
   type ZOrderOp,
 } from '../../typography/document';
 import { boundsOf, toRects, type Guide, type Rect } from '../../typography/geometry';
+import { tr } from '../../i18n/index.svelte';
 
 /** 在工程里找到某个排版片段的文档。找不到返回 null（片段可能刚被删）。 */
 export function findTextDoc(project: Project, clipId: string): TypographyDocument | null {
@@ -226,7 +227,7 @@ class TypographyEditorState {
   nudge(dx: number, dy: number): void {
     const ids = new Set(this.selectedIds);
     if (!ids.size) return;
-    this.commit('移动元素', (doc) => {
+    this.commit(tr('typo.undo.move'), (doc) => {
       for (const el of doc.elements) {
         if (!ids.has(el.id) || el.locked) continue;
         el.frame.x += dx;
@@ -242,7 +243,7 @@ class TypographyEditorState {
   order(op: ZOrderOp): void {
     const ids = this.selectedIds;
     if (!ids.length) return;
-    this.commit('调整层级', (doc) => {
+    this.commit(tr('typo.undo.order'), (doc) => {
       const next = reorderElements(doc, ids, op);
       doc.elements = next.elements;
     });

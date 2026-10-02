@@ -8,6 +8,7 @@
  */
 
 import type { ParamDef } from '../effects/types';
+import type { MessageKey } from '../i18n/locales';
 
 export interface BakeResult {
   data: Uint8Array;
@@ -33,7 +34,8 @@ export type SimFactory = (params: Record<string, number | string>, seed: number)
 
 interface GeneratorBase {
   id: string;
-  name: string;
+  /** 展示名。存的是**文案键**而不是字符串——理由见 effects/types.ts 的注释。 */
+  nameKey: MessageKey;
   params: ParamDef[];
 }
 

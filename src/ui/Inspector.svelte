@@ -20,17 +20,22 @@
   import { getGenerator } from '../algos/registry';
   import { defaultEffectValues, getEffect, listEffects } from '../effects/registry';
   import type { RangeParam } from '../effects/types';
+  import { tr } from '../i18n/index.svelte';
 
   const effectsList = listEffects();
-  const effectOptions = effectsList.map((e) => ({ value: e.id, label: e.name }));
-  const blendOptions = BLEND_MODES.map((m) => ({ value: m.id, label: m.label }));
-  const fitOptions = ['contain', 'cover', 'stretch'].map((v) => ({ value: v as SourceClip['fit'], label: v }));
+  const effectOptions = effectsList.map((e) => ({ value: e.id, label: tr(e.nameKey) }));
+  const blendOptions = BLEND_MODES.map((m) => ({ value: m.id, label: tr(m.labelKey) }));
+  const fitOptions = [
+    { value: 'contain' as const, label: tr('insp.fitContain') },
+    { value: 'cover' as const, label: tr('insp.fitCover') },
+    { value: 'stretch' as const, label: tr('insp.fitStretch') },
+  ] satisfies { value: SourceClip['fit']; label: string }[];
 
   let addChoice = $state(effectsList[0]?.id ?? '');
 
   function addEffectInstance(clip: AnyClip): void {
     if (!addChoice) return;
-    upd(clip, '添加特效', (c) => {
+    upd(clip, tr('insp.addEffect'), (c) => {
       if (c.kind !== 'effect') return;
       c.chain.push({
         instanceId: newId(),
@@ -42,13 +47,13 @@
   }
 
   function removeInstance(clip: AnyClip, instanceId: string): void {
-    upd(clip, '删除特效', (c) => {
+    upd(clip, tr('insp.removeEffect'), (c) => {
       if (c.kind === 'effect') c.chain = c.chain.filter((i) => i.instanceId !== instanceId);
     });
   }
 
   function moveInstance(clip: AnyClip, instanceId: string, dir: -1 | 1): void {
-    upd(clip, '调整特效顺序', (c) => {
+    upd(clip, tr('insp.reorderEffect'), (c) => {
       if (c.kind !== 'effect') return;
       const idx = c.chain.findIndex((i) => i.instanceId === instanceId);
       const to = idx + dir;
@@ -59,7 +64,7 @@
   }
 
   function setEffectParam(clip: AnyClip, inst: EffectInstance, key: string, v: number | string): void {
-    upd(clip, '修改特效参数', (c) => {
+    upd(clip, tr('insp.editEffectParam'), (c) => {
       if (c.kind !== 'effect') return;
       const it = c.chain.find((i) => i.instanceId === inst.instanceId);
       if (it) it.values[key] = v;
@@ -74,19 +79,19 @@
       clipStart: clip.start,
       onBase: (v: number) => setEffectParam(clip, inst, p.key, v),
       onKey: (v: number, anchor: { beat: number } | null) =>
-        upd(clip, '打关键帧', (c) => upsertCurveKey(c, curveKey, v, appState.playT, anchor, appState.project.beatGrid)),
+        upd(clip, tr('insp.keyframe'), (c) => upsertCurveKey(c, curveKey, v, appState.playT, anchor, appState.project.beatGrid)),
       onRemoveKey: (i: number) =>
-        upd(clip, '删除关键帧', (c) => {
+        upd(clip, tr('insp.removeKeyframe'), (c) => {
           const cv = c.curves[curveKey];
           if (cv) cv.keys = cv.keys.filter((_, k) => k !== i);
         }),
       onAnchorChange: (anchor: { beat: number } | null) =>
-        upd(clip, '切换锚到拍', (c) => {
+        upd(clip, tr('insp.toggleAnchor'), (c) => {
           const cv = c.curves[curveKey];
           if (cv) cv.beatAnchor = anchor;
         }),
       onClearCurve: () =>
-        upd(clip, '清除曲线', (c) => {
+        upd(clip, tr('insp.clearCurve'), (c) => {
           delete c.curves[curveKey];
         }),
     };
@@ -101,7 +106,7 @@
   }
 
   function setAlgoParam(clip: AnyClip, key: string, v: number | string): void {
-    upd(clip, '修改参数', (c) => {
+    upd(clip, tr('insp.editParam'), (c) => {
       if (c.kind === 'source' && c.source.type === 'algo') c.source.params[key] = v;
     });
   }
@@ -116,19 +121,19 @@
       clipStart: clip.start,
       onBase: (v: number) => setAlgoParam(clip, p.key, v),
       onKey: (v: number, anchor: { beat: number } | null) =>
-        upd(clip, '打关键帧', (c) => upsertCurveKey(c, p.key, v, appState.playT, anchor, appState.project.beatGrid)),
+        upd(clip, tr('insp.keyframe'), (c) => upsertCurveKey(c, p.key, v, appState.playT, anchor, appState.project.beatGrid)),
       onRemoveKey: (i: number) =>
-        upd(clip, '删除关键帧', (c) => {
+        upd(clip, tr('insp.removeKeyframe'), (c) => {
           const cv = c.curves[p.key];
           if (cv) cv.keys = cv.keys.filter((_, idx) => idx !== i);
         }),
       onAnchorChange: (anchor: { beat: number } | null) =>
-        upd(clip, '切换锚到拍', (c) => {
+        upd(clip, tr('insp.toggleAnchor'), (c) => {
           const cv = c.curves[p.key];
           if (cv) cv.beatAnchor = anchor;
         }),
       onClearCurve: () =>
-        upd(clip, '清除曲线', (c) => {
+        upd(clip, tr('insp.clearCurve'), (c) => {
           delete c.curves[p.key];
         }),
     };
@@ -164,21 +169,21 @@
       base: baseOf(clip, key),
       curve: clip.curves[key],
       clipStart: clip.start,
-      onBase: (v: number) => upd(clip, '修改参数', (c) => setBase(c, key, v)),
+      onBase: (v: number) => upd(clip, tr('insp.editParam'), (c) => setBase(c, key, v)),
       onKey: (v: number, anchor: { beat: number } | null) =>
-        upd(clip, '打关键帧', (c) => upsertCurveKey(c, key, v, appState.playT, anchor, appState.project.beatGrid)),
+        upd(clip, tr('insp.keyframe'), (c) => upsertCurveKey(c, key, v, appState.playT, anchor, appState.project.beatGrid)),
       onRemoveKey: (i: number) =>
-        upd(clip, '删除关键帧', (c) => {
+        upd(clip, tr('insp.removeKeyframe'), (c) => {
           const cv = c.curves[key];
           if (cv) cv.keys = cv.keys.filter((_, idx) => idx !== i);
         }),
       onAnchorChange: (anchor: { beat: number } | null) =>
-        upd(clip, '切换锚到拍', (c) => {
+        upd(clip, tr('insp.toggleAnchor'), (c) => {
           const cv = c.curves[key];
           if (cv) cv.beatAnchor = anchor;
         }),
       onClearCurve: () =>
-        upd(clip, '清除曲线', (c) => {
+        upd(clip, tr('insp.clearCurve'), (c) => {
           delete c.curves[key];
         }),
     };
@@ -190,20 +195,20 @@
     {@const clip = found.clip}
     {@const track = found.track}
     <h3>
-      {clip.kind === 'source' ? '画面片段' : clip.kind === 'effect' ? '特效片段' : '音频片段'}
+      {tr(clip.kind === 'source' ? 'insp.clipKindSource' : clip.kind === 'effect' ? 'insp.clipKindEffect' : 'insp.clipKindAudio')}
       <span class="track-name">{track.name}</span>
     </h3>
 
-    <Field label="名称">
+    <Field label={tr('insp.name')}>
       <input
         class="txt"
         data-testid="clip-label"
         value={clip.label}
-        onchange={(e) => upd(clip, '重命名', (c) => (c.label = e.currentTarget.value))}
+        onchange={(e) => upd(clip, tr('common.rename'), (c) => (c.label = e.currentTarget.value))}
       />
     </Field>
 
-    <Field label="起点">
+    <Field label={tr('insp.start')}>
       <NumberInput
         value={clip.start}
         min={0}
@@ -211,9 +216,9 @@
         width={64}
         suffix="s"
         testid="clip-start"
-        onchange={(v) => upd(clip, '改起点', (c) => (c.start = Math.max(0, Math.min(v, c.end - 0.05))))}
+        onchange={(v) => upd(clip, tr('insp.changeStart'), (c) => (c.start = Math.max(0, Math.min(v, c.end - 0.05))))}
       />
-      <span class="dim">终点</span>
+      <span class="dim">{tr('insp.end')}</span>
       <NumberInput
         value={clip.end}
         min={0}
@@ -222,11 +227,11 @@
         suffix="s"
         testid="clip-end"
         onchange={(v) =>
-          upd(clip, '改终点', (c) => (c.end = Math.min(appState.project.duration, Math.max(v, c.start + 0.05))))}
+          upd(clip, tr('insp.changeEnd'), (c) => (c.end = Math.min(appState.project.duration, Math.max(v, c.start + 0.05))))}
       />
     </Field>
 
-    <Field label="淡变">
+    <Field label={tr('insp.fade')}>
       <NumberInput
         value={clip.fadeSec}
         min={0}
@@ -234,52 +239,52 @@
         width={64}
         suffix="s"
         testid="clip-fade"
-        onchange={(v) => upd(clip, '改淡变', (c) => (c.fadeSec = Math.max(0, v)))}
+        onchange={(v) => upd(clip, tr('insp.changeFade'), (c) => (c.fadeSec = Math.max(0, v)))}
       />
     </Field>
 
     {#if clip.kind === 'source'}
-      <Field label="混合">
+      <Field label={tr('insp.blend')}>
         <Select
           value={clip.blend}
           options={blendOptions}
           testid="clip-blend"
           optionTestidPrefix="clip-blend-opt"
           onchange={(v) =>
-            upd(clip, '改混合模式', (c) => {
+            upd(clip, tr('insp.changeBlend'), (c) => {
               if (c.kind === 'source') c.blend = v as BlendMode;
             })}
         />
       </Field>
-      <Field label="适配">
+      <Field label={tr('insp.fit')}>
         <Select
           value={clip.fit}
           options={fitOptions}
           testid="clip-fit"
           optionTestidPrefix="clip-fit-opt"
           onchange={(v) =>
-            upd(clip, '改适配', (c) => {
+            upd(clip, tr('insp.changeFit'), (c) => {
               if (c.kind === 'source') c.fit = v;
             })}
         />
       </Field>
 
-      <KeyableField label="不透明度" min={0} max={1} step={0.01} {...keyableProps(clip, 'opacity')} />
-      <KeyableField label="位置 X" min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.x')} />
-      <KeyableField label="位置 Y" min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.y')} />
-      <KeyableField label="缩放 X" min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sx')} />
-      <KeyableField label="缩放 Y" min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sy')} />
-      <KeyableField label="旋转" min={-3.1416} max={3.1416} step={0.01} {...keyableProps(clip, 'transform.rot')} />
+      <KeyableField label={tr('insp.opacity')} min={0} max={1} step={0.01} {...keyableProps(clip, 'opacity')} />
+      <KeyableField label={tr('insp.posX')} min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.x')} />
+      <KeyableField label={tr('insp.posY')} min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.y')} />
+      <KeyableField label={tr('insp.scaleX')} min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sx')} />
+      <KeyableField label={tr('insp.scaleY')} min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sy')} />
+      <KeyableField label={tr('insp.rotate')} min={-3.1416} max={3.1416} step={0.01} {...keyableProps(clip, 'transform.rot')} />
 
       {#if clip.source.type === 'solid'}
-        <Field label="颜色">
+        <Field label={tr('insp.color')}>
           <input
             class="color"
             type="color"
             data-testid="clip-color"
             value={clip.source.color}
             oninput={(e) =>
-              upd(clip, '改颜色', (c) => {
+              upd(clip, tr('insp.changeColor'), (c) => {
                 if (c.kind === 'source' && c.source.type === 'solid') c.source.color = e.currentTarget.value;
               })}
           />
@@ -287,21 +292,21 @@
         </Field>
       {:else if clip.source.type === 'algo'}
         {@const def = getGenerator(clip.source.generator)}
-        <p class="note">算法生成器：{def?.name ?? clip.source.generator}</p>
+        <p class="note">{tr('insp.algoGenerator', { name: def ? tr(def.nameKey) : clip.source.generator })}</p>
         {#if def}
           {#each def.params as p (p.key)}
             {#if p.type === 'range'}
               {#if keyframable(def.kind, p.key)}
-                <KeyableField label={p.label} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
+                <KeyableField label={tr(p.labelKey)} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
               {:else}
                 <!-- 烘焙入参：改了要重烘，所以不能打关键帧（每帧重烘会卡死） -->
-                <Field label={p.label} tipText={`${p.label}（烘焙入参，不可打关键帧）`}>
+                <Field label={tr(p.labelKey)} tipText={tr('insp.bakedParamTip', { label: tr(p.labelKey) })}>
                   <Slider
                     min={p.min}
                     max={p.max}
                     step={p.step}
                     value={Number(clip.source.params[p.key] ?? p.defaultValue)}
-                    ariaLabel={p.label}
+                    ariaLabel={tr(p.labelKey)}
                     testid="bake-param-slider"
                     oninput={(v) => setAlgoParam(clip, p.key, v)}
                   />
@@ -318,17 +323,17 @@
                 </Field>
               {/if}
             {:else if p.type === 'select'}
-              <Field label={p.label}>
+              <Field label={tr(p.labelKey)}>
                 <Select
                   value={String(clip.source.params[p.key] ?? p.defaultValue)}
-                  options={p.options.map((o) => ({ value: o.value, label: o.label }))}
+                  options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
                   testid={`algo-param-${p.key}`}
                   optionTestidPrefix={`algo-param-${p.key}-opt`}
                   onchange={(v) => setAlgoParam(clip, p.key, v)}
                 />
               </Field>
             {:else if p.type === 'color'}
-              <Field label={p.label}>
+              <Field label={tr(p.labelKey)}>
                 <input
                   class="color"
                   type="color"
@@ -340,10 +345,10 @@
           {/each}
         {/if}
       {:else if clip.source.type === 'image'}
-        <p class="note">图片素材：{appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId}</p>
+        <p class="note">{tr('insp.imageAsset', { name: appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId })}</p>
       {/if}
     {:else if clip.kind === 'effect'}
-      <Field label="添加特效">
+      <Field label={tr('insp.addEffect')}>
         <Select
           value={addChoice}
           options={effectOptions}
@@ -352,7 +357,7 @@
           onchange={(v) => (addChoice = v)}
         />
         <Button
-          label="添加"
+          label={tr('common.add')}
           icon="plus"
           testid="add-effect-instance"
           onclick={() => addEffectInstance(clip)}
@@ -360,7 +365,7 @@
       </Field>
 
       {#if clip.chain.length === 0}
-        <p class="note">空链：从上面添加特效。特效只作用于 z 序在它之下的画面（adjustment layer）。</p>
+        <p class="note">{tr('insp.emptyChain')}</p>
       {/if}
 
       {#each clip.chain as inst, idx (inst.instanceId)}
@@ -369,20 +374,20 @@
           <div class="fx-head">
             <Checkbox
               checked={inst.enabled}
-              tipText="启用 / 禁用这个特效实例"
+              tipText={tr('insp.effectEnableTip')}
               testid="effect-enabled"
               onchange={(v) =>
-                upd(clip, '切换特效', (c) => {
+                upd(clip, tr('insp.toggleEffect'), (c) => {
                   if (c.kind === 'effect') {
                     const it = c.chain.find((x) => x.instanceId === inst.instanceId);
                     if (it) it.enabled = v;
                   }
                 })}
             />
-            <span class="fx-name">{entry?.name ?? inst.defId}</span>
+            <span class="fx-name">{entry ? tr(entry.nameKey) : inst.defId}</span>
             <IconButton
               icon="arrow-up"
-              label="上移"
+              label={tr('common.up')}
               size="sm"
               disabled={idx === 0}
               testid="effect-move-up"
@@ -390,7 +395,7 @@
             />
             <IconButton
               icon="arrow-down"
-              label="下移"
+              label={tr('common.down')}
               size="sm"
               disabled={idx === clip.chain.length - 1}
               testid="effect-move-down"
@@ -398,7 +403,7 @@
             />
             <IconButton
               icon="x"
-              label="删除特效"
+              label={tr('insp.removeEffect')}
               size="sm"
               variant="danger"
               testid="effect-remove"
@@ -408,19 +413,19 @@
           {#if entry}
             {#each entry.params as p (p.key)}
               {#if p.type === 'range'}
-                <KeyableField label={p.label} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
+                <KeyableField label={tr(p.labelKey)} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
               {:else if p.type === 'select'}
-                <Field label={p.label}>
+                <Field label={tr(p.labelKey)}>
                   <Select
                     value={String(inst.values[p.key] ?? p.defaultValue)}
-                    options={p.options.map((o) => ({ value: o.value, label: o.label }))}
+                    options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
                     testid={`effect-param-${p.key}`}
                     optionTestidPrefix={`effect-param-${p.key}-opt`}
                     onchange={(v) => setEffectParam(clip, inst, p.key, v)}
                   />
                 </Field>
               {:else if p.type === 'color'}
-                <Field label={p.label}>
+                <Field label={tr(p.labelKey)}>
                   <input
                     class="color"
                     type="color"
@@ -434,7 +439,7 @@
         </div>
       {/each}
     {:else}
-      <Field label="源内偏移">
+      <Field label={tr('insp.srcIn')}>
         <NumberInput
           value={clip.srcIn}
           min={0}
@@ -443,7 +448,7 @@
           suffix="s"
           testid="clip-srcin"
           onchange={(v) =>
-            upd(clip, '改 srcIn', (c) => {
+            upd(clip, tr('insp.changeSrcIn'), (c) => {
               if (c.kind === 'audio') c.srcIn = Math.max(0, v);
             })}
         />
@@ -454,21 +459,21 @@
       {#if clip.kind === 'source' && clip.source.type === 'text'}
         <!-- 双击片段也能打开；这里是可发现性更好的显式入口。 -->
         <Button
-          label="编辑排版"
+          label={tr('insp.editTypography')}
           icon="type"
           testid="edit-typography"
           onclick={() => appState.openTypographyTab(clip.id)}
         />
       {/if}
       <Button
-        label="在播放头切分"
+        label={tr('insp.splitAtPlayhead')}
         icon="scissors"
         shortcut="S"
         testid="split-at-playhead"
         onclick={() => appState.store.splitClipAt(track.id, clip.id, playT)}
       />
       <Button
-        label="删除"
+        label={tr('common.delete')}
         icon="trash"
         variant="danger"
         shortcut="Del"
@@ -480,10 +485,10 @@
       />
     </div>
   {:else}
-    <h3>检查器</h3>
+    <h3>{tr('insp.title')}</h3>
     <p class="placeholder">
-      选中一个片段查看属性。
-      <br />空白处右键可以在鼠标位置新建片段。
+      {tr('insp.placeholderSelect')}
+      <br />{tr('insp.placeholderRightClick')}
     </p>
   {/if}
 </div>

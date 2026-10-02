@@ -10,6 +10,7 @@ import { gameOfLifeDef } from './game-of-life';
 import { mandelbrotDef } from './mandelbrot';
 import { defaultValues } from '../effects/types';
 import type { GeneratorDef } from './types';
+import type { MessageKey } from '../i18n/locales';
 
 const DEFS = new Map<string, GeneratorDef>(
   [rule110Def, gameOfLifeDef, mandelbrotDef].map((d) => [d.id, d]),
@@ -19,8 +20,8 @@ export function getGenerator(id: string): GeneratorDef | null {
   return DEFS.get(id) ?? null;
 }
 
-export function listGenerators(): { id: string; name: string; kind: GeneratorDef['kind'] }[] {
-  return [...DEFS.values()].map((d) => ({ id: d.id, name: d.name, kind: d.kind }));
+export function listGenerators(): { id: string; nameKey: MessageKey; kind: GeneratorDef['kind'] }[] {
+  return [...DEFS.values()].map((d) => ({ id: d.id, nameKey: d.nameKey, kind: d.kind }));
 }
 
 export function defaultParams(id: string): Record<string, number | string> {

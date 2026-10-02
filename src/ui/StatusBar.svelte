@@ -10,6 +10,7 @@
   import Icon from './Icon.svelte';
   import { appState } from './app-state.svelte';
   import { tooltip } from './tooltip.svelte';
+  import { tr } from '../i18n/index.svelte';
 
   const project = $derived.by(() => {
     void appState.version;
@@ -23,7 +24,7 @@
 <footer class="statusbar" data-testid="statusbar">
   <span class="seg project" data-testid="statusbar-project">
     <Icon name="video" size={11} />
-    {project.name || '未命名工程'}
+    {project.name || tr('proj.unnamed')}
   </span>
 
   {#if appState.notice}
@@ -43,7 +44,7 @@
   {:else if exporting}
     <span class="seg accent" data-testid="statusbar-export">
       <Icon name="download" size={11} />
-      导出中 {pct}%
+      {tr('app.exporting', { pct })}
     </span>
   {:else if tooltip.text}
     <span class="seg hint" data-testid="statusbar-hint">{tooltip.text}</span>
@@ -51,12 +52,12 @@
       <span class="seg keys" data-testid="statusbar-keys"><kbd class="kbd">{tooltip.shortcut}</kbd></span>
     {/if}
   {:else}
-    <span class="seg hint muted">悬停任意控件看说明</span>
+    <span class="seg hint muted">{tr('app.hoverHint')}</span>
   {/if}
 
   <span class="seg spacer"></span>
 
-  <span class="seg mono" title="预览帧率（仅统计，不参与渲染求值）">
+  <span class="seg mono" title={tr('app.fpsTip')}>
     <span class="dim">fps</span>
     <span class="accent" data-testid="statusbar-fps">{appState.fps || '--'}</span>
   </span>

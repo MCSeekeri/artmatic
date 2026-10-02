@@ -11,6 +11,8 @@
  */
 
 import type { TypographyDocument } from './document';
+import { tr } from '../i18n/index.svelte';
+import type { MessageKey } from '../i18n/locales';
 
 /** 动画名统一加前缀，避免与用户手写 CSS 或页面其它动画撞名。 */
 export const ANIM_NAME_PREFIX = 'artmatic-a-';
@@ -85,31 +87,39 @@ export type ElementAnimation = PresetAnimation | CustomAnimation;
 
 export interface AnimPresetDef {
   id: AnimPreset;
-  label: string;
+  /** 存文案键（见 effects/types.ts 的注释）。 */
+  labelKey: MessageKey;
   duration: number;
   easing: Easing;
   params?: Record<string, number>;
 }
 
 export const ANIM_PRESETS: AnimPresetDef[] = [
-  { id: 'fade-in', label: '淡入', duration: 0.6, easing: 'ease-out' },
-  { id: 'fade-out', label: '淡出', duration: 0.6, easing: 'ease-in' },
-  { id: 'fade-in-out', label: '淡入淡出', duration: 1.2, easing: 'ease-in-out' },
-  { id: 'slide-in-left', label: '左侧滑入', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  { id: 'slide-in-right', label: '右侧滑入', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  { id: 'slide-in-up', label: '下方滑入', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  { id: 'slide-in-down', label: '上方滑入', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  { id: 'zoom-in', label: '放大进入', duration: 0.6, easing: 'ease-out', params: { z0: 0.8 } },
-  { id: 'zoom-out', label: '缩小进入', duration: 0.6, easing: 'ease-out', params: { z1: 1.25 } },
-  { id: 'pop', label: '弹一下', duration: 0.45, easing: 'ease-in-out', params: { z1: 1.15 } },
-  { id: 'spin', label: '旋转', duration: 1, easing: 'linear' },
-  { id: 'pulse', label: '脉冲', duration: 1, easing: 'ease-in-out' },
-  { id: 'shake', label: '抖动', duration: 0.5, easing: 'linear' },
-  { id: 'blur-in', label: '模糊进入', duration: 0.7, easing: 'ease-out', params: { blur: 12 } },
+  { id: 'fade-in', labelKey: 'anim.fadeIn', duration: 0.6, easing: 'ease-out' },
+  { id: 'fade-out', labelKey: 'anim.fadeOut', duration: 0.6, easing: 'ease-in' },
+  { id: 'fade-in-out', labelKey: 'anim.fadeInOut', duration: 1.2, easing: 'ease-in-out' },
+  { id: 'slide-in-left', labelKey: 'anim.slideInLeft', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
+  { id: 'slide-in-right', labelKey: 'anim.slideInRight', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
+  // 注意 id 与文案的对应关系是原样保留的：id 描述**运动方向**，文案描述**来向**，
+  // 所以 slide-in-up 配「下方滑入」。改文案时别顺手把它「修正」成上方。
+  { id: 'slide-in-up', labelKey: 'anim.slideInUp', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
+  { id: 'slide-in-down', labelKey: 'anim.slideInDown', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
+  { id: 'zoom-in', labelKey: 'anim.zoomIn', duration: 0.6, easing: 'ease-out', params: { z0: 0.8 } },
+  { id: 'zoom-out', labelKey: 'anim.zoomOut', duration: 0.6, easing: 'ease-out', params: { z1: 1.25 } },
+  { id: 'pop', labelKey: 'anim.pop', duration: 0.45, easing: 'ease-in-out', params: { z1: 1.15 } },
+  { id: 'spin', labelKey: 'anim.spin', duration: 1, easing: 'linear' },
+  { id: 'pulse', labelKey: 'anim.pulse', duration: 1, easing: 'ease-in-out' },
+  { id: 'shake', labelKey: 'anim.shake', duration: 0.5, easing: 'linear' },
+  { id: 'blur-in', labelKey: 'anim.blurIn', duration: 0.7, easing: 'ease-out', params: { blur: 12 } },
 ];
 
+/**
+ * 预设的展示名。找不到就回落到 id 本身 —— 与 `tr()` 的处理同构：
+ * 宁可显示一个看得懂的标识符，也不要显示空白。
+ */
 export function presetLabel(p: AnimPreset): string {
-  return ANIM_PRESETS.find((d) => d.id === p)?.label ?? p;
+  const def = ANIM_PRESETS.find((d) => d.id === p);
+  return def ? tr(def.labelKey) : p;
 }
 
 export function defaultTiming(): AnimTiming {

@@ -9,6 +9,7 @@
    */
   import type { Snippet } from 'svelte';
   import IconButton from './IconButton.svelte';
+  import { tr } from '../../i18n/index.svelte';
 
   interface Props {
     title: string;
@@ -52,7 +53,7 @@
       <h2>{title}</h2>
       <IconButton
         icon="x"
-        label="关闭"
+        label={tr('common.close')}
         testid={testid ? `${testid}-close` : 'modal-close'}
         onclick={onclose}
       />

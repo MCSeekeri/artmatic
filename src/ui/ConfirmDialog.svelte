@@ -13,6 +13,7 @@
    */
   import Modal from './controls/Modal.svelte';
   import Button from './controls/Button.svelte';
+  import { tr } from '../i18n/index.svelte';
 
   interface Props {
     title: string;
@@ -30,7 +31,7 @@
     title,
     message,
     confirmLabel,
-    cancelLabel = '取消',
+    cancelLabel = tr('common.cancel'),
     danger = false,
     testid,
     onconfirm,

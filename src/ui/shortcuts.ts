@@ -4,84 +4,95 @@
  * 三处消费同一份数据：侧栏的快捷键面板、底栏右侧的提示、各按钮 tooltip 的角标。
  * 分开写必然出现「面板里写 Ctrl+Z，实际上代码里拦的是别的组合」这类漂移。
  *
- * 用法约定：`keys` 是给人看的写法，代码里判定的仍是 KeyboardEvent 的 key/code。
+ * 用法约定：`keysKey` 是**给人看的写法**（'Ctrl+Shift+Z'，或 '拖动' 这种手势名），
+ * 代码里判定的仍是 KeyboardEvent 的 key/code（App.svelte 与 typography/keys.ts）。
  * 目前不区分 macOS（本项目主平台是 Windows）。
+ *
+ * 两个字段都是 `MessageKey` 而不是 `string` —— 它们都是展示文案，
+ * 直接写字面量会把语言冻结在模块加载那一刻（见 effects/types.ts 的注释）。
  */
+import type { MessageKey } from '../i18n/locales';
 
 export interface Shortcut {
-  /** 展示用写法，例如 'Ctrl+Shift+Z'。 */
-  keys: string;
-  label: string;
+  /** 展示用写法，例如 'Ctrl+Shift+Z' 或 '拖动'。 */
+  keysKey: MessageKey;
+  labelKey: MessageKey;
 }
 
 export interface ShortcutGroup {
-  title: string;
+  titleKey: MessageKey;
   items: Shortcut[];
 }
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
-    title: '播放与时间',
+    titleKey: 'sc.group.playback',
     items: [
-      { keys: 'Space', label: '播放 / 暂停' },
-      { keys: '标尺拖动', label: 'scrub 播放头（吸附到当前档位）' },
-      { keys: 'Ctrl+滚轮', label: '以鼠标为锚缩放时间轴' },
-      { keys: '滚轮', label: '时间轴横向滚动' },
+      { keysKey: 'sc.key.space', labelKey: 'sc.playPause' },
+      { keysKey: 'sc.key.rulerDrag', labelKey: 'sc.scrub' },
+      { keysKey: 'sc.key.ctrlWheel', labelKey: 'sc.zoomAtCursor' },
+      { keysKey: 'sc.key.wheel', labelKey: 'sc.scrollTimeline' },
     ],
   },
   {
-    title: '片段',
+    titleKey: 'sc.group.clip',
     items: [
-      { keys: '拖动', label: '移动片段（可跨轨；松手时才套重叠策略）' },
-      { keys: '拖边', label: '改变片段长度' },
-      { keys: '双击片段', label: '打开片段编辑器（排版片段打开排版页）' },
-      { keys: 'S', label: '在播放头处切分选中片段' },
-      { keys: 'Alt+↑ / Alt+↓', label: '把选中片段上移 / 下移一轨' },
-      { keys: 'Delete', label: '删除选中片段' },
-      { keys: '右键', label: '在鼠标位置新建片段' },
+      { keysKey: 'sc.key.drag', labelKey: 'sc.moveClip' },
+      { keysKey: 'sc.key.dragEdge', labelKey: 'sc.resizeClip' },
+      { keysKey: 'sc.key.dblClick', labelKey: 'sc.openClipEditor' },
+      { keysKey: 'sc.key.s', labelKey: 'sc.splitAtPlayhead' },
+      { keysKey: 'sc.key.altArrows', labelKey: 'sc.shiftTrack' },
+      { keysKey: 'sc.key.delete', labelKey: 'sc.deleteClip' },
+      { keysKey: 'sc.key.rightClick', labelKey: 'sc.newClipAtCursor' },
     ],
   },
   {
-    title: '排版编辑器',
+    titleKey: 'sc.group.typo',
     items: [
-      { keys: '单击 / Shift+单击', label: '选中元素 / 加选' },
-      { keys: '空白处拖动', label: '框选' },
-      { keys: '拖动元素', label: '移动（自动吸附参考线；按住 Alt 临时关吸附）' },
-      { keys: '方向键', label: '移动 1px（Shift ×10）' },
-      { keys: 'Ctrl+A', label: '全选元素' },
-      { keys: 'Esc', label: '取消选择' },
-      { keys: 'Space', label: '播放 / 暂停（驱动 CSS 动画）' },
+      { keysKey: 'sc.key.clickShiftClick', labelKey: 'sc.selectElement' },
+      { keysKey: 'sc.key.dragEmpty', labelKey: 'sc.marquee' },
+      { keysKey: 'sc.key.dragElement', labelKey: 'sc.moveElement' },
+      { keysKey: 'sc.key.arrows', labelKey: 'sc.nudgeElement' },
+      { keysKey: 'sc.key.ctrlA', labelKey: 'sc.selectAll' },
+      { keysKey: 'sc.key.esc', labelKey: 'sc.deselect' },
+      { keysKey: 'sc.key.space', labelKey: 'sc.playPauseAnim' },
     ],
   },
   {
-    title: '参数控件',
+    titleKey: 'sc.group.param',
     items: [
-      { keys: '拖动数字框', label: '连续改值' },
-      { keys: 'Ctrl 拖动', label: '吸附到步长整数倍' },
-      { keys: 'Alt 拖动', label: '精细（灵敏度 ×0.1）' },
-      { keys: 'Shift 拖动', label: '粗调（灵敏度 ×10）' },
-      { keys: 'Esc', label: '取消这次拖动，恢复原值' },
-      { keys: '↑ / ↓', label: '按步长增减（Shift ×10）' },
+      { keysKey: 'sc.key.dragNumber', labelKey: 'sc.scrubValue' },
+      { keysKey: 'sc.key.ctrlDrag', labelKey: 'sc.snapToStep' },
+      { keysKey: 'sc.key.altDrag', labelKey: 'sc.fineTune' },
+      { keysKey: 'sc.key.shiftDrag', labelKey: 'sc.coarseTune' },
+      { keysKey: 'sc.key.esc', labelKey: 'sc.cancelDrag' },
+      { keysKey: 'sc.key.upDown', labelKey: 'sc.stepValue' },
     ],
   },
   {
-    title: '工程',
+    titleKey: 'sc.group.project',
     items: [
-      { keys: 'Ctrl+S', label: '保存工程（没有位置时会先问目录）' },
-      { keys: 'Ctrl+Shift+S', label: '另存为（选一个新目录）' },
+      { keysKey: 'sc.key.ctrlS', labelKey: 'sc.saveProject' },
+      { keysKey: 'sc.key.ctrlShiftS', labelKey: 'sc.saveAs' },
     ],
   },
   {
-    title: '通用',
+    titleKey: 'sc.group.general',
     items: [
-      { keys: 'Ctrl+Z', label: '撤销' },
-      { keys: 'Ctrl+Shift+Z / Ctrl+Y', label: '重做' },
-      { keys: 'Esc', label: '关闭当前弹层' },
+      { keysKey: 'sc.key.ctrlZ', labelKey: 'sc.undo' },
+      { keysKey: 'sc.key.ctrlShiftZ', labelKey: 'sc.redo' },
+      { keysKey: 'sc.key.esc', labelKey: 'sc.closeOverlay' },
     ],
   },
 ];
 
-/** 扁平表，供需要按 keys 反查的场景（例如给按钮找它的快捷键角标）。 */
-export const SHORTCUT_BY_LABEL: Record<string, string> = Object.fromEntries(
-  SHORTCUT_GROUPS.flatMap((g) => g.items.map((i) => [i.label, i.keys])),
+/**
+ * 扁平表，供需要按用途反查按键写法的场景（例如给按钮找它的快捷键角标）。
+ *
+ * 键是**文案键**而不是渲染后的文案：用渲染后的字符串当键的话，
+ * `SHORTCUT_BY_LABEL['撤销']` 在切语言的那一刻就全部查不到了，
+ * 而且失败是静默的（查不到就当没有快捷键）。
+ */
+export const SHORTCUT_BY_LABEL: Partial<Record<MessageKey, MessageKey>> = Object.fromEntries(
+  SHORTCUT_GROUPS.flatMap((g) => g.items.map((i) => [i.labelKey, i.keysKey] as const)),
 );

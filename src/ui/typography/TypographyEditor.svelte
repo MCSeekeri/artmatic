@@ -31,6 +31,7 @@
   import { keyframeBodyOf } from '../../typography/animation';
   import CustomCssModal from './CustomCssModal.svelte';
   import { SNAP_PX, hitTest, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
+  import { tr } from '../../i18n/index.svelte';
 
   const { clipId }: { clipId: string } = $props();
 
@@ -365,7 +366,7 @@
     editorState.editingTextId = null;
     const cur = doc?.elements.find((x) => x.id === id);
     if (!cur || cur.kind !== 'text' || cur.text === next) return;
-    editorState.commit('编辑文本', (d) => {
+    editorState.commit(tr('typo.undo.editText'), (d) => {
       const el = d.elements.find((x) => x.id === id);
       if (el && el.kind === 'text') el.text = next;
     });
@@ -417,7 +418,7 @@
 
   {#if missingFonts.length}
     <div class="banner" data-testid="typo-font-missing">
-      字体「{missingFonts.join('、')}」未就绪，正在用回落字体；导出结果也会用回落字体。
+      {tr('typo.missingFonts', { fonts: missingFonts.join(tr('typo.fontListSeparator')) })}
     </div>
   {/if}
 
@@ -517,19 +518,19 @@
   </div>
 
   <div class="zoombar">
-    <IconButton icon="minus" label="缩小" testid="typo-zoom-out" onclick={() => zoomBy(1 / 1.25)} />
+    <IconButton icon="minus" label={tr('typo.zoomOut')} testid="typo-zoom-out" onclick={() => zoomBy(1 / 1.25)} />
     <span class="zoom-val">{Math.round(zoom * 100)}%</span>
-    <IconButton icon="plus" label="放大" testid="typo-zoom-in" onclick={() => zoomBy(1.25)} />
-    <IconButton icon="minimize-2" label="适配" testid="typo-zoom-fit" onclick={zoomFit} />
+    <IconButton icon="plus" label={tr('typo.zoomIn')} testid="typo-zoom-in" onclick={() => zoomBy(1.25)} />
+    <IconButton icon="minimize-2" label={tr('typo.zoomFit')} testid="typo-zoom-fit" onclick={zoomFit} />
     <span class="spacer"></span>
     <!-- 固定宽度：.sel 带 flex:1，直接放进 flex 行会被拉成整行宽。 -->
     <span class="scale-pick">
       <Select
         value={String(appState.typoPreviewScale)}
         options={[
-          { value: '1', label: '预览画质 1.0x' },
-          { value: '0.5', label: '预览画质 0.5x' },
-          { value: '0.25', label: '预览画质 0.25x' },
+          { value: '1', label: tr('typo.previewScale', { scale: '1.0x' }) },
+          { value: '0.5', label: tr('typo.previewScale', { scale: '0.5x' }) },
+          { value: '0.25', label: tr('typo.previewScale', { scale: '0.25x' }) },
         ]}
         testid="typo-preview-scale"
         onchange={(v) => (appState.typoPreviewScale = Number(v))}
@@ -537,7 +538,7 @@
     </span>
     <IconButton
       icon="panel-right"
-      label="光栅预览"
+      label={tr('typo.rasterPreview')}
       testid="typo-raster-toggle"
       active={editorState.rasterPreview}
       onclick={() => (editorState.rasterPreview = !editorState.rasterPreview)}

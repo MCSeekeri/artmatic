@@ -3,6 +3,7 @@
   import { xOfTime } from './view-model';
   import { startClipDrag } from './drag';
   import type { AnyClip, Track } from '../core/schema';
+  import { tr } from '../i18n/index.svelte';
 
   const { track, clip }: { track: Track; clip: AnyClip } = $props();
 
@@ -69,7 +70,7 @@
   <span class="label">{clip.label || clip.kind}</span>
   {#if clip.fadeSec > 0}
     <!-- 淡入淡出标记：纯几何形状，不引图标（这里只有 10px 见方） -->
-    <i class="fade" title="淡入淡出"></i>
+    <i class="fade" title={tr('tl.fade')}></i>
   {/if}
   <i class="edge l" role="presentation" onpointerdown={(e) => down(e, 'resize-l')}></i>
   <i class="edge r" role="presentation" onpointerdown={(e) => down(e, 'resize-r')}></i>

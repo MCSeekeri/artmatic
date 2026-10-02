@@ -15,6 +15,8 @@
 import type { BeatGrid } from './time';
 import type { Curve } from './curve';
 import type { TypographyDocument } from '../typography/document';
+import { tr } from '../i18n/index.svelte';
+import type { MessageKey } from '../i18n/locales';
 
 export const SCHEMA_VERSION = 2;
 
@@ -85,15 +87,16 @@ export type BlendMode =
   | 'normal' | 'multiply' | 'add' | 'screen'
   | 'overlay' | 'difference' | 'exclusion' | 'subtract';
 
-export const BLEND_MODES: { id: BlendMode; label: string }[] = [
-  { id: 'normal', label: '正常' },
-  { id: 'multiply', label: '正片叠底' },
-  { id: 'add', label: '线性加深(加)' },
-  { id: 'screen', label: '滤色' },
-  { id: 'overlay', label: '叠加' },
-  { id: 'difference', label: '差值' },
-  { id: 'exclusion', label: '排除' },
-  { id: 'subtract', label: '减去' },
+/** 混合模式表。存文案键而非字符串 —— 理由见 effects/types.ts 的注释。 */
+export const BLEND_MODES: { id: BlendMode; labelKey: MessageKey }[] = [
+  { id: 'normal', labelKey: 'blend.normal' },
+  { id: 'multiply', labelKey: 'blend.multiply' },
+  { id: 'add', labelKey: 'blend.add' },
+  { id: 'screen', labelKey: 'blend.screen' },
+  { id: 'overlay', labelKey: 'blend.overlay' },
+  { id: 'difference', labelKey: 'blend.difference' },
+  { id: 'exclusion', labelKey: 'blend.exclusion' },
+  { id: 'subtract', labelKey: 'blend.subtract' },
 ];
 
 export type AlgoSource = { type: 'algo'; generator: string; params: Record<string, number | string> };
@@ -151,7 +154,7 @@ export function defaultTransform(): SourceClip['transform'] {
   return { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 };
 }
 
-export function defaultProject(name = '未命名工程'): Project {
+export function defaultProject(name = tr('proj.unnamed')): Project {
   return {
     schemaVersion: SCHEMA_VERSION,
     name,
@@ -207,15 +210,15 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
 
 export function migrateProject(raw: Record<string, unknown>): Project {
   const rawV = raw.schemaVersion;
-  if (typeof rawV !== 'number') throw new SchemaError('缺少 schemaVersion');
+  if (typeof rawV !== 'number') throw new SchemaError(tr('err.schema.missingVersion'));
   if (rawV > SCHEMA_VERSION) {
-    throw new SchemaError(`工程版本 ${rawV} 高于本应用支持的 ${SCHEMA_VERSION}，请升级应用`);
+    throw new SchemaError(tr('err.schema.versionTooNew', { found: rawV, supported: SCHEMA_VERSION }));
   }
   let v = rawV;
   let cur = raw;
   while (v < SCHEMA_VERSION) {
     const mig = MIGRATIONS[v];
-    if (!mig) throw new SchemaError(`缺少从版本 ${v} 的迁移函数`);
+    if (!mig) throw new SchemaError(tr('err.schema.missingMigration', { version: v }));
     cur = mig(cur);
     v = cur.schemaVersion as number;
   }
@@ -224,37 +227,53 @@ export function migrateProject(raw: Record<string, unknown>): Project {
 
 export function validateProject(raw: unknown): Project {
   const p = raw as Project;
-  if (!p || typeof p !== 'object') throw new SchemaError('不是对象');
-  if (typeof p.name !== 'string') throw new SchemaError('缺少 name');
-  if (typeof p.fps !== 'number' || p.fps <= 0) throw new SchemaError('fps 非法');
-  if (!p.resolution || p.resolution.w <= 0 || p.resolution.h <= 0) throw new SchemaError('resolution 非法');
-  if (typeof p.duration !== 'number' || p.duration <= 0) throw new SchemaError('duration 非法');
-  if (!p.beatGrid || p.beatGrid.bpm <= 0 || p.beatGrid.beatsPerBar < 1) throw new SchemaError('beatGrid 非法');
-  if (typeof p.seed !== 'number') throw new SchemaError('seed 非法');
-  if (p.overlapBehavior !== 'push' && p.overlapBehavior !== 'reject' && p.overlapBehavior !== 'trim') {
-    throw new SchemaError('overlapBehavior 非法');
+  if (!p || typeof p !== 'object') throw new SchemaError(tr('err.schema.notObject'));
+  if (typeof p.name !== 'string') throw new SchemaError(tr('err.schema.missingName'));
+  if (typeof p.fps !== 'number' || p.fps <= 0) throw new SchemaError(tr('err.schema.badFps'));
+  if (!p.resolution || p.resolution.w <= 0 || p.resolution.h <= 0) {
+    throw new SchemaError(tr('err.schema.badResolution'));
   }
-  if (!p.assets || typeof p.assets !== 'object') throw new SchemaError('assets 非法');
-  if (!Array.isArray(p.tracks)) throw new SchemaError('tracks 非法');
-  for (const tr of p.tracks as { kind: string; clips: unknown }[]) {
-    if (tr.kind !== 'visual' && tr.kind !== 'audio') throw new SchemaError(`未知轨道类型 ${String(tr.kind)}`);
-    if (!Array.isArray(tr.clips)) throw new SchemaError('轨道缺少 clips');
-    for (const c of tr.clips as AnyClip[]) validateClip(c, tr.kind);
+  if (typeof p.duration !== 'number' || p.duration <= 0) throw new SchemaError(tr('err.schema.badDuration'));
+  if (!p.beatGrid || p.beatGrid.bpm <= 0 || p.beatGrid.beatsPerBar < 1) {
+    throw new SchemaError(tr('err.schema.badBeatGrid'));
+  }
+  if (typeof p.seed !== 'number') throw new SchemaError(tr('err.schema.badSeed'));
+  if (p.overlapBehavior !== 'push' && p.overlapBehavior !== 'reject' && p.overlapBehavior !== 'trim') {
+    throw new SchemaError(tr('err.schema.badOverlap'));
+  }
+  if (!p.assets || typeof p.assets !== 'object') throw new SchemaError(tr('err.schema.badAssets'));
+  if (!Array.isArray(p.tracks)) throw new SchemaError(tr('err.schema.badTracks'));
+  // 循环变量刻意叫 tk 而不是 tr：`tr` 是翻译函数的专名（i18n/index.svelte.ts），
+  // 同名会把下面那两次取词整成「tr is not a function」。
+  for (const tk of p.tracks as { kind: string; clips: unknown }[]) {
+    if (tk.kind !== 'visual' && tk.kind !== 'audio') {
+      throw new SchemaError(tr('err.schema.unknownTrackKind', { kind: String(tk.kind) }));
+    }
+    if (!Array.isArray(tk.clips)) throw new SchemaError(tr('err.schema.trackMissingClips'));
+    for (const c of tk.clips as AnyClip[]) validateClip(c, tk.kind);
   }
   return p;
 }
 
 function validateClip(c: AnyClip, trackKind: Track['kind']): void {
-  if (typeof c.id !== 'string' || !c.id) throw new SchemaError('片段缺少 id');
-  if (!(c.start >= 0) || !(c.end > c.start)) throw new SchemaError(`片段 ${c.id} 时间区间非法`);
-  if (typeof c.fadeSec !== 'number' || c.fadeSec < 0) throw new SchemaError(`片段 ${c.id} fadeSec 非法`);
-  if (!c.curves || typeof c.curves !== 'object') throw new SchemaError(`片段 ${c.id} curves 非法`);
+  if (typeof c.id !== 'string' || !c.id) throw new SchemaError(tr('err.schema.clipMissingId'));
+  if (!(c.start >= 0) || !(c.end > c.start)) {
+    throw new SchemaError(tr('err.schema.clipBadSpan', { id: c.id }));
+  }
+  if (typeof c.fadeSec !== 'number' || c.fadeSec < 0) {
+    throw new SchemaError(tr('err.schema.clipBadFade', { id: c.id }));
+  }
+  if (!c.curves || typeof c.curves !== 'object') {
+    throw new SchemaError(tr('err.schema.clipBadCurves', { id: c.id }));
+  }
   if (trackKind === 'audio') {
-    if (c.kind !== 'audio') throw new SchemaError('音频轨里有非音频片段');
+    if (c.kind !== 'audio') throw new SchemaError(tr('err.schema.audioTrackHasNonAudio'));
   } else {
-    if (c.kind !== 'source' && c.kind !== 'effect') throw new SchemaError('视觉轨里有非视觉片段');
+    if (c.kind !== 'source' && c.kind !== 'effect') {
+      throw new SchemaError(tr('err.schema.visualTrackHasNonVisual'));
+    }
     if (c.kind === 'effect' && !Array.isArray((c as EffectClip).chain)) {
-      throw new SchemaError(`特效片段 ${c.id} 缺少 chain`);
+      throw new SchemaError(tr('err.schema.effectClipMissingChain', { id: c.id }));
     }
     // text 源的最小校验。validateProject 历史上不深校验 source 字段，
     // 手改 JSON 会一路静默穿透到光栅化，在那里炸得莫名其妙。
@@ -263,10 +282,10 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
       if (src?.type === 'text') {
         const doc = src.doc as TypographyDocument | undefined;
         if (!doc || typeof doc !== 'object' || !Array.isArray(doc.elements)) {
-          throw new SchemaError(`排版片段 ${c.id} 的 doc 非法`);
+          throw new SchemaError(tr('err.schema.typographyBadDoc', { id: c.id }));
         }
         if (!doc.size || !(doc.size.w > 0) || !(doc.size.h > 0)) {
-          throw new SchemaError(`排版片段 ${c.id} 的文档尺寸非法`);
+          throw new SchemaError(tr('err.schema.typographyBadSize', { id: c.id }));
         }
       }
     }

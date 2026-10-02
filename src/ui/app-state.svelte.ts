@@ -33,6 +33,7 @@ import type { AssetIssue } from '../project/ledger';
 import type { ProjectRef } from '../project/handles';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import { DENSITY } from './tokens';
+import { tr } from '../i18n/index.svelte';
 
 /* ------------------------------------------------------------ UI 偏好持久化
  *
@@ -241,7 +242,7 @@ class AppState {
    * 「磁盘上 `project.json` 里的名字」会漂移。
    */
   get projectName(): string {
-    return this.activeProject.store.project.name || '未命名工程';
+    return this.activeProject.store.project.name || tr('proj.unnamed');
   }
 
   /** 上次保存时的 `store.version`；-1 = 从未保存过。 */
@@ -456,7 +457,7 @@ class AppState {
     }
     this.drawerOpen = true;
     if (clip.kind === 'source') {
-      this.flash('该类型的独立编辑器在后续里程碑提供；已打开属性检查器');
+      this.flash(tr('proj.noEditorYet'));
     }
   }
 

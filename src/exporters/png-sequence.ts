@@ -8,6 +8,7 @@
  */
 
 import { zipSync } from 'fflate';
+import { tr } from '../i18n/index.svelte';
 import type { FrameSink } from './frame-sink';
 
 export class PngSequenceSink implements FrameSink {
@@ -19,7 +20,8 @@ export class PngSequenceSink implements FrameSink {
 
   async submit(frameIndex: number, source: HTMLCanvasElement): Promise<void> {
     const blob = await new Promise<Blob | null>((resolve) => source.toBlob(resolve, 'image/png'));
-    if (!blob) throw new Error('canvas.toBlob 返回 null');
+    // 这条会经 ui/export.ts 的 catch 拼进 `err.export.failed` 进底栏 —— 是文案，不是诊断。
+    if (!blob) throw new Error(tr('err.export.pngBlobNull'));
     this.files[`frame_${String(frameIndex).padStart(5, '0')}.png`] = new Uint8Array(
       await blob.arrayBuffer(),
     );

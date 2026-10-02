@@ -9,6 +9,7 @@
    * 按旋转后的 AABB 画，就会出现「把手看着在左边、拖起来却往右上跑」。
    */
   import { HANDLES, type HandleId } from '../../typography/geometry';
+  import { tr } from '../../i18n/index.svelte';
 
   interface Props {
     /** `rot` 只在单选时有意义（多选用整个选区的 AABB，角度为 0）。 */
@@ -57,7 +58,7 @@
       class="rotate"
       role="presentation"
       data-testid="typo-handle-rotate"
-      title="旋转（Shift 吸附 15°）"
+      title={tr('typo.rotateHandle')}
       onpointerdown={(e) => {
         if (e.button !== 0) return;
         e.stopPropagation();

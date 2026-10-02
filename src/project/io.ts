@@ -43,6 +43,7 @@ import {
   type FsDirHandle,
 } from './fs';
 import { hashIfReasonable } from './hash';
+import { tr } from '../i18n/index.svelte';
 import {
   ASSET_LEDGER_FILE,
   PROJECT_BACKUP,
@@ -69,7 +70,7 @@ import { migrateProject, type Project } from '../core/schema';
 /** 目录里没有 `project.json` —— 打开时用它给用户一句能看懂的话。 */
 export class NotAProjectError extends Error {
   constructor(name: string) {
-    super(`「${name}」不是一个 Artmatic 工程目录（里面没有 ${PROJECT_FILE}）`);
+    super(tr('err.io.notAProject', { name, file: PROJECT_FILE }));
     this.name = 'NotAProjectError';
   }
 }
@@ -108,7 +109,7 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
   const conflicts = detectPathConflicts(ledger);
   if (conflicts.length) {
     const detail = conflicts.map((c) => `${c.path} ← ${c.ids.join(', ')}`).join('；');
-    throw new Error(`素材文件名冲突，已中止保存：${detail}`);
+    throw new Error(tr('err.io.pathConflict', { detail }));
   }
 
   await ensureDirs(dir, PROJECT_DIRS);
@@ -125,7 +126,7 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
     if (entry.mode === 'generated' || !entry.path) continue;
     const bytes = bytesFor(id);
     if (!bytes) {
-      warnings.push(`素材 ${entry.originName}（${id}）在内存里没有字节，跳过写入`);
+      warnings.push(tr('err.io.assetBytesMissing', { name: entry.originName, id }));
       continue;
     }
     const segs = splitRelPath(entry.path);
@@ -164,7 +165,7 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
       await parent.remove(name);
       assetsRemoved++;
     } catch (e) {
-      if (!isNotFound(e)) warnings.push(`删除旧素材失败（不影响工程）：${entry.path}`);
+      if (!isNotFound(e)) warnings.push(tr('err.io.removeFailed', { path: entry.path }));
     }
   }
 
@@ -198,7 +199,9 @@ export async function openProject(dir: FsDirHandle): Promise<OpenResult> {
   try {
     raw = JSON.parse(rawText) as Record<string, unknown>;
   } catch (e) {
-    throw new Error(`${PROJECT_FILE} 不是合法 JSON：${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(
+      tr('err.io.badJson', { file: PROJECT_FILE, detail: e instanceof Error ? e.message : String(e) }),
+    );
   }
   // 迁移 + 校验都在这里发生（schema.ts 的 MIGRATIONS 是那张表）。
   const project = migrateProject(raw);
@@ -290,7 +293,7 @@ async function rebuildLedgerFromDir(
   project: Project,
   diskPaths: string[],
 ): Promise<{ ledger: AssetLedger; warnings: string[] }> {
-  const warnings = ['assets.json 缺失或不完整，已从 assets/ 目录重建台账'];
+  const warnings = [tr('err.io.ledgerRebuilt')];
   const ledger = createLedger();
   for (const rel of diskPaths) {
     const name = rel.slice(rel.lastIndexOf('/') + 1);
@@ -310,7 +313,7 @@ async function rebuildLedgerFromDir(
       addedAt: 0,
     };
     ledger.entries[id] = entry;
-    if (!known) warnings.push(`assets/${name} 不在工程的素材表里，已标为未跟踪`);
+    if (!known) warnings.push(tr('err.io.untrackedFile', { name }));
   }
   return { ledger, warnings };
 }

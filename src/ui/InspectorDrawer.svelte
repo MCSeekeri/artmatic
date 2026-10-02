@@ -13,6 +13,7 @@
   import Inspector from './Inspector.svelte';
   import { appState } from './app-state.svelte';
   import { DENSITY } from './tokens';
+  import { tr } from '../i18n/index.svelte';
 
   let resizing = $state(false);
   let dragStartX = 0;
@@ -61,7 +62,7 @@
   <div
     class="drawer-resize"
     role="separator"
-    aria-label="调整检查器宽度"
+    aria-label={tr('insp.resizeWidth')}
     aria-orientation="vertical"
     data-testid="drawer-resize"
     onpointerdown={startResize}
@@ -70,11 +71,11 @@
   <div class="drawer-head">
     <span class="drawer-title">
       <Icon name="panel-right" size={12} />
-      检查器
+      {tr('insp.title')}
     </span>
     <IconButton
       icon="x"
-      label="收起检查器"
+      label={tr('insp.collapseDrawer')}
       size="sm"
       testid="drawer-toggle"
       onclick={() => appState.setDrawerOpen(false)}

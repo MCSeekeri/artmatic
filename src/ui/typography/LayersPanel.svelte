@@ -8,6 +8,7 @@
   import Icon from '../Icon.svelte';
   import { appState } from '../app-state.svelte';
   import { editorState } from './editor-state.svelte';
+  import { tr } from '../../i18n/index.svelte';
   import type { TypographyElement } from '../../typography/document';
   import type { IconName } from '../icons';
 
@@ -41,7 +42,7 @@
 
   function toggleField(el: TypographyElement, field: 'locked' | 'visible', e: MouseEvent): void {
     e.stopPropagation();
-    editorState.commit(field === 'locked' ? '切换锁定' : '切换隐藏', (doc) => {
+    editorState.commit(field === 'locked' ? tr('typo.undo.lock') : tr('typo.undo.hide'), (doc) => {
       const target = doc.elements.find((x) => x.id === el.id);
       if (target) target[field] = !target[field];
     });
@@ -55,7 +56,7 @@
 </script>
 
 <aside class="layers" data-testid="typo-layers">
-  <div class="head">图层</div>
+  <div class="head">{tr('typo.layers')}</div>
   <div class="list">
     <!-- 反转：数组末尾是最前景，列表顶部也应当是最前景（NLE / 设计工具的通用约定）。 -->
     {#each rows as el (el.id)}
@@ -74,7 +75,7 @@
           <button
             type="button"
             class="ic"
-            aria-label="上移一层"
+            aria-label={tr('typo.layerUp')}
             data-testid="typo-layer-up"
             onclick={(e) => {
               e.stopPropagation();
@@ -86,7 +87,7 @@
           <button
             type="button"
             class="ic"
-            aria-label="下移一层"
+            aria-label={tr('typo.layerDown')}
             data-testid="typo-layer-down"
             onclick={(e) => {
               e.stopPropagation();
@@ -99,7 +100,7 @@
             type="button"
             class="ic"
             class:on={!el.visible}
-            aria-label="显示 / 隐藏"
+            aria-label={tr('typo.layerToggleVisible')}
             data-testid="typo-layer-eye"
             onclick={(e) => toggleField(el, 'visible', e)}
           >
@@ -109,7 +110,7 @@
             type="button"
             class="ic"
             class:on={el.locked}
-            aria-label={el.locked ? '解锁' : '锁定'}
+            aria-label={el.locked ? tr('typo.layerUnlock') : tr('typo.layerLock')}
             aria-pressed={el.locked}
             data-testid="typo-layer-lock"
             onclick={(e) => toggleField(el, 'locked', e)}
@@ -123,7 +124,7 @@
     {/each}
 
     {#if items.length === 0}
-      <p class="empty">还没有元素。用「开始 → 文本框」或「插入 → 图形」加一个。</p>
+      <p class="empty">{tr('typo.layersEmpty')}</p>
     {/if}
   </div>
 </aside>

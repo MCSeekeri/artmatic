@@ -24,6 +24,7 @@ import {
   type HandleId,
   type Rect,
 } from '../../typography/geometry';
+import { tr } from '../../i18n/index.svelte';
 
 export interface GestureEnv {
   /** 屏幕坐标 → 文档坐标。 */
@@ -87,7 +88,7 @@ export function startMoveGesture(env: GestureEnv, start: { x: number; y: number 
     detach();
     env.setGuides([]);
     // 没动过就撤销事务，不留一条「什么也没做」的撤销记录。
-    if (moved) editorState.endGesture('移动元素');
+    if (moved) editorState.endGesture(tr('typo.undo.move'));
     else editorState.cancelGesture();
   };
 
@@ -142,7 +143,7 @@ export function startResizeGesture(
 
   const onUp = (): void => {
     detach();
-    if (moved) editorState.endGesture('缩放元素');
+    if (moved) editorState.endGesture(tr('typo.undo.resize'));
     else editorState.cancelGesture();
   };
 
@@ -189,7 +190,7 @@ export function startRotateGesture(env: GestureEnv, start: { x: number; y: numbe
 
   const onUp = (): void => {
     detach();
-    if (moved) editorState.endGesture('旋转元素');
+    if (moved) editorState.endGesture(tr('typo.undo.rotate'));
     else editorState.cancelGesture();
   };
 

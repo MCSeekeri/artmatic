@@ -36,6 +36,7 @@
  *     但能抓到「磁盘满但 close 没报错」这类静默损坏，代价是几毫秒。
  */
 
+import { tr } from '../i18n/index.svelte';
 import { hashIfReasonable } from './hash';
 
 /* ------------------------------------------------------------ 接口 */
@@ -230,7 +231,7 @@ export async function writeBytesAtomic(
         backup = { name: opts.backup, bytes: old.byteLength };
       }
     } catch (e) {
-      warnings.push(`备份失败（继续保存）：${errText(e)}`);
+      warnings.push(tr('err.fs.backupFailed', { detail: errText(e) }));
     }
   }
 
@@ -251,14 +252,16 @@ export async function writeBytesAtomic(
   if (opts.verify !== false && bytes.byteLength <= VERIFY_ANY_MAX) {
     const back = await (await fh.get()).readBytes();
     if (back.byteLength !== bytes.byteLength) {
-      throw new Error(`写入后校验失败：${name} 期望 ${bytes.byteLength} 字节，磁盘上是 ${back.byteLength}`);
+      throw new Error(
+        tr('err.fs.writeMismatch', { name, want: bytes.byteLength, got: back.byteLength }),
+      );
     }
     if (bytes.byteLength > VERIFY_HASH_MAX) {
       verified = 'size';
     } else if (sameBytes(back, bytes)) {
       verified = 'hash';
     } else {
-      throw new Error(`写入后校验失败：${name} 内容与预期不一致`);
+      throw new Error(tr('err.fs.writeCorrupt', { name }));
     }
   }
 
@@ -518,7 +521,7 @@ function wrapNativeDir(dir: FileSystemDirectoryHandle): NativeBackedDir {
         for await (const [, child] of ex.entries()) out.push({ name: child.name, kind: child.kind });
         return out;
       }
-      throw new Error('目录句柄不支持遍历（既没有 values() 也没有 entries()）');
+      throw new Error(tr('err.fs.dirNoIterator'));
     },
   };
 }
@@ -560,7 +563,7 @@ export async function pickDirectory(opts: PickDirOptions = {}): Promise<PickedDi
   const picker = (globalThis as {
     showDirectoryPicker?: (o?: unknown) => Promise<FileSystemDirectoryHandle>;
   }).showDirectoryPicker;
-  if (!picker) throw new Error('此浏览器不支持选择本地目录（需要 Chrome / Edge）');
+  if (!picker) throw new Error(tr('err.fs.noDirPicker'));
   try {
     const raw = await picker({ mode: opts.mode ?? 'readwrite', id: opts.id ?? 'artmatic-project', startIn: opts.startIn });
     return { dir: wrapNativeDir(raw), raw };

@@ -23,6 +23,7 @@ import {
 import { ANIM_PRESETS, type AnimTiming } from '../../typography/animation';
 import { SHAPE_PRESETS } from '../../typography/shapes';
 import type { TypographyActions } from './actions';
+import { tr } from '../../i18n/index.svelte';
 
 /** 「动作型」下拉的占位值：选完不改变显示值，所以可以连点。 */
 const SHAPE_PICK = '__pick';
@@ -90,17 +91,17 @@ export function buildTypographyTabs(
     /* ------------------------------------------------------------ 开始 */
     {
       id: 'home',
-      label: '开始',
+      label: tr('rib.home'),
       order: 0,
       groups: [
         {
           id: 'font',
-          label: '字体',
+          label: tr('rib.group.font'),
           items: [
             {
               kind: 'select',
               id: 'font-family',
-              label: '字体',
+              label: tr('rib.fontFamily'),
               testid: 'ribbon-font-family',
               // 固定宽度 + 触发区自己 ellipsis：字体名长度不可控，让它撑开的话
               // 整条 Ribbon 的布局会在换字体时跳一下（用户反馈的「tab 跳变」）。
@@ -114,7 +115,7 @@ export function buildTypographyTabs(
             {
               kind: 'select',
               id: 'font-size',
-              label: '字号',
+              label: tr('rib.fontSize'),
               testid: 'ribbon-font-size',
               width: 92,
               value: String(style?.fontSize ?? 0),
@@ -125,7 +126,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'bold',
-              label: '加粗',
+              label: tr('rib.bold'),
               icon: 'bold',
               testid: 'ribbon-bold',
               disabled: !hasText,
@@ -135,7 +136,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'italic',
-              label: '斜体',
+              label: tr('rib.italic'),
               icon: 'italic',
               testid: 'ribbon-italic',
               disabled: !hasText,
@@ -145,7 +146,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'underline',
-              label: '下划线',
+              label: tr('rib.underline'),
               icon: 'underline',
               testid: 'ribbon-underline',
               disabled: !hasText,
@@ -155,7 +156,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'strike',
-              label: '删除线',
+              label: tr('rib.strike'),
               icon: 'strikethrough',
               testid: 'ribbon-strike',
               disabled: !hasText,
@@ -165,7 +166,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'import-font',
-              label: '导入字体',
+              label: tr('rib.importFont'),
               // 语义是「拿进来」，不是「传上去」—— 用 upload 的箭头朝上会误导。
               icon: 'import',
               testid: 'typo-font-import',
@@ -175,12 +176,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'para',
-          label: '段落',
+          label: tr('rib.group.para'),
           items: [
             {
               kind: 'number',
               id: 'letter-spacing',
-              label: '字距',
+              label: tr('rib.letterSpacing'),
               testid: 'ribbon-letter-spacing',
               value: style?.letterSpacing ?? 0,
               step: 1,
@@ -191,7 +192,7 @@ export function buildTypographyTabs(
             {
               kind: 'number',
               id: 'line-height',
-              label: '行高',
+              label: tr('rib.lineHeight'),
               testid: 'ribbon-line-height',
               value: style?.lineHeight ?? 1.2,
               step: 0.05,
@@ -202,7 +203,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'align-left',
-              label: '左',
+              label: tr('rib.alignHLeft'),
               size: 'small',
               icon: 'text-align-start',
               testid: 'ribbon-align-left',
@@ -213,7 +214,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'align-center',
-              label: '中',
+              label: tr('rib.alignHCenter'),
               size: 'small',
               icon: 'text-align-center',
               testid: 'ribbon-align-center',
@@ -224,7 +225,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'align-right',
-              label: '右',
+              label: tr('rib.alignHRight'),
               size: 'small',
               icon: 'text-align-end',
               testid: 'ribbon-align-right',
@@ -235,7 +236,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'align-justify',
-              label: '两端',
+              label: tr('rib.alignHJustify'),
               size: 'small',
               icon: 'text-align-justify',
               testid: 'ribbon-align-justify',
@@ -246,7 +247,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'valign-top',
-              label: '顶',
+              label: tr('rib.alignVTop'),
               size: 'small',
               icon: 'align-start-horizontal',
               testid: 'ribbon-valign-top',
@@ -257,7 +258,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'valign-middle',
-              label: '中',
+              label: tr('rib.alignVMiddle'),
               size: 'small',
               icon: 'align-center-horizontal',
               testid: 'ribbon-valign-middle',
@@ -268,7 +269,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'valign-bottom',
-              label: '底',
+              label: tr('rib.alignVBottom'),
               size: 'small',
               icon: 'align-end-horizontal',
               testid: 'ribbon-valign-bottom',
@@ -280,12 +281,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'text-color',
-          label: '文本颜色',
+          label: tr('rib.group.textColor'),
           items: [
             {
               kind: 'color',
               id: 'text-color',
-              label: '颜色',
+              label: tr('rib.color'),
               testid: 'ribbon-text-color',
               value: style?.color ?? '#ffffff',
               disabled: !hasText,
@@ -295,24 +296,24 @@ export function buildTypographyTabs(
         },
         {
           id: 'align',
-          label: '对齐',
+          label: tr('rib.group.align'),
           items: [
             {
               kind: 'segment',
               id: 'align-target',
-              label: '对齐到',
+              label: tr('rib.alignTo'),
               testid: 'typo-align-target',
               value: alignTarget,
               options: [
-                { value: 'canvas', label: '画布' },
-                { value: 'selection', label: '选区' },
+                { value: 'canvas', label: tr('rib.alignTargetCanvas') },
+                { value: 'selection', label: tr('rib.alignTargetSelection') },
               ],
               onchange: (v) => a.setAlignTarget(v as 'canvas' | 'selection'),
             },
             {
               kind: 'button',
               id: 'align-l',
-              label: '左对齐',
+              label: tr('rib.alignLeft'),
               icon: 'align-start-vertical',
               testid: 'typo-align-left',
               disabled: none,
@@ -321,7 +322,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'align-ch',
-              label: '水平居中',
+              label: tr('rib.centerH'),
               icon: 'align-center-vertical',
               testid: 'typo-center-h',
               disabled: none,
@@ -330,7 +331,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'align-r',
-              label: '右对齐',
+              label: tr('rib.alignRight'),
               icon: 'align-end-vertical',
               testid: 'typo-align-right',
               disabled: none,
@@ -339,7 +340,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'align-t',
-              label: '顶对齐',
+              label: tr('rib.alignTop'),
               icon: 'align-start-horizontal',
               testid: 'typo-align-top',
               disabled: none,
@@ -348,7 +349,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'align-cv',
-              label: '垂直居中',
+              label: tr('rib.centerV'),
               icon: 'align-center-horizontal',
               testid: 'typo-center-v',
               disabled: none,
@@ -357,7 +358,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'align-b',
-              label: '底对齐',
+              label: tr('rib.alignBottom'),
               icon: 'align-end-horizontal',
               testid: 'typo-align-bottom',
               disabled: none,
@@ -366,7 +367,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'dist-h',
-              label: '横向分布',
+              label: tr('rib.distributeH'),
               icon: 'align-horizontal-space-between',
               testid: 'typo-distribute-h',
               // 少于 3 个没有「等距」可言
@@ -376,7 +377,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'dist-v',
-              label: '纵向分布',
+              label: tr('rib.distributeV'),
               icon: 'align-vertical-space-between',
               testid: 'typo-distribute-v',
               disabled: n < 3,
@@ -386,12 +387,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'order',
-          label: '层级',
+          label: tr('rib.group.order'),
           items: [
             {
               kind: 'button',
               id: 'to-front',
-              label: '置顶',
+              label: tr('rib.toFront'),
               size: 'small',
               icon: 'bring-to-front',
               testid: 'typo-to-front',
@@ -401,7 +402,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'forward',
-              label: '上移',
+              label: tr('common.up'),
               size: 'small',
               icon: 'move-up',
               testid: 'typo-forward',
@@ -411,7 +412,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'backward',
-              label: '下移',
+              label: tr('common.down'),
               size: 'small',
               icon: 'move-down',
               testid: 'typo-backward',
@@ -421,7 +422,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'to-back',
-              label: '置底',
+              label: tr('rib.toBack'),
               size: 'small',
               icon: 'send-to-back',
               testid: 'typo-to-back',
@@ -432,12 +433,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'edit',
-          label: '编辑',
+          label: tr('rib.group.edit'),
           items: [
             {
               kind: 'button',
               id: 'add-text',
-              label: '文本框',
+              label: tr('rib.addText'),
               icon: 'type',
               testid: 'typo-add-text',
               onselect: () => a.addText(),
@@ -445,7 +446,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'duplicate',
-              label: '复制',
+              label: tr('rib.duplicate'),
               icon: 'copy',
               testid: 'typo-duplicate',
               disabled: none,
@@ -454,7 +455,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'delete',
-              label: '删除',
+              label: tr('common.delete'),
               icon: 'trash',
               testid: 'typo-delete',
               disabled: none,
@@ -463,7 +464,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'lock',
-              label: '锁定',
+              label: tr('rib.lock'),
               icon: 'lock',
               testid: 'typo-lock',
               disabled: none,
@@ -473,7 +474,7 @@ export function buildTypographyTabs(
             {
               kind: 'toggle',
               id: 'hide',
-              label: '隐藏',
+              label: tr('rib.hide'),
               icon: 'eye-off',
               testid: 'typo-hide',
               disabled: none,
@@ -488,12 +489,12 @@ export function buildTypographyTabs(
     /* ------------------------------------------------------------ 插入 */
     {
       id: 'insert',
-      label: '插入',
+      label: tr('rib.insert'),
       order: 1,
       groups: [
         {
           id: 'shapes',
-          label: '图形',
+          label: tr('rib.group.shapes'),
           items: [
             {
               // 做成下拉而不是图库：图库里塞 7 个形状要占掉 168px 宽 × 全高，
@@ -501,15 +502,15 @@ export function buildTypographyTabs(
               // 「离谱的列表挤在一个极小的区域」）。
               kind: 'select',
               id: 'shape-picker',
-              label: '形状',
+              label: tr('rib.shape'),
               testid: 'typo-shape',
               optionTestidPrefix: 'typo-shape-option',
               width: 128,
               // 动作型下拉：选完不改变显示值，所以连点同一个形状也会重新触发。
               value: SHAPE_PICK,
               options: [
-                { value: SHAPE_PICK, label: '选择形状…' },
-                ...SHAPE_PRESETS.map((p) => ({ value: p.key, label: p.label })),
+                { value: SHAPE_PICK, label: tr('rib.pickShape') },
+                ...SHAPE_PRESETS.map((p) => ({ value: p.key, label: tr(p.labelKey) })),
               ],
               onchange: (v) => {
                 const preset = SHAPE_PRESETS.find((p) => p.key === v);
@@ -520,12 +521,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'media',
-          label: '图片',
+          label: tr('rib.group.media'),
           items: [
             {
               kind: 'button',
               id: 'add-image',
-              label: '插入图片',
+              label: tr('rib.addImage'),
               icon: 'image-plus',
               testid: 'typo-add-image',
               onselect: () => a.addImage(),
@@ -538,24 +539,24 @@ export function buildTypographyTabs(
     /* ------------------------------------------------------------ 动画 */
     {
       id: 'anim',
-      label: '动画',
+      label: tr('rib.anim'),
       order: 2,
       groups: [
         {
           id: 'presets',
-          label: '预设',
+          label: tr('rib.group.presets'),
           items: [
             {
               kind: 'select',
               id: 'anim-preset',
-              label: '动画',
+              label: tr('rib.anim'),
               testid: 'typo-anim-preset',
               optionTestidPrefix: 'typo-anim-option',
               width: 140,
               value: input.activePreset ?? ANIM_PICK,
               options: [
-                { value: ANIM_PICK, label: '选择预设…' },
-                ...ANIM_PRESETS.map((p) => ({ value: p.id, label: p.label })),
+                { value: ANIM_PICK, label: tr('rib.pickAnim') },
+                ...ANIM_PRESETS.map((p) => ({ value: p.id, label: tr(p.labelKey) })),
               ],
               onchange: (v) => {
                 const preset = ANIM_PRESETS.find((p) => p.id === v);
@@ -565,7 +566,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'clear-anim',
-              label: '清除动画',
+              label: tr('rib.clearAnim'),
               icon: 'rotate-cw',
               testid: 'typo-anim-clear',
               disabled: none,
@@ -575,12 +576,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'anim-timing',
-          label: '时序',
+          label: tr('rib.group.timing'),
           items: [
             {
               kind: 'number',
               id: 'anim-delay',
-              label: '延迟',
+              label: tr('rib.animDelay'),
               testid: 'typo-anim-delay',
               value: anim?.delay ?? 0,
               min: 0,
@@ -593,7 +594,7 @@ export function buildTypographyTabs(
             {
               kind: 'number',
               id: 'anim-duration',
-              label: '时长',
+              label: tr('rib.animDuration'),
               testid: 'typo-anim-duration',
               value: anim?.duration ?? 0.6,
               min: 0.01,
@@ -606,16 +607,16 @@ export function buildTypographyTabs(
             {
               kind: 'select',
               id: 'anim-iterations',
-              label: '次数',
+              label: tr('rib.animIterations'),
               testid: 'typo-anim-iterations',
               value: anim ? (anim.iterations === Infinity ? 'inf' : String(anim.iterations)) : '1',
               disabled: !anim,
               options: [
-                { value: '1', label: '1 次' },
-                { value: '2', label: '2 次' },
-                { value: '3', label: '3 次' },
-                { value: '5', label: '5 次' },
-                { value: 'inf', label: '循环' },
+                { value: '1', label: tr('rib.iter1') },
+                { value: '2', label: tr('rib.iter2') },
+                { value: '3', label: tr('rib.iter3') },
+                { value: '5', label: tr('rib.iter5') },
+                { value: 'inf', label: tr('rib.iterLoop') },
               ],
               onchange: (v) =>
                 a.setAnimTiming({ iterations: v === 'inf' ? Infinity : Number(v) }),
@@ -623,46 +624,46 @@ export function buildTypographyTabs(
             {
               kind: 'select',
               id: 'anim-easing',
-              label: '缓动',
+              label: tr('rib.animEasing'),
               testid: 'typo-anim-easing',
               value: typeof anim?.easing === 'string' ? anim.easing : 'ease',
               disabled: !anim,
               options: [
-                { value: 'linear', label: '匀速' },
-                { value: 'ease', label: '默认' },
-                { value: 'ease-in', label: '渐快' },
-                { value: 'ease-out', label: '渐慢' },
-                { value: 'ease-in-out', label: '两端缓' },
+                { value: 'linear', label: tr('rib.easingLinear') },
+                { value: 'ease', label: tr('rib.easingEase') },
+                { value: 'ease-in', label: tr('rib.easingEaseIn') },
+                { value: 'ease-out', label: tr('rib.easingEaseOut') },
+                { value: 'ease-in-out', label: tr('rib.easingEaseInOut') },
               ],
               onchange: (v) => a.setAnimTiming({ easing: v as AnimTiming['easing'] }),
             },
             {
               kind: 'select',
               id: 'anim-direction',
-              label: '方向',
+              label: tr('rib.animDirection'),
               testid: 'typo-anim-direction',
               value: anim?.direction ?? 'normal',
               disabled: !anim,
               options: [
-                { value: 'normal', label: '正向' },
-                { value: 'reverse', label: '反向' },
-                { value: 'alternate', label: '往复' },
-                { value: 'alternate-reverse', label: '往复（反）' },
+                { value: 'normal', label: tr('rib.dirNormal') },
+                { value: 'reverse', label: tr('rib.dirReverse') },
+                { value: 'alternate', label: tr('rib.dirAlternate') },
+                { value: 'alternate-reverse', label: tr('rib.dirAlternateReverse') },
               ],
               onchange: (v) => a.setAnimTiming({ direction: v as AnimTiming['direction'] }),
             },
             {
               kind: 'select',
               id: 'anim-fill',
-              label: '填充',
+              label: tr('rib.animFill'),
               testid: 'typo-anim-fill',
               value: anim?.fill ?? 'both',
               disabled: !anim,
               options: [
-                { value: 'none', label: '不保留' },
-                { value: 'forwards', label: '保留终态' },
-                { value: 'backwards', label: '保留初态' },
-                { value: 'both', label: '两端都保留' },
+                { value: 'none', label: tr('rib.fillNone') },
+                { value: 'forwards', label: tr('rib.fillForwards') },
+                { value: 'backwards', label: tr('rib.fillBackwards') },
+                { value: 'both', label: tr('rib.fillBoth') },
               ],
               onchange: (v) => a.setAnimTiming({ fill: v as AnimTiming['fill'] }),
             },
@@ -670,12 +671,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'anim-edit',
-          label: '编辑',
+          label: tr('rib.group.edit'),
           items: [
             {
               kind: 'button',
               id: 'custom-css',
-              label: '自定义 CSS',
+              label: tr('rib.customCss'),
               icon: 'wand-sparkles',
               testid: 'typo-anim-css',
               disabled: none,
@@ -684,7 +685,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'clear-anim',
-              label: '清除动画',
+              label: tr('rib.clearAnim'),
               icon: 'rotate-cw',
               testid: 'typo-anim-clear',
               disabled: none,
@@ -693,7 +694,7 @@ export function buildTypographyTabs(
             {
               kind: 'button',
               id: 'flatten',
-              label: '转为图片',
+              label: tr('rib.flatten'),
               icon: 'image',
               testid: 'typo-flatten',
               onselect: () => input.onFlatten(),
@@ -706,18 +707,18 @@ export function buildTypographyTabs(
     /* ------------------------------------------- [Contextual] 图形格式 */
     {
       id: 'shape-format',
-      label: '图形格式',
+      label: tr('rib.shapeFormat'),
       contextual: true,
       order: 10,
       groups: [
         {
           id: 'fill',
-          label: '填充',
+          label: tr('rib.group.fill'),
           items: [
             {
               kind: 'color',
               id: 'shape-fill',
-              label: '填充',
+              label: tr('rib.shapeFill'),
               icon: 'paint-bucket',
               testid: 'ribbon-shape-fill',
               value: shape?.fill.kind === 'solid' ? shape.fill.color : '#6f64ef',
@@ -727,12 +728,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'stroke',
-          label: '描边',
+          label: tr('rib.group.stroke'),
           items: [
             {
               kind: 'color',
               id: 'shape-stroke',
-              label: '描边色',
+              label: tr('rib.strokeColor'),
               icon: 'square-dashed',
               testid: 'ribbon-shape-stroke',
               value: shape?.stroke?.color ?? '#ffffff',
@@ -741,7 +742,7 @@ export function buildTypographyTabs(
             {
               kind: 'number',
               id: 'stroke-width',
-              label: '线宽',
+              label: tr('rib.strokeWidth'),
               testid: 'ribbon-stroke-width',
               value: shape?.stroke?.width ?? 0,
               min: 0,
@@ -752,12 +753,12 @@ export function buildTypographyTabs(
             {
               kind: 'select',
               id: 'stroke-style',
-              label: '线型',
+              label: tr('rib.strokeStyle'),
               testid: 'ribbon-stroke-style',
               value: shape?.stroke?.style ?? 'solid',
               options: LINE_STYLES.map((s) => ({
                 value: s,
-                label: s === 'solid' ? '实线' : s === 'dashed' ? '虚线' : '点线',
+                label: s === 'solid' ? tr('rib.lineSolid') : s === 'dashed' ? tr('rib.lineDashed') : tr('rib.lineDotted'),
               })),
               onchange: (v) => a.setShapeStrokeStyle(v as (typeof LINE_STYLES)[number]),
             },
@@ -765,12 +766,12 @@ export function buildTypographyTabs(
         },
         {
           id: 'shape',
-          label: '形状',
+          label: tr('rib.group.shape'),
           items: [
             {
               kind: 'number',
               id: 'radius',
-              label: '圆角',
+              label: tr('rib.radius'),
               testid: 'ribbon-shape-radius',
               value: shape?.radius ?? 0,
               min: 0,
@@ -786,25 +787,25 @@ export function buildTypographyTabs(
     /* ------------------------------------------- [Contextual] 图片格式 */
     {
       id: 'image-format',
-      label: '图片格式',
+      label: tr('rib.imageFormat'),
       contextual: true,
       order: 11,
       groups: [
         {
           id: 'image-fit',
-          label: '图片样式',
+          label: tr('rib.group.imageStyle'),
           items: [
             {
               kind: 'select',
               id: 'image-fit',
-              label: '适配',
+              label: tr('rib.imageFit'),
               testid: 'ribbon-image-fit',
               value: image?.fit ?? 'cover',
               options: [
-                { value: 'fill', label: '拉伸' },
-                { value: 'contain', label: '完整显示' },
-                { value: 'cover', label: '铺满裁切' },
-                { value: 'none', label: '原始尺寸' },
+                { value: 'fill', label: tr('rib.fitFill') },
+                { value: 'contain', label: tr('rib.fitContain') },
+                { value: 'cover', label: tr('rib.fitCover') },
+                { value: 'none', label: tr('rib.fitNone') },
               ],
               onchange: (v) => a.setImageFit(v as ImageElement['fit']),
             },
@@ -822,21 +823,21 @@ export function buildTypographyTabs(
 function effectsGroup(blend: MixBlend, opacity: number, a: TypographyActions) {
   return {
     id: 'effects',
-    label: '艺术效果',
+    label: tr('rib.group.effects'),
     items: [
       {
         kind: 'select' as const,
         id: 'blend',
-        label: '混合模式',
+        label: tr('rib.blend'),
         testid: 'ribbon-blend',
         value: blend,
-        options: MIX_BLENDS.map((m) => ({ value: m.id, label: m.label })),
+        options: MIX_BLENDS.map((m) => ({ value: m.id, label: tr(m.labelKey) })),
         onchange: (v: string) => a.setBlend(v as MixBlend),
       },
       {
         kind: 'number' as const,
         id: 'opacity',
-        label: '不透明度',
+        label: tr('rib.opacity'),
         testid: 'ribbon-opacity',
         value: opacity,
         min: 0,

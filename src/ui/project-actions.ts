@@ -37,6 +37,7 @@ import { createBlankProject, createDemoProject, DEMO_ASSET_ID } from '../core/de
 import { renderDemoAudio } from '../audio/demo-audio';
 import { decodeAudio, computeWaveform } from '../audio/decode';
 import { mimeForImageFilename, putImageBytes } from '../typography/image-assets';
+import { tr } from '../i18n/index.svelte';
 
 function msg(e: unknown): string {
   if (e instanceof NotAProjectError) return e.message;
@@ -59,7 +60,7 @@ export function refreshRecentProjects(): void {
 export function registerDemoAssets(target: AssetStore = appState.assets): void {
   target.putGenerated(DEMO_ASSET_ID, {
     kind: 'audio',
-    name: '演示节拍 120 BPM',
+    name: tr('tl.demoAudioAsset'),
     originName: 'demo-song',
   });
 }
@@ -87,7 +88,7 @@ export async function newProject(demo = false): Promise<void> {
     appState.waveforms = { ...appState.waveforms, [DEMO_ASSET_ID]: await computeWaveform(buf) };
   }
 
-  appState.flash(demo ? '已新开一份演示工程（尚未保存到磁盘）' : '已新开一份空白工程（尚未保存到磁盘）');
+  appState.flash(demo ? tr('proj.newDemoFlash') : tr('proj.newBlankFlash'));
 }
 
 /* ------------------------------------------------------------ 打开 */
@@ -128,13 +129,13 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     // 每次都弹一句「有 N 个问题」会让真正该看的 missing 被淹没。
     const problems = res.issues.filter((i) => i.severity === 'error').length;
     if (problems) {
-      appState.flash(`已打开「${dir.name}」，但有 ${problems} 个素材找不到 —— 见「工程」面板`, 'error');
+      appState.flash(tr('proj.openedWithProblems', { name: dir.name, problems }), 'error');
     } else {
-      appState.flash(`已打开「${dir.name}」 · ${loaded.loaded} 个素材`, 'success');
+      appState.flash(tr('proj.openedAssets', { name: dir.name, n: loaded.loaded }), 'success');
     }
     return true;
   } catch (e) {
-    appState.flash(`打开失败：${msg(e)}`, 'error');
+    appState.flash(tr('err.io.openFailed', { detail: msg(e) }), 'error');
     return false;
   } finally {
     appState.projectBusy = false;
@@ -145,7 +146,7 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
 export async function openProjectPicker(): Promise<boolean> {
   if (appState.projectBusy) return false;
   if (!hasDirectoryPicker()) {
-    appState.flash('这个浏览器不支持打开本地目录（需要 Chrome / Edge）', 'error');
+    appState.flash(tr('err.platform.openDirUnsupported'), 'error');
     return false;
   }
   const picked = await pickDirectory({ mode: 'readwrite', id: 'artmatic-open' });
@@ -184,7 +185,7 @@ export async function openRecentProject(ref: ProjectRef): Promise<boolean> {
   if (appState.projectBusy) return false;
   const raw = await getHandle(ref.key);
   if (!raw) {
-    appState.flash(`「${ref.name}」的访问凭据已失效，请用「打开工程」重新选择目录`, 'error');
+    appState.flash(tr('proj.credentialExpired', { name: ref.name }), 'error');
     return false;
   }
   const dir = adoptNativeDir(raw);
@@ -193,7 +194,7 @@ export async function openRecentProject(ref: ProjectRef): Promise<boolean> {
   if ((await queryPermission(dir, 'readwrite')) !== 'granted') {
     const state = await requestPermission(dir, 'readwrite');
     if (state !== 'granted') {
-      appState.flash(`没有拿到「${ref.name}」的访问权限`, 'error');
+      appState.flash(tr('proj.permissionDenied', { name: ref.name }), 'error');
       return false;
     }
   }
@@ -233,16 +234,22 @@ async function writeTo(dir: FsDirHandle, key: string): Promise<boolean> {
     // 保存成功了，但带着警告 —— 用中性的 info 而不是绿色：
     // 绿字会说「一切都好」，而这里有东西需要看。
     if (report.warnings.length) {
-      appState.flash(`已保存（${report.warnings.length} 条警告）：${report.warnings[0]}`);
+      appState.flash(
+        tr('proj.savedWithWarnings', { n: report.warnings.length, first: report.warnings[0] }),
+      );
     } else {
       appState.flash(
-        `已保存 · ${report.assetsWritten} 个素材 · ${(report.project.bytes / 1024).toFixed(1)} KB · ${report.durationMs} ms`,
+        tr('proj.savedAssets', {
+          n: report.assetsWritten,
+          size: (report.project.bytes / 1024).toFixed(1),
+          ms: report.durationMs,
+        }),
         'success',
       );
     }
     return true;
   } catch (e) {
-    appState.flash(`保存失败：${msg(e)}`, 'error');
+    appState.flash(tr('err.io.saveFailed', { detail: msg(e) }), 'error');
     return false;
   } finally {
     appState.projectBusy = false;
@@ -253,7 +260,7 @@ async function writeTo(dir: FsDirHandle, key: string): Promise<boolean> {
 export async function saveProjectAs(): Promise<boolean> {
   if (appState.projectBusy) return false;
   if (!hasDirectoryPicker()) {
-    appState.flash('这个浏览器不支持保存到本地目录（需要 Chrome / Edge）', 'error');
+    appState.flash(tr('err.platform.saveDirUnsupported'), 'error');
     return false;
   }
   const picked = await pickDirectory({ mode: 'readwrite', id: 'artmatic-save' });
