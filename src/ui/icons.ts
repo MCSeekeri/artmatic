@@ -9,74 +9,172 @@
  * 解析一个万行 barrel 文件，冷启动与 HMR 都更快。代价是不能用别名——所以下面
  * 全部是 `dist/icons/*.svelte` 里存在独立组件的名字（`trash-2`、`vertical-ellipsis`
  * 这类只有 .js 别名的**不能**直连，已改用 `trash` / `ellipsis-vertical`）。
+ *
+ * 踩过的坑：文本对齐的图标在 Lucide 里叫 `text-align-start/-center/-end/-justify`，
+ * **不是** `align-left` 那套（那四个名字没有独立组件文件）。排版 Ribbon 一开始
+ * 就是照着 `align-left` 写的，编译直接报「找不到模块」。
  */
 
+import AlignCenterHorizontal from '@lucide/svelte/icons/align-center-horizontal';
+import AlignCenterVertical from '@lucide/svelte/icons/align-center-vertical';
+import AlignEndHorizontal from '@lucide/svelte/icons/align-end-horizontal';
+import AlignEndVertical from '@lucide/svelte/icons/align-end-vertical';
+import AlignHorizontalSpaceBetween from '@lucide/svelte/icons/align-horizontal-space-between';
+import AlignStartHorizontal from '@lucide/svelte/icons/align-start-horizontal';
+import AlignStartVertical from '@lucide/svelte/icons/align-start-vertical';
+import AlignVerticalSpaceBetween from '@lucide/svelte/icons/align-vertical-space-between';
 import ArrowDown from '@lucide/svelte/icons/arrow-down';
 import ArrowUp from '@lucide/svelte/icons/arrow-up';
+import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
+import Blend from '@lucide/svelte/icons/blend';
+import Bold from '@lucide/svelte/icons/bold';
+import BringToFront from '@lucide/svelte/icons/bring-to-front';
 import Check from '@lucide/svelte/icons/check';
 import ChevronRight from '@lucide/svelte/icons/chevron-right';
+import Circle from '@lucide/svelte/icons/circle';
+import Clock from '@lucide/svelte/icons/clock';
+import Copy from '@lucide/svelte/icons/copy';
+import Crop from '@lucide/svelte/icons/crop';
 import Diamond from '@lucide/svelte/icons/diamond';
 import Download from '@lucide/svelte/icons/download';
+import Droplet from '@lucide/svelte/icons/droplet';
 import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 import Eye from '@lucide/svelte/icons/eye';
 import EyeOff from '@lucide/svelte/icons/eye-off';
 import FlaskConical from '@lucide/svelte/icons/flask-conical';
+import Hexagon from '@lucide/svelte/icons/hexagon';
+import ImageIcon from '@lucide/svelte/icons/image';
+import ImagePlus from '@lucide/svelte/icons/image-plus';
+import ImportIcon from '@lucide/svelte/icons/import';
 import Info from '@lucide/svelte/icons/info';
+import Italic from '@lucide/svelte/icons/italic';
 import Keyboard from '@lucide/svelte/icons/keyboard';
+import Lock from '@lucide/svelte/icons/lock';
+import LockOpen from '@lucide/svelte/icons/lock-open';
 import Megaphone from '@lucide/svelte/icons/megaphone';
 import MegaphoneOff from '@lucide/svelte/icons/megaphone-off';
 import Minimize2 from '@lucide/svelte/icons/minimize-2';
+import Minus from '@lucide/svelte/icons/minus';
 import Moon from '@lucide/svelte/icons/moon';
+import MoveDown from '@lucide/svelte/icons/move-down';
+import MoveHorizontal from '@lucide/svelte/icons/move-horizontal';
+import MoveUp from '@lucide/svelte/icons/move-up';
 import Music from '@lucide/svelte/icons/music';
+import PaintBucket from '@lucide/svelte/icons/paint-bucket';
 import PanelRight from '@lucide/svelte/icons/panel-right';
+import Palette from '@lucide/svelte/icons/palette';
 import Pause from '@lucide/svelte/icons/pause';
 import Pencil from '@lucide/svelte/icons/pencil';
 import Play from '@lucide/svelte/icons/play';
 import Plus from '@lucide/svelte/icons/plus';
+import RotateCw from '@lucide/svelte/icons/rotate-cw';
 import Save from '@lucide/svelte/icons/save';
 import Scissors from '@lucide/svelte/icons/scissors';
 import Search from '@lucide/svelte/icons/search';
+import SendToBack from '@lucide/svelte/icons/send-to-back';
 import Settings from '@lucide/svelte/icons/settings';
+import Shapes from '@lucide/svelte/icons/shapes';
+import Sigma from '@lucide/svelte/icons/sigma';
+import Sparkles from '@lucide/svelte/icons/sparkles';
 import Square from '@lucide/svelte/icons/square';
+import SquareDashed from '@lucide/svelte/icons/square-dashed';
+import Star from '@lucide/svelte/icons/star';
+import Strikethrough from '@lucide/svelte/icons/strikethrough';
 import Sun from '@lucide/svelte/icons/sun';
+import TextAlignCenter from '@lucide/svelte/icons/text-align-center';
+import TextAlignEnd from '@lucide/svelte/icons/text-align-end';
+import TextAlignJustify from '@lucide/svelte/icons/text-align-justify';
+import TextAlignStart from '@lucide/svelte/icons/text-align-start';
+import Timer from '@lucide/svelte/icons/timer';
 import Trash from '@lucide/svelte/icons/trash';
+import Triangle from '@lucide/svelte/icons/triangle';
+import Type from '@lucide/svelte/icons/type';
+import Underline from '@lucide/svelte/icons/underline';
+import Upload from '@lucide/svelte/icons/upload';
 import Video from '@lucide/svelte/icons/video';
 import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
 import X from '@lucide/svelte/icons/x';
 
 /** 名字 → 组件。新增图标只在这里加一行，调用点写 `name="eye"` 即得类型检查。 */
 export const ICONS = {
+  'align-center-horizontal': AlignCenterHorizontal,
+  'align-center-vertical': AlignCenterVertical,
+  'align-end-horizontal': AlignEndHorizontal,
+  'align-end-vertical': AlignEndVertical,
+  'align-horizontal-space-between': AlignHorizontalSpaceBetween,
+  'align-start-horizontal': AlignStartHorizontal,
+  'align-start-vertical': AlignStartVertical,
+  'align-vertical-space-between': AlignVerticalSpaceBetween,
   'arrow-down': ArrowDown,
   'arrow-up': ArrowUp,
+  'arrow-up-down': ArrowUpDown,
   'audio-lines': AudioLines,
+  blend: Blend,
+  bold: Bold,
+  'bring-to-front': BringToFront,
   check: Check,
   'chevron-right': ChevronRight,
+  circle: Circle,
+  clock: Clock,
+  copy: Copy,
+  crop: Crop,
   diamond: Diamond,
   download: Download,
+  droplet: Droplet,
   'ellipsis-vertical': EllipsisVertical,
   eye: Eye,
   'eye-off': EyeOff,
   'flask-conical': FlaskConical,
+  hexagon: Hexagon,
+  image: ImageIcon,
+  'image-plus': ImagePlus,
+  import: ImportIcon,
   info: Info,
+  italic: Italic,
   keyboard: Keyboard,
+  lock: Lock,
+  'lock-open': LockOpen,
   megaphone: Megaphone,
   'megaphone-off': MegaphoneOff,
   'minimize-2': Minimize2,
+  minus: Minus,
   moon: Moon,
+  'move-down': MoveDown,
+  'move-horizontal': MoveHorizontal,
+  'move-up': MoveUp,
   music: Music,
+  'paint-bucket': PaintBucket,
   'panel-right': PanelRight,
+  palette: Palette,
   pause: Pause,
   pencil: Pencil,
   play: Play,
   plus: Plus,
+  'rotate-cw': RotateCw,
   save: Save,
   scissors: Scissors,
   search: Search,
+  'send-to-back': SendToBack,
   settings: Settings,
+  shapes: Shapes,
+  sigma: Sigma,
+  sparkles: Sparkles,
   square: Square,
+  'square-dashed': SquareDashed,
+  star: Star,
+  strikethrough: Strikethrough,
   sun: Sun,
+  'text-align-center': TextAlignCenter,
+  'text-align-end': TextAlignEnd,
+  'text-align-justify': TextAlignJustify,
+  'text-align-start': TextAlignStart,
+  timer: Timer,
   trash: Trash,
+  triangle: Triangle,
+  type: Type,
+  underline: Underline,
+  upload: Upload,
   video: Video,
   'wand-sparkles': WandSparkles,
   x: X,
@@ -91,3 +189,11 @@ export const TRACK_ICON = {
   visual: { on: 'eye', off: 'eye-off' },
   audio: { on: 'megaphone', off: 'megaphone-off' },
 } as const satisfies Record<string, { on: IconName; off: IconName }>;
+
+/** 片段类型的图标（排版片段在轨道上用的是 `type`）。 */
+export const CLIP_ICON = {
+  source: 'video',
+  text: 'type',
+  effect: 'flask-conical',
+  audio: 'audio-lines',
+} as const satisfies Record<string, IconName>;

@@ -22,6 +22,11 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 |---|---|---|
 | `fflate` | MIT | PNG 序列导出打 zip |
 | Lucide | ISC | UI 图标（`@lucide/svelte`，按组件 tree-shaking） |
+| `@zumer/snapdom` | MIT | 排版层光栅化（ADR-003 的 `dom-snap` 后端）。把 DOM 子树序列化并栅格化为位图 |
+| Inter（`public/fonts/inter-latin-{400,700}.woff2`） | OFL-1.1 | 内置西文字体。随软件分发，许可原文见 `public/fonts/OFL.txt` |
+
+> **字体许可**：系统字体（simhei / msyh 等）通常**不允许**随软件分发，所以
+> 内置的只有 OFL 的 Inter；中文字体由用户自行导入，字节只存在用户本机。
 
 ## 明确不使用（许可冲突）
 

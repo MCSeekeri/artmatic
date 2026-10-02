@@ -203,6 +203,20 @@ interface TextRasterizer {
 
 后端优先级：`hic`（HTML-in-Canvas，API 稳定后用）→ `dom-snap`（现在用）→ `canvas2d`（极简场景）→ `png-import`（逃生舱）。
 
+**落地状态（M4，2026-10-01）**：
+
+- 四条规则**全部落地**：① 由 HarfBuzz WASM 实现（见 ADR-010）；② 恒为 `true`/`'auto'`；
+  ③ `FontRegistry.ensure()` 内部 await `document.fonts.ready`；④ `bakeAnimations()`。
+- ⚠️ **本 ADR 上文引用的「0.7 ms/帧」是 snapDOM 自己的捕获耗时，不是整条链路的。**
+  实测整条排版光栅化（建 DOM → 序列化 → SVG→Canvas）在 **1920×1080 下是 16.2 ms/帧**
+  （子集字体，稳态中位数）。子集化**直接消掉的是字体内联那 155 ms**：
+  同一文档在 `900×200` 下，全量 9.5 MB 中文字体 **165 ms/帧** vs 子集字体 **10 ms/帧**。
+  引用这两个数时务必分清「内联成本」与「整条链路成本」。
+- `hic` 的位置留好了，而且 snapDOM 3.x 自己就有 `engine: 'html-in-canvas'`（不支持时静默回退），
+  等它在这个 Electron 版本上通了，改 `backends/dom-snap.ts` 的一个选项即可。
+- `png-import` 没有做成独立后端：既有 `image` 源 + 「转为图片」动作已经覆盖它的全部用途
+  （`ui/typography/actions.ts` 的 `flattenToImage`）。
+
 ### ADR-004 · HTML-in-Canvas 只留接口，不做依赖
 
 **实测状态**（Chrome 154 + `--enable-features=CanvasDrawElement`）：
@@ -267,6 +281,99 @@ DaVinci 的直觉完全相反（用户实测报上来：「z 轴好像是轨道�
 
 **理由**：Terminal-Native 取向是「密度即特性」——同屏能多出 40% 的轨道，信息密度本身就是
 这类工具的价值。
+
+### ADR-008 · 排版编辑器 = 顶栏选项卡宿主，双击 Source 片段打开
+
+**决定**：
+1. 编辑器是**顶栏的一个临时页**（`appState.shellTabs`），不是 modal、也不是抽屉。
+   时间轴页常驻且**永不卸载**（卸载 `Preview` 的 `<canvas>` 会丢 WebGL 上下文，
+   `kit` 里所有 `Program`/`Target`/纹理一起失效，且无法恢复），所以切页只是
+   `display:none`，并配 `appState.tick()` 早退。
+2. **双击片段 = 打开它自己的编辑器，一律不切分。** 目前只有 `text` 源有独立页面，
+   其余类型聚焦检查器。切分保留 `S` 键与检查器的「在播放头切分」两个入口。
+3. **M4 不做 per-editor 脏标记。** 排版编辑全程直写工程（可撤销），编辑器内不存在
+   「未提交的本地状态」，没有「关 tab 会丢」的东西。需要脏标记的是「工程 vs 磁盘」，
+   那是 M5 的事。
+4. 快捷键按**分流**处理而不是逐条加判断：`App.svelte` 的 `onKey` 在编辑器打开时
+   整段交给 `ui/typography/keys.ts`。于是 `S`（切分）与 `Alt+↑↓`（移轨）在排版页
+   **自然失效**，不需要在时间轴的每条分支上加 `if (!editorOpen)`。
+
+**理由**：双击是最高误触的手势，把破坏性操作（切分）绑在上面迟早出事；而
+「双击 = 打开」对四类片段是同一心智，M5 接入 video / image 的独立页面时只需要改
+`appState.openClipEditor`，`ClipView` 一行都不用动。
+
+**配套**：`appState.tick()` 在编辑器打开时早退（`.body` 隐藏后 `measureDisplaySize()`
+会量到 0 并触发 `UNMEASURED_MAX_PIXELS` 兜底分配），但**播放头照常推进** ——
+排版页的 CSS 动画就是靠 `playT` 驱动 seek 的。关 tab 时必须取消未结算的手势
+（`registerGestureCancel`）：绝不能让 `beginTx` 悬空，否则之后每次 commit 都会被
+并进那个事务里，撤销栈整个错乱。
+
+### ADR-009 · 光栅化缓存键 =(docHash, 输出尺寸, 帧号)；静态文档走单帧快速路径
+
+1. 缓存键 = `docHash(doc) | WxH | frame`。`docHash` **只哈希 `clip.source.doc`**，
+   不掺 `store.version` —— 否则改一下无关片段的名字就把所有排版缓存击穿了。
+2. **静态文档（`docIsAnimated === false`）的帧号是 `null`** ⇒ 尺寸相同就永远命中同一条缓存。
+   带帧号会让一张标题卡每帧重做一遍，而且**看不出来**（只是慢）。
+3. **默认不做预烘焙 PNG 序列。** 1080p 一帧 RGBA = 8.3 MB，150 帧 = **1.24 GB**；
+   逐帧按需光栅 + LRU 常驻只需 1–2 张纹理。序列的唯一优势是「把昂贵的光栅化挪到导出前」，
+   但 16 ms/帧不是瓶颈（瓶颈在编码器背压），静态文档本来就只付一次。
+4. 内存预算：`MAX_RASTER_EDGE = 4096`、预览 48 MB / 32 条、**导出期收紧到 2 条**。
+5. **分辨率不需要 `if (isExport)` 分支。** `renderW/renderH` 就是 `kit.w/kit.h`：
+   预览时它已经是适配后的小尺寸，导出时它就是输出分辨率。光栅尺寸由 `drawSizeFor`
+   反推，纹理宽高比与文档一致 ⇒ 摆放尺寸与光栅分辨率无关 ⇒ `previewScale`（1 / 0.5 / 0.25）
+   只影响清晰度，不影响版式。
+
+**与硬约束 1.1 的关系（必须写清，否则会被人误判为违宪）**：导出循环里新增了
+`await renderer.prepareFrame(project, t)`。1.1 禁止的是**用 rAF 驱动导出**，并要求
+for 循环只受编码器背压约束；这次 await 与已有的 `await sink.submit` 同类 —— 是
+**渲染前准备 + 协作式背压**，没有引入第二个时钟。之所以必须有它：文字位图来自
+**异步**光栅化，而预览允许「这一帧缺席」，导出不允许（缺席就是那一帧真的没有文字）。
+
+### ADR-010 · 字体为引用而非内嵌 + HarfBuzz WASM 子集化
+
+| 项 | 结论 |
+|---|---|
+| 工程文件里存什么 | **只存引用**（`FontRef`）。9 MB 中文字体 base64 进 `project.json` 会把工程文件变成不可用的大 blob |
+| 内置字体 | 只内置 **OFL 的 Inter**（`public/fonts/inter-latin-{400,700}.woff2`，各 ~24 KB）+ 许可原文 |
+| 中文字体 | **用户自行导入**（`platform.pickFontFiles()`），字节只存用户本机 |
+| 子集化 | `harfbuzzjs`（MIT，**零传递依赖**，wasm 651 KB **懒加载**，不进主 bundle） |
+
+**按 face 而不是按族组织**（踩过）：Inter 的 400 与 700 是**两个文件**。一族只存一份
+字节的话，粗体只能由浏览器合成，而舞台用的是真正的 700 字面 —— 「预览是真粗体、
+导出是合成粗体」，字宽与笔画都不同，逐像素一比就是几万个像素。所以最小单位是
+`family + weight + style`，`localFonts()` 把一个族展开成多条。
+
+**实测（2026-10-01，本机）**：
+
+| 输入 | 全量 | 子集 | 冷路径耗时 |
+|---|---|---|---|
+| `simhei.ttf`（CJK） | 9517 KB | **6.4 KB（0.067%）** | 22.6 ms |
+| `inter-latin-400.woff2` | — | **不可子集化**（`hb_subset_or_fail` 返回 0） | — |
+
+- HarfBuzz 的 subset **只吃 SFNT（TTF/OTF）**；woff/woff2 走「原样内联」分支
+  （`isSubsettable()`）。woff2 本身是压缩格式，体积可控。
+- 本项目的 `harfbuzzjs` 构建**没有导出** `hb_subset_input_set_drop_hints`，hinting 被保留了 ——
+  实测 6.4 KB 反而比技术笔记里 `pyftsubset --no-hinting` 的 12 KB 更小，不是问题。代码用 `?.` 容错。
+- 缓存键 = `hash(faceId + 字形集)`，字形集由 `collectGlyphs` 产出（**已排序去重**），
+  所以打字顺序不同不会产生不同的键。字形集只在打字时变化，命中率极高。
+
+**四个必须写进注释的坑**（`typography/font/subset-hb.ts`）：
+1. `memory.buffer` 的视图会在 wasm 内存增长后 detach。官方示例抓一次一路用到底是**运气**；
+   每次用堆视图前都重取。
+2. `hb_blob_get_data` 返回的是堆上指针，必须先 `.slice()` 再销毁 blob。
+3. `hb_blob_create` 用了 `HB_MEMORY_MODE_WRITABLE`，源数据要到最后才 `free`。
+4. 必须 `for (const ch of glyphs)`（按**码点**）；用 `.length` 索引会把代理对切碎。
+
+**验证方式**：`FontRegistry.subsetting` 是可关的开关，关掉退回整体内联。
+`tests/e2e/typography-font.spec.ts` 用它做对照组，断言**子集 vs 全量逐像素零差异** ——
+这是唯一能证明「子集化没有改动字形或度量」的测试。
+
+**纹理上传方向（不是 ADR，是必须记住的实现事实）**：`VERT_QUAD` 里 `vUv = aPos*0.5+0.5`，
+v=0 是**底部**；而 `texImage2D` 默认把图像首行放到 v=0。排版纹理上传因此必须
+`UNPACK_FLIP_Y_WEBGL = true`，否则文字与图形全上下颠倒。
+`typography-export.spec.ts` 有一条**方向断言**钉着它（把图形放在文档顶部，断言它在
+readPixels 里落在 y 靠后的位置）。⚠️ `SourceManager.setImage` 与 algo 的 R8 上传路径
+**没有** flip —— 前者目前零调用方，后者只测过确定性、没测过方向，都值得复核。
 
 ## 5. 数据模型
 
@@ -359,6 +466,13 @@ function buildStack(project: Project, t: number): Stack {
 **跨轨**：`track.clips` 的兼容判据只有一条 `ProjectStore.canHost(track, clip)`（音频片段只进音频轨，画面/特效片段只进视觉轨），拖拽与 Alt+↑↓ 共用，不许各写一套。拖拽期间实时搬家（因此指针监听挂在 `window` 而不是 `setPointerCapture`——元素会在两个 `{#each}` 块之间重建，捕获随之失效）。
 
 **布局约定**：针对时间轴的操作（播放、拍网格、吸附、重叠策略、时长、缩放）一律放在**轨道正上方**的工具条里，不要挪回窗口顶部。
+
+**页面宿主（2026-10-01 补）**：顶栏的选项卡是**页面**级的容器（时间轴页常驻 + 排版编辑页临时）。
+`.shell` 之下多了一层 `.content`，它有两列：**左侧是常驻的窄侧栏**（工程级动作、设置、
+明暗切换不该随页面消失），右侧的 `.page` 才是页面宿主，用 `display:none` 在
+「时间轴主界面」与「排版编辑页」之间切换（**主界面绝不卸载**，ADR-008 第 1 条）。
+新增页面级编辑器时照这个形状加：`appState.shellTabs` 里一个判别联合分支 +
+`.page` 里一个 `{#if}`。
 
 **例外——工程级动作归窄侧栏**（2026-10-01 调整）：保存、导出这类「对整份工程」的动作放在最左侧的窄图标栏里，与「逐帧/逐拍」的时间轴操作分开。导出的**触发入口**因此从工具条搬进了侧栏的导出面板（`[data-testid=rail-export]` → `[data-testid=export-png]`）；工具条里只剩播放头与拍网格相关的东西。
 
@@ -458,19 +572,32 @@ follower(attack, release)                            // 非对称攻放包络
 
 > **警告**：angel-echo 里没有"分形靠 10 帧跳帧"这回事——分形是逐帧实时算的，全仓库唯一的 `stride` 是频谱图**行**降采样。带着错误预设做帧缓存会破坏确定性。真正的性能手段是：内部半分辨率 + nearest 放大、90 帧均值超 30ms 自动降档、粒子预算随档位缩放 `[1, 0.55, 0.3]`、渲染目标尺寸不变则复用。
 
-### M4 · 排版
+### M4 · 排版 ✅（2026-10-01 完成）
 
-- [ ] `typography/`：`TypographyDocument` 模型 + 独立编辑器（**只做静态版式 + 关键帧变换**，不做逐字动画）
-- [ ] `TextRasterizer` 接口 + `dom-snap` 后端（ADR-003 的四条规则）
-- [ ] `png-import` 后端（一等公民，第一天就有）
-- [ ] 字体子集化流程：字形集收集 → 按哈希缓存 → 输出子集字体
-- [ ] 中文禁则规则表 + 中西文自动间距
-- [ ] 字形按需光栅化 + LRU 缓存（缓存键含字号）
+**编辑器形态**：一个独立的**顶栏选项卡页**，UI 参考 PowerPoint 的 Ribbon（数据驱动的
+Tab / 分组 / 按钮，含 Contextual Tab 与横向滚动）。原文「只做静态版式 + 关键帧变换」
+被升级为「静态版式 + CSS 动画 + 可编排变换」，「逐字动画」仍然明确不做。
 
-**验收**：中英混排标题在 1920×1080 下，导出与预览逐像素一致；子集化后单帧光栅化 < 2 ms。
+| 原计划项 | 处置 |
+|---|---|
+| `typography/` 模型 + 独立编辑器 | **完成 + 升级**（Ribbon 范式；见 ADR-008） |
+| `TextRasterizer` + `dom-snap`（ADR-003 四条规则） | **完成**，①②③④ 全部落地（ADR-003 落地状态） |
+| `png-import` 后端（一等公民） | **改写**：不做独立后端，由 `image` 源 + 「转为图片」动作覆盖 |
+| 字体子集化流程 | **完成**（HarfBuzz WASM，见 ADR-010） |
+| 中文禁则 + 中西文自动间距 | **推迟**：`TextStyle.textAutospace` 已留字段，等 CSS `text-autospace` 普及 |
+| 字形按需光栅化 + LRU | **改写**：字形级交给 HarfBuzz 子集 + 浏览器；本项目做**位图级 LRU**（ADR-009） |
+
+**验收（实测 2026-10-01）**：
+- 导出与预览的一致性是**结构证明**的：舞台与光栅化共用同一个 `buildDocDom` 与同一份
+  `css.ts` 声明表，物理上不可能不同步；「光栅预览」开关是用来**验证**这一点的。
+- 子集化把 9.5 MB 中文字体裁到 6.4 KB（0.067%），**子集 vs 全量逐像素零差异**（E2E 对照组）。
+- 单帧光栅化：900×200 下 10 ms、**1920×1080 下 16.2 ms**（稳态中位数）。原计划写的
+  「< 2 ms」是只算 snapDOM 捕获的数字，整条链路达不到也不必要 —— 静态文档只付一次。
 
 **明确不做**：OpenType 高级特性（small-caps / 旧式数字）、TeX 级断行、逐字动画。
-**字体许可要提前定**：子集化属于修改，系统字体通常不允许随软件分发。正式产品用 OFL 字体（思源黑体 / Noto Sans CJK）或做成用户自备。
+
+**字体许可**：内置的只有 OFL 的 Inter；中文字体由用户自备（系统字体通常不允许再分发）。
+见 CREDITS.md。
 
 ### M5 · Electron 壳与工程文件
 
@@ -518,6 +645,108 @@ npm run dist                # electron-builder 打包（M5 才有）
 - **E2E 选择器两条坑**：
   1. ~~检查器的 `.kf > .row` 与时间轴的 `.row` 同名~~ —— 已由 `Field` 组件消除（参数行不再用 `.row`）。选轨道行仍写 `[data-testid=tl-row]`。
   2. 轨道行数多时轨道区会出纵向滚动条，用 `boundingBox()` 拿到的行可能落在视口外（鼠标事件会被钳到视口边界，`elementFromPoint` 返回 `html`）。要么把 `viewport` 开高，要么先 `scrollTop = scrollHeight` 再量。
+
+### ⚠️ 界面实时性（2026-10-01 一轮 bug 后立，条条都真咬过）
+
+**这是本项目最容易反复踩的一类 bug，而且测试抓不到。** 症状统一是「store 改了、
+界面没改，退出重进才更新」，控制台一片安静、不抛任何错。一次用户验收报了 5 个
+bug，其中 4 个是同一个根因。
+
+**根因一：Svelte 5 的 `$derived` / `{#each}` 靠 `===` 判断传播。**
+
+元素是**原地改**的普通对象（`clip.frame.x = ...`），引用不变 ⇒ 派生重跑了但
+「值没变」⇒ 依赖它的模板 effect 静默断更。
+
+- **规则：模板里凡是读嵌套对象字段的地方，来源派生必须换引用。**
+  写法是 `$derived.by(() => { void appState.version; return xs.map(e => ({...e, ...e.frame})); })`
+  —— `map` / `filter` / 显式字面量都会产生新引用，`return xs` 不会。
+- **典型反例**：`LayersPanel` 的 `items` 直接 `return editorState.elements`
+  （同一个数组、同一批对象）⇒ 点眼睛图标，图标不变。
+  修法是 `return editorState.elements.map(e => ({...e}))`。
+- 这条在 §8 记过三次同族事故（轨道列表、片段位置、检查器），现在升级为**硬规则**。
+
+**根因二：改了文档，但没改 DOM。**
+
+排版编辑器里文档是数据、舞台是 DOM，中间靠 `syncDocDom()` 同步。它踩过两次：
+
+1. **传错根节点。** `syncDocDom(host, ...)` 里曾经传的是 `.paper`（外层容器），
+   而函数只看**直接子节点**里带 `data-el-id` 的 —— 外层容器的唯一子节点是
+   `.typo-doc`（不带该属性），于是循环全部 `continue`。表现是「拖了半天画面
+   纹丝不动」，**不报任何错**。修法是让 `syncDocDom` 自己往下找一层
+   （`DOC_ROOT_ATTR`），把这类传参错误从「静默失效」变成「不可能发生」。
+2. **容器与选择层的坐标系不一致。** `SelectionLayer` 的把手坐标按文档原点算，
+   却挂在 `.paper-wrap` 外面 ⇒ 整体偏移、把手点不中（拖拽变成框选）。
+   `toBeVisible()` 抓不到 —— 它只要求元素在 DOM 里有尺寸。
+
+**配套的测试纪律（比上面两条更重要）**：
+
+> **E2E 只负责「操作」，不看「UI 表现」—— 所以上面这一整类 bug 它一条都抓不到。**
+> 断言 store 是必要的，但**不等于验证了功能**：文档改了 ≠ 用户看得见。
+
+- **凡是用户能看见的状态，就断言 DOM**：内联样式、`getBoundingClientRect()`、
+  子节点类型/顺序、`innerHTML`（图标是否换了）。
+  `tests/e2e/typography-ribbon.spec.ts` 里那几条「实时跟随」用例就是模板。
+- **图标切换必须真的换图标**，不要只改颜色 —— 只改颜色的话 DOM 里什么都看不出来，
+  测试没法断言，用户也容易漏看。锁用了 `lock` / `lock-open` 而不是同一图标变色。
+- **手写一次「传错父节点」式的防御**：能让错误不可能发生，就别指望调用方记得传对。
+
+### ⚠️ CSS 命名空间：组件类名会被全局样式命中（2026-10-02 立）
+
+`src/app.css` 与 `src/ui/controls/controls.css` 是**全局**样式表（`main.ts` 直接 import）。
+Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **但反过来成立：
+组件里用的类名会被全局规则命中。**
+
+真事：排版画布的选中框用了 `class="sel"`，而 `controls.css` 里 `.sel` 是 Select 控件的
+类名（`background: var(--input-bg)` + 1px 边框）。scoped 规则只声明了 `outline`，
+背景没被覆盖 → **选中框变成一个不透明白块，把图形整个盖住**。
+同样的问题还有 `.swatch`（Ribbon 色块 ↔ 全局 swatch）。
+
+- **规则：跨组件的复用类名加前缀**（`.typo-sel` / `.rcolor-swatch`），
+  别用 `sel` / `swatch` / `box` / `row` / `item` 这种通用词。
+- 全局类名清单（供参考）：`btn ic-btn field cbx cbx-box sel sel-pop sel-opt sel-label
+  sel-arrow menu menu-item menu-sep menu-head pop pop-row pop-title pop-sep sld sld-track
+  sld-fill sld-thumb num num-suffix swatch swatch-row tip tip-key kbd`。
+- **有守卫**：`tests/unit/css-namespace.test.ts` 会解析这两张全局表，再扫
+  `src/ui/typography` + `src/ui/ribbon` 里所有 `.svelte` 的 `class=` / `class:xxx`，
+  撞车即失败。加新组件时会自动被覆盖。
+- 这类 bug 只在「那个元素正好被选中」时才出现，控制台没有任何提示 —— 所以必须靠守卫。
+
+### 几何：旋转出来的框与旋转下的手势
+
+- **选中框必须带上 `rot`**。单个元素绕自身中心旋转时 `x/y/w/h` **一点没变**（只有 `rot` 变），
+  所以用未旋转 AABB 画框会纹丝不动，看起来像「只有图形在转，框没跟上」。
+  单选 → 用元素自己的框（含 rot）；多选 → 用整个选区的 AABB（那一堆角度没有统一说法）。
+- **旋转后的缩放要走 `resizeFramesRotated`**，不能直接用 `scaleFrames`：后者是轴对齐的，
+  把位移当作世界坐标轴的 dx/dy。元素转了角度之后，把手在屏幕上指的方向不再是世界轴，
+  直接喂世界位移会得到「拖右边却往斜上方长」。
+  做法是把位移反向旋转进本地坐标、缩放、再把本地中心正向旋转回世界。
+  `rot === 0` 时它与 `scaleFrames` 逐位等价（有单测钉着）。
+- 写了这类手势的 E2E 时注意：**细长元素转 90° 后把手会跑到视口外**（默认文本框是
+  1536×173，转 90° 后「右边把手」在中心下方 469px）。要测旋转下的缩放就用正方形元素。
+  旋转本身的断言也别用「外接矩形变大」—— 细长条转 90° 后外接矩形反而变窄，
+  直接看 `getComputedStyle(el).transform` 矩阵的非对角项。
+
+### 排版编辑器（M4）
+
+**入口**：双击排版片段，或检查器的「编辑排版」按钮。快捷键见 `shortcuts.ts` 的
+「排版编辑器」组；`S` 与 `Alt+↑↓` 在那边**故意失效**（分流机制见 ADR-008）。
+
+**测试注意**：
+- 「开始」Tab 有 6 组 30 多个项，在 **1280 宽下会横向溢出**（面板是横向滚动的）——
+  这是设计如此。测对齐/属性时先把视口开宽
+  （`page.setViewportSize({width:1920,height:900})`），否则你测的是滚动不是功能。
+- 窄窗口单独有一条用例：断言面板**只有横向滚动、没有纵向滚动**（面板高度一旦随
+  内容变化，舞台高度就会随窗口宽度抖动），且滚到最右后最后一组的按钮仍然可点。
+- **曾经做过「更多」溢出 popover 的版本，拆掉了**：面板为了固定高度必须裁剪，
+  而任何开在面板内部的弹层都会被这个裁剪吃掉 —— 用户反馈「更多按钮没有用」。
+  隐藏起来的按钮也等于功能消失。Office 同样是横向滚动条。
+- **图库（gallery）类控件也一并拆了**：7 个形状排成一列塞在 114px 高的面板里
+  就是「离谱的列表挤在一个极小的区域」。形状与动画预设现在都是下拉。
+- **`SelectionLayer` 必须挂在 `.paper-wrap` 里面**。它的把手坐标按文档原点算，
+  挂到 `.viewport` 上会以 viewport 左上角为基准，而 paper 是水平居中且带边距的 ——
+  结果是选择框整体偏移、把手完全点不中（拖拽会变成框选）。
+  `toBeVisible()` 抓不到这个，所以另有一条**位置断言**（比对 `boundingBox()` 与
+  元素真实屏幕矩形）。改动那段 DOM 结构时它会挡住你。
 - **⚠️ 已知 flaky（2026-10-01 实测确认，非本次改动引入）**：`determinism.spec.ts`、
   `algos.spec.ts`、`effects.spec.ts` 里凡是断言「同一 t 多次求值逐像素一致」的用例，
   **约 60–75% 的失败率**，且**与代码版本无关**——用 `git worktree` 检出改动前的提交
@@ -627,6 +856,12 @@ favicon 同样成对（`public/brand/`），用 `media="(prefers-color-scheme: �
 4. **长时导出稳定性**：数千帧连续截图的显存与缓存行为未测。
 5. **遮罩 / matte**：M4 之后是否要做，取决于实际用起来缺不缺。
 6. **ffmpeg 构建选择**：需确认所选的静态构建带 `nvenc`（`ffmpeg -encoders | findstr nvenc`）。
+7. **不可子集化的字体（woff2）+ 动画文档的逐帧成本**：HarfBuzz 只吃 SFNT，woff2 只能整体内联。
+   woff2 通常只有 TTF 的 30–50%，所以还不是「129 ms/帧」那个量级，但也没测过。真要遇上，
+   对策是引导用户换 TTF/OTF，或者用「转为图片」把它冻成静态资源。
+8. **`SourceManager.setImage` 与 algo 的 R8 上传是否需要 `UNPACK_FLIP_Y_WEBGL`**：
+   排版纹理已经确认需要（否则上下颠倒），这两条路径当时没测过方向。
+   `setImage` 目前零调用方，R8 只测过确定性 —— 真要用它们之前先补一条方向断言。
 
 ---
 

@@ -68,6 +68,53 @@ export class Renderer {
     this.compositor.clearFeedback();
   }
 
+  /* ---------------------------------------------------------- 导出预热
+   *
+   * 排版层的位图来自异步光栅化（与 algo 烘焙同构）。预览允许「这一帧缺席」，
+   * 但导出不允许 —— 导出是顺序紧循环，缺席就是那一帧真的没有文字。
+   * 所以循环里每帧渲染前要 await 一次 prepareFrame。
+   *
+   * 这不违反硬约束 1.1：1.1 禁止的是「用 rAF 驱动导出」，这里的 await
+   * 与已有的 `await sink.submit` 同类（渲染前准备 + 协作式背压），
+   * 没有引入第二个时钟。见 ADR-009。
+   */
+
+  private prewarmFrameFn: ((p: Project, t: number) => Promise<void>) | null = null;
+  private prewarmFontsFn: ((p: Project) => Promise<void>) | null = null;
+  private exportEnterFn: (() => void) | null = null;
+  private exportExitFn: (() => void) | null = null;
+
+  setPrewarm(fn: ((p: Project, t: number) => Promise<void>) | null): void {
+    this.prewarmFrameFn = fn;
+  }
+
+  setFontPrewarm(fn: ((p: Project) => Promise<void>) | null): void {
+    this.prewarmFontsFn = fn;
+  }
+
+  setExportLifecycle(enter: (() => void) | null, exit: (() => void) | null): void {
+    this.exportEnterFn = enter;
+    this.exportExitFn = exit;
+  }
+
+  /** 本帧的文字层预热到当前渲染尺寸。没装排版运行时就是 no-op。 */
+  async prepareFrame(project: Project, t: number): Promise<void> {
+    await this.prewarmFrameFn?.(project, t);
+  }
+
+  /** ADR-003 规则 ③：等字体就绪。必须在导出循环之前调用。 */
+  async prewarmFonts(project: Project): Promise<void> {
+    await this.prewarmFontsFn?.(project);
+  }
+
+  enterExportMode(): void {
+    this.exportEnterFn?.();
+  }
+
+  exitExportMode(): void {
+    this.exportExitFn?.();
+  }
+
   /** 测试钩子：读默认帧缓冲像素。 */
   readPixels(): { data: Uint8Array; w: number; h: number } {
     const gl = this.kit.gl;

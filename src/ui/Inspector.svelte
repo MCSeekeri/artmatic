@@ -451,6 +451,15 @@
     {/if}
 
     <div class="actions">
+      {#if clip.kind === 'source' && clip.source.type === 'text'}
+        <!-- 双击片段也能打开；这里是可发现性更好的显式入口。 -->
+        <Button
+          label="编辑排版"
+          icon="type"
+          testid="edit-typography"
+          onclick={() => appState.openTypographyTab(clip.id)}
+        />
+      {/if}
       <Button
         label="在播放头切分"
         icon="scissors"

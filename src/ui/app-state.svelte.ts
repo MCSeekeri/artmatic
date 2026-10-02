@@ -10,12 +10,21 @@
  */
 
 import { ProjectStore } from '../core/project-store';
+import type { AnyClip } from '../core/schema';
 import { Renderer } from '../engine/renderer';
 import { SourceManager } from '../engine/sources';
 import { AudioPlayer } from '../audio/player';
 import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
 import { createEffectRunner } from '../effects/runner';
+import { FontRegistry } from '../typography/font-registry';
+import { TypographyRuntime } from '../typography/runtime';
+import {
+  createOffscreenHost,
+  createTextBackendRegistry,
+  type TextBackendRegistry,
+} from '../typography/rasterizer';
+import { resolveImageAsset } from '../typography/image-assets';
 import type { WaveformData } from '../audio/decode';
 import { snapTime, type SnapMode } from '../core/time';
 import { DENSITY } from './tokens';
@@ -60,6 +69,30 @@ function saveUiPrefs(p: UiPrefs): void {
   }
 }
 
+/* ------------------------------------------------------------ 顶栏选项卡
+ *
+ * 「时间轴」是常驻页面，永不关闭；排版编辑器是临时页，跟着片段走。
+ * tab 里**只存 clipId，不复制文档** —— 文档真相始终在 store.project，
+ * 这是「关掉编辑器再打开，内容还在」的结构保证，不靠「记得保存」。
+ */
+export interface TimelineShellTab {
+  id: 'timeline';
+  kind: 'timeline';
+  title: string;
+  closable: false;
+}
+
+export interface TypographyShellTab {
+  /** `typo:<clipId>` */
+  id: string;
+  kind: 'typography';
+  title: string;
+  clipId: string;
+  closable: true;
+}
+
+export type ShellTab = TimelineShellTab | TypographyShellTab;
+
 class AppState {
   /* 响应式 */
   version = $state(0);
@@ -97,6 +130,111 @@ class AppState {
   // 显式标注 number：DENSITY 是 as const，不标注会推成字面量类型 300。
   drawerWidth = $state<number>(DENSITY.drawerW);
 
+  /* ---------------------------------------------------------- 顶栏选项卡 */
+
+  /** 首项恒为时间轴页，不可关。 */
+  shellTabs = $state<ShellTab[]>([
+    { id: 'timeline', kind: 'timeline', title: '时间轴', closable: false },
+  ]);
+  activeTabId = $state<string>('timeline');
+
+  /** 排版编辑器的预览光栅化倍率（1 = 跟随渲染尺寸，0.5 / 0.25 = 低画质）。 */
+  typoPreviewScale = $state<number>(1);
+  /** 排版对齐目标：「画布」= 相对幻灯片（PPT 叫法），「选区」= 相对选中集外接框。 */
+  typoAlignTarget = $state<'canvas' | 'selection'>('canvas');
+  /**
+   * 已注册的字体族（Ribbon 的字体下拉读它）。
+   * 做成响应式而不是每次读 registry：注册发生在异步导入之后，
+   * 不触发重算的话「导入成功了但下拉里没有」。
+   */
+  fontFamilies = $state<string[]>([]);
+
+  /** 字体表变更后调一次（注册内置字体、用户导入之后）。 */
+  refreshFontFamilies(): void {
+    this.fontFamilies = this.fonts.families();
+  }
+
+  get activeTab(): ShellTab {
+    return this.shellTabs.find((t) => t.id === this.activeTabId) ?? this.shellTabs[0]!;
+  }
+
+  get editorOpen(): boolean {
+    return this.activeTab.kind === 'typography';
+  }
+
+  get activeTypoClipId(): string | null {
+    const t = this.activeTab;
+    return t.kind === 'typography' ? t.clipId : null;
+  }
+
+  /**
+   * 打开（或聚焦）某个排版片段的编辑页。双击片段、检查器按钮都走这里。
+   * 同一个片段只会有一个 tab —— 重复打开是聚焦而不是再开一个。
+   */
+  openTypographyTab(clipId: string): void {
+    const id = `typo:${clipId}`;
+    if (!this.shellTabs.some((t) => t.id === id)) {
+      const clip = this.store.findClip(clipId)?.clip;
+      this.shellTabs.push({
+        id,
+        kind: 'typography',
+        clipId,
+        title: clip?.label || '排版',
+        closable: true,
+      });
+    }
+    this.activateTab(id);
+  }
+
+  /**
+   * 双击片段 = 打开它自己的编辑器。**一律不切分** ——
+   * 破坏性操作不该绑在高误触手势上，切分保留 S 键与检查器按钮两个入口。
+   *
+   * 目前只有 text 源有独立页面；其余类型聚焦检查器（M5 再接各自的页面时，
+   * 只需要在这里加分支，ClipView 不用动）。
+   */
+  openClipEditor(clip: AnyClip): void {
+    if (clip.kind === 'source' && clip.source.type === 'text') {
+      this.openTypographyTab(clip.id);
+      return;
+    }
+    this.drawerOpen = true;
+    if (clip.kind === 'source') {
+      this.flash('该类型的独立编辑器在后续里程碑提供；已打开属性检查器');
+    }
+  }
+
+  activateTab(id: string): void {
+    if (this.activeTabId === id) return;
+    // 进编辑器前暂停：排版页的动画由 playT 驱动，不需要 WebGL 预览在后台推进。
+    if (this.playing) this.pause();
+    this.activeTabId = id;
+    // 切页清反馈历史，免得回到时间轴时 echo 的拖尾错乱（与 seek 同语义）。
+    this.renderer?.onSeek();
+    if (id === 'timeline') {
+      // 隐藏期间显示区域尺寸是 0，不重新同步尺寸会糊/尺寸不对。
+      this.renderer?.syncSize(this.store.project.resolution);
+      this.renderer?.renderFrame(this.store.project, this.playT);
+    }
+  }
+
+  closeTab(id: string): void {
+    const i = this.shellTabs.findIndex((t) => t.id === id);
+    if (i < 0 || !this.shellTabs[i]!.closable) return;
+    // 关页前取消未结算的手势：绝不能让 beginTx 悬空，否则撤销栈会错乱。
+    this.pendingGestureCancel?.();
+    this.pendingGestureCancel = null;
+    this.shellTabs.splice(i, 1);
+    if (this.activeTabId === id) this.activateTab('timeline');
+  }
+
+  /** 编辑器注册「取消当前手势」的钩子（关页 / 切页时调用）。 */
+  registerGestureCancel(fn: (() => void) | null): void {
+    this.pendingGestureCancel = fn;
+  }
+
+  private pendingGestureCancel: (() => void) | null = null;
+
   constructor() {
     const prefs = loadUiPrefs();
     this.drawerOpen = prefs.drawerOpen;
@@ -129,6 +267,9 @@ class AppState {
   renderer!: Renderer;
   sources!: SourceManager;
   player!: AudioPlayer;
+  fonts!: FontRegistry;
+  textBackends!: TextBackendRegistry;
+  textRaster!: TypographyRuntime;
   private servicesReady = false;
 
   /** main.ts 在 mount 之前调：store 必须先存在，组件才能安全读工程。 */
@@ -162,6 +303,29 @@ class AppState {
       );
       this.renderer.setResolver(this.sources.resolve);
       this.renderer.setEffectRunner(createEffectRunner(this.renderer.kit, () => this.store.project.seed));
+
+      // 排版层与 algo 烘焙同构：异步光栅化 → 结果就绪时 touch() → 下一帧重绘。
+      // 光栅化本身必须在主线程做（要走 DOM 与 document.fonts），
+      // 所以只有「异步结果 → 缓存 → bump version」这一层是复用的。
+      this.fonts = new FontRegistry();
+      // 随软件分发的 OFL 西文（Inter 400/700）。只登记 URL，第一次用才 fetch。
+      this.fonts.registerBundled();
+      this.fontFamilies = this.fonts.families();
+      this.textBackends = createTextBackendRegistry(createOffscreenHost(), this.fonts);
+      this.textRaster = new TypographyRuntime(this.renderer.kit, this.textBackends, this.fonts, {
+        onReady: () => this.store.touch(),
+        fps: () => this.store.project.fps,
+      });
+      this.sources.setTextResolver(this.textRaster.resolve);
+      // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。
+      this.textRaster.resolveImage = resolveImageAsset;
+      this.renderer.setPrewarm((p, t) => this.textRaster.prewarmFrame(p, t));
+      this.renderer.setFontPrewarm((p) => this.textRaster.prewarmFonts(p));
+      this.renderer.setExportLifecycle(
+        () => this.textRaster.enterExportMode(),
+        () => this.textRaster.exitExportMode(),
+      );
+
       this.player = new AudioPlayer();
       this.servicesReady = true;
     }
@@ -221,19 +385,31 @@ class AppState {
     // 导出期间预览循环停手：rAF 在预览尺寸下渲染会重排反馈历史
     // （feedbackFor 按尺寸重建目标），污染正在进行的顺序导出。
     if (this.exportProgress !== null) return;
-    if (this.playing) {
-      const t = this.player.currentT();
-      if (t !== null) {
-        if (t >= this.store.project.duration) {
-          this.pause();
-          this.playT = this.store.project.duration;
-        } else {
-          this.playT = t;
-        }
-      }
+
+    // 排版编辑页激活时**不渲染 WebGL**：.body 已被 display:none 隐藏，
+    // measureDisplaySize() 会量到 0 并触发 UNMEASURED_MAX_PIXELS 兜底分配，
+    // 既浪费显存又会让预览尺寸无谓变形。
+    // 但播放头照常推进 —— 排版页的 CSS 动画就是靠 playT 驱动 seek 的。
+    if (this.editorOpen) {
+      if (this.playing) this.advancePlayhead();
+      return;
     }
+
+    if (this.playing) this.advancePlayhead();
     this.renderer.renderFrame(this.store.project, this.playT);
     this.countFrame();
+  }
+
+  /** 播放头推进。抽出来给「渲染 WebGL」与「只推进不渲染」两条路共用。 */
+  private advancePlayhead(): void {
+    const t = this.player.currentT();
+    if (t === null) return;
+    if (t >= this.store.project.duration) {
+      this.pause();
+      this.playT = this.store.project.duration;
+    } else {
+      this.playT = t;
+    }
   }
 
   /** FPS 统计。用 performance.now() 只是为了算频率，不进渲染求值路径。 */

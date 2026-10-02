@@ -61,4 +61,95 @@ describe('migrateProject', () => {
   it('缺 schemaVersion 被拒', () => {
     expect(() => migrateProject({})).toThrow(/schemaVersion/);
   });
+
+  it('v1 → v2：形状不合法的手改 doc 被补齐成合法空文档', () => {
+    // v1 里 text 源是 { type:'text'; doc: unknown }，理论上没产出过；
+    // 但手改 JSON 可能带一个残缺 doc，不补的话 validateProject 会在更远处炸。
+    const p = defaultProject('v1');
+    p.schemaVersion = 1;
+    p.tracks.push({
+      kind: 'visual',
+      id: newId(),
+      name: 'V1',
+      enabled: true,
+      clips: [{
+        kind: 'source', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+        source: { type: 'text', doc: { garbage: true } },
+        blend: 'normal', opacity: 1,
+        transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'contain',
+      }],
+    } as never);
+
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'source' || clip.source.type !== 'text') throw new Error('unreachable');
+    expect(Array.isArray(clip.source.doc.elements)).toBe(true);
+    expect(clip.source.doc.size.w).toBeGreaterThan(0);
+    expect(clip.source.doc.size.h).toBeGreaterThan(0);
+  });
+
+  it('v1 → v2：本来就合法的 doc 原样保留', () => {
+    const doc = {
+      size: { w: 1280, h: 720 },
+      background: { kind: 'none' },
+      elements: [{ id: 'keep-me' }],
+      fonts: [],
+    };
+    const p = defaultProject('v1-ok');
+    p.schemaVersion = 1;
+    p.tracks.push({
+      kind: 'visual', id: newId(), name: 'V1', enabled: true,
+      clips: [{
+        kind: 'source', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+        source: { type: 'text', doc },
+        blend: 'normal', opacity: 1,
+        transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'contain',
+      }],
+    } as never);
+
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'source' || clip.source.type !== 'text') throw new Error('unreachable');
+    expect((clip.source.doc.elements[0] as { id: string }).id).toBe('keep-me');
+    expect(clip.source.doc.size).toEqual({ w: 1280, h: 720 });
+  });
+
+  it('v1 → v2 迁移是幂等的（跑两次结果一致）', () => {
+    const p = defaultProject('idem');
+    p.schemaVersion = 1;
+    const once = migrateProject(JSON.parse(JSON.stringify(p)));
+    const twice = migrateProject(JSON.parse(JSON.stringify(once)));
+    expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
+  });
+});
+
+describe('排版片段的校验', () => {
+  const textClip = (doc: unknown) => ({
+    kind: 'source', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+    source: { type: 'text', doc },
+    blend: 'normal', opacity: 1,
+    transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'contain',
+  });
+
+  const withClip = (clip: unknown) => {
+    const p = defaultProject('t');
+    p.tracks.push({ kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [clip] } as never);
+    return p;
+  };
+
+  it('合法文档通过', () => {
+    const p = withClip(textClip({ size: { w: 1920, h: 1080 }, background: { kind: 'none' }, elements: [], fonts: [] }));
+    expect(() => validateProject(p)).not.toThrow();
+  });
+
+  it('doc 缺 elements 被拒（否则会静默穿透到光栅化再炸）', () => {
+    expect(() => validateProject(withClip(textClip({ size: { w: 10, h: 10 } })))).toThrow(/doc 非法/);
+    expect(() => validateProject(withClip(textClip(null)))).toThrow(/doc 非法/);
+  });
+
+  it('文档尺寸非法被拒', () => {
+    const bad = { size: { w: 0, h: 100 }, elements: [], fonts: [] };
+    expect(() => validateProject(withClip(textClip(bad)))).toThrow(/尺寸非法/);
+  });
 });

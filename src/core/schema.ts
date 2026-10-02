@@ -14,8 +14,9 @@
 
 import type { BeatGrid } from './time';
 import type { Curve } from './curve';
+import type { TypographyDocument } from '../typography/document';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -101,11 +102,11 @@ export type AlgoSource = { type: 'algo'; generator: string; params: Record<strin
 export interface SourceClip extends ClipBase {
   kind: 'source';
   source:
-    // MVP 实现 image / algo / solid 三种；video 与 text 只留类型位置（M5 / M4）。
+    // MVP 实现 image / algo / solid / text 四种；video 只留类型位置（M5）。
     | { type: 'video'; assetId: string; srcIn: number; speed: number }
     | { type: 'image'; assetId: string }
     | AlgoSource
-    | { type: 'text'; doc: unknown }
+    | { type: 'text'; doc: TypographyDocument }
     | { type: 'solid'; color: string };
   blend: BlendMode;
   opacity: number;
@@ -173,7 +174,36 @@ class SchemaError extends Error {}
  * 迁移函数表：MIGRATIONS[v] 把版本 v 的工程升到 v+1。
  * 第一天就是空表 + 版本检查——M5 的原子写 / 迁移链条在这里生长，不要事后打补丁。
  */
-const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, unknown>> = {};
+const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, unknown>> = {
+  /**
+   * v1 → v2：SourceClip 的 text 源从「只留类型位置」（doc: unknown）变成真正的
+   * TypographyDocument。
+   *
+   * v1 里从来没有出现过 text 片段，所以这条迁移在实践中几乎不会命中；写它是因为
+   * 「迁移链第一天就有」是项目纪律（M0 就写下的），而且手改过的 JSON 可能带着
+   * 一个形状不对的 doc，不补的话 validateProject 会在更远的地方炸。
+   *
+   * 注意这里**直接写字面量**而不是调 createTypographyDocument()：那会构成
+   * core/schema.ts ↔ typography/document.ts 的运行时循环依赖（后者运行时要用
+   * 本文件的 newId）。ESM 能容忍这个循环，但很脆 —— 不值得为省两行字去赌。
+   */
+  1: (p) => {
+    const tracks = (p.tracks as { clips?: unknown[] }[] | undefined) ?? [];
+    for (const t of tracks) {
+      for (const c of (t.clips ?? []) as {
+        kind?: string;
+        source?: { type?: string; doc?: unknown };
+      }[]) {
+        if (c.kind !== 'source' || c.source?.type !== 'text') continue;
+        const doc = c.source.doc as TypographyDocument | undefined;
+        if (!doc || typeof doc !== 'object' || !Array.isArray(doc.elements) || !doc.size) {
+          c.source.doc = { size: { w: 1920, h: 1080 }, background: { kind: 'none' }, elements: [], fonts: [] };
+        }
+      }
+    }
+    return { ...p, schemaVersion: 2 };
+  },
+};
 
 export function migrateProject(raw: Record<string, unknown>): Project {
   const rawV = raw.schemaVersion;
@@ -225,6 +255,20 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
     if (c.kind !== 'source' && c.kind !== 'effect') throw new SchemaError('视觉轨里有非视觉片段');
     if (c.kind === 'effect' && !Array.isArray((c as EffectClip).chain)) {
       throw new SchemaError(`特效片段 ${c.id} 缺少 chain`);
+    }
+    // text 源的最小校验。validateProject 历史上不深校验 source 字段，
+    // 手改 JSON 会一路静默穿透到光栅化，在那里炸得莫名其妙。
+    if (c.kind === 'source') {
+      const src = (c as SourceClip).source as { type?: string; doc?: unknown } | undefined;
+      if (src?.type === 'text') {
+        const doc = src.doc as TypographyDocument | undefined;
+        if (!doc || typeof doc !== 'object' || !Array.isArray(doc.elements)) {
+          throw new SchemaError(`排版片段 ${c.id} 的 doc 非法`);
+        }
+        if (!doc.size || !(doc.size.w > 0) || !(doc.size.h > 0)) {
+          throw new SchemaError(`排版片段 ${c.id} 的文档尺寸非法`);
+        }
+      }
     }
   }
 }

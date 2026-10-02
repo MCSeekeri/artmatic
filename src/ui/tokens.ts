@@ -106,6 +106,17 @@ export const DENSITY = {
   drawerW: 300,
   drawerMinW: 240,
   drawerMaxW: 520,
+
+  /* 排版编辑器的 Ribbon。数值与 CSS 都从这里来（见 STATIC 的派生）。 */
+  /** Tab 条高。 */
+  ribbonTabH: 26,
+  /** 面板高（分组按钮区，含底部 6px 的细横向滚动条）。总高 = 26 + 88 = 114。 */
+  ribbonBodyH: 88,
+  /** large 按钮（icon 在上、文字在下）。 */
+  ribbonBtnW: 50,
+  ribbonBtnH: 56,
+  /** small 按钮：只放得下一个图标加短文字的紧凑项。 */
+  ribbonBtnSmallW: 32,
 } as const;
 
 /* ------------------------------------------------------------ primitive */
@@ -275,6 +286,11 @@ export const STATIC: Record<string, string> = {
   'statusbar-h': `${DENSITY.statusbarH}px`,
   'rail-w': `${DENSITY.railW}px`,
   'tl-side-w': `${DENSITY.tlSideW}px`,
+
+  /* Ribbon。注意**没有 --ribbon-w**：宽度随容器，是实例值，不进 token。 */
+  'ribbon-tab-h': `${DENSITY.ribbonTabH}px`,
+  'ribbon-body-h': `${DENSITY.ribbonBodyH}px`,
+  'ribbon-h': `${DENSITY.ribbonTabH + DENSITY.ribbonBodyH}px`,
   // 注意：**没有 --drawer-w**。抽屉宽度是可拖的实例值，若放进来会被每次
   // 主题重写覆盖掉用户拖出来的宽度。它走元素内联样式，默认值取 DENSITY.drawerW。
 
@@ -371,6 +387,28 @@ export const COMPONENT: Record<string, Record<string, SemanticKey>> = {
     'icon-on': 'accent',
     'icon-off': 'text-muted',
     gutter: 'border',
+  },
+  /*
+   * Ribbon 面板。视觉纪律照旧：零阴影零渐变，层次靠 surface 深度 + 1px 实线；
+   * 主题色只出现在「当前 Tab」「toggle 打开态」「contextual 标记」「图库选中」——
+   * 全都是「选中/激活」语义。
+   */
+  ribbon: {
+    bg: 'surface-1',
+    border: 'border',
+    'tab-fg': 'text-secondary',
+    'tab-fg-hover': 'text-primary',
+    'tab-fg-active': 'accent',
+    'group-label': 'text-muted',
+    separator: 'border',
+    'btn-fg': 'text-secondary',
+    'btn-fg-hover': 'text-primary',
+    'btn-fg-active': 'accent',
+    'btn-bg-hover': 'surface-hover',
+    'btn-bg-active': 'accent-weak',
+    'btn-fg-disabled': 'text-disabled',
+    'gallery-border': 'border',
+    'gallery-sel': 'accent',
   },
 };
 

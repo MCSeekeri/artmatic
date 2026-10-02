@@ -34,11 +34,23 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { keys: '拖动', label: '移动片段（可跨轨；松手时才套重叠策略）' },
       { keys: '拖边', label: '改变片段长度' },
-      { keys: '双击片段', label: '在该处切分' },
+      { keys: '双击片段', label: '打开片段编辑器（排版片段打开排版页）' },
       { keys: 'S', label: '在播放头处切分选中片段' },
       { keys: 'Alt+↑ / Alt+↓', label: '把选中片段上移 / 下移一轨' },
       { keys: 'Delete', label: '删除选中片段' },
       { keys: '右键', label: '在鼠标位置新建片段' },
+    ],
+  },
+  {
+    title: '排版编辑器',
+    items: [
+      { keys: '单击 / Shift+单击', label: '选中元素 / 加选' },
+      { keys: '空白处拖动', label: '框选' },
+      { keys: '拖动元素', label: '移动（自动吸附参考线；按住 Alt 临时关吸附）' },
+      { keys: '方向键', label: '移动 1px（Shift ×10）' },
+      { keys: 'Ctrl+A', label: '全选元素' },
+      { keys: 'Esc', label: '取消选择' },
+      { keys: 'Space', label: '播放 / 暂停（驱动 CSS 动画）' },
     ],
   },
   {

@@ -9,6 +9,8 @@
   import Tip from './Tip.svelte';
   import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
+  import TypographyEditor from './typography/TypographyEditor.svelte';
+  import { handleTypographyKey } from './typography/keys';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
   import { installTheme } from './theme-apply';
@@ -47,6 +49,16 @@
       }
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
+        return;
+      }
+
+      /*
+       * 排版编辑页的快捷键**分流**在这里，而不是在下面每条分支上加
+       * `if (!editorOpen)`。分流之后：S（切分）与 Alt+↑↓（移轨）在排版页
+       * 自然失效 —— 它们在那边没有意义，而「不处理」正是想要的语义。
+       */
+      if (appState.editorOpen) {
+        handleTypographyKey(e);
         return;
       }
 
@@ -97,35 +109,55 @@
 <div class="shell">
   <TopBar />
 
-  <div
-    class="body"
-    style={`--drawer-w: ${appState.drawerOpen ? `${appState.drawerWidth}px` : '0px'}`}
-  >
+  <div class="content">
+    <!--
+      窄侧栏在页面**外面**：切到排版页时它必须还在（工程级动作、设置、明暗
+      切换都不该随页面消失）。所以页面级的切换发生在它右边那一格里。
+    -->
     <Rail />
 
-    <div class="stage">
-      <Preview />
-      <div class="toolbar">
-        <Transport />
-        <span class="toolbar-tail">
-          <IconButton
-            icon="panel-right"
-            label="检查器"
-            tipPlacement="top"
-            testid="drawer-open"
-            active={appState.drawerOpen}
-            onclick={() => appState.toggleDrawer()}
-          />
-        </span>
-      </div>
-      <div class="tracks">
-        <Timeline />
-      </div>
-    </div>
+    <div class="page">
+      <!--
+        主界面**永不卸载**，切到排版页只是 display:none。
+        卸载 Preview 的 <canvas> 会丢掉 WebGL 上下文 —— kit 里所有 Program /
+        Target / 纹理随之失效，renderer 永久坏掉，而且不是重新 mount 能恢复的。
+        代价是排版页打开时它还在 DOM 里，由 appState.tick() 的闸门挡住渲染。
+      -->
+      <div
+        class="body"
+        class:is-hidden={appState.editorOpen}
+        style={`--drawer-w: ${appState.drawerOpen ? `${appState.drawerWidth}px` : '0px'}`}
+      >
+        <div class="stage">
+          <Preview />
+          <div class="toolbar">
+            <Transport />
+            <span class="toolbar-tail">
+              <IconButton
+                icon="panel-right"
+                label="检查器"
+                tipPlacement="top"
+                testid="drawer-open"
+                active={appState.drawerOpen}
+                onclick={() => appState.toggleDrawer()}
+              />
+            </span>
+          </div>
+          <div class="tracks">
+            <Timeline />
+          </div>
+        </div>
 
-    {#if appState.drawerOpen}
-      <InspectorDrawer />
-    {/if}
+        {#if appState.drawerOpen}
+          <InspectorDrawer />
+        {/if}
+      </div>
+
+      <!-- 排版编辑页：同格兄弟，同一时刻只有一个在流内。 -->
+      {#if appState.editorOpen && appState.activeTypoClipId}
+        <TypographyEditor clipId={appState.activeTypoClipId} />
+      {/if}
+    </div>
   </div>
 
   <StatusBar />
@@ -140,11 +172,38 @@
     grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
     background: var(--surface-0);
   }
-  .body {
+  /*
+   * .content：左侧窄侧栏（常驻）+ 右侧「页面」列。切页面时侧栏不消失。
+   * 必须显式约束列：隐式列默认是 auto，会被子项的最小内容宽度撑开
+   * —— 与 .stage 那条教训同源（AGENTS §7 坑 3）。同一时刻只有一个子项在流内。
+   */
+  .content {
     display: grid;
-    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--drawer-w);
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     min-height: 0;
     min-width: 0;
+  }
+  /* 页面宿主：同一时刻只有一个子项在流内（时间轴主界面 或 排版编辑页）。 */
+  .page {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    min-height: 0;
+    min-width: 0;
+  }
+  .page > :global(*) {
+    min-height: 0;
+    min-width: 0;
+  }
+  .body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--drawer-w);
+    min-height: 0;
+    min-width: 0;
+  }
+  .body.is-hidden {
+    display: none;
   }
   .stage {
     display: grid;

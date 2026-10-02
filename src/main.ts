@@ -58,6 +58,54 @@ appState.renderer.renderFrame(store.project, appState.playT);
     return Object.fromEntries(Object.entries(files).map(([k, v]) => [k, Array.from(v)]));
   },
   algo: { listGenerators, defaultParams },
+  /**
+   * E2E 专用：直接调排版光栅化，**不经过 compositor / GPU**。
+   *
+   * 这样测的是「光栅化本身确定不确定」，而不是「整条 GPU 链路确定不确定」——
+   * 后者是 AGENTS §7 记录在案的 flaky 区（echo/glitch 的边界采样竞态，
+   * 60–75% 失败率，与代码版本无关）。P7 验证「子集字体 vs 全量字体逐像素
+   * 零差异」也走这个入口。
+   */
+  typoRasterize: async (doc: unknown, w: number, h: number, localSec: number) => {
+    const canvas = await appState.textRaster.rasterizeOnce(
+      doc as Parameters<typeof appState.textRaster.rasterizeOnce>[0],
+      w,
+      h,
+      localSec,
+    );
+    const ctx = canvas.getContext('2d')!;
+    const px = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    // 只回传标量：像素留在 page 内。
+    let sum = 0;
+    let ink = 0;
+    let h32 = 0x811c9dc5;
+    for (let i = 0; i < px.length; i += 4) {
+      const a = px[i + 3]!;
+      if (a > 8) ink += 1;
+      sum += px[i]! + px[i + 1]! + px[i + 2]!;
+      h32 = (Math.imul(h32 ^ px[i]!, 0x01000193) ^ a) >>> 0;
+    }
+    return { w: canvas.width, h: canvas.height, ink, sum, hash: h32.toString(16).padStart(8, '0') };
+  },
+  typoStats: () => appState.textRaster.stats(),
+  /**
+   * E2E 专用：从字节注册一个字体（本机系统字体不进仓库，测试从 Node 侧读盘传进来）。
+   */
+  typoRegisterFont: async (name: string, bytes: Uint8Array | number[]) => {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const face = await appState.fonts.registerFile(name, u8.buffer as ArrayBuffer);
+    appState.refreshFontFamilies();
+    return face.id;
+  },
+  typoFontStats: () => ({
+    ...appState.fonts.subsetStats,
+    faces: appState.fonts.faceReports(),
+  }),
+  /** ADR-003 规则 ① 的对照组开关：关掉子集化后光栅化必须**逐像素相同**。 */
+  typoSetSubsetting: (on: boolean) => {
+    appState.fonts.subsetting = on;
+    appState.fonts.invalidatePrepared();
+  },
 };
 
 export default app;

@@ -23,9 +23,29 @@ function pick(accept: string): Promise<PickedFile | null> {
   });
 }
 
+/** 多选版本。字体一次导入多款（常规 + 粗体）是常态，单选太磨人。 */
+function pickMany(accept: string): Promise<PickedFile[] | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = accept;
+    input.onchange = async () => {
+      const files = Array.from(input.files ?? []);
+      if (!files.length) return resolve(null);
+      const out: PickedFile[] = [];
+      for (const f of files) out.push({ name: f.name, data: await f.arrayBuffer() });
+      resolve(out);
+    };
+    window.addEventListener('focus', () => setTimeout(() => resolve(null), 400), { once: true });
+    input.click();
+  });
+}
+
 export const browserPlatform: Platform = {
   pickAudioFile: () => pick('audio/*'),
   pickImageFile: () => pick('image/*'),
+  pickFontFiles: () => pickMany('.ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff2'),
 
   async download(blob: Blob, filename: string): Promise<void> {
     const url = URL.createObjectURL(blob);

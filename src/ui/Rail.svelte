@@ -288,7 +288,8 @@
   }
   /* 「关于」里的锁合：大标记 + 字标并排（资源里没有现成的锁合文件，两个部件拼一下） */
   .hero-lockup {
-    display: inline-flex;
+    display: flex;
+    flex-direction: column;
     align-items: center;
     gap: var(--sp-6);
   }

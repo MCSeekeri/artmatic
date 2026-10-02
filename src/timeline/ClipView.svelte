@@ -40,13 +40,14 @@
     });
   }
 
-  function dblclick(e: MouseEvent): void {
-    // 双击：在该处切分（吸附到当前档位）
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const frac = (e.clientX - rect.left) / Math.max(1, rect.width);
-    const t = clip.start + frac * (clip.end - clip.start);
-    const snapped = Math.min(clip.end - 0.05, Math.max(clip.start + 0.05, t));
-    appState.store.splitClipAt(track.id, clip.id, snapped);
+  function dblclick(): void {
+    /*
+     * 双击 = 打开这个片段自己的编辑器，**一律不切分**。
+     * 破坏性操作不该绑在高误触手势上（原来双击切分，很容易手一抖就把片段切开）。
+     * 切分保留两个入口：S 键、检查器的「在播放头切分」。
+     */
+    appState.selectedClipId = clip.id;
+    appState.openClipEditor(clip);
   }
 </script>
 

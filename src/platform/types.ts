@@ -14,6 +14,15 @@ export interface PickedFile {
 export interface Platform {
   pickAudioFile(): Promise<PickedFile | null>;
   pickImageFile(): Promise<PickedFile | null>;
+  /**
+   * 多选字体文件。浏览器：`<input type=file multiple>`；
+   * Electron（M5）：文件对话框 + IPC 读盘。
+   *
+   * 返回 null = 用户取消；返回空数组也当取消处理。**不在这里做格式过滤**：
+   * 判断交给上层（HarfBuzz 只吃 SFNT，woff2 只能整体内联），
+   * 在这里丢掉会让「为什么我选的字体没反应」变成一个哑谜。
+   */
+  pickFontFiles(): Promise<PickedFile[] | null>;
   /** 触发一次浏览器下载（Electron 版会是写文件对话框）。 */
   download(blob: Blob, filename: string): Promise<void>;
   saveProject(json: string, suggestedName: string): Promise<void>;

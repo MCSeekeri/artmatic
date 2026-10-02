@@ -17,6 +17,7 @@
   } from '../core/schema';
   import { beatDur, snapTime } from '../core/time';
   import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
+  import { createTextElement, createTypographyDocument } from '../typography/document';
   import { canvasPalette } from '../ui/tokens';
   import { theme } from '../ui/theme.svelte';
   import { appState } from '../ui/app-state.svelte';
@@ -190,8 +191,37 @@
     appState.selectedClipId = clip.id;
   }
 
-  function addEffect(trackId: string, at?: number): void {
+  /**
+   * 排版片段。文档尺寸默认取当前工程分辨率 —— 这样新建出来的文本框是
+   * 「1:1 摆在画面上」的，用户不必先算缩放。
+   *
+   * fit 用 contain 而不是 stretch：以后改工程分辨率时文字不会被拉变形
+   * （contain 会等比缩放并留边），而 stretch 会把版式压扁。
+   */
+  function addText(trackId: string, at?: number): void {
     closeMenus();
+    const start = startFor(at);
+    const doc = createTypographyDocument(appState.store.project.resolution);
+    doc.elements = [createTextElement(doc.size)];
+    const clip: SourceClip = {
+      kind: 'source',
+      id: newId(),
+      start,
+      end: start + longLen(),
+      label: '排版',
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'text', doc },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'contain',
+    };
+    appState.store.addClip(trackId, clip);
+    appState.selectedClipId = clip.id;
+  }
+
+  function addEffect(trackId: string, at?: number): void {    closeMenus();
     const start = startFor(at);
     const clip: EffectClip = {
       kind: 'effect',
@@ -293,21 +323,31 @@
      * 曾经把三个都塞进「添加片段」二级里，反而多一次悬停才点得到；
      * 用户反馈要的是「+ 纯色片段 / + 特效片段 / + 算法片段」这种直接可点的形式，
      * 而真正会变长的是算法生成器列表（现在 3 个，以后只会更多），二级留给它。
+     * 「排版片段」同理平铺 —— 它是最常用的一类源片段。
      */
     return [
       {
         id: `${prefix}solid`,
-        label: '+ 纯色片段',
+        label: '纯色片段',
+        icon: 'palette',
         testid: `${prefix}solid`,
         onselect: () => addSolid(track.id, at),
       },
       {
+        id: `${prefix}text`,
+        label: '排版片段',
+        icon: 'type',
+        testid: `${prefix}text`,
+        onselect: () => addText(track.id, at),
+      },
+      {
         id: `${prefix}effect`,
-        label: '+ 特效片段',
+        label: '特效片段',
+        icon: 'flask-conical',
         testid: `${prefix}effect`,
         onselect: () => addEffect(track.id, at),
       },
-      submenu(`${prefix}algo`, '+ 算法片段', generatorItems(at, prefix), 'flask-conical'),
+      submenu(`${prefix}algo`, '算法片段', generatorItems(at, prefix), 'sigma'),
     ];
   }
 
@@ -489,7 +529,7 @@
     {/each}
 
     <div class="side-add" style:height={`${ROW_HEIGHT}px`}>
-      <span class="add-label">+ 添加轨道</span>
+      <span class="add-label">添加轨道</span>
       <button
         type="button"
         class="add-btn"

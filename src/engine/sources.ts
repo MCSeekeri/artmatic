@@ -4,7 +4,9 @@
  * solid → 1×1 色纹理（按颜色缓存）
  * image → 资产纹理（platform 导入后经 setImage 登记）
  * algo  → 委托给注入的 algo 运行时（B7 装配）；未装配或没烘好返回 null
- * video / text → MVP 不实现，返回 null（类型位置已在 schema 留好）
+ * text  → 委托给注入的排版运行时（M4 装配）；缓存未命中时返回 null，
+ *         由它异步光栅化后经 onReady → store.touch() → 下一帧重绘。
+ * video → MVP 不实现，返回 null（类型位置已在 schema 留好）
  */
 
 import type { SourceClip } from '../core/schema';
@@ -12,6 +14,18 @@ import type { Kit } from './kit';
 import type { SourceResolver, SourceTexture } from './compositor';
 
 export type AlgoResolver = (clip: SourceClip, t: number, frame: number) => SourceTexture | null;
+
+/**
+ * 排版解析器。比 AlgoResolver 多两个参数：当前渲染尺寸。
+ * 光栅化必须照着「这一层会被画多大」出图（预览 ≈960、导出 1920），
+ * 而渲染尺寸是 renderer 的状态（kit.w / kit.h），不是片段自己的属性。
+ */
+export type TextResolver = (
+  clip: SourceClip,
+  t: number,
+  renderW: number,
+  renderH: number,
+) => SourceTexture | null;
 
 export function hexToRgba(hex: string): [number, number, number, number] {
   const m = /^#?([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(hex.trim());
@@ -25,11 +39,16 @@ export class SourceManager {
   private readonly solidCache = new Map<string, SourceTexture>();
   private readonly imageCache = new Map<string, SourceTexture>();
   private algoResolver: AlgoResolver | null = null;
+  private textResolver: TextResolver | null = null;
 
   constructor(private readonly kit: Kit) {}
 
   setAlgoResolver(r: AlgoResolver | null): void {
     this.algoResolver = r;
+  }
+
+  setTextResolver(r: TextResolver | null): void {
+    this.textResolver = r;
   }
 
   readonly resolve: SourceResolver = (clip, t, frame) => {
@@ -40,8 +59,12 @@ export class SourceManager {
         return this.imageCache.get(clip.source.assetId) ?? null;
       case 'algo':
         return this.algoResolver?.(clip, t, frame) ?? null;
+      case 'text':
+        // 多传 kit.w / kit.h：光栅化要照着「这一层会被画多大」出图，
+        // 而渲染尺寸是 renderer 的状态（预览 ≈960、导出 1920）。
+        return this.textResolver?.(clip, t, this.kit.w, this.kit.h) ?? null;
       default:
-        return null; // video / text：MVP 不实现
+        return null; // video：M5
     }
   };
 
