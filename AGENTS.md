@@ -476,6 +476,30 @@ interface Curve {
     RGBA8**（8bit 会把逐帧低于量化步长的增量抹平，有状态模拟会 stall 成色块）。
 - **`ParamDef.visibleWhen`** 控参数的条件可见性；特效检查器里 range / select / **checkbox** / color
   四种都必须有分支（缺 checkbox 的表现是「参数不显示」，不报错）。
+
+#### 从外部移植一个特效时（2026-10-03 移植 51 个之后总结）
+
+**照抄会静默坏掉的三类，按出现频率排**：
+
+1. **重复声明 head 里的 uniform。** 上游 shader 常在自己的 fragment 里再写一遍
+   `uniform sampler2D u_texture;` / `uniform float u_time;` / `uniform vec2 u_resolution;`
+   —— 与 `EFFECT_HEAD` 重复，**直接编译失败**。移植前先搜一遍 head 里那几个名字。
+   （`u_resolution` 这一条在 51 个里出现了 **6 次**。）
+2. **`u_time` 是秒还是相位。** openmosh 的 `getEffectTime` **只对有 `speed` 参数的特效**
+   把 `u_time` 换成累积相位（`phase += dt * speed`，`sync === 'beat'` 时读拍网格）。
+   所以：def 里有 `speed` 而上游 shader 直接用 `u_time` ⇒ **移植时必须自己把它乘出来**
+   （`u_time * u_speed`，或用 `clockPhase()`），否则那个滑杆**完全失效且不报错**。
+   反过来，shader 里本来就写了 `u_time * u_speed` 的，**不要再乘一次**。
+3. **hash / noise 的形状与 seed。** `HASH_GLSL`（掺 seed，逐帧换图案）与
+   `HASH_PLAIN_GLSL`（坐标的纯函数）用途不同，拿错会让图案从「随时间爬行」变成
+   「逐帧闪烁」。`NOISE_GLSL` / `FBM6_GLSL` 建在**不掺 seed** 的那支上。
+   上游 shader 自带 hash 时**优先保留自带实现**：常数不同（`127.1/311.7` vs
+   `12.9898/78.233`）就是不同的图案，换过去是改画面，不是「统一实现」。
+   另外注意 `HUE_ROTATE_GLSL` 的 `hueRotate` 收的是**度**，上游有些 shader 自带的
+   `hrot` 收的是**弧度**。
+
+**判定「参数有没有接上」目前只能靠肉眼**：`compileAll` 只证明编得过。
+`/lab/` 里开关该特效轨画面必须变，`select` 改了必须跟着变。
 - **出画转场**挂在 `SourceClip.transitionOut`，剪切点 `cut = clip.end`，窗口**以剪切点为中心**
   `[cut - d/2, cut + d/2)`。入画片段 = 同轨 `start` 紧邻（`|Δ| ≤ 1e-6`）的下一个 SourceClip，
   **按相邻关系解析、不存 id** —— 存 id 会引入悬空引用与它的一整套清理，而片段几何
