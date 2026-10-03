@@ -478,6 +478,12 @@ interface Curve {
   - 主 pass 与 pre-pass 的 `u_original` **都指向链输入**（pre-pass 之前的那一份），
     不是上一环的输出 —— `fast-mosh` 就靠这个区别：`u_texture` 是 pre-pass 交出的关键帧，
     `u_original` 才是当前帧。
+  - **`delayedInput: true`**：这一环的 `u_texture` 换成**上一帧的链输入**。给「要拿当前帧
+    和上一帧输入做帧间差分」的特效用（`kino-datamosh` 的运动估计）。链里本来拿不到它
+    （`u_texture` 是上一环输出、`u_feedback` 是自身上一帧输出、`u_original` 是当前帧输入），
+    而 pre-pass 自己用 `feedback` 存一帧输入也不行 —— 那存的是「上一帧它自己的输出」，
+    **永远差一帧**。存储由 runner 在整条链跑完后写入（`compositor.delayedInputFor`），
+    只改输入不改输出。守卫：`lab.spec` 的「delayedInput」（用 `velocity` 当探针）。
   - `linearFilter` 的实现是「设 LINEAR → draw → 还原」（`effects/runner.ts` 的 `forceLinear`）：
     GL 的采样参数在 **draw 那一刻**被捕获，单线程里前后夹住是安全的。改的是别人的贴图，务必还原。
   - `hdrFeedback` 走 `Target({ float: true })` → RGBA16F，缺 `EXT_color_buffer_float` 时**安静回落
