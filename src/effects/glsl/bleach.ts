@@ -1,8 +1,11 @@
 import { floats, type EffectShaderDef } from '../shader-def';
 
 /**
- * 漂白：亮度对比拉伸后按 amount 混合。
+ * 去饱和度：亮度 + 对比拉伸后按 amount 混合（amount = 1 即完全去色）。
+ *
  * 移植自 openmosh `gl/effect-shaders.ts` 的 `bleach`（MIT，见 CREDITS.md）。
+ * 名字沿用了上游的 `bleach`，但**实际行为是去色**（上游的 `Bleach` 这个叫法
+ * 名不副实），所以中文名定为「去饱和度」而不是直译。
  */
 export const shader: EffectShaderDef = {
   fragment: `

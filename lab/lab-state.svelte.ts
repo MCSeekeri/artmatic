@@ -92,10 +92,20 @@ export const LAB_GROUPS: LabGroup[] = [
 export const LAB_SOURCE_ITEMS = SOURCE_ITEMS;
 export const LAB_EFFECT_ITEMS = EFFECT_ITEMS;
 
-export function paramsFor(scope: 'source' | 'effect', id: string | null, ): ParamDef[] {
-  if (!id) return [];
+/**
+ * 取某一条条目（左栏列表与右栏标题共用同一份数据）。
+ *
+ * 单一真源：`paramsFor` 也从这里取 —— 否则「按 id 找条目」会有两份 `find`，
+ * 迟早一份改了一份没改。
+ */
+export function itemFor(scope: 'source' | 'effect', id: string | null): LabItem | undefined {
+  if (!id) return undefined;
   const items = scope === 'source' ? SOURCE_ITEMS : EFFECT_ITEMS;
-  return items.find((i) => i.id === id)?.params ?? [];
+  return items.find((i) => i.id === id);
+}
+
+export function paramsFor(scope: 'source' | 'effect', id: string | null): ParamDef[] {
+  return itemFor(scope, id)?.params ?? [];
 }
 
 /** 分辨率档位。0.5 是默认：1280×720 的一半，够看清结构又不会让分形掉帧。 */

@@ -46,7 +46,7 @@ export const media = {
   'fx.solarize.curve': '曲线',
   'fx.solarize.colorize': '着色量',
 
-  'fx.bleach': '漂白',
+  'fx.bleach': '去饱和度',
   'fx.bleach.amount': '强度',
 
   'fx.colorCorrection': '色彩校正',
@@ -79,8 +79,8 @@ export const media = {
 
   'fx.hsvSwap': '通道换色',
   'fx.hsvSwap.mode': '解读方式',
-  'fx.hsvSwap.modeRgbAsHsv': 'RGB 读作 HSV',
-  'fx.hsvSwap.modeHsvAsRgb': 'HSV 显示为 RGB',
+  'fx.hsvSwap.modeRgbAsHsv': '按 HSV 解读',
+  'fx.hsvSwap.modeHsvAsRgb': '拆出 HSV 分量',
   'fx.hsvSwap.amount': '强度',
 
   'fx.trioTone': '三段色阶',

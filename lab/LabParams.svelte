@@ -16,13 +16,22 @@
   import Select from '../src/ui/controls/Select.svelte';
   import Checkbox from '../src/ui/controls/Checkbox.svelte';
   import IconButton from '../src/ui/controls/IconButton.svelte';
-  import { labState, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
+  import { labState, itemFor, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
   import { tr } from '../src/i18n/index.svelte';
   import type { ParamDef } from '../src/effects/types';
 
   const sourceParams = $derived(paramsFor('source', labState.sourceId));
   const effectParams = $derived(paramsFor('effect', labState.effectId ?? NO_EFFECT_ID));
   const failures = $derived((labState.compileResults ?? []).filter((r) => !r.ok));
+
+  /**
+   * 右栏标题里的特效名 + id。试炼场的活儿就是「决定这个特效留不留、参数定多少」，
+   * 而**要落进代码的是 id**（文件名、i18n 键、CREDITS 都按它写），不是显示名 ——
+   * 所以两个并排给出来，省得来回翻左栏或源码。
+   */
+  const effectItem = $derived(
+    labState.effectId ? itemFor('effect', labState.effectId) : undefined,
+  );
 
   function valueOf(scope: 'source' | 'effect', p: ParamDef): number | string {
     const bag = scope === 'source' ? labState.sourceParams : labState.effectParams;
@@ -117,7 +126,14 @@
 
     <section class="lab-section">
       <header class="lab-section-head">
-        <h3 class="lab-section-title">{tr('lab.paramsEffect')}</h3>
+        <h3 class="lab-section-title">
+          {#if effectItem}
+            <span class="lab-title-name" data-testid="lab-effect-name">{tr(effectItem.nameKey)}</span>
+            <code class="lab-id" data-testid="lab-effect-id">{effectItem.id}</code>
+          {:else}
+            <span class="lab-title-name">{tr('lab.paramsEffect')}</span>
+          {/if}
+        </h3>
         <IconButton
           icon="rotate-cw"
           label={tr('lab.reset')}
@@ -235,12 +251,30 @@
   }
   .lab-section-title {
     flex: 1;
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    min-width: 0; /* 长特效名要能省略号，不然会把右边两个按钮顶出去 */
     margin: 0;
     font-size: var(--fs-xs);
     font-weight: 600;
     letter-spacing: 0.06em;
     color: var(--text-muted);
     text-transform: uppercase;
+  }
+  .lab-title-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lab-id {
+    flex: none;
+    /* 父级是 uppercase + 0.06em 字距；id 必须还原这两条，否则会显示成 NEON-EDGES */
+    text-transform: none;
+    letter-spacing: normal;
+    font-family: 'Cascadia Code', Consolas, monospace;
+    font-weight: 400;
+    opacity: 0.7;
   }
   .lab-note {
     margin: 0 var(--sp-3) var(--sp-3);

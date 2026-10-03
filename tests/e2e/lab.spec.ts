@@ -135,6 +135,17 @@ test('全部编译：所有特效与实时算法都编得过', async ({ page }) 
   expect(result.failures).toEqual([]);
 });
 
+test('右栏标题并排给出显示名与 id（id 不能被 uppercase 改写）', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => (window as unknown as LabWindow).__lab!.selectEffect('neon-edges'));
+
+  // id 是要直接抄进文件名 / i18n 键 / CREDITS 的东西，所以必须原样小写连字符。
+  // `.lab-section-title` 上带着 `text-transform: uppercase` 与 0.06em 字距，
+  // 漏了在 `.lab-id` 上还原就会显示成 NEON-EDGES —— 看着不出错，抄下来就是错的。
+  await expect(page.getByTestId('lab-effect-id')).toHaveText('neon-edges');
+  await expect(page.getByTestId('lab-effect-name')).toContainText('霓虹边缘');
+});
+
 test('分辨率档位真的改后备缓冲尺寸（不被显示区压掉）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {
