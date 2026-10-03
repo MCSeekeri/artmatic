@@ -62,7 +62,13 @@ void main() {
   // 顶端提亮：一条纯色柱子读起来是一张死掉的柱状图
   float tip = 1.0 + 0.8 * (1.0 - smoothstep(0.0, 0.12, max(level - d, 0.0)));
   vec3 col = clamp(u_color * tip, 0.0, 1.0);
-  outColor = vec4(mix(src.rgb, col, clamp(fill, 0.0, 1.0) * u_opacity), src.a);
+
+  float w = clamp(fill, 0.0, 1.0) * u_opacity;
+  // **alpha 也带上柱子的覆盖**，与 glow 的做法一致（它的光晕同样带自己的覆盖，
+  // 于是能漫出文字层的边缘）。不这么做的话，柱子在一张透明源上是**看不见的**
+  // （alpha 恒为 src.a = 0），这个特效就只能贴在不透明素材上。
+  // 在不透明素材上 max(src.a, w) 仍然是 1，行为与上游一致。
+  outColor = vec4(mix(src.rgb, col, w), clamp(max(src.a, w), 0.0, 1.0));
 }`,
   setUniforms: compose(
     floats('bars', 'height', 'gain', 'opacity'),

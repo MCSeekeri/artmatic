@@ -473,7 +473,7 @@ export const media = {
 
   /* --- Phase 1f 音频 --- */
 
-  'fx.audioBars': '频谱条',
+  'fx.audioBars': '音频可视化',
   'fx.audioBars.bars': '条数',
   'fx.audioBars.height': '高度',
   'fx.audioBars.gain': '增益',

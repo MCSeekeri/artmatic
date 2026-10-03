@@ -58,9 +58,27 @@ export class SpectrumTextures {
    * 而不是让 sampler 停在未绑定状态 —— 那是 GL 的未定义行为。
    */
   private readonly silent: WebGLTexture;
+  /**
+   * 上传用的 scratch 纹理单元。
+   *
+   * **`texSubImage2D` 作用在「当前激活的纹理单元」绑着的纹理上**，而 `Program.tex()`
+   * 依次把采样本绑到 0..n 并留下最后一个为激活态 —— 直接 `bindTexture` 上传就会
+   * 把某一个 sampler 指向频谱纹理。真实事故：`audio-bars` 的 `u_original` 没被用到、
+   * 被编译器优化掉，于是 `tex()` 提前返回（**texUnit 不递增**），激活单元停在 0
+   * （`u_texture`）—— 频谱纹理把链输入换掉了，画面变成一片红色竖线
+   * （R8 读作 rgba = (r, 0, 0, 1)：红、不透明、竖直、随频谱跳动）。
+   *
+   * 取「合并单元数的最后一个」而不是某个硬编码下标：片元 sampler 只能用
+   * `0..MAX_TEXTURE_IMAGE_UNITS-1`，而 combined ≥ 那个值，所以最后一个是安全的。
+   * 这样上传与采样器绑定的**先后顺序就无所谓**了。
+   */
+  private readonly scratchUnit: number;
 
   constructor(private readonly kit: Kit) {
-    this.silent = makeTexture(kit.gl, 1, new Uint8Array([0]));
+    const gl = kit.gl;
+    const max = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) as number;
+    this.scratchUnit = Math.max(0, (max || 16) - 1);
+    this.silent = makeTexture(gl, 1, new Uint8Array([0]));
   }
 
   setSource(source: SpectrumSource | null): void {
@@ -111,8 +129,11 @@ export class SpectrumTextures {
       return;
     }
     const gl = this.kit.gl;
+    // 上传走 scratch 单元 —— 绝不能碰采样器正在用的那几个（见 scratchUnit 的注释）。
+    gl.activeTexture(gl.TEXTURE0 + this.scratchUnit);
     gl.bindTexture(gl.TEXTURE_2D, entry.tex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, entry.w, 1, gl.RED, gl.UNSIGNED_BYTE, bytes);
+    // `prog.tex()` 自己会设 activeTexture，所以这里不需要还原。
     prog.tex('u_spectrum', entry.tex);
   }
 }

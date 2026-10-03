@@ -260,7 +260,18 @@ test('频谱通道：audio-bars 真的被频谱驱动（拍点与拍中的画面
     L.setBypass(false);
     const offBeat = shot(1.25);
 
-    return { drawn: count(onBeat, bypassed), driven: count(onBeat, offBeat) };
+    // **精确不变量**：不透明度 0 → 这个特效必须是恒等的（w = 0 → 输出就是链输入）。
+    // 这条能抓住「上传把采样器单元踩掉了」那类 bug：那时 `u_texture` 会被换成
+    // 频谱纹理，R8 读出来是 (r,0,0,1)，于是背景变成一片红竖线而不是原图。
+    L.setParam('effect', 'opacity', 0);
+    const transparent = shot(1);
+    L.setParam('effect', 'opacity', 1);
+
+    return {
+      drawn: count(onBeat, bypassed),
+      driven: count(onBeat, offBeat),
+      noop: count(transparent, bypassed),
+    };
   });
 
   // ① 柱子确实画在画面上了。
@@ -269,6 +280,8 @@ test('频谱通道：audio-bars 真的被频谱驱动（拍点与拍中的画面
   //    provider → 归一化 → 逐实例平滑 → 纹理 → runner 绑定 u_spectrum。
   //    任何一环断了，频谱恒为静音 → 每根柱子都是空的 → 两张图一致。
   expect(result.driven).toBeGreaterThan(0);
+  // ③ 贡献为 0 时不许动画面（逐像素完全一致）。
+  expect(result.noop).toBe(0);
 });
 
 test('分辨率档位真的改后备缓冲尺寸（不被显示区压掉）', async ({ page }) => {
