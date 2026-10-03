@@ -162,7 +162,7 @@
     {/snippet}
     <p class="lead">{tr('app.aboutLead')}</p>
     <div class="kv">
-      <span>{tr('app.version')}</span><span class="mono">0.1.0</span>
+      <span>{tr('app.version')}</span><span class="mono">{__APP_VERSION__}</span>
       <span>{tr('app.render')}</span><span class="mono">WebGL2 + GLSL ES 3.00</span>
       <span>{tr('app.icons')}</span><span class="mono">{tr('app.licenseLucide')}</span>
       <span>{tr('app.compression')}</span><span class="mono">{tr('app.licenseFflate')}</span>

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { SETTLE_FRAMES } from './_stage';
 
 /**
- * 确定性测试——本项目最有价值的一类测试（AGENTS.md §7）。
+ * 确定性测试——本项目最有价值的一类测试（AGENTS.md §6.1 / §6.2）。
  * 逐像素断言在 page 内做完 reduce 再回传标量，不要把几 MB 像素传回 Node。
  */
 

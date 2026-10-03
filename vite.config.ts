@@ -1,7 +1,17 @@
 /// <reference types="vitest/config" />
+import { readFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+
+/**
+ * 版本号的**单一真源是 `package.json`**。这里读出来注入成编译期常量
+ * （`__APP_VERSION__`），UI 直接用 —— 不要在组件里再写一遍字面量，
+ * 那种副本必然会在某次升版本时漏掉。
+ */
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'),
+) as { version: string };
 
 /**
  * `/lab`（无尾斜杠）会被 SPA fallback 静默端上**主应用** —— 页面看起来能开，
@@ -38,6 +48,7 @@ function labRedirect(): Plugin {
 
 export default defineConfig({
   plugins: [svelte(), labRedirect()],
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   worker: { format: 'es' },
   build: {
     target: 'es2022',

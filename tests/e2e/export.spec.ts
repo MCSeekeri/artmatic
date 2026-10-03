@@ -103,7 +103,7 @@ test('导出按钮触发浏览器下载（真实下载路径）', async ({ page 
   });
 
   // 导出入口在窄侧栏的「导出」面板里（工程级动作，与保存同类；工具条只放
-  // 逐帧/逐拍的操作——见 AGENTS.md §5 的布局约定）。所以要先开面板。
+  // 逐帧/逐拍的操作——见 AGENTS.md §6.7 的操作分工）。所以要先开面板。
   await page.getByTestId('rail-export').click();
   const downloadPromise = page.waitForEvent('download');
   await page.getByTestId('export-png').click();
