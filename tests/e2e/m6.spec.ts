@@ -384,30 +384,36 @@ test('image 片段不再是空白（导入图片与排版「转为图片」共�
   expect(h.bottom[2], `画面下半应当是蓝的，实测 ${where}`).toBeGreaterThan(h.bottom[0] + 40);
 });
 
-test('工程设置：分辨率与帧率可改，且立刻生效', async ({ page }) => {
+const readProject = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { project: { resolution: { w: number; h: number }; fps: number } } };
+    }).__artmatic;
+    return { resolution: A.store.project.resolution, fps: A.store.project.fps };
+  });
+
+/**
+ * 工程设置已经搬进「设置 → 当前工程」，而且改成**草稿 + 保存并应用**：
+ * 面板里改的是草稿，点「保存并应用」才落库。所以这条测试的形态跟着变 ——
+ * 它现在同时钉住「草稿阶段不落库」与「应用后落库」两件事。
+ */
+test('工程设置：草稿阶段不落库，保存并应用后生效', async ({ page }) => {
   await boot(page);
-  await page.getByTestId('rail-project').click();
-  await expect(page.getByTestId('modal-project')).toBeVisible();
+  await page.getByTestId('rail-settings').click();
+  await expect(page.getByTestId('modal-settings')).toBeVisible();
+  // 默认落在「当前工程」分页
+  await expect(page.getByTestId('settings-pane-project')).toBeVisible();
 
   // 分辨率：从预设选 720p
   await page.getByTestId('project-res-preset').click();
   await page.getByTestId('project-res-opt-hd720').click();
-  const res = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: { store: { project: { resolution: { w: number; h: number } } } };
-    }).__artmatic;
-    return A.store.project.resolution;
-  });
-  expect(res).toEqual({ w: 1280, h: 720 });
 
   // 帧率：预设 60
   await page.getByTestId('project-fps-preset').click();
   await page.getByTestId('project-fps-opt-60').click();
-  const fps = await page.evaluate(() => {
-    const A = (window as never as { __artmatic: { store: { project: { fps: number } } } }).__artmatic;
-    return A.store.project.fps;
-  });
-  expect(fps).toBe(60);
+
+  // 草稿阶段：工程里还是原值（这是「取消」能真的取消的前提）
+  expect(await readProject(page)).toEqual({ resolution: { w: 1920, h: 1080 }, fps: 30 });
 
   // 改过帧率 → 出现「逐帧随机种子会变」的说明
   await expect(page.getByText('改帧率会改变逐帧随机种子', { exact: false })).toBeVisible();
@@ -417,15 +423,30 @@ test('工程设置：分辨率与帧率可改，且立刻生效', async ({ page 
   // 这里断言的是不变量（偶数 + 接近键入值），不是某一个具体吸附结果。
   await page.getByTestId('project-res-w').fill('1001');
   await page.getByTestId('project-res-w').press('Enter');
-  const w = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: { store: { project: { resolution: { w: number } } } };
-    }).__artmatic;
-    return A.store.project.resolution.w;
-  });
+  // 改分辨率后有一句小字警告（「不会缩放已有排版」）
+  await expect(page.getByTestId('settings-resolution-warn')).toBeVisible();
+
+  await page.getByTestId('settings-apply').click();
+  await expect(page.getByTestId('modal-settings')).toHaveCount(0);
+
+  const after = await readProject(page);
+  expect(after.fps).toBe(60);
+  expect(after.resolution.h).toBe(720);
+  const w = after.resolution.w;
   expect(w % 2, `写进工程的宽度必须是偶数，实测 ${w}`).toBe(0);
   expect(Math.abs(w - 1001)).toBeLessThanOrEqual(2);
 });
+
+test('工程设置：取消丢弃草稿', async ({ page }) => {
+  await boot(page);
+  await page.getByTestId('rail-settings').click();
+  await page.getByTestId('project-fps-preset').click();
+  await page.getByTestId('project-fps-opt-60').click();
+  await page.getByTestId('settings-cancel').click();
+  await expect(page.getByTestId('modal-settings')).toHaveCount(0);
+  expect((await readProject(page)).fps).toBe(30);
+});
+
 
 test('预览降质：档位生效但不影响导出尺寸，且画面显示尺寸不变', async ({ page }) => {
   await boot(page);

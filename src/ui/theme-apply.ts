@@ -25,3 +25,20 @@ export function installTheme(spec: ThemeSpec, el?: HTMLElement): void {
   target.style.colorScheme = spec.mode;
   target.dataset.theme = spec.mode;
 }
+
+/** `--fs-*` 的基准值（与 tokens.ts 的 STATIC 一致）。 */
+const FONT_BASE = { 'fs-xs': 10, 'fs-sm': 11, 'fs-md': 12 } as const;
+
+/**
+ * 界面字号缩放。
+ *
+ * 单独一个函数、而不是塞进 `resolveTokens`：token 解析是纯函数且有单测钉在
+ * 基准值上，把缩放揉进去会让「基准主题」这件事失真。这里只覆盖三个字号变量，
+ * **不动**图标与控件高度 —— 理由见 theme.svelte.ts 的 FONT_SCALE_STEPS。
+ */
+export function applyFontScale(scale: number, el?: HTMLElement): void {
+  const target = el ?? document.documentElement;
+  for (const [k, base] of Object.entries(FONT_BASE)) {
+    target.style.setProperty(`--${k}`, `${Math.round(base * scale * 10) / 10}px`);
+  }
+}

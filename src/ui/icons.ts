@@ -81,6 +81,7 @@ import Scissors from '@lucide/svelte/icons/scissors';
 import Search from '@lucide/svelte/icons/search';
 import SendToBack from '@lucide/svelte/icons/send-to-back';
 import Settings from '@lucide/svelte/icons/settings';
+import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
 import Shapes from '@lucide/svelte/icons/shapes';
 import Sigma from '@lucide/svelte/icons/sigma';
 import Sparkles from '@lucide/svelte/icons/sparkles';
@@ -172,6 +173,7 @@ export const ICONS = {
   search: Search,
   'send-to-back': SendToBack,
   settings: Settings,
+  'sliders-horizontal': SlidersHorizontal,
   shapes: Shapes,
   sigma: Sigma,
   sparkles: Sparkles,

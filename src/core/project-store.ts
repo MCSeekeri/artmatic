@@ -163,6 +163,22 @@ export class ProjectStore {
     });
   }
 
+  /**
+   * 把第 from 条轨道挪到第 to 位（拖曳排序）。
+   *
+   * 轨道顺序是**有语义**的：`buildStack` 里 `tracks[0]` 是最前景，
+   * 时间轴也从第 0 条往下画。所以这不是纯展示排序，而是一次真的画面改动 ——
+   * 因此走 `commit`（一笔撤销），不走 touch。
+   */
+  moveTrack(from: number, to: number): void {
+    const n = this.project.tracks.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    this.commit(tr('tl.moveTrack'), (p) => {
+      const [moved] = p.tracks.splice(from, 1);
+      if (moved) p.tracks.splice(to, 0, moved);
+    });
+  }
+
   /* ------------------------------------------------------- 轨道属性写入
    *
    * 这三个方法存在的原因是一个真 bug：轨道行的开关原来在组件里写

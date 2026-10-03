@@ -22,6 +22,7 @@
   import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
   import { createTextElement, createTypographyDocument } from '../typography/document';
   import { canvasPalette } from '../ui/tokens';
+  import { reorder } from '../ui/drag-reorder';
   import { theme } from '../ui/theme.svelte';
   import { appState } from '../ui/app-state.svelte';
   import { tr } from '../i18n/index.svelte';
@@ -694,7 +695,20 @@
 </script>
 
 <div class="tl">
-  <div class="side">
+  <!--
+    轨道行可拖曳排序。挂在整个 .side 上而不是每行上：拖动时要把它**兄弟**
+    的 transform 一起算，只有容器才拿得到全量。
+    行菜单 / 重命名输入框都在行内，所以拖曳是「位移超过阈值才算」——
+    4px 以内的移动仍然是一次正常的点击。
+  -->
+  <div
+    class="side"
+    use:reorder={{
+      axis: 'y',
+      itemSelector: '[data-testid=track-side-row]',
+      onReorder: (from, to) => appState.store.moveTrack(from, to),
+    }}
+  >
     <div class="side-head" style:height={`${RULER_HEIGHT}px`}>
       <span class="side-title">{tr('tl.sideTitle')}</span>
     </div>
@@ -894,6 +908,14 @@
     gap: var(--sp-1);
     padding: 0 var(--sp-2) 0 var(--sp-1);
     border-bottom: 1px solid var(--tl-gutter);
+    /* 拖曳排序：不设过渡，否则跟随指针会拖尾。 */
+    will-change: transform;
+  }
+  .side :global(.is-dragging) {
+    background: var(--surface-hover);
+  }
+  .side :global(.is-reordering) {
+    cursor: grabbing;
   }
   .side-row.muted .tname {
     color: var(--tl-name-muted);

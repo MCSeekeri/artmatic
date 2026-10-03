@@ -12,6 +12,7 @@
   import { onDestroy } from 'svelte';
   import IconButton from '../controls/IconButton.svelte';
   import Select from '../controls/Select.svelte';
+  import Slider from '../controls/Slider.svelte';
   import Ribbon from '../ribbon/Ribbon.svelte';
   import { contextualTabIds } from '../ribbon/ribbon-model';
   import { appState } from '../app-state.svelte';
@@ -114,8 +115,7 @@
     }));
   });
 
-  /** 弧度 → CSS `rotate()`。与 css.ts 的 elementStyle 用同一套角度约定。 */
-  function rotCss(rad: number): string | undefined {
+  /** 弧度 → CSS `rotate()`。与 css.ts 的 elementStyle 用同一套角度约定。 */  function rotCss(rad: number): string | undefined {
     return rad ? `rotate(${(rad * 180) / Math.PI}deg)` : undefined;
   }
 
@@ -207,9 +207,14 @@
   });
 
   /**
-   * 进入编辑态后把焦点给文本框并全选（双击进来通常是要整段替换）。
+   * 进入编辑态后把焦点给文本框。
    *
-   * `document.activeElement !== node` 这个判断不能省：效果每次重跑都全选的话，
+   * **刻意不在这里全选。** 原来会 `selectNodeContents` 把所有文字选中，于是
+   * 双击进来就是「整段高亮」状态：用户接着单击想挪光标，那一下只是把已有的
+   * 选区收拢，看起来像「又选中了整个文本框」，再打字就整段替换。Office 的
+   * 行为是双击只把光标放到点击处 —— 光标位置由 `onStageDblClick` 按点击点放。
+   *
+   * `document.activeElement !== node` 这个判断不能省：效果每次重跑都 focus 的话，
    * 用户打字打到一半就会被重排光标。
    */
   $effect(() => {
@@ -218,12 +223,36 @@
     const node = paperEl?.querySelector<HTMLElement>(`[data-el-id="${id}"] .typo-text`);
     if (!node || document.activeElement === node) return;
     node.focus();
-    const range = document.createRange();
-    range.selectNodeContents(node);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
   });
+
+  /**
+   * 把光标放到屏幕坐标处。
+   *
+   * `caretRangeFromPoint` 是 Chromium/WebKit 的扩展，Firefox 走
+   * `caretPositionFromPoint`。两个都拿不到（或落点不在这个文本框里）时
+   * **什么都不做**，由浏览器自己的单击结果说了算 —— 不强行塞一个「文末光标」，
+   * 那会在用户明明点在中间时把光标扔到末尾。
+   */
+  function placeCaretAt(node: HTMLElement, clientX: number, clientY: number): void {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const d = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    };
+    let range = d.caretRangeFromPoint?.(clientX, clientY) ?? null;
+    if (!range && d.caretPositionFromPoint) {
+      const pos = d.caretPositionFromPoint(clientX, clientY);
+      if (pos) {
+        range = document.createRange();
+        range.setStart(pos.offsetNode, pos.offset);
+        range.collapse(true);
+      }
+    }
+    if (!range || !node.contains(range.startContainer)) return;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
 
   // 光栅预览：只在「文档内容变了 / 帧号变了 / 停止播放」时重烘。
   // 播放中不重烘 —— 它是用来核对「所见即所得」的，不是播放器。
@@ -287,6 +316,14 @@
     if (z > 0) editorState.setZoom(z);
   }
 
+  /** 缩放百分比（滑杆与读数共用同一个取整口径）。 */
+  const zoomPct = $derived(Math.round(zoom * 100));
+
+  function setZoomPct(pct: number): void {
+    autoFit = false;
+    editorState.setZoom(pct / 100);
+  }
+
   /* ------------------------------------------------------------ 手势环境 */
 
   function toDoc(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -334,7 +371,7 @@
   }
 
   /**
-   * 双击文本元素 → 进入编辑。
+   * 双击文本元素 → 进入编辑，并把光标放到双击的那一点。
    *
    * 双击的第一下会先起一次拖拽手势，但那次没有位移，松手时走 `cancelGesture`
    * （不留撤销记录），所以两者不冲突。
@@ -348,6 +385,13 @@
     e.preventDefault();
     editorState.selectOnly(el.id);
     editorState.beginEditing(el.id);
+    // 等 DOM 真的进入编辑态（contenteditable 打开 + 上面那个 effect 里的 focus
+    // 跑完）再放光标。rAF 保证排在 Svelte 的 effect 刷新之后。
+    const { clientX, clientY } = e;
+    requestAnimationFrame(() => {
+      const node = paperEl?.querySelector<HTMLElement>(`[data-el-id="${el.id}"] .typo-text`);
+      if (node) placeCaretAt(node, clientX, clientY);
+    });
   }
 
   /**
@@ -414,13 +458,20 @@
 </script>
 
 <div class="editor" data-testid="typo-editor">
-  <Ribbon {tabs} activeId={activeRibbonTab} {contextualActive} onchange={(id) => (activeRibbonTab = id)} />
+  <!--
+    Ribbon 与「缺字体」横幅包在**同一个网格行**里。
+    分开的话 banner 是条件渲染，缺字体时网格会多出一行、不缺时少一行，
+    于是 .main 与 .zoombar 各自落到不同的轨道上 —— 表现见下面 .editor 的注释。
+  -->
+  <div class="top">
+    <Ribbon {tabs} activeId={activeRibbonTab} {contextualActive} onchange={(id) => (activeRibbonTab = id)} />
 
-  {#if missingFonts.length}
-    <div class="banner" data-testid="typo-font-missing">
-      {tr('typo.missingFonts', { fonts: missingFonts.join(tr('typo.fontListSeparator')) })}
-    </div>
-  {/if}
+    {#if missingFonts.length}
+      <div class="banner" data-testid="typo-font-missing">
+        {tr('typo.missingFonts', { fonts: missingFonts.join(tr('typo.fontListSeparator')) })}
+      </div>
+    {/if}
+  </div>
 
   <div class="main">
     <!-- role="presentation" 与 Timeline 的 .rows 一致：这是指针手势面，不是语义容器。 -->
@@ -507,6 +558,9 @@
         <SelectionLayer
           rect={selectionBox}
           {zoom}
+          editing={!!editorState.editingTextId &&
+            selection.length === 1 &&
+            selection[0]!.id === editorState.editingTextId}
           onMove={(e) => startMoveGesture(makeEnv(), toDoc(e))}
           onHandle={(h: HandleId, e: PointerEvent) => startResizeGesture(makeEnv(), h, toDoc(e))}
           onRotate={(e) => startRotateGesture(makeEnv(), toDoc(e))}
@@ -519,9 +573,25 @@
 
   <div class="zoombar">
     <IconButton icon="minus" label={tr('typo.zoomOut')} testid="typo-zoom-out" onclick={() => zoomBy(1 / 1.25)} />
-    <span class="zoom-val">{Math.round(zoom * 100)}%</span>
+    <span class="zoom-slider">
+      <Slider
+        min={5}
+        max={400}
+        step={1}
+        value={zoomPct}
+        ariaLabel={tr('typo.zoom')}
+        tipText={tr('typo.zoom')}
+        testid="typo-zoom-slider"
+        oninput={setZoomPct}
+      />
+    </span>
+    <span class="zoom-val">{zoomPct}%</span>
     <IconButton icon="plus" label={tr('typo.zoomIn')} testid="typo-zoom-in" onclick={() => zoomBy(1.25)} />
     <IconButton icon="minimize-2" label={tr('typo.zoomFit')} testid="typo-zoom-fit" onclick={zoomFit} />
+    <!-- 画面尺寸：排版里所有坐标都是文档像素，不显示的话没法判断「这段文字有多大」。 -->
+    <span class="canvas-size mono" data-testid="typo-canvas-size" title={tr('typo.canvasSize')}>
+      {docSize.w} × {docSize.h}
+    </span>
     <span class="spacer"></span>
     <!-- 固定宽度：.sel 带 flex:1，直接放进 flex 行会被拉成整行宽。 -->
     <span class="scale-pick">
@@ -557,11 +627,26 @@
 <style>
   .editor {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    /*
+     * 三行：Ribbon 区 / 舞台（吃满）/ zoombar。
+     *
+     * ⚠️ 这里曾经是 `auto auto minmax(0,1fr) auto` —— 四行，但只有三个子项
+     * （「缺字体」横幅是条件渲染的）。不缺字体时 .main 落到第 2 行的 `auto`、
+     * .zoombar 落到第 3 行的 `minmax(0,1fr)`，于是：
+     *   · zoombar 被拉成 `1fr` 的高度（默认情况下就偏高，窗口一变化更明显）；
+     *   · 舞台那一行是 `auto`，会随画布尺寸无限长高，把 zoombar 挤出屏幕。
+     * 现在 Ribbon 与横幅合成一个 `.top` 子项，行数与子项数一一对应。
+     */
+    grid-template-rows: auto minmax(0, 1fr) auto;
     grid-template-columns: minmax(0, 1fr);
     min-height: 0;
     min-width: 0;
     background: var(--surface-0);
+  }
+  .top {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
   }
   .main {
     display: grid;
@@ -641,15 +726,30 @@
     display: flex;
     align-items: center;
     gap: var(--sp-1);
-    padding: 2px var(--sp-4);
+    /* 固定高度：它是布局的常数，不该随内容或窗口宽度变。 */
+    height: 26px;
+    flex-shrink: 0;
+    padding: 0 var(--sp-4);
     background: var(--surface-1);
     border-top: 1px solid var(--border);
+  }
+  /* .sld 自带 flex:1，放进 flex 行会被拉成整行宽 —— 定宽框住它。 */
+  .zoom-slider {
+    display: inline-flex;
+    flex: none;
+    width: 120px;
   }
   .zoom-val {
     min-width: 42px;
     text-align: center;
     font-size: var(--fs-xs);
     color: var(--text-secondary);
+  }
+  .canvas-size {
+    margin-left: var(--sp-2);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    white-space: nowrap;
   }
   .spacer {
     margin-left: auto;

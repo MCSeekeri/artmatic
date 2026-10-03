@@ -30,6 +30,7 @@ import type { VideoSourceManager } from '../engine/video-source';
 import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
 import { snapTime, type SnapMode } from '../core/time';
+import type { ShortcutScheme } from './shortcuts';
 import type { FsDirHandle } from '../project/fs';
 import type { AssetIssue } from '../project/ledger';
 import type { ProjectRef } from '../project/handles';
@@ -53,12 +54,29 @@ interface UiPrefs {
   previewScale: number;
   /** 暂停时回全质（停住时看到的必须是准的）。 */
   previewRestoreOnPause: boolean;
+  /** 预览工具条收成一个悬浮球（画面小时很挡视线）。 */
+  previewBarCollapsed: boolean;
+  /**
+   * 快捷键方案（「操作习惯」）。只影响切分键，见 ui/shortcuts.ts。
+   * 存 UI 偏好而不是工程：它描述的是**用的人**，不是这份工程。
+   */
+  shortcutScheme: ShortcutScheme;
 }
 
 /** 预览帧率档位（分母）。 */
 export const PREVIEW_FPS_DIVS = [1, 2, 3] as const;
 /** 预览分辨率档位。 */
 export const PREVIEW_SCALES = [1, 0.75, 0.5, 0.25] as const;
+
+/**
+ * 快捷键方案的合法值。归一化时用它，避免 localStorage 里一个手改的字符串
+ * 让整个判定分支落空。
+ */
+const SCHEME_IDS: ShortcutScheme[] = ['artmatic', 'premiere', 'aftereffects', 'davinci'];
+
+function normalizeScheme(v: unknown): ShortcutScheme {
+  return SCHEME_IDS.includes(v as ShortcutScheme) ? (v as ShortcutScheme) : 'artmatic';
+}
 
 function normalizeDiv(v: unknown): number {
   const n = Number(v);
@@ -77,6 +95,8 @@ function loadUiPrefs(): UiPrefs {
     previewFpsDiv: 1,
     previewScale: 1,
     previewRestoreOnPause: true,
+    previewBarCollapsed: false,
+    shortcutScheme: 'artmatic',
   };
   try {
     const raw = localStorage.getItem(UI_KEY);
@@ -91,6 +111,11 @@ function loadUiPrefs(): UiPrefs {
         typeof p.previewRestoreOnPause === 'boolean'
           ? p.previewRestoreOnPause
           : fallback.previewRestoreOnPause,
+      previewBarCollapsed:
+        typeof p.previewBarCollapsed === 'boolean'
+          ? p.previewBarCollapsed
+          : fallback.previewBarCollapsed,
+      shortcutScheme: normalizeScheme(p.shortcutScheme),
     };
   } catch {
     return fallback;
@@ -149,6 +174,39 @@ export interface OpenProject {
   selectedClipId: string | null;
 }
 
+/**
+ * 没有打开任何工程时 `activeProject` 的回落值。
+ *
+ * ## 为什么不是「干脆让 projects 为空、让调用方自己处理空集」
+ *
+ * 因为主界面里读 `appState.store` / `appState.project` 的地方太多了，
+ * 而**主界面不能卸载**：Studio 的 `<canvas>` 一旦离开 DOM，WebGL 上下文连同
+ * kit 里所有 Program / Target / 纹理一起失效，而且不是重新 mount 能恢复的
+ * （见 App.svelte 的注释）。让空集把整棵树炸掉，或者把树卸载掉，两条路都是
+ * 「为了一个空状态弄坏渲染器」。
+ *
+ * 所以空状态是**表现层**的事：工程列表可以是空的（`hasProject === false`），
+ * 界面盖上「新建 / 导入 / 最近」的空界面，而底下的读取者拿到一份丢弃用的
+ * 空白工程，照常求值。它永远不进 `projects`，也永远不会被保存。
+ */
+function createPlaceholder(): OpenProject {
+  return {
+    id: '__placeholder__',
+    store: new ProjectStore(createBlankProject()),
+    assets: createAssetStore(),
+    view: { kind: 'timeline' },
+    dir: null,
+    key: null,
+    // 与 store.version 相等 ⇒ 不算「有未保存改动」，否则关页面时会弹出
+    // 一个毫无来由的「要保存吗」。
+    savedVersion: 0,
+    savedAt: 0,
+    issues: [],
+    playT: 0,
+    selectedClipId: null,
+  };
+}
+
 class AppState {
   /* 响应式 —— 这里只放**全局**（不跟工程走）的 UI 状态。
      跟工程走的东西在 `OpenProject` 上，由 getter/setter 转发（见「打开的工程」段）。
@@ -200,6 +258,8 @@ class AppState {
   previewFpsDiv = $state<number>(1);
   previewScale = $state<number>(1);
   previewRestoreOnPause = $state(true);
+  previewBarCollapsed = $state(false);
+  shortcutScheme = $state<ShortcutScheme>('artmatic');
 
   /* ---- 排版编辑器（全局，不跟工程走：这是「怎么看」，不是「看什么」） ---- */
 
@@ -221,12 +281,23 @@ class AppState {
 
   /* ---------------------------------------------------------- 打开的工程 */
 
-  /** 至少一个，顺序即选项卡顺序。 */
+  /** 至少一个，顺序即选项卡顺序。**允许为空**（空 = 显示空界面）。 */
   projects = $state<OpenProject[]>([]);
   activeProjectId = $state<string>('');
 
+  private readonly placeholder = createPlaceholder();
+
+  /** 有没有打开任何工程。界面据此决定是渲染主界面还是空界面。 */
+  get hasProject(): boolean {
+    return this.projects.length > 0;
+  }
+
   get activeProject(): OpenProject {
-    return this.projects.find((p) => p.id === this.activeProjectId) ?? this.projects[0]!;
+    return (
+      this.projects.find((p) => p.id === this.activeProjectId) ??
+      this.projects[0] ??
+      this.placeholder
+    );
   }
 
   /**
@@ -361,6 +432,19 @@ class AppState {
   }
 
   /**
+   * 拖曳调整选项卡顺序。
+   *
+   * 只动 `projects` 数组本身：`activeProjectId` 是 id，不随位置变 ——
+   * 所以「拖动选项卡」不会顺带切换当前工程（那会是最难解释的一种行为）。
+   */
+  moveProject(from: number, to: number): void {
+    const n = this.projects.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    const [moved] = this.projects.splice(from, 1);
+    if (moved) this.projects.splice(to, 0, moved);
+  }
+
+  /**
    * 切到另一份工程。
    *
    * 顺序有讲究：**先 `pause()` 再改 `activeProjectId`** —— `pause` 会把
@@ -390,9 +474,10 @@ class AppState {
    * - **脏的返回 `'dirty'`，由调用方弹确认**（`force: true` 才真关）。
    *   这里刻意不「直接拒绝」：拒绝之后用户既关不掉、也不知道下一步该干什么。
    *   改动只活在内存里，所以确认框必须说清后果是**丢失**。
-   * - **关掉最后一份会补一个空白工程**：工作区不允许 0 份工程 ——
-   *   否则所有 `activeProject` 的读取者都要处理空集，代价远大于收益。
-   *   补出来的是一份**崭新的空白**，不是「原来那个又回来了」，所以不会误导。
+   * - **关掉最后一份就真的空了**：界面切到空界面（新建 / 导入 / 最近），
+   *   而不是悄悄补一份空白工程。原先是补一份的 —— 后果是「关掉空工程」
+   *   看起来毫无反应（关了又冒出来一个一模一样的），那正是用户报的现象。
+   *   所有读取者拿到的回落值见 `placeholder`。
    */
   closeProject(id: string, opts: { force?: boolean } = {}): 'ok' | 'dirty' | 'missing' {
     const i = this.projects.findIndex((p) => p.id === id);
@@ -410,7 +495,13 @@ class AppState {
     this.projects.splice(i, 1);
 
     if (this.projects.length === 0) {
-      this.adoptProject({ store: new ProjectStore(createBlankProject()) });
+      this.activeProjectId = '';
+      // 回落值不是一个真的工程，没有版本可订阅；退订并把 version 归零，
+      // 否则界面还会挂在最后一份工程的计数上。
+      this.unsubActive?.();
+      this.unsubActive = null;
+      this.version = 0;
+      this.player?.stop();
       return 'ok';
     }
 
@@ -531,6 +622,8 @@ class AppState {
     this.previewFpsDiv = prefs.previewFpsDiv;
     this.previewScale = prefs.previewScale;
     this.previewRestoreOnPause = prefs.previewRestoreOnPause;
+    this.previewBarCollapsed = prefs.previewBarCollapsed;
+    this.shortcutScheme = prefs.shortcutScheme;
   }
 
   /**
@@ -565,6 +658,19 @@ class AppState {
     this.persistUi();
   }
 
+  setPreviewBarCollapsed(v: boolean): void {
+    if (this.previewBarCollapsed === v) return;
+    this.previewBarCollapsed = v;
+    this.persistUi();
+  }
+
+  setShortcutScheme(v: ShortcutScheme): void {
+    const next = normalizeScheme(v);
+    if (this.shortcutScheme === next) return;
+    this.shortcutScheme = next;
+    this.persistUi();
+  }
+
   setDrawerOpen(open: boolean): void {
     if (this.drawerOpen === open) return;
     this.drawerOpen = open;
@@ -589,6 +695,8 @@ class AppState {
       previewFpsDiv: this.previewFpsDiv,
       previewScale: this.previewScale,
       previewRestoreOnPause: this.previewRestoreOnPause,
+      previewBarCollapsed: this.previewBarCollapsed,
+      shortcutScheme: this.shortcutScheme,
     });
   }
 
@@ -804,6 +912,15 @@ class AppState {
     // 导出期间预览循环停手：rAF 在预览尺寸下渲染会重排反馈历史
     // （feedbackFor 按尺寸重建目标），污染正在进行的顺序导出。
     if (this.exportProgress !== null) return;
+
+    /*
+     * 没有工程时不渲染。
+     *
+     * 空界面是**盖在**主界面之上的一层（见 placeholder 的注释：主界面不能卸载），
+     * 所以这里必须显式停手 —— 否则背后那台渲染器会一直按占位工程出帧，
+     * 白烧 GPU 还让「没有工程」这件事在性能上看不出来。
+     */
+    if (!this.hasProject) return;
 
     // 排版编辑页激活时**不渲染 WebGL**：.body 已被 display:none 隐藏，
     // measureDisplaySize() 会量到 0 并触发 UNMEASURED_MAX_PIXELS 兜底分配，

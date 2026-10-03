@@ -15,19 +15,38 @@
     /** `rot` 只在单选时有意义（多选用整个选区的 AABB，角度为 0）。 */
     rect: { x: number; y: number; w: number; h: number; rot: number } | null;
     zoom: number;
+    /**
+     * 正在编辑这个元素的文本（单选且 `editingTextId` 指向它）。
+     *
+     * 此时框的**内部**必须让出指针事件：文本是 contenteditable，单击要落到
+     * 文字上放光标。原来整个框都盖在上面并吞掉 pointerdown，于是「编辑开着
+     * 但光标挪不动，一点就退回选中框」—— 那正是 Office 里单击**边框**才有的
+     * 行为。所以编辑态只保留一圈 6px 的边框环（+ 缩放把手）可拖。
+     */
+    editing?: boolean;
     onMove: (e: PointerEvent) => void;
     onHandle: (handle: HandleId, e: PointerEvent) => void;
     onRotate: (e: PointerEvent) => void;
   }
-  const { rect, zoom, onMove, onHandle, onRotate }: Props = $props();
+  const { rect, zoom, editing = false, onMove, onHandle, onRotate }: Props = $props();
 
   /** 弧度 → CSS。与 elementStyle 用同一套角度约定，绕中心转（默认 transform-origin）。 */
   const rotCss = $derived(rect?.rot ? `rotate(${(rect.rot * 180) / Math.PI}deg)` : undefined);
+
+  /** 编辑态下的边框环：四条 6px 的带，命中即起移动手势（= 选中文本框本身）。 */
+  const EDGES = ['n', 's', 'w', 'e'] as const;
+
+  function edgeDown(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    onMove(e);
+  }
 </script>
 
 {#if rect}
   <div
     class="box"
+    class:editing
     style:left={`${rect.x * zoom}px`}
     style:top={`${rect.y * zoom}px`}
     style:width={`${rect.w * zoom}px`}
@@ -41,6 +60,17 @@
       onMove(e);
     }}
   >
+    {#if editing}
+      {#each EDGES as edge (edge)}
+        <i
+          class="edge {edge}"
+          role="presentation"
+          data-testid={`typo-frame-${edge}`}
+          onpointerdown={edgeDown}
+        ></i>
+      {/each}
+    {/if}
+
     {#each HANDLES as h (h)}
       <i
         class="handle {h}"
@@ -75,6 +105,47 @@
     cursor: move;
     /* 旋转绕自身中心，与 elementStyle 的元素旋转同一套原点。 */
     transform-origin: 50% 50%;
+  }
+  /*
+   * 编辑态：框内部**不接收**指针事件，交给底下的 contenteditable 放光标。
+   * 把手与边框环各自把 pointer-events 打开，所以拖拽/缩放/旋转照旧。
+   */
+  .box.editing {
+    pointer-events: none;
+  }
+  .box.editing .handle,
+  .box.editing .rotate,
+  .edge {
+    pointer-events: auto;
+  }
+  .edge {
+    position: absolute;
+    cursor: move;
+  }
+  /* 6px 的环：与把手同宽的量级，既能点中又不会盖住文字。 */
+  .edge.n {
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 6px;
+  }
+  .edge.s {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 6px;
+  }
+  .edge.w {
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 6px;
+  }
+  .edge.e {
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 6px;
   }
   .handle {
     position: absolute;

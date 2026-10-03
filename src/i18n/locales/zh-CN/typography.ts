@@ -68,6 +68,9 @@ export const typography = {
   'typo.zoomOut': '缩小',
   'typo.zoomIn': '放大',
   'typo.zoomFit': '适配',
+  'typo.zoom': '缩放',
+  /* 画面尺寸读数。数字与 × 是格式，只有标题要翻译。 */
+  'typo.canvasSize': '画面尺寸（文档像素）',
   /* 倍率本身（1.0x / 0.5x / 0.25x）是数值格式，不进语言表。 */
   'typo.previewScale': '预览画质 {scale}',
   'typo.rasterPreview': '光栅预览',

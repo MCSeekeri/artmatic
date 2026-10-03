@@ -303,14 +303,17 @@ test('图层面板的眼睛与锁图标实时刷新', async ({ page }) => {
   expect((await readDoc(page)).elements[0]!.locked).toBe(true);
 });
 
-test('双击文本进入编辑，失焦提交为**一笔**撤销', async ({ page }) => {
+test('双击文本进入编辑：光标落在点击处（不再全选），失焦提交为**一笔**撤销', async ({ page }) => {
   await wide(page);
   await boot(page);
   const clipId = await addTextClip(page);
   await openEditor(page, clipId);
 
   const rect = await screenRect(page);
-  await page.mouse.dblclick(rect.x + rect.w / 2, rect.y + rect.h / 2);
+  const box = (await domBox(page))!;
+
+  // 双击文本框**靠左**的位置（不是正中，这样"光标落在点击处"才有判据）
+  await page.mouse.dblclick(box.x + 8, box.y + box.h / 2);
 
   // 进入编辑态：焦点落在文本框上且可编辑
   const editable = await page.evaluate(() => {
@@ -320,17 +323,60 @@ test('双击文本进入编辑，失焦提交为**一笔**撤销', async ({ page
   expect(editable.isText).toBe(true);
   expect(editable.editable).toBe(true);
 
+  /*
+   * 关键改动：**不再全选**。
+   *
+   * 旧实现在进入编辑时 `selectNodeContents` 全选整段，于是接着打的字会
+   * 整段替换（这条测试原来就是这么写的），而且用户**没法单击挪光标** ——
+   * 那一下只是把已有选区收拢。Office 的行为是双击只把光标放到点击处。
+   */
+  const selected = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+  expect(selected, '双击进入编辑时不该全选文字').toBe('');
+
   await page.keyboard.type('改过的文字');
   // 点空白处失焦 → 提交
   await page.mouse.click(rect.x + 4, rect.y - 60);
 
   const doc = await readDoc(page);
-  expect(doc.elements[0]!.text).toBe('改过的文字');
+  const text = doc.elements[0]!.text ?? '';
+  // 新文字是**插入**进去的（老文字还在），不是替换
+  expect(text).toContain('改过的文字');
+  expect(text.length).toBeGreaterThan('改过的文字'.length);
   // 画布上也是新文字（同步没被编辑态挡住）
-  expect((await domBox(page))!.text).toBe('改过的文字');
+  expect((await domBox(page))!.text).toBe(text);
 
+  // 整段提交是**一笔**撤销：按一次 Ctrl+Z 就回到编辑前的文本
   await page.keyboard.press('Control+z');
-  expect((await readDoc(page)).elements[0]!.text).not.toBe('改过的文字');
+  expect((await readDoc(page)).elements[0]!.text).not.toBe(text);
+});
+
+test('编辑文本时：点文字内部挪光标，点文本框边框才退回选中', async ({ page }) => {
+  // Office 系的手感：编辑态下框的内部归文字（放光标），只有**边框**归"这个框本身"。
+  // 旧实现里 SelectionLayer 的框盖满整个元素并吞掉 pointerdown，
+  // 所以编辑开着也挪不动光标，一点就退回选中框。
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  const box = (await domBox(page))!;
+  await page.mouse.dblclick(box.x + 8, box.y + box.h / 2);
+
+  const activeIs = () =>
+    page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return el?.classList.contains('typo-text') === true;
+    });
+  expect(await activeIs()).toBe(true);
+
+  // ① 点文字内部：仍在编辑态，焦点没离开文本框
+  await page.mouse.click(box.x + box.w / 2, box.y + box.h / 2);
+  expect(await activeIs(), '点文字内部应当仍在编辑（放光标），而不是退回选中框').toBe(true);
+
+  // ② 点 6px 的边框环：退出编辑（focusout 提交），此时才轮到"选中文本框本身"
+  await page.mouse.click(box.x + box.w / 2, box.y + 2);
+  expect(await activeIs(), '点文本框边框应当退出文字编辑').toBe(false);
+  await expect(page.getByTestId('typo-selection')).toBeVisible();
 });
 
 test('长字体名不会把 Ribbon 布局顶歪（定宽 + 截断）', async ({ page }) => {

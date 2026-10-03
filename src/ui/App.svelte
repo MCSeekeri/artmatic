@@ -7,24 +7,27 @@
   import InspectorDrawer from './InspectorDrawer.svelte';
   import StatusBar from './StatusBar.svelte';
   import Tip from './Tip.svelte';
+  import EmptyState from './EmptyState.svelte';
   import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
   import { handleTypographyKey } from './typography/keys';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
-  import { installTheme } from './theme-apply';
+  import { installTheme, applyFontScale } from './theme-apply';
   import { activeElementOwnsSpace, isExempt } from './focus';
   import { saveProjectAs, saveProjectNow } from './project-actions';
+  import { isSplitKey } from './shortcuts';
   import { tr } from '../i18n/index.svelte';
 
   /**
    * 主题的唯一写入口。main.ts 在 mount 前已经装过一次（防首帧闪默认值），
-   * 这里负责**后续变更**：runtime 改 mode/accent 后重新注入 :root。
+   * 这里负责**后续变更**：runtime 改 mode/accent/fontScale 后重新注入 :root。
    * 用 $effect 而不是 store 订阅，因为它天然读到哪些 rune 就订阅哪些。
    */
   $effect(() => {
     installTheme(theme.spec);
+    applyFontScale(theme.fontScale);
   });
 
   onMount(() => {
@@ -68,6 +71,17 @@
        */
       if (appState.editorOpen) {
         handleTypographyKey(e);
+        return;
+      }
+
+      /*
+       * 切分键的方案别名（「操作习惯」）。默认方案下 `isSplitKey` 恒返回 false，
+       * 走下面那条 `e.key === 's'` 的分支 —— 两处都判会让同一次击键切两刀。
+       */
+      if (appState.selectedClipId && isSplitKey(e, appState.shortcutScheme)) {
+        e.preventDefault();
+        const f = appState.store.findClip(appState.selectedClipId);
+        if (f) appState.store.splitClipAt(f.track.id, f.clip.id, appState.playT);
         return;
       }
 
@@ -134,7 +148,12 @@
   });
 </script>
 
-<div class="shell">
+<!--
+  `inert` + 空界面覆盖层：没有工程时，主界面**留在 DOM 里**（Studio 的 canvas
+  不能卸载，否则 WebGL 上下文永久失效），但整棵树对焦点与指针都失效，
+  视觉上被 EmptyState 完全盖住。见 app-state.svelte.ts 的 `placeholder`。
+-->
+<div class="shell" inert={!appState.hasProject}>
   <TopBar />
 
   <div class="content">
@@ -190,6 +209,10 @@
 
   <StatusBar />
 </div>
+
+{#if !appState.hasProject}
+  <EmptyState />
+{/if}
 
 <Tip />
 

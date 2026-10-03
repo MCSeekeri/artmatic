@@ -128,9 +128,10 @@ test('导出面板：同时提供 MP4 与 PNG 两个入口，且 MP4 显示预�
   await expect(page.getByTestId('export-mp4')).toBeVisible();
   await expect(page.getByTestId('export-png')).toBeVisible();
 
-  // MP4 按钮标签里带体积估计（磁盘纪律的第一道防线：点之前就知道多大）
-  const label = await page.getByTestId('export-mp4').textContent();
-  expect(label).toMatch(/\d+(\.\d+)?\s*(KB|MB|B|GB)/);
+  // MP4 的体积估计挂在按钮**下方**的说明里（磁盘纪律的第一道防线：
+  // 点之前就知道多大）。原来它被塞进按钮标签，现在标签只留「MP4」。
+  const hint = await page.getByTestId('export-mp4-hint').textContent();
+  expect(hint).toMatch(/\d+(\.\d+)?\s*(KB|MB|B|GB)/);
 });
 
 test('导出管线（不经下载）：产物是含音视频双轨的合法 MP4', async ({ page }) => {

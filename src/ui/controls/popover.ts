@@ -114,7 +114,20 @@ export function attachDismiss(opts: DismissOptions): DismissHandle {
     opts.onclose();
   };
 
-  const onWheel = (): void => opts.onclose();
+  /*
+   * 滚轮关浮层有一个必须排除的情形：**滚轮落在浮层自己身上**。
+   *
+   * 下拉的选项列表有 `max-height: 240px; overflow-y: auto`，选到下半截时
+   * 用户会直接用滚轮滚它 —— 而这里挂的是 window 捕获阶段监听，事件还没到
+   * 列表就先把浮层关了。表现是「内容一溢出就滚不动，滚一下下拉直接消失」。
+   *
+   * 浮层内部的滚动归浮层自己（`.sel-pop` / `.menu` 都有 overscroll-behavior
+   * 兜住边界）；只有滚在浮层外面才当作「用户在滚页面，别挡着」而关闭。
+   */
+  const onWheel = (e: WheelEvent): void => {
+    if (opts.isInside?.(e.target as Node)) return;
+    opts.onclose();
+  };
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') opts.onclose();
   };

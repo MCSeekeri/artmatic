@@ -249,6 +249,23 @@ class TypographyEditorState {
     });
   }
 
+  /**
+   * 拖曳排序：把 `doc.elements[from]` 挪到下标 `to`。
+   *
+   * 传的是**数组下标**（不是图层列表里的视觉下标）。列表是倒序渲染的
+   * （数组末尾 = 最前景 = 列表顶部），所以调用方负责换算：
+   * 视觉第 i 行 ↔ 数组下标 `len - 1 - i`。这个换算只放一处，
+   * 放进这里会让「上下移」那套按 id 的动作与按下标的动作混在一起。
+   */
+  moveElement(from: number, to: number): void {
+    const n = this.elements.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    this.commit(tr('typo.undo.order'), (doc) => {
+      const [moved] = doc.elements.splice(from, 1);
+      if (moved) doc.elements.splice(to, 0, moved);
+    });
+  }
+
   setZoom(z: number): void {
     this.zoom = Math.max(0.05, Math.min(4, z));
   }

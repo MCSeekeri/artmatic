@@ -28,6 +28,7 @@ export const timeline = {
   'tl.setFps': '改帧率',
   'tl.renameTrack': '重命名轨道',
   'tl.removeTrack': '删除轨道',
+  'tl.moveTrack': '调整轨道顺序',
   /* 导入音频：菜单项带省略号（要弹文件框），撤销标签不带。 */
   'tl.importAudio': '导入音频',
   'tl.importAudioMenu': '导入音频…',

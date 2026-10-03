@@ -4,18 +4,28 @@
    *
    * Ribbon 的可读性主要就靠这个分组：把 20 个按钮平铺是找不到东西的，
    * 分成「字体 / 段落 / 对齐 / 层级」四组之后，找东西靠的是位置记忆。
+   *
+   * 纯小按钮的组排成两行（见 ribbon-model 的 `layout`）：既省横向空间，
+   * 也让「一排小图标」看起来仍然是一**组**而不是一条线。
    */
   import type { Snippet } from 'svelte';
 
   interface Props {
     label: string;
+    layout?: 'row' | 'grid';
+    /** grid 布局的列数（由 Ribbon 按项数推）。 */
+    columns?: number;
     children: Snippet;
   }
-  const { label, children }: Props = $props();
+  const { label, layout = 'row', columns = 2, children }: Props = $props();
 </script>
 
 <div class="rgroup" data-testid="ribbon-group">
-  <div class="rgroup-body">{@render children()}</div>
+  <div
+    class="rgroup-body"
+    class:grid={layout === 'grid'}
+    style:--grid-cols={String(columns)}
+  >{@render children()}</div>
   <div class="rgroup-label">{label}</div>
 </div>
 
@@ -47,6 +57,18 @@
     gap: 2px;
     flex: 1;
     min-height: 0;
+  }
+  /*
+   * 两行网格。`grid-auto-flow: row` + 固定列数保证**阅读顺序不变**
+   * （1 2 / 3 4），而不是按列填充的 1 3 / 2 4 —— 后者会让图标顺序错位。
+   */
+  .rgroup-body.grid {
+    display: grid;
+    grid-template-columns: repeat(var(--grid-cols, 2), max-content);
+    grid-auto-flow: row;
+    justify-content: center;
+    align-content: center;
+    gap: 2px 3px;
   }
   .rgroup-label {
     text-align: center;

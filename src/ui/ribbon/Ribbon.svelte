@@ -45,11 +45,32 @@
 
   let bodyEl = $state<HTMLDivElement | null>(null);
 
-  /** 切 Tab 后回到最左。不这么做的话，切到一个更短的 Tab 会停在空白的右侧。 */
+  /**
+   * 上一个真正生效的 Tab id。
+   *
+   * ⚠️ 这里必须是**普通 let**，不能是 `$state` —— 下面的 effect 会读它，
+   * 做成响应式的话 effect 自己就会把自己再触发一遍。
+   */
+  let lastScrollResetTab = '';
+
+  /**
+   * 切 Tab 后回到最左。不这么做的话，切到一个更短的 Tab 会停在空白的右侧。
+   *
+   * **只在 activeId 真的变化时归零。** 原来无条件写 `scrollLeft = 0`，而
+   * `resolved` 是 `$derived(resolveVisibleTabs(...))` —— 它每次重算都返回
+   * **新对象**，Svelte 的 `===` 判等随即认为值变了，于是 effect 每一轮都跑。
+   * `tabs` 挂在 `appState.version` 上，所以「选中一个元素」「改一个参数」
+   * 这类刷新都会把 Ribbon 打回最左 —— 而用户的实际动线恰恰是
+   * 「先把 Ribbon 滚到想要的操作，再选中元素去点它」，一选中就归零等于
+   * 那个按钮永远点不到。
+   */
   $effect(() => {
-    void resolved.activeId;
     const el = bodyEl;
-    if (el) el.scrollLeft = 0;
+    const id = resolved.activeId;
+    if (!el) return;
+    if (id === lastScrollResetTab) return;
+    lastScrollResetTab = id;
+    el.scrollLeft = 0;
   });
 
   /** 纵向滚轮改为横向滚动 —— 面板没有纵向可滚的内容，不接管就完全没反应。 */
@@ -83,7 +104,11 @@
   <div class="ribbon-body" bind:this={bodyEl} onwheel={onWheel} data-testid="ribbon-body">
     {#if activeTab}
       {#each activeTab.groups as group (group.id)}
-        <RibbonGroup label={group.label}>
+        <RibbonGroup
+          label={group.label}
+          layout={group.layout}
+          columns={group.layout === 'grid' ? Math.ceil(group.items.length / 2) : undefined}
+        >
           {#each group.items as item (item.id)}
             <RibbonItem {item} />
           {/each}

@@ -96,3 +96,57 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 export const SHORTCUT_BY_LABEL: Partial<Record<MessageKey, MessageKey>> = Object.fromEntries(
   SHORTCUT_GROUPS.flatMap((g) => g.items.map((i) => [i.labelKey, i.keysKey] as const)),
 );
+
+/* ------------------------------------------------------------ 快捷键方案
+ *
+ * 「操作习惯」面板里唯一**真的会改变行为**的一项。
+ *
+ * 只有「切分片段」这一个动作在四大剪辑软件里按键真的不同：
+ *   Premiere      Ctrl+K
+ *   After Effects Ctrl+Shift+D
+ *   DaVinci       Ctrl+B
+ *   Artmatic      S（单键，未选中任何东西时也不会误触别的功能）
+ *
+ * 其余动作（Ctrl+Z / Ctrl+S / Del / Space / Alt+↑↓）在四者之间是一致的，
+ * **不要为了"看起来方案多"给它编造差异** —— 那会变成一份假的说明书。
+ * 所以这张表只描述切分键，方案菜单里显示的也是同一份数据。
+ */
+export type ShortcutScheme = 'artmatic' | 'premiere' | 'aftereffects' | 'davinci';
+
+export interface SchemeDef {
+  id: ShortcutScheme;
+  /** 展示名（Adobe / Blackmagic 的产品名是专名，不进语言表）。 */
+  label: string;
+  /** 切分键的展示写法。 */
+  splitKeys: string;
+  /** 是否与默认方案不同（"默认"那一项用它来做标记，不必翻语言表）。 */
+  changesSplit: boolean;
+}
+
+export const SHORTCUT_SCHEMES: SchemeDef[] = [
+  { id: 'artmatic', label: 'Artmatic', splitKeys: 'S', changesSplit: false },
+  { id: 'premiere', label: 'Premiere Pro', splitKeys: 'Ctrl+K', changesSplit: true },
+  { id: 'aftereffects', label: 'After Effects', splitKeys: 'Ctrl+Shift+D', changesSplit: true },
+  { id: 'davinci', label: 'DaVinci Resolve', splitKeys: 'Ctrl+B', changesSplit: true },
+];
+
+/**
+ * 某个方案下的切分键是否被按下。
+ *
+ * 默认方案返回 false：它的 `S` 由 App.svelte 那条既有分支处理，
+ * 两处都判会让同一次击键走两遍（第二遍在切分后的片段上再切一刀）。
+ */
+export function isSplitKey(e: KeyboardEvent, scheme: ShortcutScheme): boolean {
+  if (e.altKey) return false;
+  const k = e.key.toLowerCase();
+  switch (scheme) {
+    case 'premiere':
+      return e.ctrlKey && !e.shiftKey && k === 'k';
+    case 'aftereffects':
+      return e.ctrlKey && e.shiftKey && k === 'd';
+    case 'davinci':
+      return e.ctrlKey && !e.shiftKey && k === 'b';
+    default:
+      return false;
+  }
+}

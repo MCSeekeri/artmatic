@@ -217,6 +217,25 @@
 .sel[aria-expanded='true'] .sel-arrow {
   color: var(--accent);
 }
+/*
+ * 禁用态。
+ *
+ * 原来只写了 aria-disabled 属性，外观一条都没有 —— 于是「元素没有动画时时序
+ * 控件应当禁用」这件事在数据层是对的（`disabled: !anim` 老老实实生效），
+ * 但**看不出来**：下拉照样是正常的填充与文字色，用户点上去毫无反应，只会
+ * 判定成「这个软件点不动」。禁用必须同时是功能上的与视觉上的。
+ */
+.sel[aria-disabled='true'],
+.sel[aria-disabled='true']:hover {
+  color: var(--text-disabled);
+  border-color: var(--input-border);
+  background: var(--surface-2);
+  cursor: default;
+}
+.sel[aria-disabled='true'] .sel-label,
+.sel[aria-disabled='true'] .sel-arrow {
+  color: var(--text-disabled);
+}
 
 .sel-pop {
   position: fixed;
@@ -224,6 +243,9 @@
   min-width: 100%;
   max-height: 240px;
   overflow-y: auto;
+  /* 滚到两端时不要把滚动继续传给底下的时间轴 —— 那会同时滚动画布并让
+     用户以为「下拉自己跑掉了」。 */
+  overscroll-behavior: contain;
   padding: var(--sp-1);
   background: var(--menu-bg);
   border: 1px solid var(--menu-border);
@@ -365,6 +387,18 @@
   margin-left: 2px;
   color: var(--text-muted);
   font-size: var(--fs-xs);
+}
+/* 禁用态（`:has`：input 的 disabled 由 props 直接控制，容器只是壳） */
+.num:has(input:disabled),
+.num:has(input:disabled):hover {
+  background: var(--surface-2);
+  border-color: var(--input-border);
+  cursor: default;
+}
+.num:has(input:disabled) input,
+.num:has(input:disabled) .num-suffix {
+  color: var(--text-disabled);
+  cursor: default;
 }
 
 /* ------------------------------------------------------------ 菜单（含二级） */

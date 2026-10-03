@@ -81,12 +81,24 @@ function baseName(): string {
 }
 
 /**
+ * 本次导出的文件名（不含扩展名）。
+ *
+ * 由导出面板传入：面板里有一个可编辑的「文件名」输入框，默认取工程名。
+ * 传空串/全是空白时回落到工程名 —— 一个只剩扩展名的下载文件（`.mp4`）
+ * 是纯粹的困惑来源。
+ */
+function safeBase(name?: string): string {
+  const n = (name ?? '').trim();
+  return n || baseName();
+}
+
+/**
  * 导出 MP4（含音轨）。
  *
  * 混流在开跑之前做完，这样渲染循环里一次 `await` 都不用为音频分心，
  * 而且混流出的 PCM 长度与工程时长对齐，音视频时间戳共用一个 fps。
  */
-export async function exportMp4(): Promise<void> {
+export async function exportMp4(name?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
   if (!mp4Supported()) {
     appState.flash(tr('err.export.noWebCodecs'), 'error');
@@ -116,7 +128,7 @@ export async function exportMp4(): Promise<void> {
     })) as Blob;
     const size = fmtSize(blob.size);
     appState.flash(tr('err.export.mp4Done', { size }), 'success');
-    await browserPlatform.download(blob, `${baseName()}.mp4`);
+    await browserPlatform.download(blob, `${safeBase(name)}.mp4`);
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
       appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');
@@ -128,7 +140,7 @@ export async function exportMp4(): Promise<void> {
 }
 
 /** 导出 PNG 序列（zip）。重复调用是空操作。 */
-export async function exportPngSequence(): Promise<void> {
+export async function exportPngSequence(name?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
 
   const ctrl = new AbortController();
@@ -145,7 +157,7 @@ export async function exportPngSequence(): Promise<void> {
     });
     await browserPlatform.download(
       blob as Blob,
-      `${baseName()}-png.zip`,
+      `${safeBase(name)}-png.zip`,
     );
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {

@@ -32,12 +32,8 @@ export const app = {
   'app.openLabTip': '试炼场：逐个审查特效 / 生成器 / 转场，定默认参数',
 
   /* ------------------------------------------------ 画幅与帧率（工程级设置） */
-  'app.canvas': '画幅与帧率',
-  'app.canvasHint':
-    '分辨率与帧率是**工程**的属性：导出帧数、逐帧随机种子、排版光栅化尺寸都跟着它们走。',
-  'app.fpsChangeHint':
-    '改帧率会改变逐帧随机种子，带随机参数的生成器/特效画面会跟着变（这是预期行为）。',
-  'app.preset': '预设',
+  'app.frameRate': '帧率',
+  'app.fpsChangeHint': '改帧率会改变逐帧随机种子，带随机参数的生成器/特效画面会跟着变。',
   'app.custom': '自定义',
   'app.presetLandscape': '横屏 1080p',
   'app.preset720': '横屏 720p',
@@ -53,23 +49,20 @@ export const app = {
   'app.previewQuality': '画质',
   'app.previewRestore': '暂停回全质',
   'app.previewRestoreTip': '播放时用上面的档位，暂停时自动回到全质（停住时看到的必须是准的）',
-  'app.previewPlaying': '播放中 {fps} fps',
-  'app.previewPaused': '暂停 · 全质',
+  'app.previewOptions': '预览选项',
+  'app.previewCollapse': '收起为悬浮球',
 
   /* ------------------------------------------------ 导出面板 */
-  'app.range': '范围',
-  'app.frames': '{n} 帧',
+  'app.exportFileName': '文件名',
+  'app.duration': '时长',
+  'app.framesSeconds': '{n} 帧（{sec} 秒）',
   'app.resolution': '分辨率',
-  'app.frameRate': '帧率',
-  'app.exportHint':
-    '导出 MP4 或 PNG 序列。',
-  'app.exportMp4': '导出 MP4（约 {size}）',
-  'app.exportMp4Hint':
-    '默认使用 H.264 + AAC。{size} 为估算值。',
-  'app.exportMp4Unsupported': '本机浏览器不支持 WebCodecs（`VideoEncoder` 不存在），只能导出 PNG 序列。',
-  'app.exportPng': '导出 PNG 序列（.zip）',
-  'app.exportPngHint':
-    'PNG 序列体积可能非常大。',
+  'app.exportMp4': 'MP4',
+  'app.exportMp4Hint': 'H.264 + AAC · 约 {size}',
+  'app.exportMp4Unsupported': '本机浏览器不支持 WebCodecs，只能导出 PNG 序列。',
+  'app.exportPng': 'PNG 序列',
+  /* 「未压缩」是**上界**，不是预计值：PNG 的压缩率完全取决于画面内容。 */
+  'app.exportPngHint': '未压缩约 {size}',
   'app.exporting': '导出中 {pct}%',
 
   /* ------------------------------------------------ 工程面板 */
@@ -102,20 +95,53 @@ export const app = {
   'app.projectHintD': '。整个目录可以直接拷走。',
 
   /* ------------------------------------------------ 设置面板 */
+  'app.settingsNavProject': '当前工程',
+  'app.settingsNavAppearance': '外观',
+  'app.settingsNavHabits': '操作习惯',
+  'app.settingsNavEditor': '编辑器行为',
+  'app.applySettings': '保存并应用',
+  'app.changedMark': '本次已更改',
+  'app.renameProject': '重命名工程',
+
+  /* —— 当前工程 —— */
+  'app.basic': '基础',
+  'app.projectName': '工程名称',
+  'app.customResolution': '自定义分辨率…',
+  'app.width': '宽',
+  'app.height': '高',
+  'app.customFps': '自定义帧率…',
+  /* 改分辨率不会缩放已有排版 —— 这是唯一会让人"改完吓一跳"的后果，所以要说明。 */
+  'app.resolutionWarn': '改变分辨率不会缩放已有的排版：画布尺寸变了，文本框的位置与换行会跟着变。',
+  'app.music': '音乐',
+  'app.bpm': 'BPM',
+  'app.offset': '偏移',
+  'app.beatsPerBar': '每小节的拍数',
+  'app.beatsPerBarHint': '拍网格的计量方式。改 BPM / 偏移前先确认它。',
+
+  /* —— 外观 —— */
+  'app.fontScale': '字号',
+  'app.fontScaleSmall': '小',
+  'app.fontScaleNormal': '标准',
+  'app.fontScaleLarge': '大',
+  'app.fontScaleXLarge': '特大',
   'app.accentColor': '主题色',
-  'app.accentHint': '仅用于必要处。',
   'app.customAccent': '自定义主题色',
   'app.mode': '模式',
-  'app.modeCurrent': '当前：{mode}',
   'app.light': '亮色',
   'app.dark': '暗色',
+
+  /* —— 操作习惯 —— */
+  'app.shortcutScheme': '快捷键方案',
+  'app.shortcutSplit': '切分片段',
+  'app.shortcutSchemeHint': '各方案之间只有「切分片段」的按键不同，其余按键完全一致。',
+
+  /* —— 编辑器行为 —— */
+  'app.overlapBehavior': '片段重叠行为',
+  'app.overlapBehaviorTip': '把片段拖到同轨邻居身上时怎么办。',
   'app.keyframes': '关键帧',
   'app.beatAnchorNew': '新关键帧默认锚到拍',
   'app.beatAnchorTip': '锚到拍：改 BPM / offset 时卡点自动跟随',
   'app.inspector': '检查器',
-  'app.drawerWidth': '宽度 {px}px',
-  'app.resetDefault': '重置为默认',
-  'app.resetTheme': '恢复默认主题',
 
   /* ------------------------------------------------ 顶栏与关闭确认 */
   'app.openProjects': '打开的工程',
@@ -129,6 +155,12 @@ export const app = {
   'app.discardConfirm': '放弃改动并关闭',
   'app.back': '返回',
   'app.projectGone': '这份工程已经不在了',
+
+  /* ------------------------------------------------ 空界面（一份工程都没开） */
+  /* 只有一句「从哪开始」。空界面上不该有第二句解释 —— 能做的事就三件。 */
+  'app.emptyLead': '新建一份工程，或打开磁盘上已有的工程目录。',
+  'app.emptyImport': '导入工程',
+  'app.emptyRecentEmpty': '还没有打开过工程。',
 
   /* ------------------------------------------------ 底栏 */
   'app.hoverHint': '悬停任意控件获取说明',

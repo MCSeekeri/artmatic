@@ -10,7 +10,7 @@ import { renderDemoAudio } from './audio/demo-audio';
 import { computeWaveform } from './audio/decode';
 import { appState } from './ui/app-state.svelte';
 import { theme } from './ui/theme.svelte';
-import { installTheme } from './ui/theme-apply';
+import { installTheme, applyFontScale } from './ui/theme-apply';
 import { runExport } from './exporters/export-runner';
 import { PngSequenceSink } from './exporters/png-sequence';
 import { Mp4Sink, MP4_CODEC } from './exporters/mp4-sink';
@@ -33,6 +33,7 @@ import { registerImageBytes } from './engine/media-assets';
    主题必须最先注入：它是内联 style，写在 :root 上，任何时候注入都生效，
    但放在 mount 前可以避免第一帧用默认值闪一下。 */
 installTheme(theme.spec);
+applyFontScale(theme.fontScale);
 
 /* 首份工程先于 mount（组件挂载即读 appState.store.project），
    渲染服务在 Preview.onMount → appState.attachPreview 里随 canvas 惰性创建。 */

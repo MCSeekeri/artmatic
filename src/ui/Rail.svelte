@@ -15,28 +15,17 @@
    */
   import IconButton from './controls/IconButton.svelte';
   import Button from './controls/Button.svelte';
-  import Checkbox from './controls/Checkbox.svelte';
   import Modal from './controls/Modal.svelte';
   import RailShell from './RailShell.svelte';
+  import SettingsModal from './SettingsModal.svelte';
+  import ExportModal from './ExportModal.svelte';
   import { tip } from './tip';
-  import NumberInput from './controls/NumberInput.svelte';
-  import Select from './controls/Select.svelte';
   import Brand from './Brand.svelte';
   import Icon from './Icon.svelte';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
-  import { ACCENT_PRESETS, BRAND_IDS, DENSITY, type BrandId } from './tokens';
   import { SHORTCUT_GROUPS } from './shortcuts';
   import { tr } from '../i18n/index.svelte';
-  import {
-    cancelExport,
-    estimateMp4Bytes,
-    exportMp4,
-    exportPngSequence,
-    fmtSize,
-    mp4Supported,
-    totalFrames,
-  } from './export';
   import {
     newProject,
     openProjectPicker,
@@ -78,72 +67,6 @@
   }
 
   const exporting = $derived(appState.exportProgress !== null);
-  const pct = $derived(Math.round((appState.exportProgress ?? 0) * 100));
-  const frames = $derived.by(() => {
-    void appState.version;
-    return totalFrames();
-  });
-  const res = $derived.by(() => {
-    void appState.version;
-    return appState.project.resolution;
-  });
-  /** MP4 的预计体积。点之前就告诉用户要花多少磁盘。 */
-  const mp4Size = $derived.by(() => {
-    void appState.version;
-    return fmtSize(estimateMp4Bytes());
-  });
-  const canMp4 = $derived(mp4Supported());
-  const fps = $derived.by(() => {
-    void appState.version;
-    return appState.project.fps;
-  });
-
-  /* ------------------------------------------------ 画幅与帧率的预设 */
-
-  /** 常用画幅。用户点一个就同时把宽高写进工程（`setResolution` 会钳成偶数）。 */
-  const RES_PRESETS = [
-    { id: 'landscape', labelKey: 'app.presetLandscape', w: 1920, h: 1080 },
-    { id: 'hd720', labelKey: 'app.preset720', w: 1280, h: 720 },
-    { id: 'uhd4k', labelKey: 'app.preset4k', w: 3840, h: 2160 },
-    { id: 'vertical', labelKey: 'app.presetVertical', w: 1080, h: 1920 },
-    { id: 'square', labelKey: 'app.presetSquare', w: 1080, h: 1080 },
-  ] as const;
-
-  /** 当前画幅命中了哪个预设；没命中就是「自定义」。 */
-  const resPreset = $derived(
-    RES_PRESETS.find((p) => p.w === res.w && p.h === res.h)?.id ?? 'custom',
-  );
-  const resPresetOptions = $derived([
-    ...RES_PRESETS.map((p) => ({ value: p.id as string, label: tr(p.labelKey) })),
-    { value: 'custom', label: tr('app.custom') },
-  ]);
-
-  function applyResPreset(id: string): void {
-    const p = RES_PRESETS.find((x) => x.id === id);
-    if (p) appState.store.setResolution(p.w, p.h);
-  }
-
-  const FPS_PRESETS = [23.976, 24, 25, 29.97, 30, 50, 60] as const;
-  const fpsPreset = $derived(
-    FPS_PRESETS.some((v) => Math.abs(v - fps) < 1e-6) ? String(fps) : 'custom',
-  );
-  const fpsPresetOptions = $derived([
-    ...FPS_PRESETS.map((v) => ({ value: String(v), label: `${v} fps` })),
-    { value: 'custom', label: tr('app.custom') },
-  ]);
-
-  function applyFpsPreset(v: string): void {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) appState.store.setFps(n);
-  }
-
-  /**
-   * 改过帧率才提示「随机画面会跟着变」。
-   * 默认工程是 30 fps —— 等于 30 时说明用户没动过，不必解释一个没发生的事。
-   */
-  const fpsChanged = $derived(Math.abs(fps - 30) > 1e-9);
-
-  let hexDraft = $state('');
 </script>
 
 <RailShell>
@@ -266,47 +189,7 @@
 {/if}
 
 {#if panel === 'export'}
-  <Modal title={tr('app.export')} testid="modal-export" onclose={() => (panel = null)}>
-    <div class="kv">
-      <span>{tr('app.range')}</span><span class="mono">{tr('app.frames', { n: frames })}</span>
-      <span>{tr('app.resolution')}</span><span class="mono">{res.w}×{res.h}</span>
-      <span>{tr('app.frameRate')}</span><span class="mono">{fps} fps</span>
-    </div>
-    {#if exporting}
-      <div class="progress">
-        <div class="progress-track"><div class="progress-fill" style:width={`${pct}%`}></div></div>
-        <span class="mono">{pct}%</span>
-        <Button label={tr('common.cancel')} variant="outline" testid="export-cancel" onclick={cancelExport} />
-      </div>
-    {:else}
-      <p class="hint">{tr('app.exportHint')}</p>
-      <Button
-        label={tr('app.exportMp4', { size: mp4Size })}
-        icon="download"
-        variant="accent"
-        size="lg"
-        testid="export-mp4"
-        disabled={!canMp4}
-        onclick={() => void exportMp4()}
-      />
-      <p class="hint" data-testid="export-mp4-hint">
-        {#if canMp4}
-          {tr('app.exportMp4Hint', { size: fmtSize(estimateMp4Bytes()) })}
-        {:else}
-          {tr('app.exportMp4Unsupported')}
-        {/if}
-      </p>
-      <Button
-        label={tr('app.exportPng')}
-        icon="download"
-        variant="outline"
-        size="lg"
-        testid="export-png"
-        onclick={() => void exportPngSequence()}
-      />
-      <p class="hint">{tr('app.exportPngHint')}</p>
-    {/if}
-  </Modal>
+  <ExportModal onclose={() => (panel = null)} />
 {/if}
 
 {#if panel === 'project'}
@@ -335,74 +218,11 @@
     </div>
 
     <!--
-      画幅与帧率：**工程**级设置，所以放在「工程」面板而不是主题设置里。
-      这两个值决定导出帧数、逐帧随机种子、排版光栅化尺寸。
+      画幅与帧率**不在这里**：它们已经搬进「设置 → 当前工程」。
+      面板的职责收窄成「这份工程现在是什么状态、能对它做什么」，
+      改参数的入口集中在设置里 —— 同一个值有两个编辑入口迟早会漂移。
+      改分辨率的后果（已有排版不会跟着缩放）在那边有一句小字说明。
     -->
-    <section class="setting">
-      <h3>{tr('app.canvas')}</h3>
-      <p class="hint">{tr('app.canvasHint')}</p>
-
-      <div class="row">
-        <span class="grow">{tr('app.preset')}</span>
-        <Select
-          value={resPreset}
-          options={resPresetOptions}
-          testid="project-res-preset"
-          optionTestidPrefix="project-res-opt"
-          minWidth={140}
-          onchange={(v) => applyResPreset(v)}
-        />
-      </div>
-
-      <div class="row">
-        <span class="grow">{tr('app.resolution')}</span>
-        <NumberInput
-          value={res.w}
-          min={16}
-          step={2}
-          width={70}
-          ariaLabel={tr('app.resolution')}
-          testid="project-res-w"
-          onchange={(v) => appState.store.setResolution(v, res.h)}
-        />
-        <span class="dim">×</span>
-        <NumberInput
-          value={res.h}
-          min={16}
-          step={2}
-          width={70}
-          ariaLabel={tr('app.resolution')}
-          testid="project-res-h"
-          onchange={(v) => appState.store.setResolution(res.w, v)}
-        />
-      </div>
-
-      <div class="row">
-        <span class="grow">{tr('app.frameRate')}</span>
-        <Select
-          value={fpsPreset}
-          options={fpsPresetOptions}
-          testid="project-fps-preset"
-          optionTestidPrefix="project-fps-opt"
-          minWidth={140}
-          onchange={(v) => applyFpsPreset(v)}
-        />
-        <NumberInput
-          value={fps}
-          min={1}
-          max={240}
-          step={0.001}
-          width={70}
-          ariaLabel={tr('app.frameRate')}
-          testid="project-fps"
-          onchange={(v) => appState.store.setFps(v)}
-        />
-      </div>
-
-      {#if fpsChanged}
-        <p class="hint warn">{tr('app.fpsChangeHint')}</p>
-      {/if}
-    </section>
 
     {#if appState.projectIssues.length}
       <section class="setting">
@@ -487,88 +307,7 @@
 {/if}
 
 {#if panel === 'settings'}
-  <Modal title={tr('app.settings')} testid="modal-settings" onclose={() => (panel = null)}>
-    <section class="setting">
-      <h3>{tr('app.accentColor')}</h3>
-      <p class="hint">{tr('app.accentHint')}</p>
-      <div class="swatch-row">
-        {#each BRAND_IDS as id (id)}
-          <button
-            type="button"
-            class="swatch"
-            style:background={ACCENT_PRESETS[id].hex}
-            aria-label={tr(ACCENT_PRESETS[id].labelKey)}
-            aria-pressed={theme.accent.kind === 'preset' && theme.accent.id === id}
-            data-testid={`brand-${id}`}
-            onclick={() => theme.setPreset(id as BrandId)}
-          ></button>
-        {/each}
-        <input
-          class="hex"
-          type="text"
-          placeholder="#rrggbb"
-          aria-label={tr('app.customAccent')}
-          data-testid="brand-hex"
-          bind:value={hexDraft}
-          onchange={() => {
-            theme.setCustomAccent(hexDraft);
-            hexDraft = '';
-          }}
-        />
-        <span class="mono dim">{theme.accentLabel}</span>
-      </div>
-    </section>
-
-    <section class="setting">
-      <h3>{tr('app.mode')}</h3>
-      <div class="row">
-        <span class="grow">
-          {tr('app.modeCurrent', { mode: tr(theme.mode === 'light' ? 'app.light' : 'app.dark') })}
-        </span>
-        <Button
-          label={tr(theme.mode === 'light' ? 'app.toDark' : 'app.toLight')}
-          icon={theme.mode === 'light' ? 'moon' : 'sun'}
-          variant="outline"
-          testid="setting-toggle-mode"
-          onclick={() => theme.toggleMode()}
-        />
-      </div>
-    </section>
-
-    <section class="setting">
-      <h3>{tr('app.keyframes')}</h3>
-      <Checkbox
-        checked={appState.beatAnchorNewKeys}
-        label={tr('app.beatAnchorNew')}
-        tipText={tr('app.beatAnchorTip')}
-        testid="setting-beat-anchor"
-        onchange={(v) => (appState.beatAnchorNewKeys = v)}
-      />
-    </section>
-
-    <section class="setting">
-      <h3>{tr('app.inspector')}</h3>
-      <div class="row">
-        <span class="grow">{tr('app.drawerWidth', { px: appState.drawerWidth })}</span>
-        <Button
-          label={tr('app.resetDefault')}
-          variant="outline"
-          testid="setting-reset-drawer"
-          onclick={() => appState.setDrawerWidth(DENSITY.drawerW)}
-        />
-      </div>
-    </section>
-
-    <div class="modal-actions">
-      <Button
-        label={tr('app.resetTheme')}
-        icon="trash"
-        variant="outline"
-        testid="setting-reset-theme"
-        onclick={() => theme.reset()}
-      />
-    </div>
-  </Modal>
+  <SettingsModal onclose={() => (panel = null)} />
 {/if}
 
 <style>
@@ -641,8 +380,7 @@
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: var(--sp-5) var(--sp-6);
   }
-  .sc-grid h3,
-  .setting h3 {
+  .sc-grid h3 {
     margin: 0 0 var(--sp-2);
     color: var(--text-muted);
     font-size: var(--fs-xs);
@@ -664,29 +402,20 @@
     min-width: 0;
   }
 
-  .progress {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-4);
-  }
-  .progress-track {
-    flex: 1;
-    height: 6px;
-    background: var(--surface-active);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-  }
-
   .setting {
     padding: var(--sp-4) 0;
     border-bottom: 1px solid var(--border);
   }
   .setting:first-child {
     padding-top: 0;
+  }
+  .setting h3 {
+    margin: 0 0 var(--sp-2);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
   .row {
     display: flex;
@@ -695,21 +424,14 @@
     color: var(--text-secondary);
     font-size: var(--fs-sm);
   }
-  .swatch-row {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
+  .dim {
+    color: var(--text-muted);
   }
-  .hex {
-    width: 110px;
-    height: var(--control-h);
-    font-family: 'Cascadia Code', Consolas, monospace;
+  .hint {
+    margin: 0 0 var(--sp-4);
+    color: var(--text-muted);
     font-size: var(--fs-sm);
-  }
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    padding-top: var(--sp-5);
+    line-height: 1.5;
   }
 
   /* ------------------------------------------------ 工程面板 */

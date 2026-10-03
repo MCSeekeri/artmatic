@@ -15,6 +15,7 @@
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { appState } from './app-state.svelte';
   import { newProject } from './project-actions';
+  import { reorder } from './drag-reorder';
   import { tip } from './tip';
   import { tr } from '../i18n/index.svelte';
 
@@ -70,7 +71,16 @@
     <Brand variant="word" size={15} />
   </span>
 
-  <div class="tabs" role="tablist" aria-label={tr('app.openProjects')}>
+  <div
+    class="tabs"
+    role="tablist"
+    aria-label={tr('app.openProjects')}
+    use:reorder={{
+      axis: 'x',
+      itemSelector: '.tab',
+      onReorder: (from, to) => appState.moveProject(from, to),
+    }}
+  >
     {#each tabs as t (t.id)}
       <div
         class="tab"
@@ -176,6 +186,15 @@
     max-width: 240px;
     border-bottom: 2px solid transparent;
     color: var(--text-muted);
+    /* 拖曳排序要能整体平移；不设 transform 过渡，否则跟随指针会拖尾。 */
+    will-change: transform;
+  }
+  /* 拖曳中的那一项浮到最上层；其它项靠 transform 滑开让位。 */
+  .tabs :global(.is-dragging) {
+    opacity: 0.9;
+  }
+  .tabs :global(.is-reordering) {
+    cursor: grabbing;
   }
   /* 当前选项卡是「选中的东西」——主题色在此处出现是合规的少数场景之一。 */
   .tab[data-active='true'] {

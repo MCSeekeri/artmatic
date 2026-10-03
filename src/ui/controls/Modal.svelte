@@ -15,13 +15,38 @@
     title: string;
     onclose: () => void;
     testid?: string;
-    /** 可选的内容宽度：'wide' 给两栏内容用。 */
-    width?: 'normal' | 'wide';
+    /**
+     * 内容宽度：'wide' 给两栏内容（快捷键清单）。
+     * 'tall' 是「侧栏 + 内容」型面板（设置）：宽度同 normal，
+     * 但**高度固定**——左侧的 navside 需要一条确定的竖直空间，
+     * 高度随内容变的话切换分页时整个框会跳一下。
+     */
+    width?: 'normal' | 'wide' | 'tall';
     /** 顶部徽标区（如大 logo）。 */
     hero?: Snippet;
+    /**
+     * 底部操作条。给了才渲染——没有底部动作的面板（关于 / 快捷键）
+     * 不该凭空多出一条空白带。
+     */
+    footer?: Snippet;
+    /**
+     * 去掉 body 的内边距与滚动，交给内容自己管。
+     * 「侧栏 + 内容」型面板需要这个：navside 的背景要顶到边，
+     * 而滚动只能发生在右侧内容列里。
+     */
+    flushBody?: boolean;
     children: Snippet;
   }
-  const { title, onclose, testid, width = 'normal', hero, children }: Props = $props();
+  const {
+    title,
+    onclose,
+    testid,
+    width = 'normal',
+    hero,
+    footer,
+    flushBody = false,
+    children,
+  }: Props = $props();
 
   function onkeydown(e: KeyboardEvent): void {
     if (e.key !== 'Escape') return;
@@ -61,9 +86,12 @@
     {#if hero}
       <div class="modal-hero">{@render hero()}</div>
     {/if}
-    <div class="modal-body">
+    <div class="modal-body" class:flush={flushBody}>
       {@render children()}
     </div>
+    {#if footer}
+      <footer class="modal-foot">{@render footer()}</footer>
+    {/if}
   </div>
 </div>
 
@@ -90,6 +118,10 @@
   }
   .modal.wide {
     width: min(1080px, 92vw);
+  }
+  .modal.tall {
+    /* 固定高度：侧栏需要确定的竖直空间（见 Props.width 的注释）。 */
+    height: min(600px, 84vh);
   }
   .modal-head {
     display: flex;
@@ -122,5 +154,22 @@
     min-height: 0;
     overflow-y: auto;
     padding: var(--sp-5);
+  }
+  /* 交给内容自己管：navside 的背景要顶到边，滚动只发生在内容列。 */
+  .modal-body.flush {
+    overflow: hidden;
+    padding: 0;
+    display: flex;
+    min-width: 0;
+  }
+  .modal-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--sp-3);
+    flex-shrink: 0;
+    padding: 0 var(--sp-5);
+    height: 46px;
+    border-top: 1px solid var(--border);
   }
 </style>

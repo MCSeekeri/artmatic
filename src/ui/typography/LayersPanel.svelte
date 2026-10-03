@@ -8,6 +8,7 @@
   import Icon from '../Icon.svelte';
   import { appState } from '../app-state.svelte';
   import { editorState } from './editor-state.svelte';
+  import { reorder } from '../drag-reorder';
   import { tr } from '../../i18n/index.svelte';
   import type { TypographyElement } from '../../typography/document';
   import type { IconName } from '../icons';
@@ -57,7 +58,22 @@
 
 <aside class="layers" data-testid="typo-layers">
   <div class="head">{tr('typo.layers')}</div>
-  <div class="list">
+  <!--
+    可拖曳排序。列表是**倒序**渲染的（数组末尾 = 最前景 = 列表顶部），
+    所以视觉下标要换算回数组下标：`len - 1 - i`。换算在这里做一次 ——
+    在 editorState 里做会让「按 id 的上下移」和「按下标的拖曳」混成一套 API。
+  -->
+  <div
+    class="list"
+    use:reorder={{
+      axis: 'y',
+      itemSelector: '[data-testid=typo-layer-row]',
+      onReorder: (from, to) => {
+        const n = editorState.elements.length;
+        editorState.moveElement(n - 1 - from, n - 1 - to);
+      },
+    }}
+  >
     <!-- 反转：数组末尾是最前景，列表顶部也应当是最前景（NLE / 设计工具的通用约定）。 -->
     {#each rows as el (el.id)}
       <div
@@ -157,6 +173,14 @@
     font-size: var(--fs-sm);
     cursor: pointer;
     user-select: none;
+    /* 拖曳排序：不设过渡，否则跟随指针会拖尾。 */
+    will-change: transform;
+  }
+  .list :global(.is-dragging) {
+    background: var(--surface-hover);
+  }
+  .list :global(.is-reordering) {
+    cursor: grabbing;
   }
   .row:hover {
     background: var(--surface-hover);

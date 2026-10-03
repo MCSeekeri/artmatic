@@ -21,6 +21,8 @@ export const ribbon = {
   /* ------------------------------------------------ 分组标题 */
   'rib.group.font': '字体',
   'rib.group.para': '段落',
+  'rib.group.alignTextH': '水平对齐',
+  'rib.group.alignTextV': '垂直对齐',
   'rib.group.textColor': '文本颜色',
   'rib.group.align': '对齐',
   'rib.group.order': '层级',

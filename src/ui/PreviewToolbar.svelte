@@ -9,10 +9,18 @@
    * 为什么悬浮而不是放侧栏：这三项是「看着画面调」的时候顺手改的东西，
    * 视线不该离开画面。半透明 + 只在 hover 时提高到不透明，避免挡住构图。
    *
+   * 它还可以**收成一个悬浮球**：这三项调好之后基本不再动，而一条横贯画面
+   * 顶部的条子会实实在在挡住构图（预览区越小越明显）。收起状态与位置都
+   * 跟着 UI 偏好走（localStorage），不进工程。
+   *
    * ⚠️ 用 `Select` 而不是原生 `<select>`：全局快捷键（Space = 播放）
    * 只对 `INPUT/SELECT/TEXTAREA` 放行，而自研控件靠 `data-exempt` 被识别
    * —— 原生 select 在这个位置会与「点一下就开始播放」打架。
+   *
+   * 曾经这里还有一个 `pv-readout`（「播放中 30fps / 已暂停」）。它被删掉了：
+   * 左下角的播放/暂停按钮已经把这件事件说清楚了，同一屏里说两遍只是噪声。
    */
+  import Icon from './Icon.svelte';
   import Select from './controls/Select.svelte';
   import Checkbox from './controls/Checkbox.svelte';
   import { appState, PREVIEW_FPS_DIVS, PREVIEW_SCALES } from './app-state.svelte';
@@ -28,57 +36,66 @@
     value: String(s),
     label: `${Math.round(s * 100)}%`,
   }));
-
-  /** 播放中实际渲染的帧率（给用户一个「降到了多少」的具体数字）。 */
-  const effFps = $derived.by(() => {
-    void appState.playing;
-    return appState.store.project.fps / appState.previewFpsDiv;
-  });
 </script>
 
-<div class="pv-bar" data-testid="preview-toolbar">
-  <span class="pv-item">
-    <span class="pv-lbl">{tr('app.previewFps')}</span>
-    <Select
-      value={String(appState.previewFpsDiv)}
-      options={fpsOptions}
-      testid="preview-fps"
-      optionTestidPrefix="preview-fps-opt"
-      minWidth={96}
-      onchange={(v) => appState.setPreviewFpsDiv(Number(v))}
-    />
-  </span>
+{#if appState.previewBarCollapsed}
+  <button
+    type="button"
+    class="pv-ball"
+    aria-label={tr('app.previewOptions')}
+    data-testid="preview-toolbar-ball"
+    onclick={() => appState.setPreviewBarCollapsed(false)}
+  >
+    <Icon name="sliders-horizontal" size={13} />
+  </button>
+{:else}
+  <div class="pv-bar" data-testid="preview-toolbar">
+    <span class="pv-item">
+      <span class="pv-lbl">{tr('app.previewFps')}</span>
+      <Select
+        value={String(appState.previewFpsDiv)}
+        options={fpsOptions}
+        testid="preview-fps"
+        optionTestidPrefix="preview-fps-opt"
+        minWidth={96}
+        onchange={(v) => appState.setPreviewFpsDiv(Number(v))}
+      />
+    </span>
 
-  <span class="pv-item">
-    <span class="pv-lbl">{tr('app.previewQuality')}</span>
-    <Select
-      value={String(appState.previewScale)}
-      options={scaleOptions}
-      testid="preview-scale"
-      optionTestidPrefix="preview-scale-opt"
-      minWidth={80}
-      onchange={(v) => appState.setPreviewScale(Number(v))}
-    />
-  </span>
+    <span class="pv-item">
+      <span class="pv-lbl">{tr('app.previewQuality')}</span>
+      <Select
+        value={String(appState.previewScale)}
+        options={scaleOptions}
+        testid="preview-scale"
+        optionTestidPrefix="preview-scale-opt"
+        minWidth={80}
+        onchange={(v) => appState.setPreviewScale(Number(v))}
+      />
+    </span>
 
-  <span class="pv-item">
-    <Checkbox
-      checked={appState.previewRestoreOnPause}
-      tipText={tr('app.previewRestoreTip')}
-      testid="preview-restore-on-pause"
-      onchange={(v) => appState.setPreviewRestoreOnPause(v)}
-    />
-    <span class="pv-lbl">{tr('app.previewRestore')}</span>
-  </span>
+    <span class="pv-item">
+      <Checkbox
+        checked={appState.previewRestoreOnPause}
+        tipText={tr('app.previewRestoreTip')}
+        testid="preview-restore-on-pause"
+        onchange={(v) => appState.setPreviewRestoreOnPause(v)}
+      />
+      <span class="pv-lbl">{tr('app.previewRestore')}</span>
+    </span>
 
-  <span class="pv-readout mono" data-testid="preview-readout">
-    {#if appState.playing}
-      {tr('app.previewPlaying', { fps: effFps.toFixed(0) })}
-    {:else}
-      {tr('app.previewPaused')}
-    {/if}
-  </span>
-</div>
+    <!-- 收起：留在条子最右侧，与三个开关同一行，不与它们抢注意力。 -->
+    <button
+      type="button"
+      class="pv-collapse"
+      aria-label={tr('app.previewCollapse')}
+      data-testid="preview-toolbar-collapse"
+      onclick={() => appState.setPreviewBarCollapsed(true)}
+    >
+      <Icon name="x" size={11} />
+    </button>
+  </div>
+{/if}
 
 <style>
   /*
@@ -106,7 +123,7 @@
     display: flex;
     align-items: center;
     gap: var(--sp-4);
-    padding: var(--sp-1) var(--sp-3);
+    padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
     background: color-mix(in srgb, var(--surface-2) 88%, transparent);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -127,10 +144,46 @@
     color: var(--text-secondary);
     font-size: var(--fs-xs);
   }
-  .pv-readout {
+  /* 收起按钮：纯图标、透明底、hover 只变颜色（与全局 .ic-btn 同一套纪律）。 */
+  .pv-collapse {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
     color: var(--text-muted);
-    font-size: var(--fs-xs);
-    min-width: 62px;
-    text-align: right;
+    cursor: pointer;
+  }
+  .pv-collapse:hover {
+    color: var(--text-primary);
+  }
+  /* 收起后的悬浮球。同样不能带 transform（见 .pv-bar 的注释）。 */
+  .pv-ball {
+    position: absolute;
+    top: var(--sp-3);
+    left: 0;
+    right: 0;
+    margin-inline: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--text-secondary);
+    cursor: pointer;
+    z-index: 3;
+  }
+  .pv-ball:hover,
+  .pv-ball:focus-visible {
+    background: var(--surface-2);
+    color: var(--text-primary);
   }
 </style>

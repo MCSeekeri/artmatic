@@ -96,6 +96,15 @@ export interface RibbonGroupDef {
   id: string;
   /** 组底标签（PPT 风格：字体 / 段落 / 对齐 / 层级…）。 */
   label: string;
+  /**
+   * 组内排布。
+   *
+   * `'grid'` 用于**整组都是小按钮**的场合（对齐、垂直对齐、层级）：
+   * 一字排开时那一行只有 20 多个像素高却横着占掉两三百像素，
+   * 改成两行之后同样多的按钮只占一半宽度，省下的横向空间留给真正需要宽度的组
+   * （字体、字号、下拉）。列的条数由 Ribbon 按 `ceil(项数 / 2)` 推出来。
+   */
+  layout?: 'row' | 'grid';
   items: RibbonItemSpec[];
 }
 

@@ -200,6 +200,15 @@ export function buildTypographyTabs(
               disabled: !hasText,
               onchange: (v) => a.setTextProp('lineHeight', v),
             },
+          ],
+        },
+        /* 文本对齐拆成独立两组并排成两行：整组都是小按钮，一字排开要横着
+           占掉两百多像素，而它只占 24px 高。两行之后省下的宽度留给字体组。 */
+        {
+          id: 'align-text-h',
+          label: tr('rib.group.alignTextH'),
+          layout: 'grid',
+          items: [
             {
               kind: 'toggle',
               id: 'align-left',
@@ -244,6 +253,13 @@ export function buildTypographyTabs(
               active: style?.align === 'justify',
               onchange: () => a.setTextAlign('justify'),
             },
+          ],
+        },
+        {
+          id: 'align-text-v',
+          label: tr('rib.group.alignTextV'),
+          layout: 'grid',
+          items: [
             {
               kind: 'toggle',
               id: 'valign-top',
@@ -388,6 +404,7 @@ export function buildTypographyTabs(
         {
           id: 'order',
           label: tr('rib.group.order'),
+          layout: 'grid',
           items: [
             {
               kind: 'button',
