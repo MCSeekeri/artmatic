@@ -463,6 +463,14 @@ export const media = {
   'fx.motionMask.showMask': '显示遮罩',
   'fx.motionMask.hardCutoff': '硬切',
 
+  /* --- Phase 1e --- */
+
+  'fx.petri': '培养皿',
+  'fx.petri.reaction': '反应强度',
+  'fx.petri.drift': '漂移',
+  'fx.petri.scale': '胞元大小',
+  'fx.petri.takeover': '画面侵蚀',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */
