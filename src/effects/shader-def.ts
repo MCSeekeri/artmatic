@@ -253,6 +253,19 @@ export interface PrePassDef {
    * 自己的反馈分离」的状态，例如背景估计、被保持的关键帧。
    */
   feedback?: boolean;
+  /**
+   * 这一环的 `u_texture` 换成**上一帧的链输入**（而不是上一环的输出）。
+   *
+   * 给「要拿当前帧和上一帧输入做帧间差分」的特效用（`kino-datamosh` 的运动估计）。
+   * 链里本来拿不到它：`u_texture` 是上一环的输出、`u_feedback` 是**自身上一帧的输出**、
+   * `u_original` 是当前帧的链输入。而这一环自己用 `feedback` 存一帧输入也不行 ——
+   * 那存下来的是「上一帧它自己的输出」，永远差一帧。
+   *
+   * 只改**输入**，不改输出：这一环的结果照常成为下一环的输入。
+   * `linearFilter` 作用在它上面（过滤的是这一环实际读的那张贴图）。
+   * 存储由 runner 在整条链跑完后写入本帧的链输入（`compositor.delayedInputFor`）。
+   */
+  delayedInput?: boolean;
 }
 
 export interface EffectShaderDef {

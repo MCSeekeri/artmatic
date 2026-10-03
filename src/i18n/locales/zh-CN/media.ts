@@ -525,6 +525,13 @@ export const media = {
   'fx.kinoFeedback.tint': '色调',
   'fx.kinoFeedback.amount': '强度',
 
+  'fx.kinoDatamosh': '数据融毁',
+  'fx.kinoDatamosh.blockSize': '块大小',
+  'fx.kinoDatamosh.quality': '质量',
+  'fx.kinoDatamosh.contrast': '对比度',
+  'fx.kinoDatamosh.velocity': '运动强度',
+  'fx.kinoDatamosh.diffusion': '扩散',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */

@@ -112,6 +112,7 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
 
     /* ------------------------------------------------ pre-passes */
     const prePasses = shader.prePasses;
+    let delayedTarget: Target | null = null;
     if (prePasses && prePasses.length > 0) {
       const scratch = ctx.compositor.preScratchFor(ctx.w, ctx.h);
       let slot = 0;
@@ -132,9 +133,20 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
           slot = 1 - slot;
         }
 
-        const restore = pp.linearFilter ? forceLinear(gl, inputTex) : null;
+        /*
+         * 这一环的输入：默认是**上一环的输出**（链）。
+         * 声明了 `delayedInput` 就换成**上一帧的链输入** —— 有些原作要拿
+         * 「上一帧的输入」做帧间差分/运动估计，而链里拿不到它（见 shader-def 的说明）。
+         */
+        let passInput = inputTex;
+        if (pp.delayedInput) {
+          delayedTarget = ctx.compositor.delayedInputFor(inst.instanceId, ctx.w, ctx.h);
+          passInput = delayedTarget.tex;
+        }
+
+        const restore = pp.linearFilter ? forceLinear(gl, passInput) : null;
         prog.use();
-        prog.tex('u_texture', inputTex).tex('u_original', originalTex);
+        prog.tex('u_texture', passInput).tex('u_original', originalTex);
         if (fbRead) prog.tex('u_feedback', fbRead.tex);
         prog
           .u('u_time', ctx.t)
@@ -189,5 +201,17 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       kit.pass(prog, dst);
     }
     if (restore) restore();
+
+    /*
+     * 延迟输入：把**本帧的链输入**存下来，供下一帧的 `delayedInput` pre-pass 读。
+     *
+     * 必须放在链跑完之后：这一帧读到的是上一帧存进去的值，两帧不能写坏。
+     * 只在真的有人声明了才做（绝大多数特效没有这一环，零开销）。
+     */
+    if (delayedTarget) {
+      passProg.use();
+      passProg.tex('u_texture', originalTex);
+      kit.pass(passProg, delayedTarget);
+    }
   };
 }

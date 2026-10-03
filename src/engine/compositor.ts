@@ -112,6 +112,8 @@ export class Compositor {
   private preScratch: { w: number; h: number; a: Target; b: Target } | null = null;
   /** 带 feedback 的 pre-pass 的全分辨率历史，键 `${instanceId}:${index}`。 */
   private readonly preFeedback = new Map<string, { a: Target; b: Target; flip: boolean }>();
+  /** 逐实例的「上一帧链输入」（见 `delayedInputFor`）。 */
+  private readonly delayedInput = new Map<string, Target>();
 
   /**
    * 转场执行器。默认实现只把入画层搬过去（不混合）——真正的实现在
@@ -423,6 +425,26 @@ export class Compositor {
     if (e) e.flip = !e.flip;
   }
 
+  /**
+   * **上一帧的链输入**，逐实例一张，供声明了 `delayedInput` 的 pre-pass 读。
+   *
+   * 存在的理由：有些原作（KinoDatamosh 的运动估计）要做「当前帧 vs 上一帧输入」
+   * 的帧间差分，而链里拿不到它 —— `u_texture` 是上一环的输出、`u_feedback` 是
+   * 自身上一帧的输出、`u_original` 是当前帧的链输入。让 pre-pass 自己用
+   * `feedback` 存一帧输入也不行：那存的会是「上一帧它自己的输出」，永远差一帧。
+   *
+   * 由 runner 在整条链跑完之后写入本帧的链输入（见 `effects/runner.ts`）。
+   */
+  delayedInputFor(instanceId: string, w: number, h: number): Target {
+    let t = this.delayedInput.get(instanceId);
+    if (!t) {
+      t = this.kit.target(w, h);
+      this.delayedInput.set(instanceId, t);
+    }
+    t.resize(w, h);
+    return t;
+  }
+
   /** seek / 跳帧后清掉所有历史。 */
   clearFeedback(): void {
     for (const e of this.feedback.values()) {
@@ -435,6 +457,11 @@ export class Compositor {
       e.a.bind();
       this.kit.clear();
       e.b.bind();
+      this.kit.clear();
+    }
+    // 延迟输入也是跨帧状态：不清的话 seek 之后第一帧会拿跳变前的画面做差分。
+    for (const t of this.delayedInput.values()) {
+      t.bind();
       this.kit.clear();
     }
   }

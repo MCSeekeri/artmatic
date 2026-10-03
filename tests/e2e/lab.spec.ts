@@ -306,6 +306,42 @@ test('试炼场播放时把渲染节流到 LAB_FPS（反馈类特效按渲染帧
   expect(r.fps).toBeLessThan(48);
 });
 
+test('delayedInput：datamosh 的运动估计真的用到了「上一帧输入」', async ({ page }) => {
+  await boot(page);
+  const result = await page.evaluate(() => {
+    const L = (window as unknown as LabWindow).__lab!;
+    const count = (a: number[], b: number[]): number => {
+      let d = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+    /** 从干净状态跑 N 帧，返回最后一帧。 */
+    const run = (velocity: number): number[] => {
+      L.setParam('effect', 'velocity', velocity);
+      L.renderAt(1, true); // 清反馈：两次跑必须从同一状态出发
+      let last: number[] = [];
+      for (let i = 1; i <= 8; i += 1) {
+        L.renderAt(1 + i / 30, false);
+        last = L.readPixels().data;
+      }
+      return last;
+    };
+
+    // 源必须**随时间变**：运动估计是「当前帧 − 上一帧输入」的差分，
+    // 源不动的话 l0 − lp 恒为 0，探针就没信号了。
+    L.selectSource('lab:gradient');
+    L.selectEffect('kino-datamosh');
+    const still = run(0);
+    const moving = run(4);
+    return { diff: count(still, moving) };
+  });
+
+  // `velocity` 只乘运动矢量。若 `delayedInput` 没把上一帧输入接上，
+  // l0 − lp 恒为 0 → mv 恒为 0 → 两次跑会**逐像素完全一致**（连 DCT 噪声都一样，
+  // 因为 d.z 只依赖 mvLen）。所以这条断言恰好只在它真的接上时成立。
+  expect(result.diff).toBeGreaterThan(0);
+});
+
 test('分辨率档位真的改后备缓冲尺寸（不被显示区压掉）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {
