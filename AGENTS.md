@@ -516,6 +516,27 @@ interface Curve {
    `feedback: true`。漏写的表现是 sampler 没人绑、采样读回未绑定纹理 ——
    像「没有拖尾」，不报错。同理任何 runner 绑不了的 sampler（如 `u_spectrum`）
    都会被 `effect-uniforms.test.ts` 拦下。
+5. **上传纹理不许用「当前激活单元」。** `texSubImage2D` 作用在当前激活的纹理单元上，
+   而 `Program.tex()` 会把采样本依次绑到 0..n 并留下最后一个为激活态。更阴的是：
+   采样器**没被编译器保留**时（如 `audio-bars` 用不到 `u_original`）`tex()` 会提前返回
+   **且不递增 `texUnit`**，激活单元可能停在任何位置 —— 于是上传把某个 sampler
+   指到了错的纹理上。真实事故：频谱纹理把 `u_texture` 换掉，画面变成一片红竖线
+   （R8 读作 rgba=(r,0,0,1)）。**上传一律走 scratch 单元**
+   （见 `engine/spectrum-texture.ts` 的 `scratchUnit`）。
+
+#### 反馈类特效与「渲染帧」
+
+带 `feedback: true` 的特效（含 pre-pass 级的）**按渲染帧累积状态** —— 每个 pass
+只在渲染时步进一次，而 `u_delta` 是名义 `1/fps`。所以**渲染率必须等于工程帧率**，
+否则仿真会随时间轴漂：预览跑满 rAF（60）而工程 30fps → 仿真比时间轴快一倍。
+对不稳定系统（`petri`）尤其明显，直接表现成「狂闪」。
+
+- 主应用：`app-state.tick()` 播放时把渲染节流到 `project.fps`，并把 `playT`
+  **吸附到帧栅格**（`round(playT·fps)/fps`）—— 于是每个预览帧就是一个导出帧。
+  暂停时不吸附（拖播放头要的是连续）。
+- 试炼场：`lab-state` 的循环同样节流到 `LAB_FPS`（漏过这条，是 petri 那份 2× 的来源）。
+- **已知缺口**：预览的「帧率档位」低于 100%（`previewFpsDiv > 1`）时会少渲染帧，
+  反馈类特效的演化同比变慢 —— 那个档位是**性能档，不是时间档**。
 
 **判定「参数有没有接上」的自动关卡**：`tests/unit/effect-uniforms.test.ts` ——
 用伪 gl 跑一遍每个特效的 `setUniforms`，断言「fragment 里声明的每个 uniform 都被写到」

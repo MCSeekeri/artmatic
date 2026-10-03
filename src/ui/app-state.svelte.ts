@@ -970,7 +970,19 @@ class AppState {
       this.lastPreviewRender = now;
     }
 
-    this.renderer.renderFrame(this.store.project, this.playT);
+    /*
+     * 播放时把渲染时间**吸附到帧栅格**。
+     *
+     * 反馈类特效（echo / tunnel / melt / feedback / liquid-light / flow-contours /
+     * fast-mosh / motion-mask / petri）**按渲染帧累积状态**，而导出是逐帧
+     * `frame/fps` 渲染的。预览的 t 来自音频时钟（连续值），吸附之后
+     * **每一个预览帧就是一个导出帧** —— 预览与导出逐帧同源。
+     *
+     * 暂停时不吸附：拖动播放头是「看这一瞬间」，量化它只会让编辑手感变钝。
+     */
+    const fps = Math.max(1, this.store.project.fps);
+    const renderT = this.playing ? Math.round(this.playT * fps) / fps : this.playT;
+    this.renderer.renderFrame(this.store.project, renderT);
     this.countFrame();
   }
 

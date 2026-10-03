@@ -159,6 +159,8 @@ class LabState {
   private patterns: PatternRenderer | null = null;
   private raf = 0;
   private lastNow = 0;
+  /** 上一次**渲染**的墙钟时刻（只用于把渲染节流到 LAB_FPS，不参与求值）。 */
+  private lastRender = 0;
   private frames = 0;
   private fpsAt = 0;
   private smoothMs = 0;
@@ -280,6 +282,23 @@ class LabState {
     if (this.playing) {
       this.t = (this.t + dt) % LAB_DURATION;
       this.dirty = true;
+    }
+
+    /*
+     * 播放时把渲染节流到 `LAB_FPS`。
+     *
+     * **反馈类特效按「渲染帧」累积状态**（每个 pass 只在渲染时步进一次），
+     * 而 `u_delta` 是名义 `1/fps`。循环跑满 rAF（约 60）而 LAB_FPS = 30 时，
+     * 仿真每秒会走 60 步 × 1/30 秒 = **比时间轴快一倍** —— 对不稳定的模拟
+     * （petri）尤其明显，直接表现成「狂闪」。
+     *
+     * 主应用的 `tick()` 早就有这条节流；试炼场漏了。
+     * 暂停时永远渲：那是「改参数立刻看到结果」的路径。
+     */
+    if (this.playing) {
+      const minGap = 1000 / Math.max(1, LAB_FPS);
+      if (now - this.lastRender < minGap - 1) return;
+      this.lastRender = now;
     }
 
     const t0 = performance.now();

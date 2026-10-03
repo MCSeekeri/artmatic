@@ -284,6 +284,28 @@ test('频谱通道：audio-bars 真的被频谱驱动（拍点与拍中的画面
   expect(result.noop).toBe(0);
 });
 
+test('试炼场播放时把渲染节流到 LAB_FPS（反馈类特效按渲染帧累积状态）', async ({ page }) => {
+  await boot(page);
+  const r = await page.evaluate(async () => {
+    const L = (window as unknown as LabWindow).__lab! as unknown as {
+      play(on: boolean): void;
+      current(): { fps: number };
+    };
+    L.play(true);
+    // 等读数刷新（它每 500 ms 重算一次）
+    await new Promise((res) => setTimeout(res, 1600));
+    const fps = L.current().fps;
+    L.play(false);
+    return { fps };
+  });
+
+  // 反馈类特效每个 pass 只在渲染时步进一次，而 u_delta 是名义 1/fps ——
+  // 渲染率必须等于工程帧率，否则仿真会随时间轴漂（预览跑满 rAF 60 而
+  // LAB_FPS=30 → 仿真快一倍，不稳定模拟直接表现成「狂闪」）。
+  expect(r.fps).toBeGreaterThan(10);
+  expect(r.fps).toBeLessThan(48);
+});
+
 test('分辨率档位真的改后备缓冲尺寸（不被显示区压掉）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {

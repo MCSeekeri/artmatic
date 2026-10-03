@@ -37,6 +37,9 @@ mount(LabApp, { target: document.getElementById('lab')! });
     bypass: labState.bypass,
     scale: labState.scale,
     t: labState.t,
+    // 实际渲染帧率读数。播放时它应当等于 LAB_FPS（渲染节流），
+    // 而不是显示器刷新率 —— 反馈类特效按渲染帧累积状态，这条是它的前提。
+    fps: labState.fps,
   }),
   selectSource: (id: string) => labState.selectSource(id),
   selectEffect: (id: string | null) => labState.selectEffect(id ?? NO_EFFECT_ID),
