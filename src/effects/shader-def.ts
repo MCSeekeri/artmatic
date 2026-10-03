@@ -12,8 +12,65 @@
 import type { BeatGrid } from '../core/time';
 import type { EffectClip } from '../core/schema';
 
+import { colorVec3 } from '../core/color';
+
 /** hex 颜色 → [0..1] 的三分量，供 `setUniforms` 里给 vec3 uniform 用。 */
-export { colorVec3 } from '../core/color';
+export { colorVec3 };
+
+type Setter<Ctx> = (
+  gl: WebGL2RenderingContext,
+  locs: Record<string, WebGLUniformLocation | null>,
+  values: Record<string, number | string>,
+  ctx: Ctx,
+) => void;
+
+/** 把若干 setter 依次调用。参数同时含 float / int / color 时用它拼。 */
+export function compose<Ctx = EffectUniformCtx>(...fns: Setter<Ctx>[]): Setter<Ctx> {
+  return (gl, l, v, ctx) => {
+    for (const fn of fns) fn(gl, l, v, ctx);
+  };
+}
+
+/** 数值参数 → `uniform int`（四舍五入）。checkbox 参数也走这个。 */
+export function ints<Ctx = EffectUniformCtx>(...keys: string[]): Setter<Ctx> {
+  return (gl, l, v) => {
+    for (const key of keys) {
+      const loc = l[`u_${key}`];
+      if (loc) gl.uniform1i(loc, Math.round(Number(v[key]) || 0));
+    }
+  };
+}
+
+/** 颜色参数 → `uniform vec3`（hex → 0..1）。 */
+export function colors<Ctx = EffectUniformCtx>(...keys: string[]): Setter<Ctx> {
+  return (gl, l, v) => {
+    for (const key of keys) {
+      const loc = l[`u_${key}`];
+      if (!loc) continue;
+      const [r, g, b] = colorVec3(String(v[key] ?? '#000000'));
+      gl.uniform3f(loc, r, g, b);
+    }
+  };
+}
+
+/**
+ * select 参数 → `uniform int`：`map` 把选项的 `value` 映射成序号。
+ *
+ * 未知值用 `fallback`（默认 0）而**不报错**是刻意的：工程向前/向后兼容，
+ * 「选项退化成第一种模式」比「整帧拒渲」好。
+ */
+export function selectInt<Ctx = EffectUniformCtx>(
+  key: string,
+  map: Record<string, number>,
+  fallback = 0,
+): Setter<Ctx> {
+  return (gl, l, v) => {
+    const loc = l[`u_${key}`];
+    if (!loc) return;
+    const n = map[String(v[key])];
+    gl.uniform1i(loc, n === undefined ? fallback : n);
+  };
+}
 
 export interface PrePassDef {
   fragment: string;

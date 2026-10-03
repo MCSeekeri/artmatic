@@ -36,6 +36,59 @@ export const media = {
   'fx.scanlines.strength': '强度',
   'fx.scanlines.gap': '间距(px)',
 
+  /* --- 以下 9 个移植自 openmosh gl/effect-shaders.ts（MIT，见 CREDITS.md） --- */
+
+  'fx.posterize': '色阶量化',
+  'fx.posterize.levels': '色阶数',
+
+  'fx.solarize': '萨巴蒂尔效应',
+  'fx.solarize.pivot': '反折点',
+  'fx.solarize.curve': '曲线',
+  'fx.solarize.colorize': '着色量',
+
+  'fx.bleach': '漂白',
+  'fx.bleach.amount': '强度',
+
+  'fx.colorCorrection': '色彩校正',
+  'fx.colorCorrection.brightness': '亮度',
+  'fx.colorCorrection.contrast': '对比度',
+  'fx.colorCorrection.hue': '色相',
+  'fx.colorCorrection.saturation': '饱和度',
+
+  'fx.duotone': '双色调',
+  'fx.duotone.shadowColor': '暗部色',
+  'fx.duotone.highlightColor': '亮部色',
+  'fx.duotone.intensity': '强度',
+
+  'fx.thermal': '热成像',
+  'fx.thermal.intensity': '强度',
+  'fx.thermal.palette': '色带',
+  'fx.thermal.paletteThermal': '热成像',
+  'fx.thermal.paletteInfrared': '红外',
+  'fx.thermal.paletteNight': '夜视',
+
+  'fx.colorHalves': '二分色',
+  'fx.colorHalves.position': '分界位置',
+  'fx.colorHalves.angle': '角度',
+  'fx.colorHalves.mode': '处理方式',
+  'fx.colorHalves.modeInvert': '反相',
+  'fx.colorHalves.modeHue': '色相偏移',
+  'fx.colorHalves.modeDesat': '去饱和',
+  'fx.colorHalves.modeContrast': '高对比',
+  'fx.colorHalves.amount': '强度',
+
+  'fx.hsvSwap': '通道换色',
+  'fx.hsvSwap.mode': '解读方式',
+  'fx.hsvSwap.modeRgbAsHsv': 'RGB 读作 HSV',
+  'fx.hsvSwap.modeHsvAsRgb': 'HSV 显示为 RGB',
+  'fx.hsvSwap.amount': '强度',
+
+  'fx.trioTone': '三段色阶',
+  'fx.trioTone.darkColor': '暗部色',
+  'fx.trioTone.midColor': '中段色',
+  'fx.trioTone.brightColor': '亮部色',
+  'fx.trioTone.intensity': '强度',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */
