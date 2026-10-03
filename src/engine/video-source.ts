@@ -50,6 +50,12 @@ const MAX_UPLOAD_WIDTH = 3840;
 /** 纹理缓存预算。1080p RGBA8 一帧 8.3 MB，192 MB ≈ 23 帧。 */
 const DEFAULT_BUDGET_BYTES = 192 * 1024 * 1024;
 
+/**
+ * 顺序访问窗口（秒）：请求的 ts 落在「已消费位置」之后这么远以内，就继续用常驻
+ * 迭代器往前拉；超过就重开（重开要重建解码管线，所以窗口不能太小）。
+ */
+const STREAM_KEEP_SEC = 0.5;
+
 /** 上传函数：由 `SourceManager.uploadImage` 注入（图片/视频共用同一条）。 */
 export type UploadFn = (source: TexImageSource, w: number, h: number) => SourceTexture;
 
@@ -152,6 +158,11 @@ interface MediaEntry {
   busy: boolean;
   /** 待办解码，**只保留最新一个**（见 `schedule` 的注释）。 */
   pending: { ts: number; w: number } | null;
+  /**
+   * 常驻的顺序解码迭代器（见 `sampleAt`）。
+   * `null` = 还没开，或者上一次拉到底了。
+   */
+  stream: { iter: AsyncGenerator<VideoSample>; at: number } | null;
   ready: boolean;
   failure: string | null;
   displayW: number;
@@ -164,6 +175,13 @@ export interface VideoSourceStats {
   misses: number;
   /** 预览里因为「已经有一帧在解」而被丢弃的过期请求（见 `schedule`）。 */
   dropped: number;
+  /**
+   * 重建了几次顺序解码迭代器（见 `sampleAt`）。
+   *
+   * **顺序播放时这个数应当接近 1**。它是「有没有退回到逐帧重建解码管线」的
+   * 机制判据 —— 比解码数更可靠（后者会被区间去重同样压低）。
+   */
+  streams: number;
   cachedFrames: number;
   cachedBytes: number;
   failures: { assetId: string; reason: string }[];
@@ -247,7 +265,7 @@ export function createVideoSourceManager(
 ): VideoSourceManager {
   const gl = kit.gl;
   const entries = new Map<string, MediaEntry>();
-  const counters = { decodes: 0, hits: 0, misses: 0, dropped: 0 };
+  const counters = { decodes: 0, hits: 0, misses: 0, dropped: 0, streams: 0 };
 
   /** 复用一个 2D canvas：每帧新建会持续制造 GC 压力。 */
   let scratch: OffscreenCanvas | null = null;
@@ -280,6 +298,7 @@ export function createVideoSourceManager(
       chain: Promise.resolve(),
       busy: false,
       pending: null,
+      stream: null,
       ready: false,
       failure: null,
       displayW: 0,
@@ -323,6 +342,64 @@ export function createVideoSourceManager(
   }
 
   /**
+   * 取到覆盖 `ts` 的那一帧，走**常驻的顺序解码迭代器**。
+   *
+   * 为什么不能用 `sink.getSample(t)`：它的实现是
+   * `for await (… this.mediaSamplesAtTimestamps([t]) …)` —— **每次调用都新建一个
+   * 只含一个时间戳的迭代器**，也就是把解码管线整个重建一遍（从最近的关键帧重新解起）。
+   * 它自己的文档也写着：顺序访问应当用 `samples()`。
+   * 这正是「渲染循环能跑 190fps、画面却只有十来帧」的根因 —— 渲染的是缓存纹理，
+   * 而视频内容只在解码出新帧时才变。
+   *
+   * `samples(startTimestamp)` 的起点语义正好是我们要的：它的实现注释写明
+   * 「the first first is the last first whose timestamp is less than or equal to
+   * the start timestamp」，也就是**覆盖该时刻的那一帧** —— 与 `FrameCache` 的
+   * 区间包含判定一致，不需要自己回退半帧。
+   */
+  async function sampleAt(entry: MediaEntry, ts: number): Promise<VideoSample | null> {
+    const cur = entry.stream;
+    if (cur && ts >= cur.at - 1e-6 && ts - cur.at < STREAM_KEEP_SEC) {
+      for (;;) {
+        const r = await cur.iter.next();
+        if (r.done) {
+          await closeStream(entry);
+          return null;
+        }
+        const s = r.value;
+        const end = s.timestamp + (s.duration > 0 ? s.duration : 1 / 60);
+        cur.at = end;
+        if (ts < end) return s;
+        // 过期帧：解码器已经解了，只能丢掉（但必须 close，否则解码器池会卡死）
+        s.close();
+      }
+    }
+    await closeStream(entry);
+    const iter = entry.sink!.samples(ts);
+    entry.stream = { iter, at: ts };
+    counters.streams++;
+    const r = await iter.next();
+    if (r.done) {
+      await closeStream(entry);
+      return null;
+    }
+    const s = r.value;
+    entry.stream.at = s.timestamp + (s.duration > 0 ? s.duration : 1 / 60);
+    return s;
+  }
+
+  /** 收掉常驻迭代器（释放它内部的解码器）。 */
+  async function closeStream(entry: MediaEntry): Promise<void> {
+    const s = entry.stream;
+    if (!s) return;
+    entry.stream = null;
+    try {
+      await s.iter.return(undefined);
+    } catch {
+      // 关闭失败无所谓：迭代器已经不会再被用到
+    }
+  }
+
+  /**
    * 解一帧并上传。**上传完立刻 `sample.close()`** —— 见文件头第 2 条。
    * 区间已命中就直接返回，不重复解。
    */
@@ -330,7 +407,7 @@ export function createVideoSourceManager(
     if (entry.failure || !entry.sink) return;
     if (entry.frames.has(ts, w)) return;
 
-    const sample: VideoSample | null = await entry.sink.getSample(ts);
+    const sample: VideoSample | null = await sampleAt(entry, ts);
     if (!sample) return; // ts 早于素材第一帧：这一层缺席
     try {
       const scale = entry.displayW > w ? w / entry.displayW : 1;
@@ -444,6 +521,7 @@ export function createVideoSourceManager(
     forget(assetId) {
       const entry = entries.get(assetId);
       if (!entry) return;
+      void closeStream(entry);
       entry.frames.dispose();
       entry.input?.dispose();
       entries.delete(assetId);
@@ -463,6 +541,7 @@ export function createVideoSourceManager(
         hits: counters.hits,
         misses: counters.misses,
         dropped: counters.dropped,
+        streams: counters.streams,
         cachedFrames: frames,
         cachedBytes: bytes,
         failures,

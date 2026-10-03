@@ -678,3 +678,51 @@ test('视频取帧：解码请求会被合并，不会堆成无限队列', async
   expect(r.dropped).toBeGreaterThan(0);
   expect(r.queuedDecodes).toBeLessThanOrEqual(6);
 });
+
+test('视频取帧：顺序播放复用同一个解码迭代器，不逐帧重建管线', async ({ page }) => {
+  await boot(page);
+  await cleanStage(page);
+
+  const bytes = await page.evaluate(() => {
+    const A = (window as never as { __artmatic: { makeTestVideo: () => Promise<number[]> } }).__artmatic;
+    return A.makeTestVideo();
+  });
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser', { timeout: 30_000 }),
+    (async () => {
+      await page.locator('[data-testid=track-menu]').last().click();
+      await page.getByTestId('import-video').click();
+    })(),
+  ]);
+  await chooser.setFiles({ name: 'e2e-seq.mp4', mimeType: 'video/mp4', buffer: Buffer.from(bytes) });
+  await waitForClip(page);
+
+  const r = await page.evaluate(async () => {
+    const A = (window as never as { __artmatic: any }).__artmatic;
+    const clip = A.store.project.tracks.flatMap((t: any) => t.clips)[0];
+    const before = A.appState.video.stats();
+    // 顺序往前渲染 20 帧（素材 2s / 10fps），每帧之间让出事件循环
+    for (let i = 0; i < 20; i += 1) {
+      A.renderer.renderFrame(A.store.project, clip.start + 0.05 + i / 10);
+      await new Promise((res) => setTimeout(res, 40));
+    }
+    const after = A.appState.video.stats();
+    return { decodes: after.decodes - before.decodes, streams: after.streams };
+  });
+
+  // `sink.getSample(t)` 的实现是「为单个时间戳新建一个迭代器」—— 也就是**每帧都把
+  // 解码管线重建一遍**（从最近关键帧重新解起）。顺序访问必须走常驻的 `samples()`。
+  //
+  // 判据取两头的界：
+  // - `≥ 1`：顺序路径确实被走过（退回 `getSample` 时这个计数恒为 0）
+  // - `≤ 3`：没有逐帧重建（那会等于解码帧数）
+  // 这 20 帧确实解出来了。
+  expect(r.decodes).toBeGreaterThanOrEqual(15);
+  // 而整段只重建了很少几次解码管线。
+  //
+  // 注意 `streams` 取的是**绝对值**而不是增量：导入后的第一次渲染就会开流，
+  // 所以增量天然是 0（这一条是我第一次写下时搞错的判据 —— 增量 0 被误读成
+  // 「顺序路径没走到」，实际是「早就开好了」）。
+  expect(r.streams).toBeGreaterThanOrEqual(1);
+  expect(r.streams).toBeLessThanOrEqual(3);
+});
