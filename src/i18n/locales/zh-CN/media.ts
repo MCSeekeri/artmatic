@@ -336,6 +336,58 @@ export const media = {
   'fx.channelSplitPrism.speed': '漂移速度',
   'fx.channelSplitPrism.hueShift': '色相偏移',
 
+  /* --- Phase 1b·③ 信号与噪声 --- */
+
+  'fx.grain': '颗粒',
+  'fx.grain.amount': '强度',
+  'fx.grain.rgb': '彩色',
+  'fx.grain.blendMode': '混合方式',
+  'fx.grain.modeAdditive': '叠加',
+  'fx.grain.modeSoftlight': '柔光',
+  'fx.grain.modeMultiply': '正片叠底',
+
+  'fx.softGlitch': '软故障',
+  'fx.softGlitch.amount': '强度',
+  'fx.softGlitch.speed': '速度',
+
+  'fx.dataBend': '数据弯折',
+  'fx.dataBend.intensity': '强度',
+  'fx.dataBend.corruption': '损坏程度',
+  'fx.dataBend.channelShift': '通道错位',
+  'fx.dataBend.speed': '变化速度',
+
+  'fx.vhs': 'VHS 磁带',
+  'fx.vhs.static': '噪点',
+  'fx.vhs.speed': '速度',
+  'fx.vhs.tracking': '跟踪条',
+
+  'fx.composite': '复合视频',
+  'fx.composite.bleed': '色度带宽',
+  'fx.composite.crawl': '点蠕动',
+  'fx.composite.crush': '黑场压制',
+  'fx.composite.mix': '混合',
+
+  'fx.opticalFlow': '流场',
+  'fx.opticalFlow.amount': '强度',
+  'fx.opticalFlow.speed': '速度',
+
+  'fx.smear': '涂抹',
+  'fx.smear.amount': '幅度',
+  'fx.smear.angle': '角度',
+  'fx.smear.trail': '拖尾',
+
+  'fx.relief': '视差浮雕',
+  'fx.relief.amount': '高度',
+  'fx.relief.angle': '光照角度',
+
+  'fx.fiberDisplace': '纤维位移',
+  'fx.fiberDisplace.strength': '强度',
+  'fx.fiberDisplace.density': '密度',
+  'fx.fiberDisplace.comb': '梳理',
+  'fx.fiberDisplace.angle': '角度',
+  'fx.fiberDisplace.chrome': '虹彩',
+  'fx.fiberDisplace.smoothness': '平滑',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */

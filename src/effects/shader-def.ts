@@ -305,9 +305,16 @@ float hash31(vec3 p3) {
 }
 `;
 
-/** openmosh 的 value noise + fbm（3 阶）。基于 HASH_GLSL，因此继承 u_seed。 */
+/**
+ * openmosh 的 value noise + fbm（3 阶）。
+ *
+ * 建在 `HASH_PLAIN_GLSL`（**不掺 seed**）上 —— 这与 openmosh 的 `NOISE_GLSL`
+ * 逐字等价。它服务的是**空间图案**（织纹、位移场），图案必须稳定；
+ * 接了掺 seed 的那支就会逐帧沸腾。（初版建在 `HASH_GLSL` 上，是错的；
+ * 在它被第一个消费者用上之前改掉了。）
+ */
 export const NOISE_GLSL =
-  HASH_GLSL +
+  HASH_PLAIN_GLSL +
   `float vnoise(vec2 p) {
   vec2 i = floor(p);
   vec2 f = fract(p);
