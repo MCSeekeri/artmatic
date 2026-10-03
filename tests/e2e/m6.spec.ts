@@ -626,3 +626,55 @@ test('rail 在每个界面都一致：主应用有 /lab 入口，lab 里也有�
   await expect(page.getByTestId('lab-home')).toBeVisible();
   await expect(page.getByTestId('lab-rail-compile')).toBeVisible();
 });
+
+test('视频取帧：解码请求会被合并，不会堆成无限队列', async ({ page }) => {
+  await boot(page);
+  await cleanStage(page);
+
+  // 现场编一段小素材（不往仓库塞二进制），走真实导入路径
+  const bytes = await page.evaluate(() => {
+    const A = (window as never as { __artmatic: { makeTestVideo: () => Promise<number[]> } }).__artmatic;
+    return A.makeTestVideo();
+  });
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser', { timeout: 30_000 }),
+    (async () => {
+      await page.locator('[data-testid=track-menu]').last().click();
+      await page.getByTestId('import-video').click();
+    })(),
+  ]);
+  await chooser.setFiles({ name: 'e2e-queue.mp4', mimeType: 'video/mp4', buffer: Buffer.from(bytes) });
+  await waitForClip(page);
+
+  const r = await page.evaluate(async () => {
+    const A = (window as never as { __artmatic: any }).__artmatic;
+    const stats = () => A.appState.video.stats();
+
+    // **同步**跑 60 帧：JS 不让出事件循环，所以这 60 个请求会全部堆在队列里，
+    // 一个都来不及执行。这正是「拖动播放头快速扫」与「解码跟不上时」的形状。
+    const before = stats();
+    for (let i = 0; i < 60; i += 1) {
+      A.renderer.renderFrame(A.store.project, A.store.project.tracks[0].clips[0].start + i / 60);
+    }
+    // 让出事件循环，给队列排空的机会（给足时间，让「会排队」的那种实现
+    // 把差距拉大：合并后只会有 1 个，不合并会是几十个）
+    await new Promise((res) => setTimeout(res, 2000));
+    const after = stats();
+    return {
+      queuedDecodes: after.decodes - before.decodes,
+      dropped: after.dropped - before.dropped,
+    };
+  });
+
+  // 合并之后：这 60 个请求里**只有最后一个**会真正去解，其余全部作废。
+  // 不做合并的话，每个请求都会排进队列 —— 那正是「解不完的废帧把主线程饿死」
+  // 的来源（4K 素材上实测会让整页失去响应）。
+  //
+  // 两条一起看：
+  // - `dropped > 0` 是**机制判据**：合并发生了（不移除合并逻辑就是 0）。它不受
+  //   素材长度影响 —— 素材只有 10 个不同帧时，靠区间去重也能把解码数压下来，
+  //   所以单看解码数是分不出来的（这一点是实测出来的，不是推的）。
+  // - `queuedDecodes` 是**代价上界**：本素材最多只该解出个位数。
+  expect(r.dropped).toBeGreaterThan(0);
+  expect(r.queuedDecodes).toBeLessThanOrEqual(6);
+});

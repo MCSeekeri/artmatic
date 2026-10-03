@@ -148,7 +148,10 @@ interface MediaEntry {
   frames: FrameCache;
   /** 同一素材上的解码串行化：sink 内部只有一个解码器，并发调用会互相踩。 */
   chain: Promise<void>;
-  inFlight: Set<string>;
+  /** 正在解一帧（`schedule` 的去重据此判断要不要只记待办）。 */
+  busy: boolean;
+  /** 待办解码，**只保留最新一个**（见 `schedule` 的注释）。 */
+  pending: { ts: number; w: number } | null;
   ready: boolean;
   failure: string | null;
   displayW: number;
@@ -159,6 +162,8 @@ export interface VideoSourceStats {
   decodes: number;
   hits: number;
   misses: number;
+  /** 预览里因为「已经有一帧在解」而被丢弃的过期请求（见 `schedule`）。 */
+  dropped: number;
   cachedFrames: number;
   cachedBytes: number;
   failures: { assetId: string; reason: string }[];
@@ -242,7 +247,7 @@ export function createVideoSourceManager(
 ): VideoSourceManager {
   const gl = kit.gl;
   const entries = new Map<string, MediaEntry>();
-  const counters = { decodes: 0, hits: 0, misses: 0 };
+  const counters = { decodes: 0, hits: 0, misses: 0, dropped: 0 };
 
   /** 复用一个 2D canvas：每帧新建会持续制造 GC 压力。 */
   let scratch: OffscreenCanvas | null = null;
@@ -273,7 +278,8 @@ export function createVideoSourceManager(
       sink: null,
       frames: new FrameCache(DEFAULT_BUDGET_BYTES, gl),
       chain: Promise.resolve(),
-      inFlight: new Set(),
+      busy: false,
+      pending: null,
       ready: false,
       failure: null,
       displayW: 0,
@@ -350,20 +356,40 @@ export function createVideoSourceManager(
     }
   }
 
-  /** 把一次解码挂到该素材的串行链上（同一目标的重复请求会被去重）。 */
+  /**
+   * 把一次解码挂到该素材的串行链上。
+   *
+   * **同一素材同时只允许「一个在跑 + 一个待办」，而且待办只保留最新的那一个。**
+   *
+   * 为什么必须这样：sink 只有一个解码器，4K 解一帧要几十毫秒，而预览每渲染一帧
+   * 都会请求一个**新的**时间戳（顺序播放时 ts 一直在变）。若每个请求都排队，
+   * 队列会无限增长，而且每一项在轮到它时**早已过期** —— 表现是「解不完的废帧把
+   * CPU/GPU 占满、主线程被饿死」，视频越播越落后，重特效下整个页面失去响应。
+   *
+   * 只留最新一个 = **解码器能跑多快就多快，过期请求直接丢**。
+   * （导出不走这条：`prepare` 直接 await 精确帧。）
+   */
   function schedule(entry: MediaEntry, ts: number, w: number): void {
-    const key = `${ts.toFixed(6)}@${w}`;
-    if (entry.inFlight.has(key)) return;
-    entry.inFlight.add(key);
+    if (entry.busy) {
+      if (entry.pending === null || entry.pending.ts !== ts) counters.dropped++;
+      entry.pending = { ts, w };
+      return;
+    }
+    entry.busy = true;
     entry.chain = entry.chain.then(async () => {
-      try {
-        await decodeAndUpload(entry, ts, w);
-      } catch (e) {
-        entry.failure ??= e instanceof Error ? e.message : String(e);
-        console.error(`[video ${entry.assetId}] 解码失败：${entry.failure}`);
-      } finally {
-        entry.inFlight.delete(key);
+      let job: { ts: number; w: number } | null = { ts, w };
+      while (job) {
+        try {
+          await decodeAndUpload(entry, job.ts, job.w);
+        } catch (e) {
+          entry.failure ??= e instanceof Error ? e.message : String(e);
+          console.error(`[video ${entry.assetId}] 解码失败：${entry.failure}`);
+        }
+        // 跑到这里时，待办里可能已经堆了更新的请求 —— 只取最新那个。
+        job = entry.pending;
+        entry.pending = null;
       }
+      entry.busy = false;
     });
   }
 
@@ -436,6 +462,7 @@ export function createVideoSourceManager(
         decodes: counters.decodes,
         hits: counters.hits,
         misses: counters.misses,
+        dropped: counters.dropped,
         cachedFrames: frames,
         cachedBytes: bytes,
         failures,
