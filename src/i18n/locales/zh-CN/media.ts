@@ -130,6 +130,59 @@ export const media = {
   'fx.radialBlur': '径向模糊',
   'fx.radialBlur.strength': '强度',
 
+  /* --- Phase 1a·③ 风格化与形态 --- */
+
+  'fx.emboss': '浮雕',
+  'fx.emboss.strength': '强度',
+  'fx.emboss.angle': '角度',
+  'fx.emboss.mix': '混合',
+
+  'fx.stereoscopic': '红青立体',
+  'fx.stereoscopic.depth': '视差量',
+  'fx.stereoscopic.angle': '角度',
+  'fx.stereoscopic.mode': '模式',
+  'fx.stereoscopic.modeAnaglyph': '红青',
+  'fx.stereoscopic.modeSplit': '分色',
+  'fx.stereoscopic.depthSource': '深度来源',
+  'fx.stereoscopic.sourceLuma': '亮度',
+  'fx.stereoscopic.sourceEdges': '边缘',
+  'fx.stereoscopic.sourceFlat': '平面',
+  'fx.stereoscopic.focus': '对焦',
+
+  'fx.pixelSort': '像素排序',
+  'fx.pixelSort.threshold': '阈值',
+  'fx.pixelSort.ceiling': '上限',
+  'fx.pixelSort.range': '偏移范围',
+  'fx.pixelSort.direction': '方向',
+  'fx.pixelSort.dirHorizontal': '水平',
+  'fx.pixelSort.dirVertical': '垂直',
+  'fx.pixelSort.reverse': '反向',
+
+  'fx.sobelNeon': '霓虹描边',
+  'fx.sobelNeon.width': '描边宽度',
+  'fx.sobelNeon.neon': '霓虹',
+  'fx.sobelNeon.brightness': '亮度',
+  'fx.sobelNeon.bgFade': '背景混合',
+  'fx.sobelNeon.bgColor': '背景色',
+
+  'fx.vignette': '暗角',
+  'fx.vignette.size': '范围',
+  'fx.vignette.amount': '强度',
+  'fx.vignette.transparent': '透明',
+
+  'fx.bulge': '凸起畸变',
+  'fx.bulge.amount': '凸起量',
+  'fx.bulge.radius': '半径',
+
+  'fx.halftone': '半调网屏',
+  'fx.halftone.scale': '网屏间距',
+  'fx.halftone.angle': '角度',
+  'fx.halftone.contrast': '对比度',
+  'fx.halftone.mode': '模式',
+  'fx.halftone.modeDots': '网点',
+  'fx.halftone.modeLines': '刻线',
+  'fx.halftone.invert': '反相',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */
