@@ -489,6 +489,42 @@ export const media = {
   'fx.audioBars.styleSegmented': '分段',
   'fx.audioBars.color': '颜色',
 
+  /* --- Phase 1g 实验室移植（ISF 来源） --- */
+
+  'fx.godray': '体积光',
+  'fx.godray.angle': '角度',
+  'fx.godray.gain': '增益',
+  'fx.godray.lacunarity': '频率倍增',
+  'fx.godray.alpha': '强度',
+  'fx.godray.speed': '速度',
+  'fx.godray.fade': '垂直淡出',
+
+  'fx.reflection': '水面倒影',
+  'fx.reflection.boundary': '分界线',
+  'fx.reflection.mirror': '镜像',
+  'fx.reflection.ampMin': '最小振幅',
+  'fx.reflection.ampMax': '最大振幅',
+  'fx.reflection.waveMin': '最短波长',
+  'fx.reflection.waveMax': '最长波长',
+  'fx.reflection.alphaMin': '分界处亮度',
+  'fx.reflection.alphaMax': '末端亮度',
+  'fx.reflection.speed': '速度',
+
+  'fx.flashGlitch': '闪频故障',
+  'fx.flashGlitch.strength': '强度',
+  'fx.flashGlitch.rate': '触发频率',
+  'fx.flashGlitch.release': '释放时长',
+  'fx.flashGlitch.hue': '色相偏移',
+
+  'fx.kinoFeedback': '视频反馈',
+  'fx.kinoFeedback.rotation': '旋转速度',
+  'fx.kinoFeedback.scale': '缩放',
+  'fx.kinoFeedback.offsetX': '偏移 X',
+  'fx.kinoFeedback.offsetY': '偏移 Y',
+  'fx.kinoFeedback.hue': '色相偏移',
+  'fx.kinoFeedback.tint': '色调',
+  'fx.kinoFeedback.amount': '强度',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */

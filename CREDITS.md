@@ -25,6 +25,9 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | `openmosh` | MIT | 多 pass 特效（**Phase 1d**，5 个）：`glow`、`blur`、`ghosting`、`fast-mosh`、`motion-mask`。用到 `prePasses` / `u_original` / pre-pass 级 `feedback`。其中 `blur` 与 `glow` 共用的两条高斯 pass 收进 `shader-def.ts` 的 `BLUR_H_PASS` / `BLUR_V_PASS`（`glsl/` 目录是按文件名与 `defs/` 一一配对的，不能放不对应的文件） | `src/effects/defs/*`、`src/effects/glsl/*`、`src/effects/shader-def.ts` |
 | `openmosh` | MIT | **Phase 1e**：`petri`（循环反应扩散模拟，本项目里 `hdrFeedback` 的唯一使用者） | `src/effects/defs/petri.ts`、`src/effects/glsl/petri.ts` |
 | `openmosh` | MIT | **音频频谱链路 + `audio-bars`**（Phase 1f）：`audio/spectrum.ts`（离线频谱提取，本项目自研：上游用实时 `AnalyserNode`）、`audio/spectrum-range.ts`（滚动归一化 + 逐实例包络平滑的移植，常数与时间常数逐条对应）、`audio/spectrum-frames.ts`、`engine/spectrum-texture.ts`、`src/effects/{defs,glsl}/audio-bars.ts` | 同左 |
+| `openmosh` | MIT | **Phase 1g**：`lab/shaders/keijiro/*.fs` 与 `lab/shaders/pixi/*.fs` 的 ISF 端口 —— `godray`、`reflection`、`flash-glitch`、`kino-feedback`。ISF 的 `TIME` 是**秒**（不是 openmosh 那套累积相位），所以这批不需要相位折算 | `src/effects/defs/*`、`src/effects/glsl/*` |
+| 同上，二级来源 `keijiro`（KinoDatamosh / FlashGlitch / KinoFeedbackURP） | **Unlicense**（公有领域） | `flash-glitch`、`kino-feedback` 的行为移植。`kino-feedback` 的**三个 pass 被精确折叠成单 pass + `u_feedback`**（等价变换，非近似）。`kino-datamosh` **未移植**：它有两个独立持久状态 + 一个上一帧输入，需要命名多目标的执行模型 | 同上 |
+| 同上，二级来源 `PixiJS filters`（godray / reflection） | MIT | `godray`、`reflection` 的行为移植 | 同上 |
 | `openmosh` | MIT | `gl/preview-size.ts` 预览尺寸策略（含 `UNMEASURED_MAX_PIXELS` 兜底） | `src/engine/preview-size.ts` |
 | `openmosh` | MIT | `timeline/clips.ts` 片段几何（`moveClip` 钳制、`freeRangeAt`、`MIN_CLIP_LENGTH`、`clipFadeWeight`） | `src/core/clips.ts` |
 | `openmosh` | MIT | `effects/types.ts` 参数定义类型（Range/Select/Checkbox/Color，去掉 mosh/volumeLink/fontPicker） | `src/effects/types.ts` |
