@@ -25,7 +25,7 @@
     listTransitions,
   } from '../effects/transitions/registry';
   import { transitionCut } from '../core/transitions';
-  import type { RangeParam } from '../effects/types';
+  import { visibleParams, type RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
 
   const effectsList = listEffects();
@@ -362,7 +362,7 @@
         {@const def = getGenerator(clip.source.generator)}
         <p class="note">{tr('insp.algoGenerator', { name: def ? tr(def.nameKey) : clip.source.generator })}</p>
         {#if def}
-          {#each def.params as p (p.key)}
+          {#each visibleParams(def.params, clip.source.params) as p (p.key)}
             {#if p.type === 'range'}
               {#if keyframable(def.kind, p.key)}
                 <KeyableField label={tr(p.labelKey)} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
@@ -398,6 +398,14 @@
                   testid={`algo-param-${p.key}`}
                   optionTestidPrefix={`algo-param-${p.key}-opt`}
                   onchange={(v) => setAlgoParam(clip, p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'checkbox'}
+              <Field label={tr(p.labelKey)}>
+                <Checkbox
+                  checked={Number(clip.source.params[p.key] ?? p.defaultValue) !== 0}
+                  testid={`algo-param-${p.key}`}
+                  onchange={(v) => setAlgoParam(clip, p.key, v ? 1 : 0)}
                 />
               </Field>
             {:else if p.type === 'color'}
@@ -557,7 +565,7 @@
             />
           </div>
           {#if entry}
-            {#each entry.params as p (p.key)}
+            {#each visibleParams(entry.params, inst.values) as p (p.key)}
               {#if p.type === 'range'}
                 <KeyableField label={tr(p.labelKey)} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
               {:else if p.type === 'select'}
@@ -568,6 +576,14 @@
                     testid={`effect-param-${p.key}`}
                     optionTestidPrefix={`effect-param-${p.key}-opt`}
                     onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                  />
+                </Field>
+              {:else if p.type === 'checkbox'}
+                <Field label={tr(p.labelKey)}>
+                  <Checkbox
+                    checked={Number(inst.values[p.key] ?? p.defaultValue) !== 0}
+                    testid={`effect-param-${p.key}`}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, v ? 1 : 0)}
                   />
                 </Field>
               {:else if p.type === 'color'}

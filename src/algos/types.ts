@@ -9,6 +9,7 @@
 
 import type { ParamDef } from '../effects/types';
 import type { MessageKey } from '../i18n/locales';
+import type { AlgoSetUniforms } from './shader-lib';
 
 export interface BakeResult {
   data: Uint8Array;
@@ -42,4 +43,10 @@ interface GeneratorBase {
 export type GeneratorDef =
   | (GeneratorBase & { kind: 'bake'; bake: BakeFn })
   | (GeneratorBase & { kind: 'sim'; create: SimFactory })
-  | (GeneratorBase & { kind: 'realtime'; fragment: string });
+  | (GeneratorBase & {
+      kind: 'realtime';
+      /** fragment **不含头** —— 由 `ALGO_HEAD` 拼在前面（见 shader-lib.ts）。 */
+      fragment: string;
+      /** 把求值后的参数派发到 `u_<key>`。缺了它参数永远拿不到值且不报错。 */
+      setUniforms: AlgoSetUniforms;
+    });

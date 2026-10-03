@@ -10,13 +10,32 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | 同上 | 同上 | `js/util.js` 的 mulberry32 / approach / follower / Impulse 包络原语 | `src/core/prng.ts`、`src/core/curve.ts` |
 | 同上 | 同上 | `js/automata.js` 的 `LIVE=255` 约定、`elementary()`、`sheetSpec/sheetPut`、`gameOfLife/lifeStep`、R8 `upload()` | `src/algos/` |
 | 同上 | 同上 | `js/post.js` 的 ECHO_FS 反馈回声思路（max 合成、floor-then-decay、ping-pong 历史） | `src/effects/glsl/echo.ts` |
+| 同上 | 同上 | `js/scenes.js` 的 `LIB`（`hash11/hash21/hash31`、`vnoise`、6 阶 `fbm`、`ridge`、`rot`）与 `js/post.js` 的 `hash11`、`bayer2/4/8`、`disc()` | `src/effects/shader-def.ts` 的 `HASH_FAST_GLSL`、`FBM6_GLSL`、`BAYER_GLSL`、`DISC_GLSL`、`MATH_GLSL` |
 | `openmosh` | MIT | `gl/effect-shaders.ts` 的 blend mode switch（`TEXT_BLEND_FRAG`）、`LAYER_BOX_GLSL` 层盒、`EffectShaderDef/PrePassDef` 协议、`HASH_GLSL` | `src/engine/blend.frag.ts`、`src/engine/placement.frag.ts`、`src/effects/shader-def.ts` |
+| `openmosh` | MIT | `gl/effect-shaders.ts` 的 `BOUNCE_GLSL`、`HSV_GLSL`（`rgb2hsv/hsv2rgb`）、`HUE_ROTATE_GLSL`（罗德里格旋转） | `src/effects/shader-def.ts` 的共享 GLSL 头 |
 | `openmosh` | MIT | `gl/preview-size.ts` 预览尺寸策略（含 `UNMEASURED_MAX_PIXELS` 兜底） | `src/engine/preview-size.ts` |
 | `openmosh` | MIT | `timeline/clips.ts` 片段几何（`moveClip` 钳制、`freeRangeAt`、`MIN_CLIP_LENGTH`、`clipFadeWeight`） | `src/core/clips.ts` |
 | `openmosh` | MIT | `effects/types.ts` 参数定义类型（Range/Select/Checkbox/Color，去掉 mosh/volumeLink/fontPicker） | `src/effects/types.ts` |
 | `openmosh` | MIT | **仅供参照，未逐行复制代码**：`lab/` 试炼场的信息架构（三栏 · 清单/舞台/参数）与三个机制——按住旁路看源、渲染分辨率档位、批量编译着色器。「全部编译」的具体做法是自研的（用 `Kit.quad` 的按名缓存命中运行期 program，不引 ISF 运行时） | `lab/`、`src/effects/compile-all.ts` |
 | `openmosh` | MIT | `vite.config.ts` 的 `labRedirect()` 插件形态（`/lab` 无斜杠被 SPA fallback 吞掉 → 302 到 `/lab/`）。本项目改写了类型并**额外注册 `configurePreviewServer`**，因为 E2E 跑的是 preview 而 openmosh 只挂了 dev 那一侧 | `vite.config.ts` |
 | `angel-echo-splitter` | 同作者，内部移植 | `store.js` 事务式撤销栈模式（snapshot + beginTx/endTx）、时间换算与拍吸附思路（吸附单位已统一为 `core/time.ts` 一张表，不再沿用其双表） | `src/core/commands.ts`、`src/core/time.ts` |
+
+## 已核对许可、尚未落地的来源（2026-10-03 核）
+
+移植这两批之前**不必再查许可**，直接对照下表登记即可。清单与取舍见实施方案
+（`.workbuddy/plans/`，AI 侧记录，不入库）。
+
+| 来源 | 许可 | 内容 |
+|---|---|---|
+| `Vidvox/ISF-Files` | **MIT**（GitHub licensee 判定仓库级 LICENSE） | openmosh 的 12 个端口：`hsv-swap`、`rgb-strobe`、`trio-tone`、`circle-warp`、`pixel-shifter`、`ring-warp`、`shockwave`、`ghosting`、`fast-mosh`、`resize-glitch`、`stylize-glitch`、`motion-mask`。**二级来源**：openmosh 已按行为匹配重写，不是逐行复制 |
+| `QianMo/X-PostProcessing-Library` | **MIT** | openmosh 的 3 个端口：`rgb-burst`、`screen-jump`、`sobel-neon` |
+| `keijiro/FlashGlitch`、`keijiro/KinoDatamosh`、`keijiro/KinoFeedbackURP` | **Unlicense**（公有领域） | openmosh `lab/shaders/keijiro/` 的三个手写 ISF 端口（含 **Kino Datamosh**）。文件头自带 `CREDIT`/`LICENSE`/`SOURCE` |
+| `pixijs/filters` | **MIT** | openmosh `lab/shaders/pixi/` 的 `Godray`、`Reflection` |
+
+> **hash 函数的署名**：`HASH_FAST_GLSL` 属于 Dave Hoskins 风格的无 sin hash
+> （`p * 0.1031` / `12.9898,78.233,43758.5453` 那一族），在 Shadertoy / MIT 圈广泛流传、
+> 通行的做法是视为公有领域惯例。**两个上游源码里都没有署名**，这里补一句出处说明以便追溯。
+> 本项目自己的 `HASH_GLSL` 只是在该族写法上掺了 `u_seed`，属本项目改动。
 
 ## 依赖库
 

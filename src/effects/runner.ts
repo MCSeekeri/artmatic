@@ -7,14 +7,24 @@
  *
  * 反馈类特效（feedback:true，如 echo）：主 pass 读 fb.read 写 fb.write，
  * commit 换手后再把 fb.write 拷到链上——每个特效实例一对历史目标，
- * seek 时由 Renderer.clearFeedback() 清空。
+ * seek 时由 Renderer.clearFeedback() 清空。`hdrFeedback` 时这对历史是
+ * 浮点的（8bit 会把逐帧低于量化步长的增量抹平）。
+ *
+ * pre-pass（`shader.prePasses`）：主 pass 之前的一串全屏 pass，链式相接；
+ * 第一环读本特效的输入，最后一环的输出就是主 pass 的 `u_texture`。
+ * 非 feedback 的 pre-pass 渲染在半分辨率浮点草稿上，但 `u_resolution` 仍传
+ * 全分辨率——降采样只改 tap 密度、不改模糊半径。带 feedback 的 pre-pass
+ * 用**自己的**全分辨率浮点历史（`${instanceId}:${index}`）。
+ *
+ * `u_original` 恒为「本特效拿到的链输入」，即 pre-pass 之前的那一份 ——
+ * glow / ghosting / fast-mosh / motion-mask 靠它拿回未处理的源。
  */
 
 import { evalCurve } from '../core/curve';
 import { seedFor } from '../engine/clock';
 import type { Kit, Program, Target } from '../engine/kit';
 import type { EffectRunner } from '../engine/compositor';
-import { EFFECT_HEAD } from './shader-def';
+import { EFFECT_HEAD, effectProgramName, type EffectUniformCtx } from './shader-def';
 import { getEffect } from './registry';
 
 const PASSTHROUGH = `#version 300 es
@@ -24,15 +34,36 @@ in vec2 vUv;
 out vec4 outColor;
 void main() { outColor = texture(u_texture, vUv); }`;
 
+/**
+ * 临时把一张贴图切成 LINEAR 采样，返回还原函数。
+ *
+ * 为什么敢改别人拥有的贴图：GL 的采样参数在 **draw 调用那一刻**被捕获，
+ * 命令按序执行，所以「设 LINEAR → draw → 还原」在单线程里是安全的。
+ * 只在协议声明了 `linearFilter` 时才做——smooth warps 没有它会有明显锯齿。
+ */
+function forceLinear(gl: WebGL2RenderingContext, tex: WebGLTexture): () => void {
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  const min = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER) as number;
+  const mag = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) as number;
+  if (min === gl.LINEAR && mag === gl.LINEAR) return () => {};
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  return () => {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mag);
+  };
+}
+
 export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectRunner {
   const passProg = kit.quad(PASSTHROUGH, 'fx-passthrough');
   const programs = new Map<string, Program>();
 
-  const programFor = (defId: string, fragment: string): Program => {
-    let p = programs.get(defId);
+  const programFor = (name: string, fragment: string): Program => {
+    let p = programs.get(name);
     if (!p) {
-      p = kit.quad(EFFECT_HEAD + fragment, `fx-${defId}`);
-      programs.set(defId, p);
+      p = kit.quad(EFFECT_HEAD + fragment, name);
+      programs.set(name, p);
     }
     return p;
   };
@@ -59,27 +90,82 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
     }
 
     const shader = entry.shader;
-    const prog = programFor(inst.defId, shader.fragment);
     const seed = seedFor(projectSeed(), inst.instanceId, ctx.frame) / 4294967296;
-
-    const fb = shader.feedback ? ctx.compositor.feedbackFor(inst.instanceId, ctx.w, ctx.h) : null;
-
-    prog.use();
-    prog
-      .tex('u_texture', src.tex)
-      .u('u_time', ctx.t)
-      .u('u_seed', seed)
-      .u('u_resolution', [ctx.w, ctx.h]);
-    if (fb) prog.tex('u_feedback', fb.read.tex);
-    shader.setUniforms(kit.gl, prog.uniforms, values, {
+    const gl = kit.gl;
+    /** 只读快照：setUniforms 拿到的是带 t/frame/seed/... 的 ctx。 */
+    const uniformCtx: EffectUniformCtx = {
       t: ctx.t,
       frame: ctx.frame,
       seed,
       w: ctx.w,
       h: ctx.h,
+      fps: ctx.fps,
       grid: ctx.grid,
       clip: ctx.clip,
-    });
+    };
+    /** 名义帧间隔（秒）。反馈类特效按它缩放逐帧增量。 */
+    const delta = ctx.fps > 0 ? 1 / ctx.fps : 0;
+
+    // u_original 是「本特效拿到的链输入」，在 pre-pass 之前 —— 先钉住。
+    const originalTex = src.tex;
+    let inputTex = src.tex;
+
+    /* ------------------------------------------------ pre-passes */
+    const prePasses = shader.prePasses;
+    if (prePasses && prePasses.length > 0) {
+      const scratch = ctx.compositor.preScratchFor(ctx.w, ctx.h);
+      let slot = 0;
+      for (let i = 0; i < prePasses.length; i++) {
+        const pp = prePasses[i]!;
+        const prog = programFor(effectProgramName(inst.defId, i), pp.fragment);
+
+        let out: Target;
+        let fbRead: Target | null = null;
+        let fbKey = '';
+        if (pp.feedback) {
+          fbKey = `${inst.instanceId}:${i}`;
+          const fb = ctx.compositor.preFeedbackFor(fbKey, ctx.w, ctx.h);
+          fbRead = fb.read;
+          out = fb.write;
+        } else {
+          out = slot === 0 ? scratch.a : scratch.b;
+          slot = 1 - slot;
+        }
+
+        const restore = pp.linearFilter ? forceLinear(gl, inputTex) : null;
+        prog.use();
+        prog.tex('u_texture', inputTex).tex('u_original', originalTex);
+        if (fbRead) prog.tex('u_feedback', fbRead.tex);
+        prog
+          .u('u_time', ctx.t)
+          .u('u_delta', delta)
+          .u('u_seed', seed)
+          .u('u_resolution', [ctx.w, ctx.h]);
+        kit.pass(prog, out);
+        if (restore) restore();
+
+        if (pp.feedback) ctx.compositor.preFeedbackCommit(fbKey);
+        inputTex = out.tex;
+      }
+    }
+
+    /* --------------------------------------------------- 主 pass */
+    const prog = programFor(effectProgramName(inst.defId), shader.fragment);
+    const fb = shader.feedback
+      ? ctx.compositor.feedbackFor(inst.instanceId, ctx.w, ctx.h, shader.hdrFeedback ?? false)
+      : null;
+
+    const restore = shader.linearFilter ? forceLinear(gl, inputTex) : null;
+    prog.use();
+    prog
+      .tex('u_texture', inputTex)
+      .tex('u_original', originalTex)
+      .u('u_time', ctx.t)
+      .u('u_delta', delta)
+      .u('u_seed', seed)
+      .u('u_resolution', [ctx.w, ctx.h]);
+    if (fb) prog.tex('u_feedback', fb.read.tex);
+    shader.setUniforms(gl, prog.uniforms, values, uniformCtx);
 
     if (fb) {
       // 主 pass 写历史，换手，再把刚写的那份拷到链上。
@@ -92,5 +178,6 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
     } else {
       kit.pass(prog, dst);
     }
+    if (restore) restore();
   };
 }

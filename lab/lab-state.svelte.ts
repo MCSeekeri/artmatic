@@ -212,7 +212,7 @@ class LabState {
 
     const core = createRenderCore(canvas, {
       // 试炼场的工程是每帧现造的常量，这里只需要拍网格与种子。
-      getProject: () => ({ beatGrid: LAB_BEAT_GRID, seed: LAB_SEED }),
+      getProject: () => ({ beatGrid: LAB_BEAT_GRID, seed: LAB_SEED, fps: LAB_FPS }),
       // rAF 循环一直在跑，不需要"叫醒"，留着是为了 render-core 的接口完整。
       onAlgoReady: () => {},
     });

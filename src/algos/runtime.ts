@@ -14,11 +14,12 @@
 
 import { evalCurve } from '../core/curve';
 import { hashSeed } from '../core/prng';
+import { colorVec3 } from '../core/color';
 import type { BeatGrid } from '../core/time';
 import type { SourceClip } from '../core/schema';
 import type { Kit, Program, Target } from '../engine/kit';
 import type { SourceTexture } from '../engine/compositor';
-import { hexToRgba } from '../engine/sources';
+import { ALGO_HEAD, algoProgramName, type AlgoUniformCtx } from './shader-lib';
 import { getGenerator } from './registry';
 import { BakeClient } from './bake-client';
 import type { SimHandle } from './types';
@@ -73,11 +74,6 @@ void main() {
   outColor = vec4(c, 1.0);
 }`;
 
-function colorVec3(hex: string): [number, number, number] {
-  const [r, g, b] = hexToRgba(hex);
-  return [r / 255, g / 255, b / 255];
-}
-
 interface SimEntry {
   handle: SimHandle;
   hash: string;
@@ -101,9 +97,10 @@ export class AlgoRuntime {
   readonly resolve = (
     clip: SourceClip,
     t: number,
-    _frame: number,
+    frame: number,
     grid: BeatGrid,
     projectSeed: number,
+    fps: number,
     renderW: number,
     renderH: number,
   ): SourceTexture | null => {
@@ -163,16 +160,18 @@ export class AlgoRuntime {
     const w = Math.round((res * 16) / 9);
     const h = res;
     const out = this.outFor(w, h);
-    const prog = this.kit.quad(def.fragment, `algo-${def.id}`);
+    const prog = this.kit.quad(ALGO_HEAD + def.fragment, algoProgramName(def.id));
     prog.use();
     prog
-      .u('u_center', [Number(params.cx ?? -0.6), Number(params.cy ?? 0)])
-      .u('u_zoom', Math.pow(2, Number(params.zoom ?? 0)))
-      .u1i('u_maxIter', Math.round(Number(params.maxIter ?? 224)))
-      .u('u_aspect', w / h)
-      .u('u_colorA', colorVec3(String(params.colorA ?? '#000000')))
-      .u('u_colorB', colorVec3(String(params.colorB ?? '#ffffff')))
-      .u('u_interior', colorVec3(String(params.colorIn ?? '#000000')));
+      .u('u_time', t)
+      .u('u_delta', fps > 0 ? 1 / fps : 0)
+      .u('u_seed', seed / 4294967296)
+      .u('u_resolution', [w, h])
+      .u('u_aspect', w / h);
+    // 参数派发交给 def —— 通用化了才可能「场景 = realtime 生成器」。
+    // 写死 uniform 名的年代，新 shader 拿不到参数**且不报错**，只是恒用默认值。
+    const uctx: AlgoUniformCtx = { t, frame, seed, w, h, fps, grid, clip };
+    def.setUniforms(this.kit.gl, prog.uniforms, params, uctx);
     this.kit.pass(prog, out);
     return { tex: out.tex, w, h };
   };

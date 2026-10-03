@@ -30,8 +30,11 @@ import { createTransitionRunner } from '../effects/transitions/runner';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
 
-/** 装配只需要工程里的这两项：拍网格（曲线上下文）与种子（确定性随机）。 */
-export type RenderCoreProject = Pick<Project, 'beatGrid' | 'seed'>;
+/**
+ * 装配只需要工程里的这几项：拍网格（曲线上下文）、种子（确定性随机）、
+ * 帧率（`u_delta` = 1/fps）。
+ */
+export type RenderCoreProject = Pick<Project, 'beatGrid' | 'seed' | 'fps'>;
 
 export interface RenderCoreOpts {
   /**
@@ -69,7 +72,7 @@ export function createRenderCore(
   sources.setAlgoResolver((clip, t, frame) => {
     const p = opts.getProject();
     // 渲染尺寸是 renderer 的状态（预览 ≈960、导出 1920），不是片段的属性。
-    return algos.resolve(clip, t, frame, p.beatGrid, p.seed, renderer.kit.w, renderer.kit.h);
+    return algos.resolve(clip, t, frame, p.beatGrid, p.seed, p.fps, renderer.kit.w, renderer.kit.h);
   });
 
   /*

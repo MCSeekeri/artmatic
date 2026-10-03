@@ -37,6 +37,13 @@ export const media = {
   'fx.scanlines.gap': '间距(px)',
 
   /* ------------------------------------------------ 算法生成器（algos/*） */
+
+  /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */
+  'algo.intRes': '内部分辨率',
+  'algo.intRes.240': '240p（最快）',
+  'algo.intRes.480': '480p',
+  'algo.intRes.720': '720p',
+
   'algo.rule110': '基本元胞自动机',
   'algo.rule110.rule': '规则',
   'algo.rule110.rule30': 'Rule 30（混沌）',
@@ -66,10 +73,6 @@ export const media = {
   'algo.mandelbrot.colorSlow': '慢逃逸色',
   'algo.mandelbrot.colorFast': '快逃逸色',
   'algo.mandelbrot.colorInner': '内部色',
-  'algo.mandelbrot.quality': '内部分辨率',
-  'algo.mandelbrot.quality240': '240p（最快）',
-  'algo.mandelbrot.quality480': '480p',
-  'algo.mandelbrot.quality720': '720p',
 
   /* ------------------------------------------------ 混合模式（core/schema + typography/document） */
   'blend.normal': '正常',

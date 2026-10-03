@@ -106,16 +106,18 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 ```
 src/
 ├── core/          纯 TS，无 DOM / WebGL，必须可单测
-│                  schema · 曲线求值 · 命令栈 · 片段几何（clips）· 转场钳制 · prng
+│                  schema · 曲线求值 · 命令栈 · 片段几何（clips）· 转场钳制 · prng · 颜色（color.ts）
 ├── engine/        WebGL2：Program / Target / Pass 调度 · 纹理池 · 预览尺寸 · 确定性时钟
 │   ├── media-assets.ts   运行期素材登记（图片 = 已解码 canvas；视频 = Blob / File 引用）
 │   └── video-source.ts   视频取帧：mediabunny + WebCodecs + 有界纹理缓存
 ├── effects/       声明式特效定义 + GLSL
 │   ├── defs/ · glsl/     「一个特效 = 两个文件」，glob 配对，缺一半启动报错
+│   ├── shader-def.ts     着色器协议：EFFECT_HEAD · 共享 GLSL 头 · floats/colorVec3 · program 命名
 │   ├── registry.ts       glob 配对 + 批量编译
 │   ├── compile-all.ts    全量编译守卫（E2E 与按钮用，不在启动路径上）
 │   └── transitions/      gl-transitions 目录 + GLSL 规范化 + runner
 ├── algos/         算法生成器注册表 + 烘焙 Worker
+│   └── shader-lib.ts     realtime 生成器的头（ALGO_HEAD）· intResParam · program 命名
 ├── render/        ★ 合成根，见下
 ├── audio/         离线 FFT · BPM/offset 估计 · 波形桶 · 播放器
 ├── typography/    TypographyDocument 模型 + 光栅化后端 + 字体注册表 / HarfBuzz 子集化
@@ -451,9 +453,29 @@ interface Curve {
 - **新增一个特效 = 两个文件**（定义 + GLSL）。由 `effects/registry.ts` 的 glob 配对强制执行，
   缺一半启动报错。这是硬指标 —— 摩擦成本决定这个工具三年后还有没有生命力。
 - **着色器是惰性编译的**：语法错误在你点到它之前不报。所以有
-  `__artmatic.compileAll()`（`effects/compile-all.ts`）覆盖特效 + realtime 算法 + 转场，
-  E2E 断言 `failures == []`。**目录层的静态检查只能挡「结构性不可能」，语法 / 版本问题
+  `__artmatic.compileAll()`（`effects/compile-all.ts`）覆盖特效（**主 pass + 每一环 pre-pass**）+
+  realtime 算法 + 转场，E2E 断言 `failures == []`。**目录层的静态检查只能挡「结构性不可能」，语法 / 版本问题
   只有真编一次才知道。** 它是按钮与 E2E 的动作，**不在启动路径上**（122 次编译是秒级）。
+  - program 名由 `effectProgramName(defId, preIndex?)` / `algoProgramName(id)` 生成，**只有一处**。
+    预编译与运行期不同名 = `Kit.quad` 另编一份，预编译白做且不报错。
+- **特效能拿到什么**（`EFFECT_HEAD`，`effects/shader-def.ts`；fragment 里**不得重复声明**）：
+  `u_texture`（本环输入）/ `u_feedback`（本实例跨帧历史）/ `u_original`（**pre-pass 之前**的链输入）/
+  `u_time`（**秒**）/ `u_delta`（= 1/fps）/ `u_seed` / `u_resolution` / `in vec2 vUv` / `out vec4 outColor`。
+  - **`u_time` 没有「累积相位」这回事。** openmosh 里带 `speed` 的特效用 `phase += dt * speed` 累加，
+    那是 dt 驱动的有状态量 —— 与硬约束 1.1 冲突且 seek 不可复现。**移植时把相位算成闭式**：
+    常速就在 fragment 里写 `u_time * u_speed`；要按拍同步就在 `setUniforms` 里用
+    `beatAtTime(ctx.t, ctx.grid) * division` 算好当普通 uniform 传（那里拿得到 `BeatGrid`）。
+  - `u_original` 堵的是「需要未处理的源」那一类（glow / ghosting / fast-mosh / motion-mask）。
+- **`prePasses`**（主 pass 之前的全屏 pass 链）：第一环读本特效输入，最后一环的输出就是主 pass 的
+  `u_texture`。非 `feedback` 的 pre-pass 渲染在**半分辨率浮点草稿**上，`u_resolution` 仍传全分辨率
+  —— 降采样只改 tap 密度、**不改模糊半径**。带 `feedback` 的 pre-pass 用**自己的**全分辨率浮点历史
+  （键 `${instanceId}:${index}`，`compositor.preFeedbackFor`）。两种历史都由 `clearFeedback()` 清。
+  - `linearFilter` 的实现是「设 LINEAR → draw → 还原」（`effects/runner.ts` 的 `forceLinear`）：
+    GL 的采样参数在 **draw 那一刻**被捕获，单线程里前后夹住是安全的。改的是别人的贴图，务必还原。
+  - `hdrFeedback` 走 `Target({ float: true })` → RGBA16F，缺 `EXT_color_buffer_float` 时**安静回落
+    RGBA8**（8bit 会把逐帧低于量化步长的增量抹平，有状态模拟会 stall 成色块）。
+- **`ParamDef.visibleWhen`** 控参数的条件可见性；特效检查器里 range / select / **checkbox** / color
+  四种都必须有分支（缺 checkbox 的表现是「参数不显示」，不报错）。
 - **出画转场**挂在 `SourceClip.transitionOut`，剪切点 `cut = clip.end`，窗口**以剪切点为中心**
   `[cut - d/2, cut + d/2)`。入画片段 = 同轨 `start` 紧邻（`|Δ| ≤ 1e-6`）的下一个 SourceClip，
   **按相邻关系解析、不存 id** —— 存 id 会引入悬空引用与它的一整套清理，而片段几何
@@ -488,6 +510,13 @@ interface Curve {
   所有阈值把它抹成 0（画面全黑）。
 - bake 型在 **Worker** 烘焙 sheet 纹理；sim 型固定步长 + 每 16 步快照 + seek 重放；
   realtime 型逐帧算。**烘焙入参不可打关键帧**（防每帧重烘）。
+  - **realtime 型的 fragment 不含头**，由 `ALGO_HEAD`（`algos/shader-lib.ts`）拼在前面；
+    def 必须自带 `setUniforms` 把参数派发到 uniform —— **没有它参数永远拿不到值且不报错**，
+    只是恒用默认值。`u_resolution` 是**内部**渲染尺寸，`u_aspect` = w/h。
+  - **`realtime` 生成器就是「全屏程序化场景」**（angel-echo 的 `scenes.js` 那一型）。
+    `AlgoSource.generator` 是自由字符串、realtime 本就渲染整帧，**不需要新的 SourceClip 类型**。
+  - 内部渲染高度统一走 `intResParam()`（键 `intRes`，文案 `algo.intRes*` 共用一套），
+    别再一个生成器写一份 select。内部低分辨率再放大是性能手段，**不是跳帧缓存**（那破坏确定性）。
 - 烘焙是**异步就绪**的：未就绪时该层返回 `null`（「这一层缺席」）。试炼场工具栏把
   「源：等待中 / 就绪」显式化。
 - openmosh 的 Rnd 按钮用裸 `Math.random()`；移植时换成 `mulberry32(hashSeed(...))`，

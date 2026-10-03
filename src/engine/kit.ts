@@ -124,33 +124,43 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string, label: s
 export class Target {
   tex: WebGLTexture;
   private fb: WebGLFramebuffer;
+  private readonly nearest: boolean;
+  /** 实际是否拿到了浮点渲染目标（缺 EXT_color_buffer_float 时回落 RGBA8）。 */
+  readonly float: boolean;
 
   constructor(
     private gl: WebGL2RenderingContext,
     public w: number,
     public h: number,
-    opts: { nearest?: boolean } = {},
+    opts: { nearest?: boolean; float?: boolean } = {},
   ) {
+    this.nearest = opts.nearest ?? false;
+    this.float = (opts.float ?? false) && hasColorBufferFloat(gl);
     this.tex = gl.createTexture()!;
-    this.alloc(opts.nearest ?? false);
+    this.alloc();
     this.fb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.tex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private alloc(nearest: boolean): void {
+  private alloc(): void {
     const gl = this.gl;
-    const filter = nearest ? gl.NEAREST : gl.LINEAR;
+    const filter = this.nearest ? gl.NEAREST : gl.LINEAR;
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.w, this.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    if (this.float) {
+      // RGBA16F：有状态模拟的逐帧增量会低于 8bit 量化步长，RGBA8 下会 stall 成色块。
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, this.w, this.h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.w, this.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
 
-  /** 尺寸变化时重分配（反馈池、ping-pong 都会用到）。 */
+  /** 尺寸变化时重分配（反馈池、ping-pong 都会用到）。保留 filter 与浮点标志。 */
   resize(w: number, h: number): void {
     if (w === this.w && h === this.h) return;
     this.w = w;
@@ -158,7 +168,7 @@ export class Target {
     const gl = this.gl;
     gl.deleteTexture(this.tex);
     this.tex = gl.createTexture()!;
-    this.alloc(false);
+    this.alloc();
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.tex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -175,6 +185,20 @@ export class Target {
     this.gl.deleteTexture(this.tex);
     this.gl.deleteFramebuffer(this.fb);
   }
+}
+
+/**
+ * 浮点颜色缓冲的可用性。每个上下文只探一次——`getExtension` 的结果
+ * 在上下文生命周期内不变，重复问是浪费。
+ */
+const floatRtCache = new WeakMap<WebGL2RenderingContext, boolean>();
+
+function hasColorBufferFloat(gl: WebGL2RenderingContext): boolean {
+  const cached = floatRtCache.get(gl);
+  if (cached !== undefined) return cached;
+  const ok = gl.getExtension('EXT_color_buffer_float') !== null;
+  floatRtCache.set(gl, ok);
+  return ok;
 }
 
 /* ------------------------------------------------------------------- kit */
@@ -237,7 +261,7 @@ export class Kit {
     return p;
   }
 
-  target(w: number, h: number, opts?: { nearest?: boolean }): Target {
+  target(w: number, h: number, opts?: { nearest?: boolean; float?: boolean }): Target {
     return new Target(this.gl, w, h, opts);
   }
 

@@ -17,9 +17,20 @@
 
 import type { MessageKey } from '../i18n/locales';
 
-export interface RangeParam {
+interface ParamBase {
   key: string;
   labelKey: MessageKey;
+  /**
+   * 条件可见性：返回 false 时这一项在检查器里不出现（值仍保留在
+   * `values` 里，不参与渲染的部分照样能写 uniforms）。
+   *
+   * 收到的是**当前求值后的**参数表（已含默认值），所以可以写
+   * `(v) => v.outline === 1`。移植自 openmosh 的同名机制。
+   */
+  visibleWhen?: (values: Record<string, number | string>) => boolean;
+}
+
+export interface RangeParam extends ParamBase {
   type: 'range';
   min: number;
   max: number;
@@ -29,24 +40,18 @@ export interface RangeParam {
   curve?: number;
 }
 
-export interface SelectParam {
-  key: string;
-  labelKey: MessageKey;
+export interface SelectParam extends ParamBase {
   type: 'select';
   defaultValue: string;
   options: { labelKey: MessageKey; value: string }[];
 }
 
-export interface CheckboxParam {
-  key: string;
-  labelKey: MessageKey;
+export interface CheckboxParam extends ParamBase {
   type: 'checkbox';
   defaultValue: number;
 }
 
-export interface ColorParam {
-  key: string;
-  labelKey: MessageKey;
+export interface ColorParam extends ParamBase {
   type: 'color';
   defaultValue: string;
 }
@@ -57,4 +62,17 @@ export function defaultValues(params: ParamDef[]): Record<string, number | strin
   const out: Record<string, number | string> = {};
   for (const p of params) out[p.key] = p.defaultValue;
   return out;
+}
+
+/** 按 `visibleWhen` 过一遍参数表。values 缺项时用 defaultValue 补。 */
+export function visibleParams(
+  params: ParamDef[],
+  values: Record<string, number | string>,
+): ParamDef[] {
+  return params.filter((p) => {
+    if (!p.visibleWhen) return true;
+    const merged: Record<string, number | string> = {};
+    for (const q of params) merged[q.key] = values[q.key] ?? q.defaultValue;
+    return p.visibleWhen(merged);
+  });
 }

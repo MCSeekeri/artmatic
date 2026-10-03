@@ -47,6 +47,8 @@ export interface EffectCtx {
   frame: number;
   w: number;
   h: number;
+  /** 工程帧率：`u_delta` = 1/fps（名义帧间隔）。 */
+  fps: number;
   compositor: Compositor;
   /** 特效片段本体（曲线的宿主）：曲线键 `${instanceId}.${paramKey}`。 */
   clip: EffectClip;
@@ -95,7 +97,14 @@ export class Compositor {
   private readonly blendProg: Program;
   private readonly placeProg: Program;
   private readonly passProg: Program;
-  private readonly feedback = new Map<string, { a: Target; b: Target; flip: boolean }>();
+  private readonly feedback = new Map<
+    string,
+    { a: Target; b: Target; flip: boolean; hdr: boolean }
+  >();
+  /** 非 feedback 的 pre-pass 草稿（半分辨率 HDR，按尺寸复用一对）。 */
+  private preScratch: { w: number; h: number; a: Target; b: Target } | null = null;
+  /** 带 feedback 的 pre-pass 的全分辨率历史，键 `${instanceId}:${index}`。 */
+  private readonly preFeedback = new Map<string, { a: Target; b: Target; flip: boolean }>();
 
   /**
    * 转场执行器。默认实现只把入画层搬过去（不混合）——真正的实现在
@@ -161,7 +170,16 @@ export class Compositor {
         acc = buf;
         buf = tmp;
       } else {
-        const ctx: EffectCtx = { t, frame, w, h, compositor: this, clip: op.clip, grid: project.beatGrid };
+        const ctx: EffectCtx = {
+          t,
+          frame,
+          w,
+          h,
+          fps: project.fps,
+          compositor: this,
+          clip: op.clip,
+          grid: project.beatGrid,
+        };
         for (const inst of op.clip.chain) {
           if (!inst.enabled) continue;
           this.runEffect(inst, acc, buf, ctx);
@@ -294,11 +312,33 @@ export class Compositor {
 
   /* ------------------------------------------------------- 反馈池 */
 
-  /** 取特效实例的反馈对（尺寸跟随渲染尺寸，变了就重建——历史随之失效）。 */
-  feedbackFor(instanceId: string, w: number, h: number): { read: Target; write: Target } {
+  /**
+   * 取特效实例的反馈对（尺寸跟随渲染尺寸，变了就重建——历史随之失效）。
+   *
+   * `hdr` 对应协议里的 `hdrFeedback`：有状态模拟的逐帧增量会低于 RGBA8 的
+   * 量化步长，用 8bit 历史会 stall 成色块。标志变化时重建目标（旧历史的
+   * 精度不够，留着不如丢掉）。
+   */
+  feedbackFor(
+    instanceId: string,
+    w: number,
+    h: number,
+    hdr = false,
+  ): { read: Target; write: Target } {
     let e = this.feedback.get(instanceId);
+    if (e && e.hdr !== hdr) {
+      e.a.dispose();
+      e.b.dispose();
+      this.feedback.delete(instanceId);
+      e = undefined;
+    }
     if (!e) {
-      e = { a: this.kit.target(w, h), b: this.kit.target(w, h), flip: false };
+      e = {
+        a: this.kit.target(w, h, { float: hdr }),
+        b: this.kit.target(w, h, { float: hdr }),
+        flip: false,
+        hdr,
+      };
       this.feedback.set(instanceId, e);
     }
     e.a.resize(w, h);
@@ -312,9 +352,71 @@ export class Compositor {
     if (e) e.flip = !e.flip;
   }
 
+  /* ------------------------------------------------- 特效的 pre-pass 池 */
+
+  /**
+   * 非 feedback 的 pre-pass 草稿对，**半分辨率 HDR**。
+   *
+   * 降采样只改 tap 密度、不改模糊半径 —— `u_resolution` 仍由 runner 传
+   * 全分辨率尺寸，所以 `1/u_resolution` 算出来的偏移不会被减半。
+   * 结果随后被主 pass 线性采样放大，视觉上等价。
+   */
+  preScratchFor(w: number, h: number): { a: Target; b: Target } {
+    const hw = Math.max(1, Math.round(w / 2));
+    const hh = Math.max(1, Math.round(h / 2));
+    let s = this.preScratch;
+    if (!s) {
+      s = {
+        w: hw,
+        h: hh,
+        a: this.kit.target(hw, hh, { float: true }),
+        b: this.kit.target(hw, hh, { float: true }),
+      };
+      this.preScratch = s;
+    } else if (s.w !== hw || s.h !== hh) {
+      s.w = hw;
+      s.h = hh;
+      s.a.resize(hw, hh);
+      s.b.resize(hw, hh);
+    }
+    return s;
+  }
+
+  /**
+   * 带 `feedback` 的 pre-pass 的持久历史，键 `${instanceId}:${index}`。
+   *
+   * **全分辨率、浮点** —— 它是状态而不是中间结果：8bit 会把逐帧低于
+   * 量化步长的增量抹平（背景估计、保持的关键帧都会因此冻结）。
+   */
+  preFeedbackFor(key: string, w: number, h: number): { read: Target; write: Target } {
+    let e = this.preFeedback.get(key);
+    if (!e) {
+      e = {
+        a: this.kit.target(w, h, { float: true }),
+        b: this.kit.target(w, h, { float: true }),
+        flip: false,
+      };
+      this.preFeedback.set(key, e);
+    }
+    e.a.resize(w, h);
+    e.b.resize(w, h);
+    return e.flip ? { read: e.b, write: e.a } : { read: e.a, write: e.b };
+  }
+
+  preFeedbackCommit(key: string): void {
+    const e = this.preFeedback.get(key);
+    if (e) e.flip = !e.flip;
+  }
+
   /** seek / 跳帧后清掉所有历史。 */
   clearFeedback(): void {
     for (const e of this.feedback.values()) {
+      e.a.bind();
+      this.kit.clear();
+      e.b.bind();
+      this.kit.clear();
+    }
+    for (const e of this.preFeedback.values()) {
       e.a.bind();
       this.kit.clear();
       e.b.bind();

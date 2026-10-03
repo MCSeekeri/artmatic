@@ -14,11 +14,9 @@
  * 编译失败时 `new Program` 抛错且不写缓存，所以失败项下次仍会重编，
  * 不存在"坏 program 被缓存住"的污染。
  *
- * 覆盖面（刻意不扩大）：所有特效主 pass + 所有 `realtime` 算法 + 所有转场。
- * 未覆盖 ——
- *   - 算法的 `bake` / `sim` 通路共用的 reveal / tint program（定义在
- *     algo/runtime.ts 内部且未导出）；
- *   - 特效协议里的 `prePasses` / `hdrFeedback`（MVP 尚未实现）。
+ * 覆盖面：所有特效的主 pass **与 pre-pass** + 所有 `realtime` 算法 + 所有转场。
+ * 未覆盖 —— 算法的 `bake` / `sim` 通路共用的 reveal / tint program
+ * （定义在 algo/runtime.ts 内部且未导出）。
  *
  * ## 转场这一批为什么非编不可
  *
@@ -33,8 +31,9 @@
 
 import { getEffect, listEffects } from './registry';
 import { getGenerator, listGenerators } from '../algos/registry';
+import { ALGO_HEAD, algoProgramName } from '../algos/shader-lib';
 import { listTransitions } from './transitions/registry';
-import { EFFECT_HEAD } from './shader-def';
+import { EFFECT_HEAD, effectProgramName } from './shader-def';
 import type { Kit } from '../engine/kit';
 
 export interface CompileResult {
@@ -47,21 +46,33 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 编译全部特效的主 pass。名字与 effects/runner.ts 的 `fx-${defId}` 一致。 */
+/**
+ * 编译一个特效的全部 program（主 pass + 每一环 pre-pass）。
+ * 名字走 `effectProgramName`，与 effects/runner.ts 同源。
+ */
 export function compileAllEffects(kit: Kit): CompileResult[] {
-  return listEffects().map(({ id }) => {
+  const out: CompileResult[] = [];
+  for (const { id } of listEffects()) {
     const entry = getEffect(id);
-    if (!entry) return { id, ok: false, error: `注册表里没有 ${id}` };
-    try {
-      kit.quad(EFFECT_HEAD + entry.shader.fragment, `fx-${id}`);
-      return { id, ok: true };
-    } catch (e) {
-      return { id, ok: false, error: message(e) };
+    if (!entry) {
+      out.push({ id, ok: false, error: `注册表里没有 ${id}` });
+      continue;
     }
-  });
+    try {
+      kit.quad(EFFECT_HEAD + entry.shader.fragment, effectProgramName(id));
+      const pre = entry.shader.prePasses ?? [];
+      for (let i = 0; i < pre.length; i++) {
+        kit.quad(EFFECT_HEAD + pre[i]!.fragment, effectProgramName(id, i));
+      }
+      out.push({ id, ok: true });
+    } catch (e) {
+      out.push({ id, ok: false, error: message(e) });
+    }
+  }
+  return out;
 }
 
-/** 编译全部 `realtime` 算法的着色器。名字与 algos/runtime.ts 的 `algo-${id}` 一致。 */
+/** 编译全部 `realtime` 算法的着色器。名字与 algos/runtime.ts 同源。 */
 export function compileAllAlgoShaders(kit: Kit): CompileResult[] {
   const out: CompileResult[] = [];
   for (const { id, kind } of listGenerators()) {
@@ -72,7 +83,7 @@ export function compileAllAlgoShaders(kit: Kit): CompileResult[] {
       continue;
     }
     try {
-      kit.quad(def.fragment, `algo-${id}`);
+      kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
       out.push({ id, ok: true });
     } catch (e) {
       out.push({ id, ok: false, error: message(e) });

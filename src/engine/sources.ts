@@ -48,13 +48,10 @@ export type TextResolver = (
   renderH: number,
 ) => SourceTexture | null;
 
-export function hexToRgba(hex: string): [number, number, number, number] {
-  const m = /^#?([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(hex.trim());
-  if (!m) return [255, 0, 255, 255]; // 坏颜色画成品红，立刻可见
-  const n = parseInt(m[1]!, 16);
-  const a = m[2] ? parseInt(m[2], 16) : 255;
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, a];
-}
+import { hexToRgba } from '../core/color';
+
+/** 兼容旧路径：实现已提到 `core/color.ts`（纯函数，可单测）。 */
+export { hexToRgba };
 
 export class SourceManager {
   private readonly solidCache = new Map<string, SourceTexture>();
