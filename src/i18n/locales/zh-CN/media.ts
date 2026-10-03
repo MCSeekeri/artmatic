@@ -422,6 +422,47 @@ export const media = {
   'fx.flowContours.cycle': '色相周期',
   'fx.flowContours.sheen': '光泽',
 
+  /* --- Phase 1d 多 pass（prePasses + u_original） --- */
+
+  'fx.glow': '辉光',
+  'fx.glow.amount': '强度',
+  'fx.glow.cutoff': '阈值',
+  'fx.glow.radius': '半径',
+
+  'fx.blur': '高斯模糊',
+  'fx.blur.radius': '半径',
+
+  'fx.ghosting': '镜头鬼影',
+  'fx.ghosting.bias': '偏置',
+  'fx.ghosting.scale': '缩放',
+  'fx.ghosting.ghosts': '鬼影数',
+  'fx.ghosting.dispersal': '扩散',
+  'fx.ghosting.dirX': '方向 X',
+  'fx.ghosting.dirY': '方向 Y',
+  'fx.ghosting.lensColor': '镜片颜色',
+  'fx.ghosting.additive': '叠加',
+
+  'fx.fastMosh': '融帧故障',
+  'fx.fastMosh.hold': '冻结关键帧',
+  'fx.fastMosh.rate': '混合比例',
+  'fx.fastMosh.block': '块大小',
+  'fx.fastMosh.sharpen': '锐化',
+  'fx.fastMosh.blur': '模糊',
+  'fx.fastMosh.posterize': '色阶量化',
+  'fx.fastMosh.mode': '模式',
+  'fx.fastMosh.modeRelative': '相对',
+  'fx.fastMosh.modeAbsolute': '绝对',
+  'fx.fastMosh.modeDifference': '差分',
+
+  'fx.motionMask': '运动遮罩',
+  'fx.motionMask.threshold': '阈值',
+  'fx.motionMask.persistence': '背景保持',
+  'fx.motionMask.erode': '腐蚀',
+  'fx.motionMask.blur': '模糊',
+  'fx.motionMask.still': '静止区亮度',
+  'fx.motionMask.showMask': '显示遮罩',
+  'fx.motionMask.hardCutoff': '硬切',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */

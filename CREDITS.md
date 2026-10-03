@@ -22,6 +22,7 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | 同上，二级来源 `Vidvox/ISF-Files` | MIT | 其中 `hsv-swap`、`trio-tone`、`circle-warp`、`pixel-shifter`、`rgb-strobe`、`ring-warp`、`shockwave`、`resize-glitch`、`stylize-glitch` 是 openmosh 从 Vidvox ISF 集合按行为重写的端口（非逐行复制） | 同上 |
 | `openmosh` | MIT | 单 pass 特效（**Phase 1b·③ 信号与噪声**，9 个）：`grain`、`soft-glitch`、`data-bend`、`vhs`、`composite`、`optical-flow`、`smear`、`relief`、`fiber-displace` | 同上 |
 | `openmosh` | MIT | 反馈类特效（**Phase 1c**，5 个）：`melt`、`tunnel`、`feedback`、`liquid-light`、`flow-contours`。上游靠「fragment 声明了 `u_feedback`」隐式分配历史，本项目改成显式 `feedback: true` | 同上 |
+| `openmosh` | MIT | 多 pass 特效（**Phase 1d**，5 个）：`glow`、`blur`、`ghosting`、`fast-mosh`、`motion-mask`。用到 `prePasses` / `u_original` / pre-pass 级 `feedback`。其中 `blur` 与 `glow` 共用的两条高斯 pass 收进 `shader-def.ts` 的 `BLUR_H_PASS` / `BLUR_V_PASS`（`glsl/` 目录是按文件名与 `defs/` 一一配对的，不能放不对应的文件） | `src/effects/defs/*`、`src/effects/glsl/*`、`src/effects/shader-def.ts` |
 | `openmosh` | MIT | `gl/preview-size.ts` 预览尺寸策略（含 `UNMEASURED_MAX_PIXELS` 兜底） | `src/engine/preview-size.ts` |
 | `openmosh` | MIT | `timeline/clips.ts` 片段几何（`moveClip` 钳制、`freeRangeAt`、`MIN_CLIP_LENGTH`、`clipFadeWeight`） | `src/core/clips.ts` |
 | `openmosh` | MIT | `effects/types.ts` 参数定义类型（Range/Select/Checkbox/Color，去掉 mosh/volumeLink/fontPicker） | `src/effects/types.ts` |

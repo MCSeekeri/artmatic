@@ -141,6 +141,12 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
           .u('u_delta', delta)
           .u('u_seed', seed)
           .u('u_resolution', [ctx.w, ctx.h]);
+        // **pre-pass 也要派发特效参数。** 上游的 `drawPass` 对每个 pass 都传
+        // `def` 与 `values`，所以它的 pre-pass fragment 里是可以直接用特效参数的
+        // （glow 的 u_cutoff/u_radius、blur 的 u_radius、ghosting 的 u_bias/u_scale、
+        // fast-mosh 的 u_hold、motion-mask 的 u_persistence/u_erode/u_blur 都是）。
+        // 只派发 head uniform 的话这些参数恒为 0 —— 画面会明显不对，但不报错。
+        shader.setUniforms(gl, prog.uniforms, values, uniformCtx);
         kit.pass(prog, out);
         if (restore) restore();
 

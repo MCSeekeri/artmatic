@@ -73,6 +73,57 @@ export function selectInt<Ctx = EffectUniformCtx>(
   };
 }
 
+/* ------------------------------------------------- pre-pass 片段库 */
+
+/**
+ * 横向 / 纵向高斯模糊 pre-pass（半径由 `u_radius` 给，R = 16 tap）。
+ *
+ * 放在这里而不是 `glsl/` 下：那个目录是**按文件名与 `defs/` 一一配对**的，
+ * 多一个不对应的文件会让注册表启动报错。`glow` 与 `blur` 共用这两个 pass，
+ * 所以是共享常量而不是各抄一份。
+ *
+ * `u_resolution` 用**全分辨率**（`EFFECT_HEAD` 提供）而不是 pre-pass 缓冲尺寸 ——
+ * pre-pass 跑在半分辨率上，但屏幕空间的模糊宽度不该因此变窄。
+ */
+export const BLUR_H_PASS = `uniform float u_radius;
+void main() {
+  vec2 px = 1.0 / u_resolution;
+  float spread = u_radius * 3.0;
+  float sigma = spread * 0.4;
+  float invSigma2 = 1.0 / max(sigma * sigma, 0.001);
+  vec4 sum = vec4(0.0);
+  float totalW = 0.0;
+  const int R = 16;
+  float step = spread / float(R);
+  for (int i = -R; i <= R; i++) {
+    float fi = float(i) * step;
+    float w = exp(-fi * fi * invSigma2);
+    sum += texture(u_texture, vUv + vec2(fi * px.x, 0.0)) * w;
+    totalW += w;
+  }
+  outColor = sum / totalW;
+}`;
+
+export const BLUR_V_PASS = `uniform float u_radius;
+void main() {
+  vec2 px = 1.0 / u_resolution;
+  float spread = u_radius * 3.0;
+  float sigma = spread * 0.4;
+  float invSigma2 = 1.0 / max(sigma * sigma, 0.001);
+  vec4 bloom = vec4(0.0);
+  float totalW = 0.0;
+  const int R = 16;
+  float step = spread / float(R);
+  for (int i = -R; i <= R; i++) {
+    float fi = float(i) * step;
+    float w = exp(-fi * fi * invSigma2);
+    vec2 off = vec2(0.0, fi * px.y);
+    bloom += texture(u_texture, vUv + off) * w;
+    totalW += w;
+  }
+  outColor = bloom / totalW;
+}`;
+
 /* --------------------------------------------------------------- 时钟 */
 
 /**

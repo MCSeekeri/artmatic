@@ -470,6 +470,14 @@ interface Curve {
   `u_texture`。非 `feedback` 的 pre-pass 渲染在**半分辨率浮点草稿**上，`u_resolution` 仍传全分辨率
   —— 降采样只改 tap 密度、**不改模糊半径**。带 `feedback` 的 pre-pass 用**自己的**全分辨率浮点历史
   （键 `${instanceId}:${index}`，`compositor.preFeedbackFor`）。两种历史都由 `clearFeedback()` 清。
+  - **特效参数会派发到每个 pass**（上游 `drawPass` 就是这么做的）：`glow` 的 `u_cutoff`/`u_radius`、
+    `blur` 的 `u_radius`、`ghosting` 的 `u_bias`/`u_scale`、`fast-mosh` 的 `u_hold`、
+    `motion-mask` 的 `u_persistence`/`u_erode`/`u_blur` **都只声明在 pre-pass 里**。
+    漏派发的表现是这些参数恒为 0 —— 画面明显不对但不报错。守卫：`lab.spec` 的
+    「pre-pass 的参数真的生效」（`blur` 的 radius 只活在 pre-pass 里，是最干净的探针）。
+  - 主 pass 与 pre-pass 的 `u_original` **都指向链输入**（pre-pass 之前的那一份），
+    不是上一环的输出 —— `fast-mosh` 就靠这个区别：`u_texture` 是 pre-pass 交出的关键帧，
+    `u_original` 才是当前帧。
   - `linearFilter` 的实现是「设 LINEAR → draw → 还原」（`effects/runner.ts` 的 `forceLinear`）：
     GL 的采样参数在 **draw 那一刻**被捕获，单线程里前后夹住是安全的。改的是别人的贴图，务必还原。
   - `hdrFeedback` 走 `Target({ float: true })` → RGBA16F，缺 `EXT_color_buffer_float` 时**安静回落

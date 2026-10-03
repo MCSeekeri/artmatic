@@ -5,7 +5,8 @@ import type { EffectClip } from '../../src/core/schema';
 import type { EffectUniformCtx } from '../../src/effects/shader-def';
 
 /**
- * 特效接线自检：`setUniforms` 写出来的 uniform，**名字与类型**都要与 fragment 的声明对上。
+ * 特效接线自检：每个 pass（主 pass + 每一环 pre-pass）的 uniform，**名字与类型**
+ * 都要与它实际编译出来的源码对上。
  *
  * 起因是一次真实的静默失效（2026-10-03）：
  * `clockUniforms()` 用 `gl.uniform1i` 去写 `u_sync`，而 8 个 clock 特效的 fragment
@@ -16,11 +17,16 @@ import type { EffectUniformCtx } from '../../src/effects/shader-def';
  * `compileAll`（lab.spec）只证明 shader **编得过**，这类「写 uniform 的类型不匹配」
  * 它看不见。这份测试用伪 gl 跑一遍 `setUniforms`，纯静态、不需要 GL 上下文。
  *
- * 它守的是**协议层**（`shader-def.ts` 那套 setter 助手），不是「某个特效好不好看」——
- * 新增一个 setter 助手、或改一个 fragment 的 uniform 声明，都会在这里被拦下。
+ * 它守的是**协议层**（`shader-def.ts` 那套 setter 助手 + runner 的派发约定），
+ * 不是「某个特效好不好看」。
  */
 
-/** runner 自己负责写、`setUniforms` 不该碰的 uniform（见 effects/runner.ts）。 */
+/**
+ * head 自己提供的 uniform：runner 负责写、`setUniforms` 不该碰。
+ *
+ * 其中 `u_feedback` 是**条件提供**的（要 `feedback: true`），`u_original` 在
+ * pre-pass 里指向**链输入**而不是上一环的输出 —— 见 runner.ts。
+ */
 const HEAD_OWNED = new Set([
   'u_texture',
   'u_feedback',
@@ -51,16 +57,35 @@ const WRITER_TYPES: Record<string, string[]> = {
   uniform4f: ['vec4'],
 };
 
+/** 解析 `uniform <type> u_<name>;`。 */
+function parseUniforms(src: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of src.matchAll(
+    /uniform\s+(float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\s+(u_\w+)\s*;/g,
+  )) {
+    out.set(m[2]!, m[1]!);
+  }
+  return out;
+}
+
+interface PassProbe {
+  /** `main` 或 `pre0` / `pre1` … */
+  kind: string;
+  /** 这一 pass 的 fragment **自己**声明的 uniform（不含 head）。 */
+  own: Map<string, string>;
+  /** 自己声明了、但 head 里已经有了的名字 → 重复声明，直接编译失败。 */
+  headClashes: string[];
+}
+
 interface Probe {
-  /** fragment 里声明的 uniform → GLSL 类型。 */
-  declared: Map<string, string>;
-  /** 实际被写过的 uniform → 写入函数名。 */
+  passes: PassProbe[];
+  /** 实际被写过的 uniform → 写入函数名（同一份 setUniforms 会跑在每个 pass 上）。 */
   written: Map<string, string>;
-  /** 被 setUniforms 摸到、但 fragment 里根本没声明的名字（拼错就是这样）。 */
+  /** 被 setUniforms 摸到、但既没声明也不是 head 提供的名字（拼错就是这样）。 */
   undeclared: Set<string>;
-  /** 这个特效的 fragment 有没有**用到** `u_feedback`（决定 runner 要不要绑它）。 */
+  /** fragment 有没有**用到** `u_feedback`（决定 runner 要不要绑它）。 */
   usesFeedback: boolean;
-  /** 这个特效有没有声明 `feedback: true`。 */
+  /** 有没有声明 `feedback: true`。 */
   declaresFeedback: boolean;
 }
 
@@ -68,17 +93,21 @@ function probeEffect(defId: string): Probe {
   const entry = getEffect(defId);
   if (!entry) throw new Error(`注册表里没有 ${defId}`);
 
-  const declared = new Map<string, string>();
-  // **必须按实际编译的源码来解析**（head + fragment）。只解析 fragment 的话，
-  // `u_feedback` / `u_texture` / `u_delta` 这些 head 里的声明根本看不到，
-  // 于是「声明了 u_feedback 就必须带 feedback: true」那条断言永远不会触发 ——
-  // 一条结构上不可能失败的假防线（初版就是这么写的，改回 bug 跑一遍才发现）。
-  const source = EFFECT_HEAD + entry.shader.fragment;
-  for (const m of source.matchAll(
-    /uniform\s+(float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\s+(u_\w+)\s*;/g,
-  )) {
-    declared.set(m[2]!, m[1]!);
-  }
+  // 每个 pass 单独看。**必须按「fragment 单独」解析一次**：head 里已经声明过的
+  // 名字若在 fragment 里再写一遍就是重复声明（编译失败），只解析 head+fragment
+  // 会把这个信号吞掉。
+  const passFragments: { kind: string; src: string }[] = [
+    { kind: 'main', src: entry.shader.fragment },
+    ...(entry.shader.prePasses ?? []).map((pp, i) => ({ kind: `pre${i}`, src: pp.fragment })),
+  ];
+  const passes: PassProbe[] = passFragments.map(({ kind, src }) => {
+    const own = parseUniforms(src);
+    return { kind, own, headClashes: [...own.keys()].filter((n) => HEAD_OWNED.has(n)) };
+  });
+
+  // 供 setter 查找名字用的「全部声明过的东西」= head + 所有 pass 自己声明的。
+  const declared = new Map<string, string>([...parseUniforms(EFFECT_HEAD)]);
+  for (const p of passes) for (const [n, t] of p.own) declared.set(n, t);
 
   const written = new Map<string, string>();
   const undeclared = new Set<string>();
@@ -87,7 +116,7 @@ function probeEffect(defId: string): Probe {
   // 未声明的名字返回 null —— 与真实 `Program.u()` 的行为一致（静默跳过），
   // 但这里**记一笔**，于是拼错的 uniform 名会被断言抓到。
   //
-  // head 自己提供的名字（HEAD_OWNED）除外：setter 那侧会**防御性地**读它们
+  // head 自己提供的名字除外：setter 那侧会**防御性地**读它们
   // （比如 `clockUniforms` 会读 `u_delta`，而并非每个 clock fragment 都声明它），
   // 那是合法用法，不是拼错。
   const locs = new Proxy({} as Record<string, WebGLUniformLocation | null>, {
@@ -133,33 +162,59 @@ function probeEffect(defId: string): Probe {
   } satisfies EffectUniformCtx;
 
   entry.shader.setUniforms(gl, locs, values, ctx);
+
   return {
-    declared,
+    passes,
     written,
     undeclared,
-    declaresFeedback: entry.shader.feedback === true,
     usesFeedback: /\bu_feedback\b/.test(entry.shader.fragment),
+    declaresFeedback: entry.shader.feedback === true,
   };
 }
 
 const EFFECTS = listEffects().map((e) => e.id);
+/** 展开成「特效 × pass」的用例表。 */
+const PASS_CASES = EFFECTS.flatMap((id) =>
+  probeEffect(id).passes.map((p) => [`${id}/${p.kind}`, id, p.kind] as const),
+);
 
 describe('特效接线自检', () => {
   test('注册表非空（自检本身要有覆盖面）', () => {
     expect(EFFECTS.length).toBeGreaterThan(20);
   });
 
-  test.each(EFFECTS)('%s：fragment 里的每个 uniform 都被 setUniforms 写到', (id) => {
-    const { declared, written } = probeEffect(id);
-    const missed = [...declared.keys()].filter((n) => !HEAD_OWNED.has(n) && !written.has(n));
-    expect(missed, `${id} 声明了却没写 → 这些 uniform 恒为默认值且不报错`).toEqual([]);
+  test.each(EFFECTS)('%s：runner 该跑 setUniforms 的每个 pass 都被检查到', (id) => {
+    const { passes } = probeEffect(id);
+    expect(passes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // 上游 shader 常在自己的 fragment 里再写一遍 u_texture / u_time / u_resolution，
+  // 而 Artmatic 的 EFFECT_HEAD 已经声明过 —— 照抄就是重复声明，**直接编译失败**。
+  // 移植 51 个特效时这条重复声明出现了 8 次，所以固化成断言。
+  test.each(EFFECTS)('%s：没有 pass 重复声明 head 里的 uniform', (id) => {
+    const { passes } = probeEffect(id);
+    const bad = passes.flatMap((p) => p.headClashes.map((n) => `${p.kind} 里又声明了 ${n}`));
+    expect(bad, `${id} 与 EFFECT_HEAD 重复声明 → 编译失败`).toEqual([]);
+  });
+
+  // runner 对**每个 pass** 都调用 setUniforms（pre-pass 里用特效参数是上游的用法：
+  // glow 的 u_cutoff/u_radius、blur 的 u_radius、ghosting 的 u_bias/u_scale、
+  // fast-mosh 的 u_hold、motion-mask 的 u_persistence/u_erode/u_blur）。
+  // 因此每个 pass 自己声明的参数都应当被写到。
+  test.each(PASS_CASES)('%s：这一 pass 声明的参数都被 setUniforms 写到', (_label, id, kind) => {
+    const { passes, written } = probeEffect(id);
+    const p = passes.find((x) => x.kind === kind)!;
+    const missed = [...p.own.keys()].filter((n) => !HEAD_OWNED.has(n) && !written.has(n));
+    expect(missed, `${id} 的 ${kind} 声明了却没写 → 这些 uniform 恒为默认值且不报错`).toEqual([]);
   });
 
   test.each(EFFECTS)('%s：写 uniform 的类型与声明一致', (id) => {
-    const { declared, written } = probeEffect(id);
+    const { passes, written } = probeEffect(id);
+    const typeOf = new Map<string, string>();
+    for (const p of passes) for (const [n, t] of p.own) typeOf.set(n, t);
     const bad: string[] = [];
     for (const [name, via] of written) {
-      const glsl = declared.get(name);
+      const glsl = typeOf.get(name);
       if (!glsl) continue;
       if (!WRITER_TYPES[via]!.includes(glsl)) bad.push(`${name}: 声明 ${glsl}，却用 ${via} 写`);
     }
@@ -186,11 +241,13 @@ describe('特效接线自检', () => {
   });
 
   test.each(EFFECTS)('%s：声明的 sampler 都是 runner 能绑的', (id) => {
-    const { declared } = probeEffect(id);
-    const samplers = [...declared.entries()]
-      .filter(([, t]) => t === 'sampler2D')
-      .map(([n]) => n)
-      .filter((n) => !BINDABLE_SAMPLERS.has(n));
-    expect(samplers, `${id} 声明了 runner 绑不了的 sampler → 采样会读回未绑定纹理`).toEqual([]);
+    const { passes } = probeEffect(id);
+    const samplers = passes.flatMap((p) =>
+      [...p.own.entries()].filter(([, t]) => t === 'sampler2D').map(([n]) => n),
+    );
+    expect(
+      samplers.filter((n) => !BINDABLE_SAMPLERS.has(n)),
+      `${id} 声明了 runner 绑不了的 sampler → 采样会读回未绑定纹理`,
+    ).toEqual([]);
   });
 });

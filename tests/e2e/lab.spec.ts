@@ -197,6 +197,36 @@ test('时钟特效：按拍对齐真的接管了相位（speed 归零后相位�
   expect(result.px).toBeGreaterThan(0);
 });
 
+test('pre-pass 的参数真的生效（blur 的 radius 只活在 pre-pass 里）', async ({ page }) => {
+  await boot(page);
+  const result = await page.evaluate(() => {
+    const L = (window as unknown as LabWindow).__lab!;
+    const shot = (): number[] => {
+      L.renderAt(1, true);
+      return L.readPixels().data;
+    };
+    const count = (a: number[], b: number[]): number => {
+      let d = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+
+    // blur 的 radius **只**在它的两环 pre-pass 里声明，主 pass 一个 uniform 都没有。
+    L.selectSource('mandelbrot');
+    L.selectEffect('blur');
+    L.setParam('effect', 'radius', 0);
+    const r0 = shot();
+    L.setParam('effect', 'radius', 20);
+    const r20 = shot();
+    return { diff: count(r0, r20) };
+  });
+
+  // runner 若只给主 pass 派发参数，pre-pass 的 u_radius 恒为 0 → 两张图一致。
+  // 这条是**唯一**能守住「pre-pass 也要派发参数」的自动关卡 ——
+  // effect-uniforms.test.ts 只跑 setUniforms，不经过 runner，看不见这一层。
+  expect(result.diff).toBeGreaterThan(0);
+});
+
 test('分辨率档位真的改后备缓冲尺寸（不被显示区压掉）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {
