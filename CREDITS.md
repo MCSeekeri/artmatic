@@ -16,9 +16,10 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | `openmosh` | MIT | 单 pass 特效（**Phase 1a·① 色彩与色调**，9 个）：`posterize`、`solarize`、`bleach`、`color-correction`、`duotone`、`thermal`、`color-halves`、`hsv-swap`、`trio-tone` | `src/effects/defs/*`、`src/effects/glsl/*` |
 | `openmosh` | MIT | 单 pass 特效（**Phase 1a·② 几何与采样**，9 个）：`edges`、`neon-edges`、`sharpen`、`mirror`、`kaleido`、`polar`、`zoom`、`circle-warp`、`radial-blur` | 同上 |
 | `openmosh` | MIT | 单 pass 特效（**Phase 1a·③ 风格化与形态**，7 个）：`emboss`、`stereoscopic`、`pixel-sort`、`sobel-neon`、`vignette`、`bulge`、`halftone` | 同上 |
-| 同上，二级来源 `X-PostProcessing-Library` | MIT | 其中 `sobel-neon` 是 openmosh 从 X-PostProcessing-Library 按行为重写的端口 | 同上 |
+| 同上，二级来源 `X-PostProcessing-Library` | MIT | 其中 `sobel-neon`、`rgb-burst` 是 openmosh 从 X-PostProcessing-Library 按行为重写的端口 | 同上 |
 | `openmosh` | MIT | 单 pass 特效（**Phase 1b·① 位移与抖动**，9 个）：`jitter`、`wobble`、`shake`、`screen-jump`、`tile`、`swirl`、`ripple`、`pixel-shifter`、`transform-3d` | 同上 |
-| 同上，二级来源 `Vidvox/ISF-Files` | MIT | 其中 `hsv-swap`、`trio-tone`、`circle-warp`、`pixel-shifter` 是 openmosh 从 Vidvox ISF 集合按行为重写的端口（非逐行复制） | 同上 |
+| `openmosh` | MIT | 单 pass 特效（**Phase 1b·② 频闪与时序故障**，8 个）：`strobe`、`rgb-strobe`、`rgb-burst`、`resize-glitch`、`stylize-glitch`、`shockwave`、`ring-warp`，以及从上游 `channel-split` 拆出的新特效 `channel-split-prism`（只列径向 / 棱镜两模式，着色器保留上游分支） | 同上 |
+| 同上，二级来源 `Vidvox/ISF-Files` | MIT | 其中 `hsv-swap`、`trio-tone`、`circle-warp`、`pixel-shifter`、`rgb-strobe`、`ring-warp`、`shockwave`、`resize-glitch`、`stylize-glitch` 是 openmosh 从 Vidvox ISF 集合按行为重写的端口（非逐行复制） | 同上 |
 | `openmosh` | MIT | `gl/preview-size.ts` 预览尺寸策略（含 `UNMEASURED_MAX_PIXELS` 兜底） | `src/engine/preview-size.ts` |
 | `openmosh` | MIT | `timeline/clips.ts` 片段几何（`moveClip` 钳制、`freeRangeAt`、`MIN_CLIP_LENGTH`、`clipFadeWeight`） | `src/core/clips.ts` |
 | `openmosh` | MIT | `effects/types.ts` 参数定义类型（Range/Select/Checkbox/Color，去掉 mosh/volumeLink/fontPicker） | `src/effects/types.ts` |
