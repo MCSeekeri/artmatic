@@ -14,7 +14,8 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | `openmosh` | MIT | `gl/effect-shaders.ts` 的 blend mode switch（`TEXT_BLEND_FRAG`）、`LAYER_BOX_GLSL` 层盒、`EffectShaderDef/PrePassDef` 协议、`HASH_GLSL` | `src/engine/blend.frag.ts`、`src/engine/placement.frag.ts`、`src/effects/shader-def.ts` |
 | `openmosh` | MIT | `gl/effect-shaders.ts` 的 `BOUNCE_GLSL`、`HSV_GLSL`（`rgb2hsv/hsv2rgb`）、`HUE_ROTATE_GLSL`（罗德里格旋转） | `src/effects/shader-def.ts` 的共享 GLSL 头 |
 | `openmosh` | MIT | 单 pass 特效（**Phase 1a·① 色彩与色调**，9 个）：`posterize`、`solarize`、`bleach`、`color-correction`、`duotone`、`thermal`、`color-halves`、`hsv-swap`、`trio-tone` | `src/effects/defs/*`、`src/effects/glsl/*` |
-| 同上，二级来源 `Vidvox/ISF-Files` | MIT | 其中 `hsv-swap`、`trio-tone` 是 openmosh 从 Vidvox ISF 集合按行为重写的端口（非逐行复制） | 同上 |
+| `openmosh` | MIT | 单 pass 特效（**Phase 1a·② 几何与采样**，9 个）：`edges`、`neon-edges`、`sharpen`、`mirror`、`kaleido`、`polar`、`zoom`、`circle-warp`、`radial-blur` | 同上 |
+| 同上，二级来源 `Vidvox/ISF-Files` | MIT | 其中 `hsv-swap`、`trio-tone`、`circle-warp` 是 openmosh 从 Vidvox ISF 集合按行为重写的端口（非逐行复制） | 同上 |
 | `openmosh` | MIT | `gl/preview-size.ts` 预览尺寸策略（含 `UNMEASURED_MAX_PIXELS` 兜底） | `src/engine/preview-size.ts` |
 | `openmosh` | MIT | `timeline/clips.ts` 片段几何（`moveClip` 钳制、`freeRangeAt`、`MIN_CLIP_LENGTH`、`clipFadeWeight`） | `src/core/clips.ts` |
 | `openmosh` | MIT | `effects/types.ts` 参数定义类型（Range/Select/Checkbox/Color，去掉 mosh/volumeLink/fontPicker） | `src/effects/types.ts` |

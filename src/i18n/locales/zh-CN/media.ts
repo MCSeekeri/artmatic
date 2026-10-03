@@ -89,6 +89,47 @@ export const media = {
   'fx.trioTone.brightColor': '亮部色',
   'fx.trioTone.intensity': '强度',
 
+  /* --- Phase 1a·② 几何与采样 --- */
+
+  'fx.edges': '边缘检测',
+  'fx.edges.strength': '强度',
+  'fx.edges.mix': '混合',
+
+  'fx.neonEdges': '霓虹边缘',
+  'fx.neonEdges.strength': '强度',
+  'fx.neonEdges.glow': '辉光',
+  'fx.neonEdges.bg': '背景亮度',
+
+  'fx.sharpen': '锐化',
+  'fx.sharpen.amount': '强度',
+  'fx.sharpen.radius': '半径',
+  'fx.sharpen.threshold': '阈值',
+
+  'fx.mirror': '镜像',
+  'fx.mirror.amount': '强度',
+  'fx.mirror.side': '镜像边',
+  'fx.mirror.position': '分界位置',
+
+  'fx.kaleido': '万花筒',
+  'fx.kaleido.amount': '强度',
+  'fx.kaleido.sides': '扇区数',
+  'fx.kaleido.angle': '角度',
+
+  'fx.polar': '极坐标',
+  'fx.polar.amount': '强度',
+  'fx.polar.angle': '角度',
+
+  'fx.zoom': '缩放',
+  'fx.zoom.amount': '缩放量',
+
+  'fx.circleWarp': '圆筒变形',
+  'fx.circleWarp.radius': '半径',
+  'fx.circleWarp.width': '横向压缩',
+  'fx.circleWarp.rotation': '旋转',
+
+  'fx.radialBlur': '径向模糊',
+  'fx.radialBlur.strength': '强度',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */
