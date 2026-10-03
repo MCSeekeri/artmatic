@@ -97,6 +97,19 @@
       testid="bpm-input"
       onchange={(v) => appState.store.setBeatGrid({ bpm: Math.max(20, Math.min(300, v || 120)) })}
     />
+    <!--
+      自动估计（ADR-002）。放在 BPM 右边而不是设置面板里：它是「对着这首曲子
+      调拍网格」这个动作的一部分，离 BPM/offset 越近越顺手。
+    -->
+    <IconButton
+      icon="wand-sparkles"
+      label={tr('tp.estimate')}
+      tipText={appState.beatBusy ? tr('tp.estimateBusy') : tr('tp.estimateTip')}
+      size="sm"
+      disabled={appState.beatBusy}
+      testid="estimate-bpm"
+      onclick={() => void appState.estimateBeatGrid()}
+    />
   </span>
 
   <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.offsetTip') }}>

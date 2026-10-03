@@ -25,6 +25,7 @@ import AlignStartVertical from '@lucide/svelte/icons/align-start-vertical';
 import AlignVerticalSpaceBetween from '@lucide/svelte/icons/align-vertical-space-between';
 import ArrowDown from '@lucide/svelte/icons/arrow-down';
 import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+import ArrowRight from '@lucide/svelte/icons/arrow-right';
 import ArrowUp from '@lucide/svelte/icons/arrow-up';
 import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
@@ -73,6 +74,7 @@ import Pause from '@lucide/svelte/icons/pause';
 import Pencil from '@lucide/svelte/icons/pencil';
 import Play from '@lucide/svelte/icons/play';
 import Plus from '@lucide/svelte/icons/plus';
+import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 import RotateCw from '@lucide/svelte/icons/rotate-cw';
 import Save from '@lucide/svelte/icons/save';
 import Scissors from '@lucide/svelte/icons/scissors';
@@ -114,6 +116,8 @@ export const ICONS = {
   'align-vertical-space-between': AlignVerticalSpaceBetween,
   'arrow-down': ArrowDown,
   'arrow-left': ArrowLeft,
+  'rotate-ccw': RotateCcw,
+  'arrow-right': ArrowRight,
   'arrow-up': ArrowUp,
   'arrow-up-down': ArrowUpDown,
   'audio-lines': AudioLines,

@@ -28,6 +28,33 @@ export const app = {
   'app.settings': '设置',
   'app.toDark': '切到暗色',
   'app.toLight': '切到亮色',
+  'app.openLab': '打开试炼场',
+  'app.openLabTip': '试炼场：逐个审查特效 / 生成器 / 转场，定默认参数',
+
+  /* ------------------------------------------------ 画幅与帧率（工程级设置） */
+  'app.canvas': '画幅与帧率',
+  'app.canvasHint':
+    '分辨率与帧率是**工程**的属性：导出帧数、逐帧随机种子、排版光栅化尺寸都跟着它们走。',
+  'app.fpsChangeHint':
+    '改帧率会改变逐帧随机种子，带随机参数的生成器/特效画面会跟着变（这是预期行为）。',
+  'app.preset': '预设',
+  'app.custom': '自定义',
+  'app.presetLandscape': '横屏 1080p',
+  'app.preset720': '横屏 720p',
+  'app.preset4k': '横屏 4K',
+  'app.presetVertical': '竖屏 1080×1920',
+  'app.presetSquare': '方形 1080',
+
+  /* ------------------------------------------------ 预览浮动工具栏 */
+  /* 这些档位只影响预览；导出永远是全帧全质，所以文案里不含「导出」。 */
+  'app.previewFps': '帧率',
+  'app.previewFpsFull': '全速',
+  'app.previewFpsFraction': '1/{n} 帧率',
+  'app.previewQuality': '画质',
+  'app.previewRestore': '暂停回全质',
+  'app.previewRestoreTip': '播放时用上面的档位，暂停时自动回到全质（停住时看到的必须是准的）',
+  'app.previewPlaying': '播放中 {fps} fps',
+  'app.previewPaused': '暂停 · 全质',
 
   /* ------------------------------------------------ 导出面板 */
   'app.range': '范围',

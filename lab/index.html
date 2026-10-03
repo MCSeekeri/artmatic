@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/brand/artmatic-small-dark.svg"
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/brand/artmatic-small-light.svg"
+      media="(prefers-color-scheme: dark)"
+    />
+    <title>Artmatic · 试炼场</title>
+  </head>
+  <body>
+    <!--
+      试炼场是**独立入口**（第二个 Vite HTML 页），不挂进主应用的路由。
+      它有自己的 canvas 与自己的 Renderer：试炼场里把渲染玩坏了，
+      主应用那套状态一毫不受影响。反过来它也**不引导**主应用 ——
+      `window.__artmatic` 在这个页面里不存在（E2E 有一条断言钉这个）。
+    -->
+    <div id="lab"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

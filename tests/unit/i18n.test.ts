@@ -15,6 +15,7 @@ import { typography } from '../../src/i18n/locales/zh-CN/typography';
 import { ribbon } from '../../src/i18n/locales/zh-CN/ribbon';
 import { shortcuts } from '../../src/i18n/locales/zh-CN/shortcuts';
 import { errors } from '../../src/i18n/locales/zh-CN/errors';
+import { lab } from '../../src/i18n/locales/zh-CN/lab';
 
 const SRC = fileURLToPath(new URL('../../src', import.meta.url));
 
@@ -88,6 +89,7 @@ describe('文案表结构', () => {
     ribbon,
     shortcuts,
     errors,
+    lab,
   } as const;
 
   it('合并结果等于各域之并（没有跨文件重名把别人覆盖掉）', () => {
@@ -156,6 +158,50 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   // runtime.schedule() 里是 `this.backends.pick()`，**没有 catch** ——
   // 这条抛出来就是整个排版光栅化坏掉，属于「应用被构建坏了」。
   'typography/rasterizer.ts': ['没有可用的排版光栅化后端'],
+  // 试炼场的「全部编译」用。`listEffects()` 与 `getEffect()` 读的是同一个
+  // Map，所以这条分支实际不可达 —— 它是注册表被改坏时的诊断，
+  // 只会出现在 lab 右栏的编译日志里，没有任何出口通向用户界面。
+  'effects/compile-all.ts': ['注册表里没有 ${id}'],
+  /*
+   * 转场目录的准入拒绝理由。它们只进 `CATALOG_ISSUES` —— 一个**开发期台账**：
+   * 单测断言它、CREDITS.md 记录它、E2E 失败时把它打进断言消息。
+   * 界面上的转场列表根本不含被拒的条目，所以这些文案没有任何出口通向用户。
+   * （真要有出口，那时再抽成 key；现在抽反而是给一段永不渲染的文字做翻译。）
+   */
+  'effects/transitions/catalog.ts': [
+    '缺少 name',
+    '<无名>',
+    'name 与前面的条目重复（只保留第一条）',
+    '许可证「${t.license}」不在宽松白名单里',
+    'glsl 里没有 vec4 transition(vec2) 入口',
+    '声明了额外贴图输入 sampler2D ${name} —— 规范只提供 from / to，给不出这张图',
+    '声明了 uniform ${name} 但 paramsTypes 里没有它（拿不到可信默认值，运行时恒为 0）',
+  ],
+  // 改写表里的 `why` 字段：写给读这段规范化代码的人，不渲染。
+  'effects/transitions/glsl.ts': [
+    'ES 3.00 的取色函数叫 texture',
+    'ES 3.00 没有内建 gl_FragColor',
+  ],
+
+  /*
+   * ── 三、一次性分析 / 解码路径的开发诊断 ──────────────────────────
+   * 这几条都只进 console，没有任何出口通向界面：
+   *   · 视频解不开时界面上的反馈是**底栏的错误条**（走 `err.video.unreadable`，
+   *     那条在语言文件里）；console 那几行是给调试的人看格式/编解码细节的。
+   *   · FFT 长度断言是编程错误（内部 API 用错），不是用户能触发的输入。
+   *   · 拍网格估计失败同样走底栏（`tp.estimateFailed`）。
+   * 抽成 key 只会给一段永不渲染的文字做翻译，反而让 grep 错误信息变难。
+   */
+  'audio/fft.ts': ['FFT 长度必须是 2 的幂，收到 ${n}'],
+  'engine/video-source.ts': [
+    '[video] probe 失败：',
+    '无法识别的容器格式',
+    '文件里没有视频轨',
+    '[video ${assetId}] 打开失败：${entry.failure}',
+    '[video ${assetId}] 初始化失败：${entry.failure}',
+    '[video ${entry.assetId}] 解码失败：${entry.failure}',
+  ],
+  'ui/app-state.svelte.ts': ['[tempo] 估计失败：'],
 
   /* ── 二、按 error.name 判定的哨兵；或测试替身内部 ─────────────────
    * 判据在 `name` 上，文案不参与逻辑 —— 本地化它们不会让任何东西变好，

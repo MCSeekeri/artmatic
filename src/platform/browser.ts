@@ -6,7 +6,20 @@
  */
 
 import { tr } from '../i18n/index.svelte';
-import type { PickedFile, Platform } from './types';
+import type { PickedFile, PickedVideo, Platform } from './types';
+
+/** 选一个文件，**保留 `File` 句柄**（不读字节）。视频那条路要用它。 */
+function pickFileHandle(accept: string): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    // 用户取消时部分浏览器不发任何事件——focus 回来视为取消。
+    window.addEventListener('focus', () => setTimeout(() => resolve(null), 400), { once: true });
+    input.click();
+  });
+}
 
 function pick(accept: string): Promise<PickedFile | null> {
   return new Promise((resolve) => {
@@ -46,6 +59,10 @@ function pickMany(accept: string): Promise<PickedFile[] | null> {
 export const browserPlatform: Platform = {
   pickAudioFile: () => pick('audio/*'),
   pickImageFile: () => pick('image/*'),
+  async pickVideoFile(): Promise<PickedVideo | null> {
+    const file = await pickFileHandle('video/*,.mp4,.m4v,.mov,.webm,.mkv');
+    return file ? { name: file.name, file, size: file.size } : null;
+  },
   pickFontFiles: () => pickMany('.ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff2'),
 
   async download(blob: Blob, filename: string): Promise<void> {

@@ -14,6 +14,7 @@
   import {
     TYPEAHEAD_RESET_MS,
     edgeIndex,
+    filterOptions,
     indexOfValue,
     keyIntent,
     stepIndex,
@@ -34,6 +35,14 @@
     optionTestidPrefix?: string;
     /** 弹层最小宽度（px）。默认跟随触发区。 */
     minWidth?: number;
+    /**
+     * 弹层顶部加一个筛选输入框。选项上百时（转场有 122 条）必需。
+     *
+     * 打开时**索引语义会变**：`active` 与 `indexOfValue` 一律作用在过滤后的
+     * `visible` 上。筛选态下不接管字母键（否则用户没法打字）。
+     */
+    filterable?: boolean;
+    filterPlaceholder?: string;
   }
   const {
     value,
@@ -45,6 +54,8 @@
     testid = 'select',
     optionTestidPrefix = 'select-option',
     minWidth = 0,
+    filterable = false,
+    filterPlaceholder = '',
   }: Props = $props();
 
   /** 弹层 id，供 aria-controls 指向。 */
@@ -54,8 +65,13 @@
   let active = $state(-1);
   let triggerEl = $state<HTMLDivElement | undefined>(undefined);
   let panelEl = $state<HTMLDivElement | undefined>(undefined);
+  let filterEl = $state<HTMLInputElement | undefined>(undefined);
   const pos = $state({ x: -1, y: -1 });
   let panelWidth = $state(0);
+
+  let query = $state('');
+  /** 过滤后的选项：所有索引操作的唯一作用对象。 */
+  const visible = $derived(filterable ? filterOptions(options, query) : options);
 
   const current = $derived(options.find((o) => o.value === value));
   /** 定位完成前不显示，避免在 (-1,-1) 闪一帧。$effect 在 DOM 更新后、绘制前跑，
@@ -67,14 +83,28 @@
 
   function openWith(startIndex: number): void {
     open = true;
-    active = startIndex >= 0 ? startIndex : edgeIndex(options, 'first');
+    query = '';
+    active = startIndex >= 0 ? startIndex : edgeIndex(visible, 'first');
   }
 
   function close(): void {
     open = false;
+    query = '';
     pos.x = -1;
     pos.y = -1;
   }
+
+  /** 打开后把焦点交给筛选框（键盘用户直接就能打字）。 */
+  $effect(() => {
+    if (open && filterable && filterEl) filterEl.focus();
+  });
+
+  /** 筛选结果变了就把高亮拉回第一项，否则 active 会指到过滤后的界外。 */
+  $effect(() => {
+    void query;
+    if (!open || !filterable) return;
+    active = edgeIndex(visible, 'first');
+  });
 
   function commit(opt: SelectOption<T> | undefined): void {
     if (!opt || opt.disabled) return;
@@ -85,7 +115,7 @@
   // 定位：面板已渲染后量尺寸，再按 popover 的纯函数摆放（含贴边翻转）。
   $effect(() => {
     void open;
-    void options;
+    void visible;
     if (!open) return;
     if (!panelEl || !triggerEl) return;
     const anchor = triggerEl.getBoundingClientRect();
@@ -117,10 +147,21 @@
 
     if (intent === 'open') {
       e.preventDefault();
-      openWith(indexOfValue(options, value));
+      openWith(indexOfValue(visible, value));
       return;
     }
     if (!open || !intent) return;
+
+    // 筛选态下文本键归输入框，不要被 typeahead 抢走（否则什么都打不出来）。
+    if (intent === 'type') {
+      if (filterable) return;
+      e.preventDefault();
+      const now = Date.now();
+      buffer = now - bufferAt > TYPEAHEAD_RESET_MS ? e.key : buffer + e.key;
+      bufferAt = now;
+      active = typeaheadIndex(visible, buffer, active);
+      return;
+    }
 
     e.preventDefault();
     if (intent === 'cancel') {
@@ -128,22 +169,15 @@
       return;
     }
     if (intent === 'next' || intent === 'prev') {
-      active = stepIndex(options, active, intent === 'next' ? 1 : -1);
+      active = stepIndex(visible, active, intent === 'next' ? 1 : -1);
       return;
     }
     if (intent === 'first' || intent === 'last') {
-      active = edgeIndex(options, intent);
+      active = edgeIndex(visible, intent);
       return;
     }
     if (intent === 'commit') {
-      commit(options[active]);
-      return;
-    }
-    if (intent === 'type') {
-      const now = Date.now();
-      buffer = now - bufferAt > TYPEAHEAD_RESET_MS ? e.key : buffer + e.key;
-      bufferAt = now;
-      active = typeaheadIndex(options, buffer, active);
+      commit(visible[active]);
     }
   }
 </script>
@@ -161,7 +195,7 @@
   data-exempt
   data-testid={testid}
   use:tip={{ text: tipText ?? '', disabled: !tipText }}
-  onclick={() => !disabled && (open ? close() : openWith(indexOfValue(options, value)))}
+  onclick={() => !disabled && (open ? close() : openWith(indexOfValue(visible, value)))}
   {onkeydown}
 >
   <span class="sel-label">{current?.label ?? String(value)}</span>
@@ -174,12 +208,27 @@
     id={listboxId}
     bind:this={panelEl}
     role="listbox"
+    data-testid={`${testid}-pop`}
     style:left={`${pos.x}px`}
     style:top={`${pos.y}px`}
     style:min-width={`${panelWidth}px`}
     style:visibility={positioned ? undefined : 'hidden'}
   >
-    {#each options as opt, i (opt.value)}
+    {#if filterable}
+      <input
+        class="sel-filter"
+        bind:this={filterEl}
+        type="text"
+        value={query}
+        placeholder={filterPlaceholder}
+        aria-label={filterPlaceholder}
+        data-exempt
+        data-testid={`${testid}-filter`}
+        oninput={(e) => (query = e.currentTarget.value)}
+        {onkeydown}
+      />
+    {/if}
+    {#each visible as opt, i (opt.value)}
       <button
         type="button"
         class="sel-opt"

@@ -11,9 +11,26 @@ export interface PickedFile {
   data: ArrayBuffer;
 }
 
+/**
+ * 选中的视频文件。
+ *
+ * **刻意不给 `ArrayBuffer`，给 `File` 本身**：浏览器的 `File` 是磁盘背书的
+ * 句柄，mediabunny 从它 seek 读，10 GB 素材也不会把堆撑爆。音频/图片那两条
+ * 路顺手给了字节（它们本来就小，且要喂给 decodeAudioData / createImageBitmap），
+ * 视频如果照抄就会在「导入一个 4 GB 素材」时直接 OOM —— 这是用户专门点名的
+ * 那条性能问题，所以接口形状必须不一样。
+ */
+export interface PickedVideo {
+  name: string;
+  file: File;
+  size: number;
+}
+
 export interface Platform {
   pickAudioFile(): Promise<PickedFile | null>;
   pickImageFile(): Promise<PickedFile | null>;
+  /** 视频：只给句柄不给字节，见 `PickedVideo`。 */
+  pickVideoFile(): Promise<PickedVideo | null>;
   /**
    * 多选字体文件。浏览器：`<input type=file multiple>`；
    * Electron（M5）：文件对话框 + IPC 读盘。

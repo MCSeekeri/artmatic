@@ -22,7 +22,7 @@
  * 会把锚点自己推走。
  */
 
-import type { OverlapBehavior } from './schema';
+import type { AnyClip, OverlapBehavior } from './schema';
 
 /** 最短片段长度（秒）：拖动 / 裁切都不会留下比这更短的碎片。 */
 export const MIN_CLIP_LENGTH = 0.05;
@@ -314,4 +314,90 @@ export function fadeWeight(clip: Span, fadeSec: number, time: number): number {
   const inW = (time - clip.start) / ramp;
   const outW = (clip.end - time) / ramp;
   return Math.max(0, Math.min(1, inW, outW));
+}
+
+/* ------------------------------------------------------------ trim-in 语义 */
+
+/**
+ * 有「源内偏移」的片段：音频与视频。其余源（纯色 / 算法 / 排版）没有这个概念。
+ *
+ * 视频的 `speed` 也在这里一起返回：左边界挪动 Δt 秒，素材内的时间要挪
+ * `Δt × speed` —— 2 倍速的片段裁掉 1s 画面，对应素材里的 2s。
+ */
+export function trimInOf(clip: AnyClip): { srcIn: number; speed: number } | null {
+  if (clip.kind === 'audio') return { srcIn: clip.srcIn, speed: 1 };
+  if (clip.kind === 'source' && clip.source.type === 'video') {
+    const speed = clip.source.speed > 0 ? clip.source.speed : 1;
+    return { srcIn: clip.source.srcIn, speed };
+  }
+  return null;
+}
+
+/** 写回源内偏移（返回新对象，与 clips.ts 的其余函数一样不可变）。 */
+export function withTrimIn<C extends AnyClip>(clip: C, srcIn: number): C {
+  const copy = { ...clip } as C;
+  if (copy.kind === 'source' && copy.source.type === 'video') {
+    return { ...copy, source: { ...copy.source, srcIn } };
+  }
+  if (copy.kind === 'audio') copy.srcIn = srcIn;
+  return copy;
+}
+
+/**
+ * 原地写回源内偏移。
+ *
+ * 拖动期间的实时变更走这条：store 的实时手势**是原地改工程对象的**
+ * （见 project-store.ts 的 `liveResizeClip` 注释），造新对象会让
+ * `commit` 的快照对比认不出来，进而丢失撤销记录。
+ */
+export function setTrimIn(clip: AnyClip, srcIn: number): void {
+  if (clip.kind === 'audio') {
+    clip.srcIn = srcIn;
+    return;
+  }
+  if (clip.kind === 'source' && clip.source.type === 'video') clip.source.srcIn = srcIn;
+}
+
+/**
+ * 左边界**最早**能拖到哪一秒。
+ *
+ * `srcIn` 不能为负 —— 素材头部没有更多内容了。所以往左拖的上限是「把已经
+ * 消耗掉的 srcIn 用完」那一刻。这也正是「裁掉 1 秒之后拖不回来」的正确含义：
+ * 素材里确实没有那 1 秒之前的东西。反向拖（往右）不受此限，于是裁剪可逆。
+ *
+ * 用户点名的交互就是这条：拖片段中部 = 整体平移（不改 srcIn），
+ * 拖左边界 = 改长度**并且**改 srcIn，与所有剪辑软件一致。
+ */
+export function earliestTrimStart(clip: AnyClip): number {
+  const ti = trimInOf(clip);
+  if (!ti) return 0;
+  return Math.max(0, clip.start - ti.srcIn / ti.speed);
+}
+
+/**
+ * 比较「结算前 / 结算后」两条 lane，把被裁掉头部的片段的 `srcIn` 跟着挪。
+ *
+ * 判据的关键是把三种情况分开：
+ *   - 起点动、终点**也**动 → 整体平移（`push` 把邻居挤开）→ **不动 srcIn**
+ *   - 起点动、终点不动     → 头部被裁掉或被拉长 → `srcIn += Δ × speed`
+ *   - 起点没动             → 无关
+ *
+ * 一条规则同时覆盖「用户拖左边界」与「`trim` 策略吃掉邻居的头部」，
+ * 而不会误伤 `push`（被挤开的片段内容不该变）。
+ *
+ * 拖动过程中同一片段会被结算很多次，所以这里按**每次的增量**累加，
+ * 而不是从某个基准重算 —— 增量的含义是「这一次又裁掉了多少」。
+ */
+export function applyTrimIn<C extends AnyClip>(oldLane: C[], newLane: C[]): C[] {
+  const prev = new Map(oldLane.map((c) => [c.id, c]));
+  return newLane.map((clip) => {
+    const before = prev.get(clip.id);
+    if (!before) return clip;
+    if (clip.start === before.start) return clip;
+    if (clip.end !== before.end) return clip;
+    const ti = trimInOf(clip);
+    if (!ti) return clip;
+    const delta = clip.start - before.start;
+    return withTrimIn(clip, Math.max(0, ti.srcIn + delta * ti.speed));
+  });
 }

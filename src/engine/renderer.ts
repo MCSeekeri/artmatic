@@ -6,7 +6,7 @@
  * 不是参数分支）。导出前 setExportSize，导完 clearExportSize。
  */
 
-import { Compositor, type EffectRunner, type SourceResolver } from './compositor';
+import { Compositor, type EffectRunner, type SourceResolver, type TransitionRunner } from './compositor';
 import { Kit } from './kit';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
 import type { Project } from '../core/schema';
@@ -30,6 +30,11 @@ export class Renderer {
     this.compositor.runEffect = runEffect;
   }
 
+  /** 转场执行器（`effects/transitions/runner.ts`）。未装配时 compositor 用降级实现。 */
+  setTransitionRunner(runTransition: TransitionRunner): void {
+    this.compositor.runTransition = runTransition;
+  }
+
   /** 预览画布显示区域的容器元素（量设备像素尺寸用）。 */
   attachDisplay(el: Element): void {
     this.displayEl = el;
@@ -45,7 +50,59 @@ export class Renderer {
       ? measureDisplaySize(this.displayEl)
       : { width: 0, height: 0 };
     const fit = fitPreviewSize(resolution.w, resolution.h, display.width, display.height);
-    if (fit) this.kit.size(fit.width, fit.height);
+    if (!fit) return;
+
+    /*
+     * 预览降质：**只缩后备缓冲，不缩显示尺寸**。
+     *
+     * 这是用户报的那个「选 25% 画面也跟着变小」的根因：canvas 元素不设 CSS
+     * 尺寸时，它的显示尺寸就等于 `width`/`height` 属性（= 后备缓冲的像素数），
+     * 所以把缓冲缩到 1/4，画面就真的变成 1/4 大。
+     *
+     * 正确语义是「**同样的显示面积，用更少的像素去画**」—— 于是这里显式把
+     * CSS 盒钉在**未缩放**的适配尺寸上（除以 dpr 换成 CSS px），缓冲照旧缩小。
+     * 结果就是用户要的「放大到 100%、有点糊」。
+     *
+     * 降质不能走 `setExportSize`：那会让上面那行直接 return，窗口缩放、
+     * 切工程、改分辨率全都不会再重新适配。
+     */
+    const s = this.previewScale;
+    this.kit.size(
+      Math.max(2, Math.round(fit.width * s)),
+      Math.max(2, Math.round(fit.height * s)),
+    );
+    this.applyCanvasCssSize(fit.width, fit.height);
+  }
+
+  /**
+   * 把 canvas 的 **CSS 盒**固定成适配尺寸（入参是设备像素）。
+   *
+   * 不这样做的话 CSS 尺寸会跟着后备缓冲走 —— 那正是降质时画面变小的原因。
+   * `max-width/height: 100%` 仍然在外层兜着，避免浮点误差顶破容器。
+   */
+  private applyCanvasCssSize(deviceW: number, deviceH: number): void {
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    const cssW = `${Math.max(1, Math.round(deviceW / dpr))}px`;
+    const cssH = `${Math.max(1, Math.round(deviceH / dpr))}px`;
+    const el = this.kit.canvas;
+    if (el.style.width !== cssW) el.style.width = cssW;
+    if (el.style.height !== cssH) el.style.height = cssH;
+  }
+
+  /**
+   * 预览质量的缩放系数（1 = 全质）。**只影响预览**：导出走 `setExportSize`，
+   * 那条路完全不过这里。默认 1，装配时不需要显式调用。
+   */
+  private previewScale = 1;
+
+  setPreviewScale(scale: number): void {
+    const v = Number.isFinite(scale) && scale > 0 ? Math.min(1, scale) : 1;
+    if (v === this.previewScale) return;
+    this.previewScale = v;
+  }
+
+  getPreviewScale(): number {
+    return this.previewScale;
   }
 
   setExportSize(w: number, h: number): void {

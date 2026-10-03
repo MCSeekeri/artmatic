@@ -37,6 +37,7 @@ import { createBlankProject, createDemoProject, DEMO_ASSET_ID } from '../core/de
 import { renderDemoAudio } from '../audio/demo-audio';
 import { decodeAudio, computeWaveform } from '../audio/decode';
 import { mimeForImageFilename, putImageBytes } from '../typography/image-assets';
+import { registerImageBytes, registerVideoMedia } from '../engine/media-assets';
 import { tr } from '../i18n/index.svelte';
 
 function msg(e: unknown): string {
@@ -295,7 +296,25 @@ async function hydrateRenderAssets(store: AssetStore): Promise<void> {
     if (!bytes || !input) continue;
 
     if (input.kind === 'image') {
-      putImageBytes(id, bytes.slice().buffer as ArrayBuffer, mimeForImageFilename(input.originName));
+      const arr = bytes.slice().buffer as ArrayBuffer;
+      const mime = mimeForImageFilename(input.originName);
+      putImageBytes(id, arr, mime);
+      // 排版文档用 objectURL（snapDOM 要从 DOM 取 <img>），
+      // 而 image **片段**要的是 WebGL 纹理 —— 两条路都得喂。
+      // 这里漏过一整个 M4/M5a 周期：`setImage` 零调用方，
+      // 于是「转为图片」产出的片段在画面上一律空白。
+      try {
+        await registerImageBytes(id, new Blob([arr], { type: mime }));
+      } catch {
+        /* 单条解不开不挡打开（与下面的音频同理） */
+      }
+      continue;
+    }
+
+    if (input.kind === 'video') {
+      // 走 Uint8Array 而不是再包一层 Blob：字节已经在这份内存里了，
+      // 包 Blob 会多一份拷贝（几 GB 素材下这一步就是压垮堆的那一下）。
+      registerVideoMedia(id, bytes);
       continue;
     }
 

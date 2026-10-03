@@ -17,19 +17,26 @@ import {
   type Project,
   type SourceClip,
   type Track,
+  type TransitionRef,
   type VisualTrack,
 } from './schema';
 import {
   MIN_CLIP_LENGTH,
+  applyTrimIn,
+  earliestTrimStart,
   freeRangeAt,
   placeSpan,
   replaceSpan,
   resizeSpan,
+  setTrimIn,
   sortSpans,
   spanAt,
   splitSpan,
+  trimInOf,
+  withTrimIn,
   type Span,
 } from './clips';
+import { clampTransitionDuration, transitionMaxDuration } from './transitions';
 import { evalCurve, type Curve } from './curve';
 import type { BeatGrid } from './time';
 import { CommandStack } from './commands';
@@ -262,7 +269,22 @@ export class ProjectStore {
     const clip = (track.clips as AnyClip[]).find((c) => c.id === clipId);
     if (!clip) return;
     if (edge === 'start') {
-      clip.start = Math.max(0, Math.min(time, clip.end - MIN_CLIP_LENGTH));
+      /*
+       * trim-in：拖左边界改的是**长度 + 源内偏移**，不是整体平移。
+       *
+       * 下界是 `earliestTrimStart`（= start − srcIn/speed）：素材头部没有更多
+       * 内容了，srcIn 不能为负。这条下界正是「裁掉 1 秒之后拖不回来」的正确
+       * 含义，同时让裁剪可逆 —— 往右裁多少，往回就能拖多少。
+       *
+       * 增量式累加（每次 pointermove 挪一点）而不是按基准重算：拖动过程中
+       * 会结算很多次，每次只知道自己这一次挪了多少。
+       */
+      const next = Math.max(earliestTrimStart(clip), Math.min(time, clip.end - MIN_CLIP_LENGTH));
+      const delta = next - clip.start;
+      if (delta === 0) return;
+      const ti = trimInOf(clip);
+      if (ti) setTrimIn(clip, ti.srcIn + delta * ti.speed);
+      clip.start = next;
       return;
     }
     const end = Math.max(time, clip.start + MIN_CLIP_LENGTH);
@@ -295,16 +317,31 @@ export class ProjectStore {
   settleResize(trackId: string, clipId: string, edge: 'start' | 'end', time: number): boolean {
     const track = this.track(trackId);
     if (!track) return false;
-    if (!(track.clips as AnyClip[]).some((c) => c.id === clipId)) return false;
+    const clip = (track.clips as AnyClip[]).find((c) => c.id === clipId);
+    if (!clip) return false;
+    /*
+     * 左边界要**再钳一次** trim-in 下界。
+     *
+     * 实时拖动已经钳过一次，但松手传进来的是**指针的原始时间**，可能比下界
+     * 更靠左；不再钳的话 resizeSpan 会把 start 拖到素材头部之外，而 srcIn
+     * 早已停在 0 —— 于是几何与内容对不上（表现是「松手后画面从第 1 秒重放」）。
+     */
+    const t = edge === 'start' ? Math.max(time, earliestTrimStart(clip)) : time;
+    /*
+     * 结算会让别的片段也动：trim 吃掉邻居头部（起点动、终点不动）需要同步
+     * 推进它的 srcIn，push 挤开邻居（两端一起动）则**不能**动。判据在
+     * `applyTrimIn` 里，这里只负责把「结算前」的 lane 留一份。
+     */
+    const before = (track.clips as AnyClip[]).map((c) => ({ ...c }));
     const lane = resizeSpan(
       track.clips as Span[],
       clipId,
       edge,
-      time,
+      t,
       this.project.duration,
       this.project.overlapBehavior,
     ) as AnyClip[];
-    this.writeLane(track, lane);
+    this.writeLane(track, applyTrimIn(before, lane));
     return true;
   }
 
@@ -398,6 +435,24 @@ export class ProjectStore {
   }
 
   /**
+   * 改工程帧率。
+   *
+   * 允许小数（23.976 / 29.97 这类是真实存在的），但保留两位就够 ——
+   * 再多位在 `frameOf` 的 Math.round 里也没有意义。
+   *
+   * ⚠️ 改帧率会改变 `frameOf(t, fps)`，而 `seedFor(seed, id, frame)` 用的就是
+   * 帧号 —— 于是所有掺了逐帧随机的特效/生成器（slices 的切片位移、噪声类）
+   * 画面会跟着变。这是**预期行为**（帧号是随机的定义域），UI 上有说明。
+   */
+  setFps(fps: number): void {
+    const v = Math.max(1, Math.min(240, Math.round(fps * 100) / 100));
+    if (!Number.isFinite(v) || v <= 0) return;
+    this.commit(tr('tl.setFps'), (p) => {
+      p.fps = v;
+    });
+  }
+
+  /**
    * 在 at（秒）处切分片段。曲线的处理：
    *   beatAnchor 曲线 —— 原样复制给两半（锚是绝对的，两半各自正确）；
    *   相对曲线 —— 左半保留 t ≤ 切点的 keys，右半 keys 平移 -切点，
@@ -409,6 +464,14 @@ export class ProjectStore {
     const clip = (track.clips as AnyClip[]).find((c) => c.id === clipId);
     if (!clip) return false;
     const atRel = at - clip.start;
+    /*
+     * 右半段的源内偏移必须前进 atRel × speed。
+     *
+     * 漏掉这一步的症状很具体：把一段音频从中间切开，右半段会**从头重放**
+     * （它继承了原来的 srcIn），于是后半段与前半段内容重叠、整段对不上拍。
+     * 视频同理。这是与「拖左边界要改 srcIn」同一个道理的两处落点。
+     */
+    const ti = trimInOf(clip);
     return this.commit(tr('tl.splitClip'), () => {
       const curvesFor = (c: AnyClip, side: 'left' | 'right'): Record<string, Curve> => {
         const curves: Record<string, Curve> = {};
@@ -438,7 +501,10 @@ export class ProjectStore {
       if (!split) return;
       track.clips = split.map((c) => {
         if (c.id === clipId) return { ...c, curves: leftCurves };
-        if (c.start === at) return { ...c, curves: rightCurves };
+        if (c.start === at) {
+          const right = { ...c, curves: rightCurves };
+          return ti ? withTrimIn(right as AnyClip, ti.srcIn + atRel * ti.speed) : right;
+        }
         return c;
       }) as typeof track.clips;
       track.clips.sort((a, b) => a.start - b.start);
@@ -457,6 +523,79 @@ export class ProjectStore {
   setOverlapBehavior(b: OverlapBehavior): void {
     this.commit(tr('tl.setOverlapBehavior'), (p) => {
       p.overlapBehavior = b;
+    });
+  }
+
+  /* ------------------------------------------------------------ 转场 */
+
+  /**
+   * 转场只可能挂在**视觉轨的 SourceClip** 上（EffectClip 没有画面可以当 from）。
+   * 返回数组下标是为了让调用方拿到轨道级上下文 —— `transitionMaxDuration`
+   * 需要看邻居的转场，光有片段本身算不出来。
+   */
+  private transitionHost(clipId: string): { track: VisualTrack; index: number } | null {
+    for (const track of this.project.tracks) {
+      if (track.kind !== 'visual') continue;
+      const index = track.clips.findIndex((c) => c.id === clipId);
+      if (index < 0) continue;
+      if (track.clips[index]!.kind !== 'source') return null;
+      return { track, index };
+    }
+    return null;
+  }
+
+  /**
+   * 设 / 改出画转场。`defId` 为空串 = 删除。
+   *
+   * `values` 由调用方给（core 不认识 effects/transitions 的注册表，
+   * 默认参数得由 UI 侧先 `defaultTransitionValues(defId)` 取好）。
+   */
+  setTransitionOut(
+    clipId: string,
+    defId: string,
+    duration: number,
+    values: Record<string, number>,
+  ): void {
+    const host = this.transitionHost(clipId);
+    if (!host) return;
+    this.commit(tr('insp.setTransition'), () => {
+      const clip = host.track.clips[host.index] as SourceClip;
+      if (!defId) {
+        delete clip.transitionOut;
+        return;
+      }
+      const max = transitionMaxDuration(host.track, host.index);
+      clip.transitionOut = {
+        defId,
+        duration: clampTransitionDuration(duration, max),
+        values: { ...values },
+      };
+    });
+  }
+
+  clearTransitionOut(clipId: string): void {
+    this.setTransitionOut(clipId, '', 0, {});
+  }
+
+  /** 改时长。钳制走同一个函数，UI 与这里不许各写一套。 */
+  setTransitionDuration(clipId: string, seconds: number): void {
+    const host = this.transitionHost(clipId);
+    if (!host) return;
+    this.commit(tr('insp.changeTransitionDuration'), () => {
+      const clip = host.track.clips[host.index] as SourceClip;
+      if (!clip.transitionOut) return;
+      const max = transitionMaxDuration(host.track, host.index);
+      clip.transitionOut.duration = clampTransitionDuration(seconds, max);
+    });
+  }
+
+  /** 改转场参数。 */
+  updateTransition(clipId: string, label: string, fn: (t: TransitionRef) => void): void {
+    const host = this.transitionHost(clipId);
+    if (!host) return;
+    this.commit(label, () => {
+      const clip = host.track.clips[host.index] as SourceClip;
+      if (clip.transitionOut) fn(clip.transitionOut);
     });
   }
 

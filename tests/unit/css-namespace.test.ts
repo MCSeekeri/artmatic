@@ -20,8 +20,27 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = process.cwd();
 const GLOBAL_CSS = ['src/app.css', 'src/ui/controls/controls.css'];
-/** 只扫新写的这两块；controls/ 自己就是全局类的**定义方**，不适用。 */
-const SCANNED_DIRS = ['src/ui/typography', 'src/ui/ribbon'];
+/** 只扫新写的这几块；controls/ 自己就是全局类的**定义方**，不适用。 */
+const SCANNED_DIRS = ['src/ui/typography', 'src/ui/ribbon', 'lab'];
+
+/**
+ * **刻意**复用全局类的白名单：`相对路径 → [类名]`。
+ *
+ * 默认禁止是为了防「不小心继承到不该有的背景/边框」——那种碰撞是静默的，
+ * 只有肉眼看到某个元素莫名其妙变样才会发现。但**刻意**复用是另一回事：
+ * 它是「只留一份真源」的手段。
+ *
+ * 现在唯一的条目是试炼场的 rail 入口：硬要求是「rail 在每个界面都一致」，
+ * 而 `.ic-btn` 就是 rail 图标尺寸/颜色/hover 的真源。不让它复用的话，
+ * 只能把那五六条声明抄一份到 lab —— 那正是「两个真源」，
+ * 将来改主应用的图标规格就会漏掉 lab。
+ *
+ * 加条目时必须写清理由，并且确认过：被复用的类只含**叶子级**声明
+ * （尺寸/颜色/hover），不含容器类的背景与边框。
+ */
+const ALLOWED_REUSE: Record<string, string[]> = {
+  'lab/LabRail.svelte': ['ic-btn'],
+};
 
 function globalClassNames(): Set<string> {
   const out = new Set<string>();
@@ -67,20 +86,42 @@ describe('CSS 命名空间', () => {
     expect(globals.size).toBeGreaterThan(20);
   });
 
-  it('排版 / Ribbon 组件不使用任何全局类名', () => {
+  it('排版 / Ribbon / 试炼场组件不使用任何全局类名', () => {
     const globals = globalClassNames();
     const clashes: string[] = [];
     for (const dir of SCANNED_DIRS) {
       for (const file of collectSvelte(dir)) {
+        const rel = file.replace(ROOT, '').replace(/\\/g, '/').replace(/^\//, '');
+        const allowed = new Set(ALLOWED_REUSE[rel] ?? []);
         for (const name of usedClassNames(file)) {
-          if (globals.has(name)) clashes.push(`${file.replace(ROOT, '').replace(/\\/g, '/')} → .${name}`);
+          if (globals.has(name) && !allowed.has(name)) {
+            clashes.push(`/${rel} → .${name}`);
+          }
         }
       }
     }
     expect(
       clashes,
-      '这些类名与全局样式表撞车，会继承到不该有的背景/边框。加前缀改名（如 .sel → .typo-sel）。',
+      '这些类名与全局样式表撞车，会继承到不该有的背景/边框。加前缀改名（如 .sel → .typo-sel）；\n' +
+        '确实是**刻意**复用的，加进本文件的 ALLOWED_REUSE 并写明理由。',
     ).toEqual([]);
+  });
+
+  it('白名单里的条目确实还在用（过期条目要删掉，否则会掩盖回归）', () => {
+    const byRel = new Map<string, Set<string>>();
+    for (const dir of SCANNED_DIRS) {
+      for (const file of collectSvelte(dir)) {
+        const rel = file.replace(ROOT, '').replace(/\\/g, '/').replace(/^\//, '');
+        byRel.set(rel, usedClassNames(file));
+      }
+    }
+    for (const [rel, names] of Object.entries(ALLOWED_REUSE)) {
+      const used = byRel.get(rel);
+      expect(used, `白名单里的 ${rel} 不存在了`).toBeTruthy();
+      for (const n of names) {
+        expect(used!.has(n), `${rel} 里已经不用 .${n} 了，把它从 ALLOWED_REUSE 删掉`).toBe(true);
+      }
+    }
   });
 
   it('扫描器确实能读到类名（否则上一条是空断言）', () => {

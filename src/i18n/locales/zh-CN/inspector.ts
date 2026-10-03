@@ -73,6 +73,26 @@ export const inspector = {
   'insp.changeColor': '改颜色',
   'insp.changeSrcIn': '改 srcIn',
 
+  /* ------------------------------------------------ 转场（出画） */
+  /* 转场的**名称与参数名不翻译**：它们逐字来自 gl-transitions 的第三方作者
+     （CrossZoom / pixelSize / blocksize…），没有可维护的中文对应物，
+     翻译只会让「去上游查这条转场」变难。所以界面上直接显示原文。
+     这里只放我们自己写的界面文案。 */
+  'insp.transition': '转场（出画）',
+  'insp.transitionNone': '无',
+  'insp.transitionDuration': '时长',
+  'insp.transitionPick': '选择转场',
+  'insp.setTransition': '设置转场',
+  'insp.changeTransitionDuration': '改转场时长',
+  'insp.editTransitionParam': '修改转场参数',
+  'insp.transitionNoNext': '这条轨道后面没有片段，转场无处可去。',
+  'insp.transitionNextNotSource': '下一个片段是特效片段，没有画面可以作为「入画」内容。',
+  'insp.transitionNotAdjacent': '与下一个片段之间有缝隙。转场需要两个片段紧邻；把片段拖到贴合即可生效。',
+  'insp.transitionTooShort': '两侧片段太短，放不下转场。',
+  'insp.transitionClamped': '时长超过两侧片段能容纳的上限，实际按 {max}s 生效。',
+  'insp.transitionFadeTip': '这个片段同时设了淡变，窗口内会叠加成二次淡出，通常只需要其中一种。',
+  'insp.transitionInactive': '当前未生效',
+
   /* ------------------------------------------------ 抽屉 */
   'insp.resizeWidth': '调整检查器宽度',
   'insp.collapseDrawer': '收起检查器',

@@ -44,6 +44,9 @@ export const errors = {
   'err.schema.effectClipMissingChain': '特效片段 {id} 缺少 chain',
   'err.schema.typographyBadDoc': '排版片段 {id} 的 doc 非法',
   'err.schema.typographyBadSize': '排版片段 {id} 的文档尺寸非法',
+  'err.schema.transitionBadDefId': '片段 {id} 的转场缺少 defId',
+  'err.schema.transitionBadDuration': '片段 {id} 的转场时长非法',
+  'err.schema.transitionBadValues': '片段 {id} 的转场参数非法',
 
   /* ------------------------------------------------ 工程读写（project/io.ts） */
   /* 这些会经「打开失败：…」/「保存失败：…」进底栏，或进 SaveReport 的警告。 */
@@ -91,8 +94,12 @@ export const errors = {
   'err.export.notConfigured': 'configure 还没调用',
   'err.export.noBuffer': 'mediabunny 没有产出 buffer',
 
-  /* ------------------------------------------------ 平台能力 */
-  'err.platform.openDirUnsupported': '这个浏览器不支持打开本地目录（需要 Chrome / Edge）',
+  /* ------------------------------------------------ 视频素材 */
+  /* 进底栏的 flash。容器认得、轨里没视频、或者编码本机解不动，都归这条 ——
+     对用户来说下一步动作是同一个：换一个文件。 */
+  'err.video.unreadable': '「{name}」不是能读的视频文件（容器或编码不支持）',
+
+  /* ------------------------------------------------ 平台能力 */  'err.platform.openDirUnsupported': '这个浏览器不支持打开本地目录（需要 Chrome / Edge）',
   'err.platform.saveDirUnsupported': '这个浏览器不支持保存到本地目录（需要 Chrome / Edge）',
   'err.platform.webgl2': '此浏览器没有 WebGL2',
 } as const;

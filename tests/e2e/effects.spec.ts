@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { buildStage, hashAt, renderTwiceDiff, setTrackEnabled } from './_stage';
 
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
@@ -9,82 +10,69 @@ function meanExpr(): string {
   return `((d) => { let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i+1] + d[i+2]; return s / (d.length / 4) / 3; })`;
 }
 
+/*
+ * 这两条用例原来直接往 **demo 工程**上叠片段，于是同时踩了两个坑（AGENTS §7
+ * 有完整记录）：
+ *   - addTrack 是 push：新轨落在最**底层**，被测的东西被 demo 轨道遮住；
+ *   - demo 的 echo 是反馈型特效，连渲同一 t 不清历史本来就该不一样。
+ * 现在统一从空舞台起步（buildStage 负责），并且**额外断言特效真的可见**
+ * —— 没有这条，用例可以在「什么也没测到」的情况下全绿。
+ */
+
 test('slices：同帧逐像素一致，异帧不同（u_seed 注入路径）', async ({ page }) => {
   await boot(page);
-  const result = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: {
-        store: { addTrack: (k: 'visual') => string; addClip: (t: string, c: unknown) => void };
-        algo: { defaultParams: (id: string) => Record<string, number | string> };
-        renderFrame: (t: number) => void;
-        readPixels: () => { data: number[] };
-      };
-    }).__artmatic;
-    // 平色底上做位移是不可见的（位移均匀场 = 原图）——垫一层有细节的 Mandelbrot。
-    const v2 = A.store.addTrack('visual');
-    A.store.addClip(v2, {
-      kind: 'source', id: 'mb', start: 0, end: 8, label: 'MB', fadeSec: 0, curves: {},
-      source: { type: 'algo', generator: 'mandelbrot', params: A.algo.defaultParams('mandelbrot') },
-      blend: 'normal', opacity: 1,
-      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'stretch',
-    });
-    const tid = A.store.addTrack('visual');
-    A.store.addClip(tid, {
-      kind: 'effect', id: 'fxc1', start: 0, end: 8, label: '故障', fadeSec: 0,
-      curves: {},
-      chain: [{ instanceId: 'fx1', defId: 'slices', enabled: true, values: { count: 36, amount: 0.2, coverage: 0.6 } }],
-    });
-    const hash = (d: number[]) => { let h = 0; for (let i = 0; i < d.length; i += 887) h = (h * 31 + d[i]!) | 0; return h; };
-    A.renderFrame(3);
-    const a = A.readPixels().data;
-    A.renderFrame(3);
-    const b = A.readPixels().data;
-    let diff = 0;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++;
-    const h3 = hash(a);
-    A.renderFrame(3.5);
-    const h35 = hash(A.readPixels().data);
-    return { diff, h3, h35 };
-  });
-  expect(result.diff).toBe(0);
-  expect(result.h3).not.toBe(result.h35);
+  // 平色底上做位移是不可见的（位移均匀场 = 原图）——垫一层有细节的 Mandelbrot。
+  const stage = await buildStage(
+    page,
+    { id: 'mb', source: { type: 'algo', generator: 'mandelbrot' } },
+    { id: 'fxc1', defId: 'slices', values: { count: 36, amount: 0.2, coverage: 0.6 } },
+  );
+
+  // ① 覆盖率：关掉特效轨画面必须变。
+  //    这条断言的存在理由 —— 早先这条用例的被测对象被上层轨道整个遮住，
+  //    实测开关 slices 轨对画面的影响是 **0 个像素**，两条断言其实在测 demo 工程。
+  const withFx = await hashAt(page, 3);
+  await setTrackEnabled(page, stage.effectTrack!, false);
+  const withoutFx = await hashAt(page, 3);
+  await setTrackEnabled(page, stage.effectTrack!, true);
+  expect(withFx).not.toBe(withoutFx);
+
+  // ② 确定性契约：「同一历史状态下，同一 t 必须同帧」——
+  //    所以每次求值前清掉反馈历史（determinism.spec.ts 的注释写明了这条）。
+  expect(await renderTwiceDiff(page, 3, true)).toBe(0);
+
+  // ③ 防止 ② 在比两张一样的图
+  expect(await hashAt(page, 3)).not.toBe(await hashAt(page, 3.5));
 });
 
 test('echo：顺序渲染留下拖尾，clearFeedback 后消失，两次顺序渲染一致', async ({ page }) => {
   await boot(page);
+
+  // 亮闪源只在 [0, 0.5] 存在。echo **必须盖在它之上**才拿得到输入：
+  // 早先这条用例把 echo 加在 flash 之后（= z 更低 = 被 flash 盖住），
+  // 读到的 acc 恒为透明黑，反馈恒为黑 —— 表现就是 first 与 cleared 逐位相同。
+  // buildStage 会把特效轨提到数组最前（= z 最大）。
+  await buildStage(
+    page,
+    { id: 'flash', source: { type: 'solid', color: '#ffffff' }, start: 0, end: 0.5 },
+    {
+      id: 'echoc',
+      defId: 'echo',
+      values: { decay: 0.95, floor: 0, weight: 1, zoom: 0, spin: 0 },
+      start: 0,
+      end: 4,
+    },
+  );
+
   const result = await page.evaluate((meanSrc: string) => {
     const mean = eval(meanSrc) as (d: number[]) => number;
     const A = (window as never as {
       __artmatic: {
-        store: {
-          addTrack: (k: 'visual') => string;
-          addClip: (t: string, c: unknown) => void;
-          commit: (label: string, fn: (p: { tracks: { clips: { kind: string }[]; enabled: boolean }[] }) => void) => void;
-        };
         renderFrame: (t: number) => void;
         readPixels: () => { data: number[] };
         renderer: { onSeek: () => void };
       };
     }).__artmatic;
-    // 关掉 demo 自带的特效轨：本测试只量化自己这组 flash+echo 的历史。
-    A.store.commit('关闭特效轨', (p) => {
-      for (const tr of p.tracks) {
-        if (tr.clips.some((c) => c.kind === 'effect')) tr.enabled = false;
-      }
-    });
-    // 亮闪源：只在 [0, 0.5] 存在
-    const v2 = A.store.addTrack('visual');
-    A.store.addClip(v2, {
-      kind: 'source', id: 'flash', start: 0, end: 0.5, label: '闪', fadeSec: 0, curves: {},
-      source: { type: 'solid', color: '#ffffff' }, blend: 'normal', opacity: 1,
-      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'stretch',
-    });
-    // echo 层：z 序在亮闪之上，[0, 4]
-    const v3 = A.store.addTrack('visual');
-    A.store.addClip(v3, {
-      kind: 'effect', id: 'echoc', start: 0, end: 4, label: '回声', fadeSec: 0, curves: {},
-      chain: [{ instanceId: 'e1', defId: 'echo', enabled: true, values: { decay: 0.95, floor: 0, weight: 1, zoom: 0, spin: 0 } }],
-    });
 
     const runSeq = () => {
       A.renderer.onSeek(); // 清历史，等价从干净起点顺序渲染

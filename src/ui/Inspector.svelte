@@ -19,6 +19,12 @@
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { getGenerator } from '../algos/registry';
   import { defaultEffectValues, getEffect, listEffects } from '../effects/registry';
+  import {
+    defaultTransitionValues,
+    getTransition,
+    listTransitions,
+  } from '../effects/transitions/registry';
+  import { transitionCut } from '../core/transitions';
   import type { RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
 
@@ -30,6 +36,19 @@
     { value: 'cover' as const, label: tr('insp.fitCover') },
     { value: 'stretch' as const, label: tr('insp.fitStretch') },
   ] satisfies { value: SourceClip['fit']; label: string }[];
+
+  /*
+   * 转场选项。**名称与作者原样显示，不翻译**：
+   * 它们逐字来自 gl-transitions 的第三方作者（`CrossZoom` / `pixelSize`…），
+   * 翻译只会让「去上游查这条转场」变难。空串是「无」。
+   */
+  const transitionOptions = [
+    { value: '', label: tr('insp.transitionNone') },
+    ...listTransitions().map((e) => ({ value: e.id, label: e.id })),
+  ];
+
+  /** 新转场的默认时长。两拍以内、也不至于短到看不见。 */
+  const DEFAULT_TRANSITION_SEC = 0.5;
 
   let addChoice = $state(effectsList[0]?.id ?? '');
 
@@ -187,6 +206,55 @@
           delete c.curves[key];
         }),
     };
+  }
+
+  /* ---------------------------------------------------------------- 转场 */
+
+  /** 落不了地的原因 → 文案键。`cut.reason` 是闭联合，索引结果仍是字面量键。 */
+  const REASON_KEYS = {
+    'no-next': 'insp.transitionNoNext',
+    'next-not-source': 'insp.transitionNextNotSource',
+    'not-adjacent': 'insp.transitionNotAdjacent',
+    'too-short': 'insp.transitionTooShort',
+  } as const;
+
+  /**
+   * 剪切点几何。
+   *
+   * 注意这里**只做展示**：相邻判定与时长钳制只有 `core/transitions.ts` 一处实现，
+   * 检查器不重算一遍（两边各写一套的话，"UI 上看着没问题、渲染时没生效" 就会
+   * 变成一类查不出来的 bug）。
+   */
+  const transitionInfo = $derived.by(() => {
+    void appState.version;
+    const id = appState.selectedClipId;
+    if (!id) return null;
+    const f = appState.store.findClip(id);
+    if (!f || f.track.kind !== 'visual') return null;
+    const index = (f.track.clips as AnyClip[]).findIndex((c) => c.id === id);
+    if (index < 0) return null;
+    return transitionCut(f.track, index);
+  });
+
+  function setTransition(clip: AnyClip, defId: string): void {
+    if (!defId) {
+      appState.store.clearTransitionOut(clip.id);
+      return;
+    }
+    // 换一条转场时**保住已有时长**：用户调好的节拍不该因为换了个效果被重置。
+    const keep = clip.kind === 'source' ? clip.transitionOut?.duration : undefined;
+    appState.store.setTransitionOut(
+      clip.id,
+      defId,
+      keep ?? DEFAULT_TRANSITION_SEC,
+      defaultTransitionValues(defId),
+    );
+  }
+
+  function setTransitionParam(clip: AnyClip, key: string, v: number): void {
+    appState.store.updateTransition(clip.id, tr('insp.editTransitionParam'), (t) => {
+      t.values[key] = v;
+    });
   }
 </script>
 
@@ -346,6 +414,84 @@
         {/if}
       {:else if clip.source.type === 'image'}
         <p class="note">{tr('insp.imageAsset', { name: appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId })}</p>
+      {/if}
+
+      <!-- 出画转场：挂在片段上，窗口以 end 为中心吃两侧各一半 -->
+      {@const trRef = clip.transitionOut}
+      {@const trEntry = trRef ? getTransition(trRef.defId) : null}
+      {@const trMax = transitionInfo?.ok ? transitionInfo.max : 0}
+      <Field label={tr('insp.transition')} tipText={tr('insp.transitionPick')}>
+        <Select
+          value={trRef?.defId ?? ''}
+          options={transitionOptions}
+          filterable
+          filterPlaceholder={tr('insp.transitionPick')}
+          testid="transition-picker"
+          optionTestidPrefix="transition-opt"
+          onchange={(v) => setTransition(clip, v)}
+        />
+      </Field>
+
+      {#if trRef && trEntry}
+        <!-- 署名：MIT / BSD 要求保留作者，顺带让人能回上游查这条转场 -->
+        <p class="note">{trEntry.author} · {trEntry.license}</p>
+
+        <Field label={tr('insp.transitionDuration')}>
+          <NumberInput
+            value={trRef.duration}
+            min={0.05}
+            max={trMax > 0 ? trMax : undefined}
+            step={0.05}
+            width={64}
+            suffix="s"
+            testid="transition-duration"
+            onchange={(v) => appState.store.setTransitionDuration(clip.id, v)}
+          />
+        </Field>
+
+        {#each trEntry.params as p (p.key)}
+          {#if p.type === 'checkbox'}
+            <Field label={p.label}>
+              <Checkbox
+                checked={Number(trRef.values[p.key] ?? p.defaultValue) !== 0}
+                testid={`transition-param-${p.key}`}
+                onchange={(v) => setTransitionParam(clip, p.key, v ? 1 : 0)}
+              />
+            </Field>
+          {:else}
+            <Field label={p.label}>
+              <Slider
+                min={p.min ?? 0}
+                max={p.max ?? 1}
+                step={p.step ?? 0.01}
+                value={Number(trRef.values[p.key] ?? p.defaultValue)}
+                ariaLabel={p.label}
+                testid={`transition-param-${p.key}`}
+                oninput={(v) => setTransitionParam(clip, p.key, v)}
+              />
+              <NumberInput
+                value={Number(trRef.values[p.key] ?? p.defaultValue)}
+                min={p.min ?? 0}
+                max={p.max ?? 1}
+                step={p.step ?? 0.01}
+                width={64}
+                testid={`transition-param-num-${p.key}`}
+                onchange={(v) => setTransitionParam(clip, p.key, v)}
+              />
+            </Field>
+          {/if}
+        {/each}
+
+        {#if transitionInfo && !transitionInfo.ok}
+          <p class="note insp-warn">{tr('insp.transitionInactive')}：{tr(REASON_KEYS[transitionInfo.reason])}</p>
+        {:else if trMax > 0 && trRef.duration > trMax + 1e-9}
+          <p class="note insp-warn">
+            {tr('insp.transitionClamped', { max: trMax.toFixed(2) })}
+          </p>
+        {/if}
+        {#if clip.fadeSec > 0}
+          <p class="note insp-warn">{tr('insp.transitionFadeTip')}</p>
+        {/if}
       {/if}
     {:else if clip.kind === 'effect'}
       <Field label={tr('insp.addEffect')}>
@@ -515,6 +661,11 @@
     color: var(--text-muted);
     font-size: var(--fs-sm);
     margin: 0 0 var(--sp-2);
+  }
+  /* 转场落不了地 / 被钳制 / 与 fadeSec 打架时的提示。用 warning 而不是 danger：
+     这些都不阻断操作，只是「照这样下去不会按你想的生效」。 */
+  .note.insp-warn {
+    color: var(--warning);
   }
   .dim {
     color: var(--text-muted);

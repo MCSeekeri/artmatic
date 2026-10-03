@@ -1,0 +1,457 @@
+/**
+ * lab-state.svelte.ts — 试炼场的状态与渲染循环（Svelte 5 runes）。
+ *
+ * 与主应用 `ui/app-state.svelte.ts` 的关系：**只共享装配**（都走
+ * `render-core`），不共享任何状态。试炼场没有工程、没有时间轴、没有撤销栈，
+ * 它每帧现造一棵最小 `Project` 喂给 `Renderer.renderFrame`。
+ *
+ * 时间纪律（硬约束 1.1）：`t` 是唯一的渲染时间来源。rAF 回调用真实时间推进
+ * 播放头，但**只把 `t` 传进 `renderFrame`** —— 渲染路径里没有任何时钟读取。
+ * 暂停 / 拖动 / 帧步进时 `t` 完全由输入决定，所以同 t 的渲染是可复现的
+ * （E2E 的确定性断言依赖这一点）。
+ */
+
+import { createRenderCore, type RenderCore } from '../src/render/render-core';
+import { PatternRenderer, PATTERNS, isPatternId } from './patterns';
+import {
+  buildLabProject,
+  LAB_BASE_H,
+  LAB_BASE_W,
+  LAB_BEAT_GRID,
+  LAB_DURATION,
+  LAB_FPS,
+  LAB_SEED,
+  type LabSelection,
+} from './build-project';
+import { defaultEffectValues, getEffect, listEffects } from '../src/effects/registry';
+import { defaultParams, getGenerator, listGenerators } from '../src/algos/registry';
+import { compileAll, type CompileResult } from '../src/effects/compile-all';
+import { hashSeed, mulberry32 } from '../src/core/prng';
+import { tr } from '../src/i18n/index.svelte';
+import type { ParamDef } from '../src/effects/types';
+import type { Project } from '../src/core/schema';
+import type { MessageKey } from '../src/i18n/locales';
+
+export interface LabItem {
+  id: string;
+  nameKey: MessageKey;
+  /** 种类徽标（烘焙 / 模拟 / 实时 / 内置）。特效没有徽标。 */
+  badgeKey?: MessageKey;
+  params: ParamDef[];
+}
+
+const KIND_BADGE: Record<string, MessageKey> = {
+  bake: 'lab.kindBake',
+  sim: 'lab.kindSim',
+  realtime: 'lab.kindRealtime',
+};
+
+/**
+ * 「源」= 内置测试图 + 算法生成器。
+ *
+ * 两者走**同一条** `type:'algo'` 通道（测试图靠 `lab:` 前缀在 resolver 里被
+ * 拦截），所以列表里可以并列，不需要给 schema 加第五种 source 类型。
+ */
+const SOURCE_ITEMS: LabItem[] = [
+  ...PATTERNS.map((p) => ({ id: p.id, nameKey: p.nameKey, badgeKey: 'lab.kindLab' as const, params: [] })),
+  ...listGenerators().map((g) => ({
+    id: g.id,
+    nameKey: g.nameKey,
+    badgeKey: KIND_BADGE[g.kind] ?? 'lab.kindRealtime',
+    params: getGenerator(g.id)?.params ?? [],
+  })),
+];
+
+/**
+ * 「无特效」那一行。存成哨兵 id 而不是 `null`，是为了让左栏分组、键盘导航
+ * 与「当前选中哪一行」三处共用同一条数据 —— 给 null 单独开一个分支的话，
+ * 每次加导航逻辑都要记得处理它一次。
+ */
+export const NO_EFFECT_ID = 'lab:none';
+
+const EFFECT_ITEMS: LabItem[] = [
+  { id: NO_EFFECT_ID, nameKey: 'lab.none', params: [] },
+  ...listEffects().map((e) => ({
+    id: e.id,
+    nameKey: e.nameKey,
+    params: getEffect(e.id)?.params ?? [],
+  })),
+];
+
+export interface LabGroup {
+  id: 'source' | 'effect';
+  labelKey: MessageKey;
+  items: LabItem[];
+}
+
+export const LAB_GROUPS: LabGroup[] = [
+  { id: 'source', labelKey: 'lab.groupSource', items: SOURCE_ITEMS },
+  { id: 'effect', labelKey: 'lab.groupEffect', items: EFFECT_ITEMS },
+];
+
+export const LAB_SOURCE_ITEMS = SOURCE_ITEMS;
+export const LAB_EFFECT_ITEMS = EFFECT_ITEMS;
+
+export function paramsFor(scope: 'source' | 'effect', id: string | null, ): ParamDef[] {
+  if (!id) return [];
+  const items = scope === 'source' ? SOURCE_ITEMS : EFFECT_ITEMS;
+  return items.find((i) => i.id === id)?.params ?? [];
+}
+
+/** 分辨率档位。0.5 是默认：1280×720 的一半，够看清结构又不会让分形掉帧。 */
+export const LAB_SCALES = [1, 0.5, 0.25] as const;
+export type LabScale = (typeof LAB_SCALES)[number];
+
+function defaultsFor(scope: 'source' | 'effect', id: string | null): Record<string, number | string> {
+  if (!id || id === NO_EFFECT_ID) return {};
+  return scope === 'source' ? defaultParams(id) : defaultEffectValues(id);
+}
+
+const DEFAULT_SOURCE = SOURCE_ITEMS[0]!.id;
+const DEFAULT_EFFECT = 'slices';
+
+class LabState {
+  readonly groups = LAB_GROUPS;
+
+  /** 左栏搜索词。 */
+  search = $state('');
+
+  /* ---------------------------------------------------------------- 选择 */
+
+  sourceId = $state<string>(DEFAULT_SOURCE);
+  sourceParams = $state<Record<string, number | string>>(defaultsFor('source', DEFAULT_SOURCE));
+  effectId = $state<string | null>(DEFAULT_EFFECT);
+  effectParams = $state<Record<string, number | string>>(defaultsFor('effect', DEFAULT_EFFECT));
+
+  /* ---------------------------------------------------------------- 播放 */
+
+  playing = $state(false);
+  /** 播放头（秒）。渲染的唯一时间来源。 */
+  t = $state(0);
+  scale = $state<LabScale>(0.5);
+  bypass = $state(false);
+
+  /* ---------------------------------------------------------------- 读数 */
+
+  fps = $state(0);
+  frameMs = $state(0);
+  /** 源这一帧有没有出图（烘焙型算法首次会缺席）。 */
+  srcPending = $state(false);
+
+  /* ------------------------------------------------------------ 编译结果 */
+
+  compileResults = $state<CompileResult[] | null>(null);
+
+  /* ---------------------------------------------------------------- 内部 */
+
+  private core: RenderCore | null = null;
+  private patterns: PatternRenderer | null = null;
+  private raf = 0;
+  private lastNow = 0;
+  private frames = 0;
+  private fpsAt = 0;
+  private smoothMs = 0;
+  /** 源 resolver 本帧有没有返回 null（写完立刻同步到 srcPending）。 */
+  private srcMissing = false;
+  /** 合成工程缓存：只在选择/尺寸/旁路变化时重建。 */
+  private cached: Project | null = null;
+  private dirty = true;
+  /** 「随机」按钮的序号。用它当种子的一部分，于是每次点击的结果可复现。 */
+  private rndSeq = 0;
+
+  get ready(): boolean {
+    return this.core !== null;
+  }
+
+  /** 左栏要显示的分组（按搜索词过滤；空组丢掉）。 */
+  visibleGroups(): LabGroup[] {
+    const q = this.search.trim().toLowerCase();
+    if (!q) return this.groups;
+    return this.groups
+      .map((g) => ({
+        ...g,
+        items: g.items.filter(
+          (i) => tr(i.nameKey).toLowerCase().includes(q) || i.id.toLowerCase().includes(q),
+        ),
+      }))
+      .filter((g) => g.items.length > 0);
+  }
+
+  /** 键盘导航用的扁平顺序 —— 必须与左栏显示顺序逐项一致。 */
+  private flatItems(): { scope: 'source' | 'effect'; id: string }[] {
+    const out: { scope: 'source' | 'effect'; id: string }[] = [];
+    for (const g of this.visibleGroups()) for (const i of g.items) out.push({ scope: g.id, id: i.id });
+    return out;
+  }
+
+  /** ↑↓ 在可见列表里挪一格。源与特效共用一条扁平序，符合"看到一个列表"的直觉。 */
+  moveSelection(delta: number): void {
+    const items = this.flatItems();
+    if (!items.length) return;
+    const effectRow = this.effectRowId();
+    const cur = items.findIndex((i) =>
+      i.scope === 'source' ? i.id === this.sourceId : i.id === effectRow,
+    );
+    const next = items[Math.max(0, Math.min(items.length - 1, (cur < 0 ? -1 : cur) + delta))];
+    if (!next) return;
+    if (next.scope === 'source') this.selectSource(next.id);
+    else this.selectEffect(next.id);
+  }
+
+  resolution(): { w: number; h: number } {
+    return {
+      w: Math.max(2, Math.round(LAB_BASE_W * this.scale)),
+      h: Math.max(2, Math.round(LAB_BASE_H * this.scale)),
+    };
+  }
+
+  /* ---------------------------------------------------------------- 装配 */
+
+  attach(canvas: HTMLCanvasElement): void {
+    if (this.core) return;
+
+    const core = createRenderCore(canvas, {
+      // 试炼场的工程是每帧现造的常量，这里只需要拍网格与种子。
+      getProject: () => ({ beatGrid: LAB_BEAT_GRID, seed: LAB_SEED }),
+      // rAF 循环一直在跑，不需要"叫醒"，留着是为了 render-core 的接口完整。
+      onAlgoReady: () => {},
+    });
+    this.core = core;
+    this.patterns = new PatternRenderer(core.kit);
+
+    /*
+     * 包一层 resolver：`lab:` 前缀的 id 交给测试图渲染器，其余原样转回
+     * SourceManager（solid / 算法 / 排版）。这是测试图接入的**唯一**落点 ——
+     * 生产注册表与 schema 都不需要知道它存在。
+     */
+    const inner = core.sources.resolve;
+    core.renderer.setResolver((clip, t, frame) => {
+      const s = clip.source;
+      if (s.type === 'algo' && isPatternId(s.generator)) {
+        this.srcMissing = false;
+        return this.patterns!.render(s.generator, t);
+      }
+      const tex = inner(clip, t, frame);
+      this.srcMissing = tex === null;
+      return tex;
+    });
+
+    this.applySize();
+    this.renderNow();
+    this.raf = requestAnimationFrame(this.loop);
+  }
+
+  /** 把分辨率档位钉到后备缓冲上。 */
+  private applySize(): void {
+    if (!this.core) return;
+    const { w, h } = this.resolution();
+    /*
+     * 用 setExportSize 而不是 attachDisplay + syncSize：`syncSize` 走
+     * `fitPreviewSize`，而那里的 `k = Math.min(1, scale)` **只缩不放** ——
+     * 中间舞台列在 1280 视口下只有约 640px 宽，100% 档会被悄悄缩成一半，
+     * 档位语义整个失效。setExportSize 直接定住后备缓冲尺寸（CSS 负责
+     * 把 canvas 缩放进舞台显示），三档才是真的三档。
+     */
+    this.core.renderer.setExportSize(w, h);
+    this.dirty = true;
+  }
+
+  /* ------------------------------------------------------------ 渲染循环 */
+
+  private loop = (now: number): void => {
+    this.raf = requestAnimationFrame(this.loop);
+    const dt = this.lastNow ? (now - this.lastNow) / 1000 : 0;
+    this.lastNow = now;
+
+    if (this.playing) {
+      this.t = (this.t + dt) % LAB_DURATION;
+      this.dirty = true;
+    }
+
+    const t0 = performance.now();
+    this.renderNow();
+    // 帧耗时与 fps **只用于读数**，不参与任何渲染求值（硬约束 1.1）。
+    this.smoothMs = this.smoothMs * 0.9 + (performance.now() - t0) * 0.1;
+    this.frames++;
+    if (now - this.fpsAt > 500) {
+      this.fps = Math.round((this.frames * 1000) / (now - this.fpsAt));
+      this.frameMs = this.smoothMs;
+      this.frames = 0;
+      this.fpsAt = now;
+    }
+  };
+
+  private project(): Project {
+    if (!this.cached || this.dirty) {
+      const sel: LabSelection = {
+        sourceId: this.sourceId,
+        sourceParams: { ...this.sourceParams },
+        effect: this.effectId ? { id: this.effectId, params: { ...this.effectParams } } : null,
+      };
+      this.cached = buildLabProject(sel, this.resolution(), { bypass: this.bypass });
+      this.dirty = false;
+    }
+    return this.cached;
+  }
+
+  private renderNow(): void {
+    if (!this.core) return;
+    this.core.renderer.renderFrame(this.project(), this.t);
+    const pending = this.srcMissing;
+    if (pending !== this.srcPending) this.srcPending = pending;
+  }
+
+  /* ---------------------------------------------------------------- 动作 */
+
+  selectSource(id: string): void {
+    this.sourceId = id;
+    this.sourceParams = defaultsFor('source', id);
+    this.afterSelectionChange();
+  }
+
+  selectEffect(id: string | null): void {
+    this.effectId = id === NO_EFFECT_ID ? null : id;
+    this.effectParams = defaultsFor('effect', this.effectId);
+    this.afterSelectionChange();
+  }
+
+  /** 当前选中的特效在左栏对应哪一行（无特效时是哨兵行）。 */
+  effectRowId(): string {
+    return this.effectId ?? NO_EFFECT_ID;
+  }
+
+  private afterSelectionChange(): void {
+    /*
+     * 刻意**不把 t 归零**。
+     *
+     * 试炼场的核心动作是「同一个时刻换一个源/特效来对比」——把播放头踹回 0
+     * 会让每次对比都从头再来，而且生长型的算法（Rule 110 的生长前沿、
+     * 生命游戏的演化）在 t=0 本来就是全黑的，一归零等于什么都没看到。
+     *
+     * 但**反馈历史必须清**：那是 echo 这类特效的跨帧状态，换了源还留着
+     * 上一个源的拖尾就是纯粹的误导。
+     */
+    this.core?.renderer.onSeek();
+    this.dirty = true;
+  }
+
+  setParam(scope: 'source' | 'effect', key: string, value: number | string): void {
+    if (scope === 'source') this.sourceParams[key] = value;
+    else this.effectParams[key] = value;
+    this.dirty = true;
+    // 不清反馈：拖 echo 的滑杆要看拖尾跟着变，清掉反而看不到。
+  }
+
+  setT(t: number): void {
+    this.t = Math.max(0, Math.min(t, LAB_DURATION));
+    this.core?.renderer.onSeek();
+    this.dirty = true;
+  }
+
+  stepFrames(n: number): void {
+    this.setT(this.t + n / LAB_FPS);
+  }
+
+  togglePlay(): void {
+    this.playing = !this.playing;
+    if (!this.playing) this.lastNow = 0;
+  }
+
+  setScale(s: LabScale): void {
+    this.scale = s;
+    this.applySize();
+    this.core?.renderer.onSeek();
+    this.renderNow();
+  }
+
+  setBypass(on: boolean): void {
+    if (this.bypass === on) return;
+    this.bypass = on;
+    this.dirty = true;
+  }
+
+  /* ------------------------------------------------------------ 参数工具 */
+
+  resetParams(scope: 'source' | 'effect'): void {
+    const id = scope === 'source' ? this.sourceId : this.effectId;
+    const next = defaultsFor(scope, id);
+    if (scope === 'source') this.sourceParams = next;
+    else this.effectParams = next;
+    this.dirty = true;
+  }
+
+  /**
+   * 种子化随机（硬约束 1.2：禁止裸 `Math.random()`）。
+   * 序列由 `rndSeq` 决定，所以「第 1 次点随机」在任何机器、任何时刻
+   * 都得到同一组参数 —— 试炼场里看到一个好组合，别人能复现。
+   */
+  randomizeParams(scope: 'source' | 'effect'): void {
+    const id = scope === 'source' ? this.sourceId : this.effectId;
+    const params = paramsFor(scope, id);
+    if (!params.length) return;
+    const rng = mulberry32(hashSeed(LAB_SEED, 'rnd', scope, this.rndSeq++));
+    const values: Record<string, number | string> = {};
+    for (const p of params) {
+      if (p.type === 'range') values[p.key] = p.min + rng() * (p.max - p.min);
+      else if (p.type === 'select') values[p.key] = p.options[Math.floor(rng() * p.options.length)]!.value;
+      else if (p.type === 'checkbox') values[p.key] = rng() < 0.5 ? 0 : 1;
+      else values[p.key] = p.defaultValue;
+    }
+    if (scope === 'source') this.sourceParams = values;
+    else this.effectParams = values;
+    this.dirty = true;
+  }
+
+  /* ---------------------------------------------------------------- 编译 */
+
+  runCompile(): CompileResult[] {
+    if (!this.core) return [];
+    const results = compileAll(this.core.kit).results;
+    this.compileResults = results;
+    return results;
+  }
+
+  failedIds(): Set<string> {
+    const out = new Set<string>();
+    for (const r of this.compileResults ?? []) if (!r.ok) out.add(r.id);
+    return out;
+  }
+
+  compiledOkCount(): number {
+    return (this.compileResults ?? []).filter((r) => r.ok).length;
+  }
+
+  /* ------------------------------------------------------------------ E2E
+   *
+   * 下面几个是给 `window.__lab` 用的。约定与 `window.__artmatic` 一致：
+   * 像素在 page 内 reduce，只把标量/数组回传，避免几 MB 的 JSON 过界。
+   */
+
+  /** 在指定 t 渲一帧。`clearFeedback` 默认开——同 t 可复现的前提。 */
+  renderAt(t: number, clearFeedback = true): void {
+    if (clearFeedback) this.core?.renderer.onSeek();
+    this.t = t;
+    this.dirty = true;
+    this.renderNow();
+  }
+
+  readPixels(): { data: number[]; w: number; h: number } {
+    if (!this.core) return { data: [], w: 0, h: 0 };
+    const { data, w, h } = this.core.renderer.readPixels();
+    return { data: Array.from(data), w, h };
+  }
+
+  /** 后备缓冲尺寸（不是 canvas 的显示尺寸——那个被 CSS 缩过）。 */
+  renderSize(): { w: number; h: number } {
+    return this.core ? { w: this.core.kit.w, h: this.core.kit.h } : { w: 0, h: 0 };
+  }
+
+  listIds(): { sources: string[]; effects: string[] } {
+    return {
+      sources: SOURCE_ITEMS.map((i) => i.id),
+      effects: EFFECT_ITEMS.map((i) => i.id).filter((id) => id !== NO_EFFECT_ID),
+    };
+  }
+}
+
+export const labState = new LabState();

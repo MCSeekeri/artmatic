@@ -10,14 +10,13 @@
  */
 
 import { ProjectStore } from '../core/project-store';
-import { newId, type AnyClip } from '../core/schema';
+import { newId, type AnyClip, type AudioClip } from '../core/schema';
 import { createBlankProject } from '../core/demo-project';
-import { Renderer } from '../engine/renderer';
-import { SourceManager } from '../engine/sources';
+import type { Renderer } from '../engine/renderer';
+import type { SourceManager } from '../engine/sources';
 import { AudioPlayer } from '../audio/player';
-import { BakeClient } from '../algos/bake-client';
-import { AlgoRuntime } from '../algos/runtime';
-import { createEffectRunner } from '../effects/runner';
+// 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
+import { createRenderCore } from '../render/render-core';
 import { FontRegistry } from '../typography/font-registry';
 import { TypographyRuntime } from '../typography/runtime';
 import {
@@ -26,6 +25,9 @@ import {
   type TextBackendRegistry,
 } from '../typography/rasterizer';
 import { resolveImageAsset } from '../typography/image-assets';
+import { setMediaAssetsListener } from '../engine/media-assets';
+import type { VideoSourceManager } from '../engine/video-source';
+import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
 import { snapTime, type SnapMode } from '../core/time';
 import type { FsDirHandle } from '../project/fs';
@@ -45,10 +47,37 @@ const UI_KEY = 'artmatic.ui';
 interface UiPrefs {
   drawerOpen: boolean;
   drawerWidth: number;
+  /** 预览帧率分母：1 = 全速、2 = 半速、3 = 三分之一。 */
+  previewFpsDiv: number;
+  /** 预览分辨率缩放：1 / 0.75 / 0.5 / 0.25。 */
+  previewScale: number;
+  /** 暂停时回全质（停住时看到的必须是准的）。 */
+  previewRestoreOnPause: boolean;
+}
+
+/** 预览帧率档位（分母）。 */
+export const PREVIEW_FPS_DIVS = [1, 2, 3] as const;
+/** 预览分辨率档位。 */
+export const PREVIEW_SCALES = [1, 0.75, 0.5, 0.25] as const;
+
+function normalizeDiv(v: unknown): number {
+  const n = Number(v);
+  return (PREVIEW_FPS_DIVS as readonly number[]).includes(n) ? n : 1;
+}
+
+function normalizeScale(v: unknown): number {
+  const n = Number(v);
+  return (PREVIEW_SCALES as readonly number[]).includes(n) ? n : 1;
 }
 
 function loadUiPrefs(): UiPrefs {
-  const fallback: UiPrefs = { drawerOpen: true, drawerWidth: DENSITY.drawerW };
+  const fallback: UiPrefs = {
+    drawerOpen: true,
+    drawerWidth: DENSITY.drawerW,
+    previewFpsDiv: 1,
+    previewScale: 1,
+    previewRestoreOnPause: true,
+  };
   try {
     const raw = localStorage.getItem(UI_KEY);
     if (!raw) return fallback;
@@ -56,6 +85,12 @@ function loadUiPrefs(): UiPrefs {
     return {
       drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : fallback.drawerOpen,
       drawerWidth: clampDrawerWidth(Number(p.drawerWidth) || fallback.drawerWidth),
+      previewFpsDiv: normalizeDiv(p.previewFpsDiv),
+      previewScale: normalizeScale(p.previewScale),
+      previewRestoreOnPause:
+        typeof p.previewRestoreOnPause === 'boolean'
+          ? p.previewRestoreOnPause
+          : fallback.previewRestoreOnPause,
     };
   } catch {
     return fallback;
@@ -156,6 +191,15 @@ class AppState {
   drawerOpen = $state(true);
   // 显式标注 number：DENSITY 是 as const，不标注会推成字面量类型 300。
   drawerWidth = $state<number>(DENSITY.drawerW);
+
+  /* ---- 预览质量（只影响预览；导出永远全帧全质） ----
+   *
+   * 这三项是「怎么看」，所以跟界面偏好走（localStorage），**不进 project.json**：
+   * 它们不该让工程变脏，也不该随工程共享给别的机器。
+   */
+  previewFpsDiv = $state<number>(1);
+  previewScale = $state<number>(1);
+  previewRestoreOnPause = $state(true);
 
   /* ---- 排版编辑器（全局，不跟工程走：这是「怎么看」，不是「看什么」） ---- */
 
@@ -484,6 +528,41 @@ class AppState {
     const prefs = loadUiPrefs();
     this.drawerOpen = prefs.drawerOpen;
     this.drawerWidth = prefs.drawerWidth;
+    this.previewFpsDiv = prefs.previewFpsDiv;
+    this.previewScale = prefs.previewScale;
+    this.previewRestoreOnPause = prefs.previewRestoreOnPause;
+  }
+
+  /**
+   * 实际生效的预览缩放。
+   *
+   * 「暂停时回全质」（默认开）就是在这里生效的：播放中按档位降，一停下来
+   * 立刻用全质重画一次 —— 停住时看到的画面必须是准的，否则调参数是在
+   * 对着一个糊的参考做决定。
+   */
+  get effectivePreviewScale(): number {
+    if (this.previewRestoreOnPause && !this.playing) return 1;
+    return this.previewScale;
+  }
+
+  setPreviewFpsDiv(v: number): void {
+    const next = normalizeDiv(v);
+    if (this.previewFpsDiv === next) return;
+    this.previewFpsDiv = next;
+    this.persistUi();
+  }
+
+  setPreviewScale(v: number): void {
+    const next = normalizeScale(v);
+    if (this.previewScale === next) return;
+    this.previewScale = next;
+    this.persistUi();
+  }
+
+  setPreviewRestoreOnPause(v: boolean): void {
+    if (this.previewRestoreOnPause === v) return;
+    this.previewRestoreOnPause = v;
+    this.persistUi();
   }
 
   setDrawerOpen(open: boolean): void {
@@ -504,7 +583,13 @@ class AppState {
   }
 
   private persistUi(): void {
-    saveUiPrefs({ drawerOpen: this.drawerOpen, drawerWidth: this.drawerWidth });
+    saveUiPrefs({
+      drawerOpen: this.drawerOpen,
+      drawerWidth: this.drawerWidth,
+      previewFpsDiv: this.previewFpsDiv,
+      previewScale: this.previewScale,
+      previewRestoreOnPause: this.previewRestoreOnPause,
+    });
   }
 
   /* ---------------------------------------------------- 工程面板的全局状态 */
@@ -519,6 +604,8 @@ class AppState {
      它们渲染「当前工程」，不持有任何工程数据。 */
   renderer!: Renderer;
   sources!: SourceManager;
+  /** 视频取帧器（`engine/video-source.ts`）。导出前逐帧 prepare、关工程时 forget。 */
+  video!: VideoSourceManager;
   player!: AudioPlayer;
   fonts!: FontRegistry;
   textBackends!: TextBackendRegistry;
@@ -539,23 +626,15 @@ class AppState {
    */
   attachPreview(canvas: HTMLCanvasElement, host: Element): void {
     if (!this.servicesReady) {
-      this.renderer = new Renderer(canvas, () => null, () => {});
-      this.sources = new SourceManager(this.renderer.kit);
-      const bake = new BakeClient(this.renderer.kit, () => this.store.touch());
-      const algos = new AlgoRuntime(this.renderer.kit, bake);
-      this.sources.setAlgoResolver((clip, t, frame) =>
-        algos.resolve(
-          clip,
-          t,
-          frame,
-          this.store.project.beatGrid,
-          this.store.project.seed,
-          this.renderer.kit.w,
-          this.renderer.kit.h,
-        ),
-      );
-      this.renderer.setResolver(this.sources.resolve);
-      this.renderer.setEffectRunner(createEffectRunner(this.renderer.kit, () => this.store.project.seed));
+      // 源解析 / 算法运行时 / 特效执行器的装配在 render-core —— 与 lab 试炼场
+      // 共用同一份真源。这里只做「主应用特有的追加装配」（排版、字体、音频）。
+      const core = createRenderCore(canvas, {
+        getProject: () => this.store.project,
+        onAlgoReady: () => this.store.touch(),
+      });
+      this.renderer = core.renderer;
+      this.sources = core.sources;
+      this.video = core.video;
 
       // 排版层与 algo 烘焙同构：异步光栅化 → 结果就绪时 touch() → 下一帧重绘。
       // 光栅化本身必须在主线程做（要走 DOM 与 document.fonts），
@@ -572,12 +651,24 @@ class AppState {
       this.sources.setTextResolver(this.textRaster.resolve);
       // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。
       this.textRaster.resolveImage = resolveImageAsset;
-      this.renderer.setPrewarm((p, t) => this.textRaster.prewarmFrame(p, t));
+
+      /*
+       * 导出预热是**两个来源共用同一个槽位**（`Renderer.setPrewarm` 只有一个）。
+       * 两者都是「异步就绪」的：排版等光栅化缓存，视频等解码到精确帧。
+       * 必须都 await —— 排版缺席只是少几个字，视频缺席就是一帧错画面。
+       */
+      this.renderer.setPrewarm(async (p, t) => {
+        await this.textRaster.prewarmFrame(p, t);
+        await this.video.prepareProject(p, t, this.renderer.kit.w);
+      });
       this.renderer.setFontPrewarm((p) => this.textRaster.prewarmFonts(p));
       this.renderer.setExportLifecycle(
         () => this.textRaster.enterExportMode(),
         () => this.textRaster.exitExportMode(),
       );
+
+      // 素材登记处就绪/变化 → 下一帧重绘（视频新帧解出来就靠这条推画面）。
+      setMediaAssetsListener(() => this.store.touch());
 
       this.player = new AudioPlayer();
       this.servicesReady = true;
@@ -600,6 +691,80 @@ class AppState {
       this.notice = null;
       this.noticeTimer = null;
     }, 2600);
+  }
+
+  /* ------------------------------------------------------------ 拍网格估计 */
+
+  /** 估计进行中（按钮据此禁用并显示「估计中…」）。 */
+  beatBusy = $state(false);
+
+  /**
+   * 从工程里的音频估计 BPM / offset 并写进拍网格（ADR-002）。
+   *
+   * 取**最早开始的那段音频**当节拍参考：工程里通常只有一首曲子，
+   * 而「最早开始」比「第一条音频轨的第一段」更符合直觉（片段可以挪）。
+   *
+   * 估计不出来时**什么都不写**并说明原因 —— 拍网格是卡点的基准，
+   * 塞一个看起来像模像样的错值比留空更坏。
+   */
+  async estimateBeatGrid(opts: { announce?: boolean } = {}): Promise<boolean> {
+    const announce = opts.announce ?? true;
+    if (this.beatBusy) return false;
+
+    let best: { clip: AudioClip; buffer: AudioBuffer } | null = null;
+    for (const track of this.store.project.tracks) {
+      if (track.kind !== 'audio') continue;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'audio') continue;
+        const buffer = this.player.buffer(clip.assetId);
+        if (!buffer) continue;
+        if (!best || clip.start < best.clip.start) best = { clip, buffer };
+      }
+    }
+    if (!best) {
+      if (announce) this.flash(tr('tp.estimateNoAudio'), 'error');
+      return false;
+    }
+
+    this.beatBusy = true;
+    try {
+      const r = await estimateTempo(best.buffer);
+      if (!r || r.silent || !(r.confidence > 0)) {
+        if (announce) this.flash(tr('tp.estimateSilent'), 'error');
+        return false;
+      }
+      const bpm = Math.max(20, Math.min(300, Math.round(r.bpm * 100) / 100));
+      if (!Number.isFinite(bpm) || bpm <= 0) {
+        if (announce) this.flash(tr('tp.estimateFailed'), 'error');
+        return false;
+      }
+      // offset 是「第 0 拍的秒数」：估计给的是相对音频起点的相位，
+      // 而片段可能被挪过（srcIn 也是偏移），所以要加上片段自己的时间基准。
+      const offset = r.offset + best.clip.start - best.clip.srcIn;
+      this.store.setBeatGrid({ bpm, offset: Math.round(offset * 10000) / 10000 });
+      if (announce) {
+        this.flash(tr('tp.estimateOk', { bpm, offset: offset.toFixed(3) }), 'success');
+      }
+      return true;
+    } catch (e) {
+      if (announce) this.flash(tr('tp.estimateFailed'), 'error');
+      console.error('[tempo] 估计失败：', e);
+      return false;
+    } finally {
+      this.beatBusy = false;
+    }
+  }
+
+  /**
+   * 导入音频之后**只在拍网格还是默认值**时自动估一次。
+   *
+   * 判据是「bpm 还是 120 且 offset 还是 0」—— 那说明用户没有动过拍网格。
+   * 动过就绝不覆盖：他手调过的卡点比他刚导入的一首歌的自动估计更值钱。
+   */
+  async autoEstimateIfDefault(): Promise<void> {
+    const g = this.store.project.beatGrid;
+    if (g.bpm !== 120 || g.offset !== 0) return;
+    await this.estimateBeatGrid({ announce: true });
   }
 
   seek(t: number, opts: { snap?: boolean } = {}): void {
@@ -650,9 +815,37 @@ class AppState {
     }
 
     if (this.playing) this.advancePlayhead();
+
+    // 预览画质档位推给 renderer（它只在真的变化时才动尺寸）
+    this.renderer.setPreviewScale(this.effectivePreviewScale);
+
+    /*
+     * 帧率档位**只在播放中**节流。
+     *
+     * 暂停时永远渲：那是「改一个参数立刻看到结果」的路径，任何节流都会让
+     * 编辑手感变钝，而预览尺寸下这点开销不值得省。
+     *
+     * 播放中省的才是 GPU（分形/模拟类来源在降分辨率下本来就快，降帧率
+     * 进一步把每秒的工作量按比例砍掉）。**播放头的推进从不节流** ——
+     * playT 来自音频时钟，所以降帧率只影响画面刷新率，不影响时间与声音对齐。
+     *
+     * `performance.now()` 在这里只做**节流**，不参与内容求值：渲染函数收到的
+     * 仍然只有 t（硬约束 1.1 管的是后者，这个节流属于预览传输层）。
+     */
+    if (this.playing) {
+      const effFps = Math.max(1, this.store.project.fps / this.previewFpsDiv);
+      const minGap = 1000 / effFps;
+      const now = performance.now();
+      if (now - this.lastPreviewRender < minGap - 1) return;
+      this.lastPreviewRender = now;
+    }
+
     this.renderer.renderFrame(this.store.project, this.playT);
     this.countFrame();
   }
+
+  /** 上一次预览渲染的墙钟时刻（只用于降帧率节流）。 */
+  private lastPreviewRender = 0;
 
   /** 播放头推进。抽出来给「渲染 WebGL」与「只推进不渲染」两条路共用。 */
   private advancePlayhead(): void {

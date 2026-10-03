@@ -18,7 +18,7 @@ import type { TypographyDocument } from '../typography/document';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -40,7 +40,13 @@ export interface Project {
 
 export interface Asset {
   id: string;
-  kind: 'audio' | 'image';
+  /**
+   * `video` 在 M6 接上（`engine/video-source.ts`）。台账层
+   * （`project/ledger.ts` 的 `AssetEntry.kind`）从 M5a 起就已经有它了，
+   * 这里落后了一格 —— 于是「导入视频 → 存进工程 → 打开时按 kind 分支」
+   * 会在校验处对不上。
+   */
+  kind: 'audio' | 'image' | 'video';
   name: string;
   /** 内容哈希（M5 引用制的预留，MVP 不强制）。 */
   hash?: string;
@@ -101,6 +107,27 @@ export const BLEND_MODES: { id: BlendMode; labelKey: MessageKey }[] = [
 
 export type AlgoSource = { type: 'algo'; generator: string; params: Record<string, number | string> };
 
+/**
+ * 出画转场（gl-transitions 的一条）。
+ *
+ * 窗口以 `clip.end` 为剪切点、前后各 `duration / 2`，两侧的内容由窗口解析
+ * （`core/transitions.ts`）自动取到「同轨紧邻的下一个 SourceClip」，所以这里
+ * **不存 toClipId** —— 存 id 会引入悬空引用与它的一整套清理逻辑，而片段几何
+ * 天然保持相邻（push / trim 都保持）。
+ */
+export interface TransitionRef {
+  /** gl-transitions 条目的 name（如 'CrossZoom'）。渲染侧据此取 GLSL。 */
+  defId: string;
+  /** 秒。窗口总长；实际生效值还会被两侧片段长度与相邻转场钳制。 */
+  duration: number;
+  /**
+   * 扁平化的标量参数，键由 `effects/transitions/params.ts` 派生
+   * （向量会被拆成 `foo#0` / `foo#1`…，于是这里能保持 `Record<string, number>`，
+   * 与 EffectInstance.values 的标量约定一致）。
+   */
+  values: Record<string, number>;
+}
+
 /** 有画面来源，参与合成。被特效影响的就是它。 */
 export interface SourceClip extends ClipBase {
   kind: 'source';
@@ -115,6 +142,8 @@ export interface SourceClip extends ClipBase {
   opacity: number;
   transform: { x: number; y: number; sx: number; sy: number; rot: number };
   fit: 'contain' | 'cover' | 'stretch';
+  /** 出画转场。缺失 = 不设转场。语义与钳制规则见 core/transitions.ts。 */
+  transitionOut?: TransitionRef;
 }
 
 /** 特效实例：参考 openmosh EffectInstance，去掉 mosh/volumeLink。 */
@@ -206,6 +235,16 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
     }
     return { ...p, schemaVersion: 2 };
   },
+
+  /**
+   * v2 → v3：`SourceClip` 新增可选的 `transitionOut`（出画转场）。
+   *
+   * **这是一条恒等迁移**：字段可选，v2 的工程读进来天然合法，没有任何要改写的
+   * 东西。写它的唯一目的是**把版本号抬上去** —— 于是新版存出的工程被旧版打开时
+   * 会走 `versionTooNew` 明确报错，而不是静默忽略 `transitionOut` 再保存
+   * （那会把用户的转场悄悄抹掉，是最难查的一类数据丢失）。
+   */
+  2: (p) => ({ ...p, schemaVersion: 3 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -286,6 +325,19 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
         }
         if (!doc.size || !(doc.size.w > 0) || !(doc.size.h > 0)) {
           throw new SchemaError(tr('err.schema.typographyBadSize', { id: c.id }));
+        }
+      }
+      // 转场同样是「形状不对就穿透到渲染期」的那一类，在这里挡住。
+      const trRef = (c as SourceClip).transitionOut;
+      if (trRef !== undefined) {
+        if (!trRef || typeof trRef !== 'object' || typeof trRef.defId !== 'string' || !trRef.defId) {
+          throw new SchemaError(tr('err.schema.transitionBadDefId', { id: c.id }));
+        }
+        if (typeof trRef.duration !== 'number' || !Number.isFinite(trRef.duration) || trRef.duration <= 0) {
+          throw new SchemaError(tr('err.schema.transitionBadDuration', { id: c.id }));
+        }
+        if (!trRef.values || typeof trRef.values !== 'object') {
+          throw new SchemaError(tr('err.schema.transitionBadValues', { id: c.id }));
         }
       }
     }

@@ -17,6 +17,10 @@
   import Button from './controls/Button.svelte';
   import Checkbox from './controls/Checkbox.svelte';
   import Modal from './controls/Modal.svelte';
+  import RailShell from './RailShell.svelte';
+  import { tip } from './tip';
+  import NumberInput from './controls/NumberInput.svelte';
+  import Select from './controls/Select.svelte';
   import Brand from './Brand.svelte';
   import Icon from './Icon.svelte';
   import { appState } from './app-state.svelte';
@@ -94,12 +98,57 @@
     return appState.project.fps;
   });
 
+  /* ------------------------------------------------ 画幅与帧率的预设 */
+
+  /** 常用画幅。用户点一个就同时把宽高写进工程（`setResolution` 会钳成偶数）。 */
+  const RES_PRESETS = [
+    { id: 'landscape', labelKey: 'app.presetLandscape', w: 1920, h: 1080 },
+    { id: 'hd720', labelKey: 'app.preset720', w: 1280, h: 720 },
+    { id: 'uhd4k', labelKey: 'app.preset4k', w: 3840, h: 2160 },
+    { id: 'vertical', labelKey: 'app.presetVertical', w: 1080, h: 1920 },
+    { id: 'square', labelKey: 'app.presetSquare', w: 1080, h: 1080 },
+  ] as const;
+
+  /** 当前画幅命中了哪个预设；没命中就是「自定义」。 */
+  const resPreset = $derived(
+    RES_PRESETS.find((p) => p.w === res.w && p.h === res.h)?.id ?? 'custom',
+  );
+  const resPresetOptions = $derived([
+    ...RES_PRESETS.map((p) => ({ value: p.id as string, label: tr(p.labelKey) })),
+    { value: 'custom', label: tr('app.custom') },
+  ]);
+
+  function applyResPreset(id: string): void {
+    const p = RES_PRESETS.find((x) => x.id === id);
+    if (p) appState.store.setResolution(p.w, p.h);
+  }
+
+  const FPS_PRESETS = [23.976, 24, 25, 29.97, 30, 50, 60] as const;
+  const fpsPreset = $derived(
+    FPS_PRESETS.some((v) => Math.abs(v - fps) < 1e-6) ? String(fps) : 'custom',
+  );
+  const fpsPresetOptions = $derived([
+    ...FPS_PRESETS.map((v) => ({ value: String(v), label: `${v} fps` })),
+    { value: 'custom', label: tr('app.custom') },
+  ]);
+
+  function applyFpsPreset(v: string): void {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) appState.store.setFps(n);
+  }
+
+  /**
+   * 改过帧率才提示「随机画面会跟着变」。
+   * 默认工程是 30 fps —— 等于 30 时说明用户没动过，不必解释一个没发生的事。
+   */
+  const fpsChanged = $derived(Math.abs(fps - 30) > 1e-9);
+
   let hexDraft = $state('');
 </script>
 
-<aside class="rail" data-testid="rail">
-  <!-- ① 品牌 -->
-  <div class="rail-block">
+<RailShell>
+  {#snippet brand()}
+    <!-- ① 品牌 -->
     <button
       type="button"
       class="logo-btn"
@@ -109,10 +158,10 @@
     >
       <Brand variant="mark" size={20} />
     </button>
-  </div>
+  {/snippet}
 
-  <!-- ② 快捷键 · 工程 · 保存 · 导出 -->
-  <div class="rail-block">
+  {#snippet main()}
+    <!-- ② 快捷键 · 工程 · 保存 · 导出 -->
     <IconButton
       icon="keyboard"
       label={tr('app.shortcuts')}
@@ -142,27 +191,43 @@
       active={exporting}
       onclick={() => (panel = 'export')}
     />
-  </div>
+  {/snippet}
 
-  <div class="rail-spacer"></div>
-
-  <!-- ③ 设置 · 明暗 -->
-  <div class="rail-block">
+  {#snippet bottom()}
+    <!-- ③ 设置 · 试炼场入口 · 明暗 -->
     <IconButton
       icon="settings"
       label={tr('app.settings')}
       testid="rail-settings"
       onclick={() => (panel = 'settings')}
     />
+    <!--
+      试炼场入口用 `<a>` 而不是 Button：它是一次**真的页面跳转**
+      （lab 是独立 Vite 入口，不是 SPA 视图）。锚点才有无障碍语义，
+      中键新开标签页、复制链接也才跟着成立。
+
+      `class="ic-btn"` 是刻意复用全局样式：rail 上所有图标的尺寸/颜色/hover
+      必须一致，而那套规则在 `controls.css` 里已经定义了一份。**不加这个类
+      的话锚点会用浏览器默认的链接蓝**（实测 `rgb(158,158,255)`）——
+      一个又蓝又大的异类，正好破坏了「rail 每个界面都一致」。
+    -->
+    <a
+      class="ic-btn rail-lab-link"
+      href="/lab/"
+      aria-label={tr('app.openLab')}
+      data-testid="rail-lab"
+      use:tip={{ text: tr('app.openLabTip') }}
+    >
+      <Icon name="flask-conical" size={14} />
+    </a>
     <IconButton
       icon={theme.mode === 'light' ? 'moon' : 'sun'}
       label={tr(theme.mode === 'light' ? 'app.toDark' : 'app.toLight')}
       testid="theme-toggle"
-      active={theme.mode === 'dark'}
       onclick={() => theme.toggleMode()}
     />
-  </div>
-</aside>
+  {/snippet}
+</RailShell>
 
 {#if panel === 'about'}
   <Modal title={tr('app.aboutArtmatic')} testid="modal-about" onclose={() => (panel = null)}>
@@ -269,10 +334,79 @@
       </span>
     </div>
 
+    <!--
+      画幅与帧率：**工程**级设置，所以放在「工程」面板而不是主题设置里。
+      这两个值决定导出帧数、逐帧随机种子、排版光栅化尺寸。
+    -->
+    <section class="setting">
+      <h3>{tr('app.canvas')}</h3>
+      <p class="hint">{tr('app.canvasHint')}</p>
+
+      <div class="row">
+        <span class="grow">{tr('app.preset')}</span>
+        <Select
+          value={resPreset}
+          options={resPresetOptions}
+          testid="project-res-preset"
+          optionTestidPrefix="project-res-opt"
+          minWidth={140}
+          onchange={(v) => applyResPreset(v)}
+        />
+      </div>
+
+      <div class="row">
+        <span class="grow">{tr('app.resolution')}</span>
+        <NumberInput
+          value={res.w}
+          min={16}
+          step={2}
+          width={70}
+          ariaLabel={tr('app.resolution')}
+          testid="project-res-w"
+          onchange={(v) => appState.store.setResolution(v, res.h)}
+        />
+        <span class="dim">×</span>
+        <NumberInput
+          value={res.h}
+          min={16}
+          step={2}
+          width={70}
+          ariaLabel={tr('app.resolution')}
+          testid="project-res-h"
+          onchange={(v) => appState.store.setResolution(res.w, v)}
+        />
+      </div>
+
+      <div class="row">
+        <span class="grow">{tr('app.frameRate')}</span>
+        <Select
+          value={fpsPreset}
+          options={fpsPresetOptions}
+          testid="project-fps-preset"
+          optionTestidPrefix="project-fps-opt"
+          minWidth={140}
+          onchange={(v) => applyFpsPreset(v)}
+        />
+        <NumberInput
+          value={fps}
+          min={1}
+          max={240}
+          step={0.001}
+          width={70}
+          ariaLabel={tr('app.frameRate')}
+          testid="project-fps"
+          onchange={(v) => appState.store.setFps(v)}
+        />
+      </div>
+
+      {#if fpsChanged}
+        <p class="hint warn">{tr('app.fpsChangeHint')}</p>
+      {/if}
+    </section>
+
     {#if appState.projectIssues.length}
       <section class="setting">
-        <h3>{tr('app.assetAudit')}</h3>
-        {#each appState.projectIssues as issue (issue.kind + ':' + issue.assetId + ':' + issue.path)}
+        <h3>{tr('app.assetAudit')}</h3>        {#each appState.projectIssues as issue (issue.kind + ':' + issue.assetId + ':' + issue.path)}
           <div class="issue" class:err={issue.severity === 'error'}>
             <Icon name={issue.severity === 'error' ? 'triangle-alert' : 'info'} size={13} />
             <span>{issue.message}</span>
@@ -438,26 +572,16 @@
 {/if}
 
 <style>
-  .rail {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--sp-2);
-    width: var(--rail-w);
-    flex-shrink: 0;
-    padding: var(--sp-3) 0;
-    background: var(--rail-bg);
-    border-right: 1px solid var(--rail-border);
-    overflow: hidden;
-  }
-  .rail-block {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--sp-2);
-  }
-  .rail-spacer {
-    flex: 1;
+  /* `.rail / .rail-block / .rail-spacer` 已上移到 RailShell.svelte ——
+     它们在主应用与 lab 之间必须完全一致，留两份就是两个真源。 */
+
+  /*
+   * 试炼场入口复用全局 `.ic-btn`（尺寸/颜色/hover 全跟其它 rail 图标一致），
+   * 这里只清掉锚点自带的浏览器默认样式 —— 下划线和链接色都是浏览器的，
+   * 不是我们的设计。不加这一段，图标会是默认链接蓝，在一排灰色图标里非常扎眼。
+   */
+  a.rail-lab-link {
+    text-decoration: none;
   }
   .logo-btn {
     display: inline-flex;

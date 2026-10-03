@@ -1,0 +1,607 @@
+import { expect, test, type Page } from '@playwright/test';
+import { buildStage, meanAt, renderTwiceDiff, setTrackEnabled, settle } from './_stage';
+
+/**
+ * M6 收尾这批功能的 E2E：视频素材、image 片段、工程设置、预览降质、rail 一致性。
+ *
+ * 视频素材**现场编**（`__artmatic.makeTestVideo`）：不往仓库塞二进制，而且这条
+ * 路顺带证明了「导出的 MP4 能被自己的解码链路读回来」。
+ *
+ * 素材内容刻意做成**上下两半不同色、颜色还随时间变**：
+ *
+ * | 时间 | 上半 | 下半 |
+ * |---|---|---|
+ * | `[0,1)` | 红 | 蓝 |
+ * | `[1,2)` | 绿 | 蓝 |
+ *
+ * 于是同一份素材能同时验两件容易互相掩盖的事：**取帧跟着 t 走**（红→绿；
+ * 纯色视频就算解码器卡在第一帧也照样"通过"）与**上下方向正确**（上下颠倒
+ * 会立刻被抓到）。image 那条用同一套「上红下蓝」判据。
+ */
+
+async function boot(page: Page): Promise<void> {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+}
+
+/** 清空舞台并建一条空的视觉轨，返回 trackId。 */
+async function cleanStage(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          addTrack: (kind: 'visual', name?: string) => string;
+          commit: (label: string, fn: (p: { tracks: { id: string; enabled: boolean }[] }) => void) => void;
+        };
+      };
+    }).__artmatic;
+    A.store.commit('e2e: 清空舞台', (p) => {
+      for (const t of p.tracks) t.enabled = false;
+    });
+    const track = A.store.addTrack('visual', 'E2E');
+    A.store.commit('e2e: 只启用新轨', (p) => {
+      for (const t of p.tracks) t.enabled = t.id === track;
+    });
+    return track;
+  });
+}
+
+/** 等启用轨上出现片段。 */
+async function waitForClip(page: Page, timeout = 60_000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const A = (window as never as {
+        __artmatic: { store: { project: { tracks: { clips: unknown[]; enabled: boolean }[] } } };
+      }).__artmatic;
+      return A.store.project.tracks.some((t) => t.enabled && t.clips.length > 0);
+    },
+    undefined,
+    { timeout },
+  );
+}
+
+type Rgb = [number, number, number];
+
+/** 整帧 + 上下半的三通道均值。`readPixels` 原点在左下 → rows[0..h/2) 是画面**下**半。 */
+async function halvesAt(page: Page, t: number): Promise<{ all: Rgb; bottom: Rgb; top: Rgb }> {
+  return page.evaluate((tt) => {
+    const A = (window as never as {
+      __artmatic: {
+        renderer: { onSeek: () => void };
+        renderFrame: (t: number) => void;
+        readPixels: () => { data: number[]; w: number; h: number };
+      };
+    }).__artmatic;
+    A.renderer.onSeek();
+    A.renderFrame(tt);
+    const { data, w, h } = A.readPixels();
+    const region = (y0: number, y1: number): [number, number, number] => {
+      const s = [0, 0, 0];
+      let n = 0;
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = 0; x < w; x += 1) {
+          const i = (y * w + x) * 4;
+          s[0]! += data[i]!;
+          s[1]! += data[i + 1]!;
+          s[2]! += data[i + 2]!;
+          n += 1;
+        }
+      }
+      return [s[0]! / n, s[1]! / n, s[2]! / n] as [number, number, number];
+    };
+    const mid = Math.floor(h / 2);
+    return { all: region(0, h), bottom: region(0, mid), top: region(mid, h) };
+  }, t);
+}
+
+/**
+ * 等到 t 处的帧**真的解出来**为止。
+ *
+ * 视频是异步就绪的：缺帧时预览会拿「最近的已解码帧」顶上（视频播放器的
+ * 常规做法，见 engine/video-source.ts）。所以只渲一次就断言会读到上一帧 ——
+ * 那不是 bug，是设计，测试必须等。
+ *
+ * 判据数据化（`want` 是 'topRed' / 'topGreen'），不在 page 里 eval 字符串。
+ */
+async function waitFrameAt(page: Page, t: number, want: 'topRed' | 'topGreen'): Promise<boolean> {
+  return page
+    .waitForFunction(
+      ({ t, want }) => {
+        const A = (window as never as {
+          __artmatic: {
+            renderer: { onSeek: () => void };
+            renderFrame: (t: number) => void;
+            readPixels: () => { data: number[]; w: number; h: number };
+          };
+        }).__artmatic;
+        A.renderer.onSeek();
+        A.renderFrame(t);
+        const { data, w, h } = A.readPixels();
+        const mid = Math.floor(h / 2);
+        let tr = 0;
+        let tg = 0;
+        let tb = 0;
+        let br = 0;
+        let bb = 0;
+        let n = 0;
+        for (let y = 0; y < h; y += 1) {
+          for (let x = 0; x < w; x += 1) {
+            const i = (y * w + x) * 4;
+            if (y < mid) {
+              br += data[i]!;
+              bb += data[i + 2]!;
+            } else {
+              tr += data[i]!;
+              tg += data[i + 1]!;
+              tb += data[i + 2]!;
+            }
+            n += 1;
+          }
+        }
+        const half = n / 2;
+        const bottomBlue = bb / half > br / half + 40;
+        const topOk = want === 'topRed' ? tr / half > tb / half + 40 : tg / half > tr / half + 40;
+        return bottomBlue && topOk;
+      },
+      { t, want },
+      { timeout: 20_000, polling: 250 },
+    )
+    .then(() => true)
+    .catch(() => false);
+}
+
+test('视频素材：导入 → 解码 → 取帧跟着 t 走 + 方向正确', async ({ page }) => {
+  const errors: string[] = [];
+  await boot(page);
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await cleanStage(page);
+
+  // 1) 现场编一段测试视频
+  const bytes = await page.evaluate(async () => {
+    const A = (window as never as { __artmatic: { makeTestVideo: () => Promise<number[]> } }).__artmatic;
+    return A.makeTestVideo();
+  });
+  expect(bytes.length).toBeGreaterThan(1000);
+
+  // 2) 走**真实的导入路径**：文件选择器 → 轨道菜单「导入视频」
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser', { timeout: 15_000 }),
+    (async () => {
+      await page.locator('[data-testid=track-menu]').last().click();
+      await page.getByTestId('import-video').click();
+    })(),
+  ]);
+  await chooser.setFiles({
+    name: 'e2e-test.mp4',
+    mimeType: 'video/mp4',
+    buffer: Buffer.from(bytes),
+  });
+
+  await waitForClip(page);
+  const clip = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          project: {
+            tracks: {
+              clips: { id: string; start: number; end: number; source?: { type: string } }[];
+              enabled: boolean;
+            }[];
+            assets: Record<string, { kind: string; durationSec?: number; size?: { w: number; h: number } }>;
+          };
+        };
+      };
+    }).__artmatic;
+    const c = A.store.project.tracks.flatMap((t) => (t.enabled ? t.clips : []))[0]!;
+    const asset = Object.values(A.store.project.assets).find((a) => a.kind === 'video');
+    return { start: c.start, end: c.end, src: c.source, asset };
+  });
+
+  expect(clip.src?.type).toBe('video');
+  expect(clip.asset?.durationSec).toBeGreaterThan(1.5);
+  expect(clip.asset?.size).toEqual({ w: 160, h: 90 });
+  // 片段默认长度 = 素材时长
+  expect(clip.end - clip.start).toBeGreaterThan(1.5);
+
+  // 3) 取帧跟着 t 走 + 方向正确（两者共用一个判据，见文件头）
+  expect(await waitFrameAt(page, 0.3, 'topRed'), 't=0.3 应当解出「上红下蓝」').toBe(true);
+  expect(await waitFrameAt(page, 1.7, 'topGreen'), 't=1.7 应当解出「上绿下蓝」').toBe(true);
+
+  const early = await halvesAt(page, 0.3);
+  const late = await halvesAt(page, 1.7);
+  expect(early.top[0], `上半应为红，实测 ${JSON.stringify(early.top)}`).toBeGreaterThan(early.top[2] + 40);
+  expect(early.bottom[2], `下半应为蓝，实测 ${JSON.stringify(early.bottom)}`).toBeGreaterThan(
+    early.bottom[0] + 40,
+  );
+  expect(late.top[1], `t=1.7 上半应为绿，实测 ${JSON.stringify(late.top)}`).toBeGreaterThan(late.top[0] + 40);
+  expect(late.bottom[2], `t=1.7 下半应为蓝，实测 ${JSON.stringify(late.bottom)}`).toBeGreaterThan(
+    late.bottom[0] + 40,
+  );
+
+  // 4) 解码真的发生，缓存有界（不是把整段摊开）
+  const stats = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        videoStats: () => {
+          decodes: number;
+          cachedFrames: number;
+          cachedBytes: number;
+          failures: { reason: string }[];
+        };
+      };
+    }).__artmatic;
+    return A.videoStats();
+  });
+  expect(stats.decodes).toBeGreaterThan(0);
+  expect(stats.failures).toEqual([]);
+  expect(stats.cachedFrames).toBeLessThan(60);
+
+  // 5) 同一 t 渲两次逐像素一致（视频帧命中缓存里的同一张纹理）
+  expect(await renderTwiceDiff(page, 0.6)).toBe(0);
+
+  // 6) 覆盖率断言：关掉视频轨画面必须变（否则上面测的可能根本不是它）
+  await settle(page, 0.3);
+  const withVideo = await meanAt(page, 0.3);
+  const trackId = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { project: { tracks: { id: string; enabled: boolean; clips: unknown[] }[] } } };
+    }).__artmatic;
+    return A.store.project.tracks.find((t) => t.enabled && t.clips.length > 0)?.id ?? '';
+  });
+  await setTrackEnabled(page, trackId, false);
+  const withoutVideo = await meanAt(page, 0.3);
+  expect(Math.abs(withVideo - withoutVideo)).toBeGreaterThan(5);
+  await setTrackEnabled(page, trackId, true);
+
+  // 7) 合成方式（blend）作用在视频上：垫一层纯色在**下面**，
+  //    换混合模式必须改变画面 —— 视频与纯色走的是同一个 blend pass。
+  const blendDiff = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          addTrack: (k: 'visual', n?: string) => string;
+          addClip: (trackId: string, clip: unknown) => void;
+          commit: (
+            l: string,
+            f: (p: {
+              tracks: { id: string; clips: { id: string; blend?: string; source?: unknown }[] }[];
+            }) => void,
+          ) => void;
+        };
+        renderer: { onSeek: () => void };
+        renderFrame: (t: number) => void;
+        readPixels: () => { data: number[] };
+      };
+    }).__artmatic;
+    // 新轨 push 到数组末尾 = z 最低 = 垫在视频下面
+    const host = A.store.addTrack('visual', 'UNDER');
+    A.store.addClip(host, {
+      kind: 'source',
+      id: 'under-solid',
+      start: 0,
+      end: 60,
+      label: 'under',
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'solid', color: '#3366ff' },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'stretch',
+    });
+    const hashAt = (): number => {
+      A.renderer.onSeek();
+      A.renderFrame(0.3);
+      const d = A.readPixels().data;
+      let h = 0;
+      for (let i = 0; i < d.length; i += 887) h = (h * 31 + d[i]!) | 0;
+      return h;
+    };
+    const setBlend = (mode: string): void => {
+      A.store.commit('e2e: 改混合模式', (p) => {
+        for (const t of p.tracks) for (const c of t.clips) if (c.source && c.id !== 'under-solid') c.blend = mode;
+      });
+    };
+    const normal = hashAt();
+    setBlend('difference');
+    const difference = hashAt();
+    setBlend('normal');
+    return { normal, difference };
+  });
+  expect(blendDiff.difference, '换混合模式必须改变画面').not.toBe(blendDiff.normal);
+
+  expect(errors).toEqual([]);
+});
+
+test('image 片段不再是空白（导入图片与排版「转为图片」共用同一条上传路径）', async ({ page }) => {
+  await boot(page);
+  await cleanStage(page);
+
+  // 造一张「上红下蓝」的 PNG，走与真实导入相同的注册 → 上传路径
+  const ok = await page.evaluate(async () => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          commit: (label: string, fn: (p: { assets: Record<string, unknown> }) => void) => void;
+          addClip: (trackId: string, clip: unknown) => void;
+          project: { tracks: { id: string; enabled: boolean }[] };
+        };
+        registerImageAsset: (assetId: string, blob: Blob) => Promise<void>;
+        assets: { put: (id: string, bytes: Uint8Array, input: unknown) => void };
+      };
+    }).__artmatic;
+
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, 64, 32);
+    ctx.fillStyle = '#0000ff';
+    ctx.fillRect(0, 32, 64, 32);
+    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png'));
+    if (!blob) return false;
+
+    const assetId = 'e2e-image';
+    A.assets.put(assetId, new Uint8Array(await blob.arrayBuffer()), {
+      kind: 'image',
+      name: 'e2e.png',
+      originName: 'e2e.png',
+    });
+    A.store.commit('e2e: 记素材', (p) => {
+      p.assets[assetId] = { id: assetId, kind: 'image', name: 'e2e.png' };
+    });
+    await A.registerImageAsset(assetId, blob);
+
+    const track = A.store.project.tracks.find((t) => t.enabled)!;
+    A.store.addClip(track.id, {
+      kind: 'source',
+      id: 'e2e-image-clip',
+      start: 0,
+      end: 4,
+      label: 'img',
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'image', assetId },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'stretch',
+    });
+    return true;
+  });
+  expect(ok).toBe(true);
+
+  await settle(page, 1);
+  const h = await halvesAt(page, 1);
+  // 先证明它**不是空白**（修复前这一条就会挂：setImage 零调用方）
+  expect(h.all[0], `整帧应当既有红又有蓝，实测 ${JSON.stringify(h.all)}`).toBeGreaterThan(40);
+  expect(h.all[2]).toBeGreaterThan(40);
+  // 再验方向：上红下蓝
+  const where = JSON.stringify(h);
+  expect(h.top[0], `画面上半应当是红的，实测 ${where}`).toBeGreaterThan(h.top[2] + 40);
+  expect(h.bottom[2], `画面下半应当是蓝的，实测 ${where}`).toBeGreaterThan(h.bottom[0] + 40);
+});
+
+test('工程设置：分辨率与帧率可改，且立刻生效', async ({ page }) => {
+  await boot(page);
+  await page.getByTestId('rail-project').click();
+  await expect(page.getByTestId('modal-project')).toBeVisible();
+
+  // 分辨率：从预设选 720p
+  await page.getByTestId('project-res-preset').click();
+  await page.getByTestId('project-res-opt-hd720').click();
+  const res = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { project: { resolution: { w: number; h: number } } } };
+    }).__artmatic;
+    return A.store.project.resolution;
+  });
+  expect(res).toEqual({ w: 1280, h: 720 });
+
+  // 帧率：预设 60
+  await page.getByTestId('project-fps-preset').click();
+  await page.getByTestId('project-fps-opt-60').click();
+  const fps = await page.evaluate(() => {
+    const A = (window as never as { __artmatic: { store: { project: { fps: number } } } }).__artmatic;
+    return A.store.project.fps;
+  });
+  expect(fps).toBe(60);
+
+  // 改过帧率 → 出现「逐帧随机种子会变」的说明
+  await expect(page.getByText('改帧率会改变逐帧随机种子', { exact: false })).toBeVisible();
+
+  // 自定义分辨率：写进工程的值必须是**偶数**（H.264 的 4:2:0 要求宽高为偶数）。
+  // 输入框 step=2，所以键入 1001 可能被吸附到 1000 或 1002 —— 两者都对，
+  // 这里断言的是不变量（偶数 + 接近键入值），不是某一个具体吸附结果。
+  await page.getByTestId('project-res-w').fill('1001');
+  await page.getByTestId('project-res-w').press('Enter');
+  const w = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { project: { resolution: { w: number } } } };
+    }).__artmatic;
+    return A.store.project.resolution.w;
+  });
+  expect(w % 2, `写进工程的宽度必须是偶数，实测 ${w}`).toBe(0);
+  expect(Math.abs(w - 1001)).toBeLessThanOrEqual(2);
+});
+
+test('预览降质：档位生效但不影响导出尺寸，且画面显示尺寸不变', async ({ page }) => {
+  await boot(page);
+  await buildStage(page, { id: 'pv', source: { type: 'solid', color: '#336699' } });
+
+  const sizeOf = (): Promise<{ w: number; h: number }> =>
+    page.evaluate(() => {
+      const A = (window as never as { __artmatic: { renderer: { kit: { w: number; h: number } } } }).__artmatic;
+      return { w: A.renderer.kit.w, h: A.renderer.kit.h };
+    });
+  /** canvas 的**显示**尺寸（CSS 盒）—— 降质不该动它。 */
+  const boxOf = (): Promise<{ w: number; h: number }> =>
+    page.evaluate(() => {
+      const el = document.getElementById('gl')!;
+      const r = el.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    });
+
+  const full = await sizeOf();
+  const fullBox = await boxOf();
+
+  // 默认「暂停回全质」开着：暂停时选 25% 也不该变小（缓冲与显示都不变）
+  await page.getByTestId('preview-scale').click();
+  await page.getByTestId('preview-scale-opt-0.25').click();
+  expect((await sizeOf()).w).toBe(full.w);
+
+  // 关掉它 → 缓冲降到 1/4，但**显示尺寸必须不变**（放大到 100%、有点糊）
+  await page.getByTestId('preview-restore-on-pause').click();
+  await expect.poll(async () => (await sizeOf()).w, { timeout: 5000 }).toBeLessThan(full.w);
+  const degraded = await sizeOf();
+  expect(Math.abs(degraded.w - Math.round(full.w * 0.25))).toBeLessThanOrEqual(2);
+  const degradedBox = await boxOf();
+  expect(
+    Math.abs(degradedBox.w - fullBox.w),
+    `降质后显示宽度应保持不变：降质前 ${fullBox.w}，降质后 ${degradedBox.w}`,
+  ).toBeLessThanOrEqual(1);
+  expect(Math.abs(degradedBox.h - fullBox.h)).toBeLessThanOrEqual(1);
+
+  // 帧率档位有且只有三档（全速 / 1-2 / 1-3）
+  await page.getByTestId('preview-fps').click();
+  expect(await page.locator('[data-testid^=preview-fps-opt-]').count()).toBe(3);
+  await page.keyboard.press('Escape');
+
+  // 导出走 setExportSize，与预览档位无关
+  const exportSize = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        renderer: {
+          setExportSize: (w: number, h: number) => void;
+          clearExportSize: () => void;
+          kit: { w: number; h: number };
+        };
+      };
+    }).__artmatic;
+    A.renderer.setExportSize(640, 360);
+    const s = { w: A.renderer.kit.w, h: A.renderer.kit.h };
+    A.renderer.clearExportSize();
+    return s;
+  });
+  expect(exportSize).toEqual({ w: 640, h: 360 });
+});
+
+test('预览工具栏的下拉贴着它自己的触发器，不会偏到一边', async ({ page }) => {
+  await boot(page);
+  await buildStage(page, { id: 'pv2', source: { type: 'solid', color: '#336699' } });
+
+  /*
+   * 这条钉的是一个很容易复发的坑：`Select` 的弹层是 `position: fixed` +
+   * `getBoundingClientRect()` 算出来的**视口**坐标。只要工具栏（或它的任何
+   * 祖先）带了 `transform` / `filter` / `backdrop-filter`，它就成了 fixed
+   * 后代的**包含块**，那些视口坐标会被当成「相对工具栏」解释 ——
+   * 表现是弹层整体偏到右边、和触发器错开一整个工具栏的宽度。
+   */
+  for (const id of ['preview-fps', 'preview-scale']) {
+    const trigger = (await page.getByTestId(id).boundingBox())!;
+    await page.getByTestId(id).click();
+    const pop = (await page.getByTestId(`${id}-pop`).boundingBox())!;
+    expect(
+      Math.abs(pop.x - trigger.x),
+      `${id} 的弹层左边缘应与触发器对齐（触发器 ${trigger.x}，弹层 ${pop.x}）`,
+    ).toBeLessThanOrEqual(2);
+    expect(pop.y, `${id} 的弹层应在触发器下方`).toBeGreaterThanOrEqual(trigger.y + trigger.height - 1);
+    await page.keyboard.press('Escape');
+  }
+});
+
+test('rail 的图标颜色一致：主题切换与 /lab 入口都不抢色', async ({ page }) => {
+  await boot(page);
+
+  // 切到暗色 —— 主题图标那个 bug 只在暗色下看得出来（亮色下 active 没被置上）
+  const mode = await page.evaluate(
+    () => (window as never as { __artmatic: { theme: { mode: string } } }).__artmatic.theme.mode,
+  );
+  if (mode !== 'dark') await page.getByTestId('theme-toggle').click();
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () => (window as never as { __artmatic: { theme: { mode: string } } }).__artmatic.theme.mode,
+        ),
+      { timeout: 5000 },
+    )
+    .toBe('dark');
+
+  // 指针移开：.ic-btn:hover 会变成 text-primary（近白），
+  // 不挪走量到的就是 hover 色而不是静止态
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(120);
+
+  const probe = await page.evaluate(() => {
+    const ids = [
+      'rail-shortcuts',
+      'rail-project',
+      'rail-save',
+      'rail-export',
+      'rail-settings',
+      'rail-lab',
+      'theme-toggle',
+    ];
+    const out: Record<string, string | null> = {};
+    for (const id of ids) {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      out[id] = el ? getComputedStyle(el).color : null;
+    }
+    const toggle = document.querySelector('[data-testid="theme-toggle"]');
+    out.__pressed = toggle?.getAttribute('aria-pressed') ?? null;
+    return out;
+  });
+
+  /*
+   * 这一条同时钉两件事，都是**实测踩过**的：
+   *   1. 主题切换曾经带 `active`，于是 `.ic-btn[aria-pressed=true]` 把它染成
+   *      主题色 —— 在一排灰色图标里只有它是紫的；
+   *   2. /lab 入口是 `<a>`，不给它复用 `.ic-btn` 的话会用**浏览器默认的链接蓝**
+   *      （实测 rgb(158,158,255)），又蓝又大。
+   *
+   * 判据是「所有 rail 图标同一个颜色」，而不是「等于某个具体值」——
+   * 后者会在换主题/改 token 时假失败。
+   */
+  expect(probe.__pressed, '主题切换不该带激活态').not.toBe('true');
+  const colors = Object.entries(probe)
+    .filter(([k]) => !k.startsWith('__'))
+    .map(([, v]) => v);
+  expect(new Set(colors).size, `rail 图标颜色应当只有一个，实测 ${JSON.stringify(probe)}`).toBe(1);
+});
+
+test('rail 在每个界面都一致：主应用有 /lab 入口，lab 里也有同一套 rail', async ({ page }) => {
+  await boot(page);
+
+  const rail = page.getByTestId('rail');
+  await expect(rail).toBeVisible();
+  const appBox = (await rail.boundingBox())!;
+
+  // 入口存在且指向 /lab/
+  const lab = page.getByTestId('rail-lab');
+  await expect(lab).toBeVisible();
+  expect(await lab.getAttribute('href')).toBe('/lab/');
+
+  // 点进去 → lab 页面
+  await lab.click();
+  await page.waitForURL('**/lab/');
+  await page.waitForFunction(() => (window as never as { __lab?: unknown }).__lab);
+
+  // lab 侧栏：与主应用同一套骨架（同一个组件、同样的宽度）
+  const labRail = page.getByTestId('lab-rail');
+  await expect(labRail).toBeVisible();
+  const labBox = (await labRail.boundingBox())!;
+  expect(Math.abs(labBox.width - appBox.width)).toBeLessThanOrEqual(1);
+
+  // lab 仍然**不引主应用**：没有 __artmatic
+  const hasApp = await page.evaluate(
+    () => typeof (window as never as { __artmatic?: unknown }).__artmatic !== 'undefined',
+  );
+  expect(hasApp, 'lab 里不该有 __artmatic（它不能引主应用的图）').toBe(false);
+
+  // lab 的 rail 上有它自己的动作与返回入口
+  await expect(page.getByTestId('lab-home')).toBeVisible();
+  await expect(page.getByTestId('lab-rail-compile')).toBeVisible();
+});

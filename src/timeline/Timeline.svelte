@@ -16,6 +16,9 @@
     type Track,
   } from '../core/schema';
   import { beatDur, snapTime } from '../core/time';
+  import { resolveTransition } from '../core/transitions';
+  import { probeVideo } from '../engine/video-source';
+  import { registerVideoMedia } from '../engine/media-assets';
   import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
   import { createTextElement, createTypographyDocument } from '../typography/document';
   import { canvasPalette } from '../ui/tokens';
@@ -72,6 +75,42 @@
     return appState.store.project.duration;
   });
   const totalWidth = $derived(Math.ceil(xOfTime(duration, appState.pxPerBeat, grid)) + 2);
+
+  /**
+   * 每条视觉轨上**能生效**的出画转场窗口（按 trackId 分组）。
+   *
+   * 只在时间轴上画出来是不够的：「窗口以剪切点为中心、两侧各让 d/2」这件事
+   * 必须让人**看见**，否则「转场为什么吃掉了隔壁半秒」永远是个谜。
+   * 窗口由 `core/transitions.ts` 算（与渲染同一份钳制），这里只做像素换算。
+   */
+  const transitionMarks = $derived.by(() => {
+    void appState.version;
+    const map = new Map<string, { id: string; clipId: string; left: number; width: number; title: string }[]>();
+    const px = appState.pxPerBeat;
+    const g = appState.store.project.beatGrid;
+    for (const track of appState.store.project.tracks) {
+      if (track.kind !== 'visual') continue;
+      const marks: { id: string; clipId: string; left: number; width: number; title: string }[] = [];
+      for (let i = 0; i < track.clips.length; i += 1) {
+        const clip = track.clips[i]!;
+        if (clip.kind !== 'source' || !clip.transitionOut) continue;
+        const r = resolveTransition(track, i);
+        if (!r) continue;
+        const start = r.from.end - r.duration / 2;
+        const end = r.from.end + r.duration / 2;
+        marks.push({
+          id: clip.id,
+          clipId: clip.id,
+          left: xOfTime(start, px, g),
+          width: Math.max(6, xOfTime(end, px, g) - xOfTime(start, px, g)),
+          title: `${clip.transitionOut.defId} · ${r.duration.toFixed(2)}s`,
+        });
+      }
+      if (marks.length) map.set(track.id, marks);
+    }
+    return map;
+  });
+
   /** 实际绘制宽度：工程内容与滚动视口取大者。 */
   const drawWidth = $derived(Math.max(totalWidth, scrollW));
   const playheadX = $derived(xOfTime(appState.playT, appState.pxPerBeat, grid));
@@ -395,6 +434,69 @@
     };
     appState.store.addClip(trackId, clip);
     appState.selectedClipId = clip.id;
+    // 拍网格还是默认值（120/0）时顺手估一次 —— 用户没动过它，就是在等这个。
+    // 动过就绝不覆盖：手调过的卡点比自动估计更值钱。
+    await appState.autoEstimateIfDefault();
+  }
+
+  /**
+   * 导入本地视频。
+   *
+   * 与 `addAudio` 的两处关键差别：
+   *  1. **先把 `File` 句柄交给渲染层**（`registerVideoMedia`），解码从磁盘流式读；
+   *     素材字节另存一份进仓只是为了保存工程 —— 视频编码器不需要它。
+   *  2. 片段默认 `fit: 'cover'`：空镜头是底图，铺满画幅才符合预期
+   *     （`contain` 会留黑边，那是素材与工程画幅不一致时的意外，不是意图）。
+   */
+  async function addVideo(trackId: string, at?: number): Promise<void> {
+    closeMenus();
+    const picked = await browserPlatform.pickVideoFile();
+    if (!picked) return;
+
+    const meta = await probeVideo(picked.file);
+    if (!meta) {
+      appState.flash(tr('err.video.unreadable', { name: picked.name }), 'error');
+      return;
+    }
+
+    const assetId = newId();
+    // 渲染层先拿到**磁盘句柄**：解码全程走它，不需要素材字节在场。
+    registerVideoMedia(assetId, picked.file);
+
+    // 存一份字节进仓（保存工程用）。这一步是几 GB 素材唯一的内存峰值 ——
+    // 见 AGENTS 里「视频素材打开/保存的流式化」那条未决问题。
+    appState.assets.put(assetId, new Uint8Array(await picked.file.arrayBuffer()), {
+      kind: 'video',
+      name: picked.name,
+      originName: picked.name,
+    });
+    appState.store.commit(tr('tl.importVideo'), (p) => {
+      p.assets[assetId] = {
+        id: assetId,
+        kind: 'video',
+        name: picked.name,
+        durationSec: meta.duration,
+        size: { w: meta.width, h: meta.height },
+      };
+    });
+
+    const start = startFor(at);
+    const clip: SourceClip = {
+      kind: 'source',
+      id: newId(),
+      start,
+      end: start + Math.max(0.1, meta.duration),
+      label: picked.name,
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'video', assetId, srcIn: 0, speed: 1 },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'cover',
+    };
+    appState.store.addClip(trackId, clip);
+    appState.selectedClipId = clip.id;
   }
 
   /* ------------------------------------------------------------ 轨道操作 */
@@ -478,6 +580,13 @@
         icon: 'flask-conical',
         testid: `${prefix}effect`,
         onselect: () => addEffect(track.id, at),
+      },
+      {
+        id: `${prefix}video`,
+        label: tr('tl.importVideoMenu'),
+        icon: 'video',
+        testid: prefix === 'ctx-' ? `${prefix}video` : 'import-video',
+        onselect: () => void addVideo(track.id, at),
       },
       submenu(`${prefix}algo`, tr('tl.addAlgo'), generatorItems(at, prefix), 'sigma'),
     ];
@@ -701,6 +810,24 @@
             {#each track.clips as clip (clip.id)}
               <ClipView {track} {clip} />
             {/each}
+            {#each transitionMarks.get(track.id) ?? [] as m (m.id)}
+              <!--
+                转场窗口涂层：跨在剪切点上，两侧各 d/2。
+                点它选中出画片段（转场挂在它身上）。
+              -->
+              <div
+                class="tl-transition"
+                style:left={`${m.left}px`}
+                style:width={`${m.width}px`}
+                title={m.title}
+                data-testid="transition-marker"
+                role="presentation"
+                onpointerdown={(e) => {
+                  e.stopPropagation();
+                  appState.selectedClipId = m.clipId;
+                }}
+              ></div>
+            {/each}
           </div>
         {/each}
         <div class="playhead" style:left={`${playheadX}px`}></div>
@@ -857,5 +984,28 @@
     border-left: 1.5px solid var(--accent);
     pointer-events: none;
     z-index: var(--z-playhead);
+  }
+
+  /*
+   * 转场窗口涂层：斜纹是「这里两段画面在同时存在」的通用视觉语言。
+   * 用 currentColor 之外的 token（--warning）是因为它表达的是**操作语义**
+   * （这块区域的行为被改写了），不是某一类数据。
+   */
+  .tl-transition {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--warning);
+    background: repeating-linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--warning) 55%, transparent) 0 3px,
+      transparent 3px 7px
+    );
+    cursor: pointer;
+    z-index: var(--z-edge);
+  }
+  .tl-transition:hover {
+    background: color-mix(in srgb, var(--warning) 35%, transparent);
   }
 </style>

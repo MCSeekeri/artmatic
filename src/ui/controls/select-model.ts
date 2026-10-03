@@ -88,6 +88,25 @@ export type SelectIntent =
   | 'type';
 
 /**
+ * 按查询串过滤选项（大小写不敏感的子串匹配）。
+ *
+ * 为 122 条转场而加：typeahead 只能「按首字母跳到下一项」，在一个上百项、
+ * 命名风格还很杂（`CrossZoom` / `burn` / `x_axis_translation`）的列表里不够用。
+ *
+ * 纯函数，索引语义与 `Select.svelte` 的 `visible` 一致 —— 过滤后**下标会变**，
+ * 所以 `active` / `indexOfValue` 都必须作用在过滤后的数组上，不能混用。
+ * 空查询原样返回（不产生新数组，便于 `$derived` 省掉一次重算）。
+ */
+export function filterOptions<T>(
+  options: SelectOption<T>[],
+  query: string,
+): SelectOption<T>[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return options;
+  return options.filter((o) => o.label.toLowerCase().includes(q));
+}
+
+/**
  * 键 → 意图。合上时只有「开」这一类；打开后才有导航。
  * 返回 null 表示这个键不归下拉管（放行给页面）。
  */

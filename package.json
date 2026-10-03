@@ -15,6 +15,7 @@
     "@lucide/svelte": "^1.49.0",
     "@zumer/snapdom": "^3.2.0",
     "fflate": "^0.8.2",
+    "gl-transitions": "^1.71.0",
     "harfbuzzjs": "^1.6.2",
     "mediabunny": "^1.61.0"
   },

@@ -1,122 +1,64 @@
 import { expect, test, type Page } from '@playwright/test';
+import { buildStage, hashAt, meanAt, renderTwiceDiff, waitForSourceReady } from './_stage';
 
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
 }
 
-interface HookResult {
-  mean: number;
-  diff: number;
-  frontDiff: number;
-}
+/*
+ * 三条用例原来都往 **demo 工程**上叠片段：addTrack 是 push，新轨落在最底层，
+ * 于是它们断言的是 demo 的画面而不是自己的。现在统一从空舞台起步（buildStage）。
+ *
+ * 「同一 t 连渲两次逐像素一致」这类断言还必须**每次求值前清反馈历史** ——
+ * 契约见 determinism.spec.ts：「连渲同一 t 不清历史是在泵历史，本身就不该一致」。
+ * renderTwiceDiff 默认就按契约来。
+ */
 
 test('Rule 110 上轨：非黑、逐像素确定、生长前沿随 t 推进', async ({ page }) => {
   await boot(page);
-  // 建 rule110 片段并等烘焙完成（轮询画面均值出现非零）
-  await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: {
-        store: {
-          addTrack: (k: 'visual') => string;
-          addClip: (t: string, c: unknown) => void;
-        };
-        algo: { defaultParams: (id: string) => Record<string, number | string> };
-      };
-    }).__artmatic;
-    const trackId = A.store.addTrack('visual');
-    A.store.addClip(trackId, {
-      kind: 'source',
-      id: 'r110',
-      start: 0,
-      end: 8,
-      label: 'R110',
-      fadeSec: 0,
-      curves: {},
-      source: { type: 'algo', generator: 'rule110', params: A.algo.defaultParams('rule110') },
-      blend: 'normal',
-      opacity: 1,
-      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
-      fit: 'stretch',
-    });
+  await buildStage(page, {
+    id: 'r110',
+    source: { type: 'algo', generator: 'rule110' },
+    end: 8,
   });
 
-  // 烘焙是异步的：被动等待（别在 page 里忙轮询——持续的 rAF + readPixels
-  // 长任务会把 worker 回包饿死在队列里，这是实测踩过的坑）。
-  await page.waitForTimeout(2500);
+  // 烘焙是 Worker 异步的：**从 Node 侧**轮询等它落地。
+  // 固定 waitForTimeout(2500) 在机器有负载时不够 —— 烘焙中途落地会被
+  // 误判成「非确定」（这不是非确定，是异步就绪）。
+  // 也不要在 page 里忙轮询：持续的 rAF + readPixels 会把 worker 回包饿死在队列里。
+  await waitForSourceReady(page, 6, { minMean: 1, timeoutMs: 20_000 });
 
-  const result = await page.evaluate((): HookResult => {
-    const A = (window as never as {
-      __artmatic: {
-        renderFrame: (t: number) => void;
-        readPixels: () => { data: number[] };
-      };
-    }).__artmatic;
-    const mean = (d: number[]) => {
-      let s = 0;
-      for (let i = 0; i < d.length; i += 4) s += d[i]! + d[i + 1]! + d[i + 2]!;
-      return s / (d.length / 4) / 3;
-    };
-    A.renderFrame(6);
-    const m = mean(A.readPixels().data);
-    // 确定性：同一 t 两次渲染
-    A.renderFrame(6);
-    const a = A.readPixels().data;
-    A.renderFrame(6);
-    const b = A.readPixels().data;
-    let diff = 0;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++;
-    // 生长前沿：t=1（front 小）与 t=7（front 大）的画面差异
-    A.renderFrame(1);
-    const early = mean(A.readPixels().data);
-    A.renderFrame(7);
-    const late = mean(A.readPixels().data);
-    return { mean: m, diff, frontDiff: late - early };
-  });
+  const mean6 = await meanAt(page, 6);
+  expect(mean6).toBeGreaterThan(20);
 
-  expect(result.mean).toBeGreaterThan(20);
-  expect(result.diff).toBe(0);
-  expect(result.frontDiff).toBeGreaterThan(1); // 长得越晚越亮
+  // 确定性：同一历史状态下同一 t 必须同帧
+  expect(await renderTwiceDiff(page, 6, true)).toBe(0);
+
+  // 生长前沿：t=1（front 小）与 t=7（front 大）的亮度差
+  const early = await meanAt(page, 1);
+  const late = await meanAt(page, 7);
+  expect(late - early).toBeGreaterThan(1);
 });
 
 test('生命游戏：seek 回退再前进与顺序播放逐像素一致', async ({ page }) => {
   await boot(page);
+  // game-of-life 是 sim 型（同步 + 快照重放），没有异步烘焙要等。
+  await buildStage(page, {
+    id: 'gol',
+    source: { type: 'algo', generator: 'game-of-life' },
+    end: 8,
+  });
+
   const diff = await page.evaluate(() => {
     const A = (window as never as {
       __artmatic: {
-        store: {
-          addTrack: (k: 'visual') => string;
-          addClip: (t: string, c: unknown) => void;
-          commit: (label: string, fn: (p: { tracks: { clips: { kind: string }[]; enabled: boolean }[] }) => void) => void;
-        };
-        algo: { defaultParams: (id: string) => Record<string, number | string> };
         renderFrame: (t: number) => void;
         readPixels: () => { data: number[] };
         renderer: { onSeek: () => void };
       };
     }).__artmatic;
-    // demo 的 echo 是有历史的全屏特效，会污染整帧对比——本测试只看生命游戏，
-    // 把所有特效轨关掉（其余生成器都是无状态的，不影响对比）。
-    A.store.commit('关闭特效轨', (p) => {
-      for (const tr of p.tracks) {
-        if (tr.clips.some((c) => c.kind === 'effect')) tr.enabled = false;
-      }
-    });
-    const trackId = A.store.addTrack('visual');
-    A.store.addClip(trackId, {
-      kind: 'source',
-      id: 'gol',
-      start: 0,
-      end: 8,
-      label: 'GoL',
-      fadeSec: 0,
-      curves: {},
-      source: { type: 'algo', generator: 'game-of-life', params: A.algo.defaultParams('game-of-life') },
-      blend: 'normal',
-      opacity: 1,
-      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
-      fit: 'stretch',
-    });
+
     // 顺序播放到 t=40/30（simFrame=16），留档
     for (let i = 0; i <= 40; i++) A.renderFrame(i / 30);
     const sequential = A.readPixels().data;
@@ -134,60 +76,27 @@ test('生命游戏：seek 回退再前进与顺序播放逐像素一致', async 
 
 test('Mandelbrot：zoom 关键帧曲线改变画面且逐帧确定', async ({ page }) => {
   await boot(page);
-  const result = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: {
-        store: {
-          addTrack: (k: 'visual') => string;
-          addClip: (t: string, c: unknown) => void;
-          updateClip: (id: string, label: string, fn: (c: never) => void) => void;
-        };
-        algo: { defaultParams: (id: string) => Record<string, number | string> };
-        renderFrame: (t: number) => void;
-        readPixels: () => { data: number[] };
-      };
-    }).__artmatic;
-    const trackId = A.store.addTrack('visual');
-    A.store.addClip(trackId, {
-      kind: 'source',
-      id: 'mb',
-      start: 0,
-      end: 4,
-      label: 'Mandelbrot',
-      fadeSec: 0,
-      curves: {},
-      source: { type: 'algo', generator: 'mandelbrot', params: A.algo.defaultParams('mandelbrot') },
-      blend: 'normal',
-      opacity: 1,
-      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
-      fit: 'stretch',
-    });
-    A.store.updateClip('mb', '打关键帧', (c: { curves: Record<string, unknown> }) => {
-      c.curves['zoom'] = {
+  await buildStage(page, {
+    id: 'mb',
+    source: { type: 'algo', generator: 'mandelbrot' },
+    end: 4,
+    // 缓慢推近：0 → 4（clip 相对）
+    curves: {
+      zoom: {
         keys: [
           { t: 0, v: 0, interp: 'linear' },
           { t: 3, v: 4, interp: 'linear' },
         ],
-      };
-    });
-    const hash = (d: number[]) => {
-      let h = 0;
-      for (let i = 0; i < d.length; i += 997) h = (h * 31 + d[i]!) | 0;
-      return h;
-    };
-    A.renderFrame(0);
-    const at0 = hash(A.readPixels().data);
-    A.renderFrame(3);
-    const at3 = hash(A.readPixels().data);
-    // 确定性：t=1.5 两次
-    A.renderFrame(1.5);
-    const a = A.readPixels().data;
-    A.renderFrame(1.5);
-    const b = A.readPixels().data;
-    let diff = 0;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++;
-    return { at0, at3, diff };
+      },
+    },
   });
-  expect(result.at0).not.toBe(result.at3); // zoom 曲线确实改变了画面
-  expect(result.diff).toBe(0);
+
+  // 非空（防止下面那条「不同 t 不同」在比两张黑图）
+  expect(await meanAt(page, 3)).toBeGreaterThan(0);
+
+  // zoom 曲线确实改变了画面
+  expect(await hashAt(page, 0)).not.toBe(await hashAt(page, 3));
+
+  // 确定性：同一历史状态下同一 t 必须同帧
+  expect(await renderTwiceDiff(page, 1.5, true)).toBe(0);
 });

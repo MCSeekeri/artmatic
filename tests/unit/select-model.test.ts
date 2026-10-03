@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   TYPEAHEAD_RESET_MS,
   edgeIndex,
+  filterOptions,
   indexOfValue,
   keyIntent,
   stepIndex,
@@ -146,5 +147,42 @@ describe('keyIntent — 键 → 意图', () => {
   it('打开后无关键放行', () => {
     expect(keyIntent('F5', true)).toBeNull();
     expect(keyIntent('Shift', true)).toBeNull();
+  });
+});
+
+describe('filterOptions：可筛选下拉', () => {
+  const items: SelectOption<string>[] = [
+    { value: 'CrossZoom', label: 'CrossZoom' },
+    { value: 'crosswarp', label: 'crosswarp' },
+    { value: 'fade', label: 'fade' },
+    { value: 'x_axis_translation', label: 'x_axis_translation' },
+    { value: '', label: '无' },
+  ];
+
+  it('大小写不敏感的子串匹配', () => {
+    expect(filterOptions(items, 'cross').map((o) => o.value)).toEqual(['CrossZoom', 'crosswarp']);
+    expect(filterOptions(items, 'CROSS').map((o) => o.value)).toEqual(['CrossZoom', 'crosswarp']);
+  });
+
+  it('非首字母也能命中（typeahead 做不到这一点，这是它存在的理由）', () => {
+    expect(filterOptions(items, 'zoom').map((o) => o.value)).toEqual(['CrossZoom']);
+    expect(filterOptions(items, 'translation').map((o) => o.value)).toEqual(['x_axis_translation']);
+  });
+
+  it('空查询 / 纯空白返回原数组（同一个引用，让 $derived 少跑一次）', () => {
+    expect(filterOptions(items, '')).toBe(items);
+    expect(filterOptions(items, '   ')).toBe(items);
+  });
+
+  it('无匹配返回空数组，不抛', () => {
+    expect(filterOptions(items, 'zzz')).toEqual([]);
+  });
+
+  it('过滤后下标会变 —— 索引操作必须作用在结果上', () => {
+    const vis = filterOptions(items, 'warp');
+    expect(vis).toHaveLength(1);
+    expect(indexOfValue(vis, 'crosswarp')).toBe(0);
+    // 在完整表里它是 1
+    expect(indexOfValue(items, 'crosswarp')).toBe(1);
   });
 });

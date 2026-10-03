@@ -258,6 +258,29 @@
   cursor: default;
 }
 
+/* 弹层顶部的筛选框（`filterable` 时才有）。sticky 是为了让它不随列表滚走 ——
+   122 条转场滚到一半发现筛选框不见了，是很具体的挫败感。 */
+.sel-filter {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: var(--sp-1);
+  padding: 3px var(--sp-3);
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+.sel-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* ------------------------------------------------------------ 滑杆 */
 
 .sld {

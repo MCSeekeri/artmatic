@@ -10,16 +10,29 @@
  *
  * 曲线求值集中在这里做（每个 op 附求值好的值），GLSL 只收标量 uniform；
  * fadeSec 在这里折算进 opacity——GLSL 不需要知道 fade 的存在。
+ *
+ * ## 转场：一个 op 顶两个 op
+ *
+ * 窗口命中的时候（见 core/transitions.ts）**不产出两个 source op，只产出一个
+ * transition op**——转场着色器要同时看两张贴图，拆成两个 op 就凑不到一起了。
+ * op 里两个 ResolvedSource 都是**超范围求值**的：入画片段在 `t < its.start`
+ * 时被求值（`algos/runtime.ts` 的 `Math.max(0, …)` 让它停在首帧），出画片段在
+ * `t >= its.end` 时继续走。
+ *
+ * ⚠️ **转场判断必须在 span 过滤之前**：窗口后半段的 t 已经越过出画片段的
+ * `end`，先过滤就会整段漏掉，表现是「转场只在前半段生效」。
  */
 
 import { evalCurve } from '../core/curve';
 import { fadeWeight } from '../core/clips';
+import { transitionAt } from '../core/transitions';
 import type { BeatGrid } from '../core/time';
 import type {
   BlendMode,
   EffectClip,
   Project,
   SourceClip,
+  VisualTrack,
 } from '../core/schema';
 
 export interface ResolvedSource {
@@ -30,9 +43,29 @@ export interface ResolvedSource {
   blend: BlendMode;
 }
 
+/**
+ * 转场 op。
+ *
+ * `blend` 取**入画片段**的混合模式：窗口结束后的下一帧画的就是入画片段，
+ * 用它的 blend 才不会有跳变。已知代价是出画片段的 blend ≠ normal 时，
+ * 窗口开始处有一次混合模式跳变（blend 是离散枚举，插值没有定义）。
+ */
+export interface TransitionOp {
+  type: 'transition';
+  z: number;
+  from: ResolvedSource;
+  to: ResolvedSource;
+  defId: string;
+  values: Record<string, number>;
+  /** 窗口内进度 ∈ [0,1)。 */
+  progress: number;
+  blend: BlendMode;
+}
+
 export type RenderOp =
   | { type: 'source'; z: number; source: ResolvedSource }
-  | { type: 'effect'; z: number; clip: EffectClip };
+  | { type: 'effect'; z: number; clip: EffectClip }
+  | TransitionOp;
 
 /** 片段参数：有曲线求曲线，无曲线取基值。clipStart/grid 双上下文都由这里喂。 */
 export function paramWithCurve(
@@ -46,8 +79,33 @@ export function paramWithCurve(
   return c ? evalCurve(c, t, { grid, clipStart: clip.start }) : base;
 }
 
+/**
+ * 把一个 SourceClip 在 t 求值成 ResolvedSource。
+ *
+ * 转场两侧都用它——注意**两侧各自的 fadeSec 斜坡照常生效**（窗口内也一样）。
+ * 出画片段的 fade-out 恰好在剪切点归零，再叠上转场就是「二次淡出」，
+ * 检查器对同时设了两者的情况给提示，机制上不做特判。
+ */
+function resolveSource(clip: SourceClip, t: number, grid: BeatGrid): ResolvedSource {
+  const opacity =
+    paramWithCurve(clip, 'opacity', clip.opacity, t, grid) * fadeWeight(clip, clip.fadeSec, t);
+  return {
+    clip,
+    opacity,
+    transform: {
+      x: paramWithCurve(clip, 'transform.x', clip.transform.x, t, grid),
+      y: paramWithCurve(clip, 'transform.y', clip.transform.y, t, grid),
+      sx: paramWithCurve(clip, 'transform.sx', clip.transform.sx, t, grid),
+      sy: paramWithCurve(clip, 'transform.sy', clip.transform.sy, t, grid),
+      rot: paramWithCurve(clip, 'transform.rot', clip.transform.rot, t, grid),
+    },
+    blend: clip.blend,
+  };
+}
+
 export function buildStack(project: Project, t: number): RenderOp[] {
   const ops: RenderOp[] = [];
+  const grid = project.beatGrid;
 
   /**
    * 轨道序 → z 序。
@@ -75,23 +133,42 @@ export function buildStack(project: Project, t: number): RenderOp[] {
   project.tracks.forEach((track) => {
     if (!track.enabled || track.kind !== 'visual') return;
     const z = last - visualIndex.get(track.id)!;
-    for (const clip of track.clips) {
+    // 带下标的 for：转场要跳过一个片段，forEach 做不到。
+    const clips: VisualTrack['clips'] = track.clips;
+    for (let i = 0; i < clips.length; i += 1) {
+      const clip = clips[i]!;
+
+      /*
+       * ⚠️ 顺序要紧：转场判断放在 span 过滤**之前**。
+       * 窗口后半段的 t 已经 `>= from.end`，先过滤掉就永远出不了 transition op。
+       */
+      if (clip.kind === 'source') {
+        const win = transitionAt(track, i, t);
+        const tr = clip.transitionOut;
+        if (win && tr) {
+          ops.push({
+            type: 'transition',
+            z,
+            from: resolveSource(win.from, t, grid),
+            to: resolveSource(win.to, t, grid),
+            defId: tr.defId,
+            values: tr.values,
+            progress: win.progress,
+            blend: win.to.blend,
+          });
+          // 入画片段这一帧由转场全权负责；不跳就会把它再单独画一遍。
+          i += 1;
+          continue;
+        }
+      }
+
       if (t < clip.start || t >= clip.end) continue;
+
       if (clip.kind === 'effect') {
-        if (clip.chain.some((i) => i.enabled)) ops.push({ type: 'effect', z, clip });
+        if (clip.chain.some((i2) => i2.enabled)) ops.push({ type: 'effect', z, clip });
         continue;
       }
-      const g = project.beatGrid;
-      const opacity =
-        paramWithCurve(clip, 'opacity', clip.opacity, t, g) * fadeWeight(clip, clip.fadeSec, t);
-      const transform = {
-        x: paramWithCurve(clip, 'transform.x', clip.transform.x, t, g),
-        y: paramWithCurve(clip, 'transform.y', clip.transform.y, t, g),
-        sx: paramWithCurve(clip, 'transform.sx', clip.transform.sx, t, g),
-        sy: paramWithCurve(clip, 'transform.sy', clip.transform.sy, t, g),
-        rot: paramWithCurve(clip, 'transform.rot', clip.transform.rot, t, g),
-      };
-      ops.push({ type: 'source', z, source: { clip, opacity, transform, blend: clip.blend } });
+      ops.push({ type: 'source', z, source: resolveSource(clip, t, grid) });
     }
   });
   // z 升序输出，compositor 顺序合成 → z 大者盖在上，与「列表顶部 = 前景」一致。

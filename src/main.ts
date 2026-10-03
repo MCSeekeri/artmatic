@@ -5,7 +5,7 @@ import './app.css';
 // `button:hover` 会盖掉 `.ic-btn:hover`（纯图标按钮要保持透明底）。
 import './ui/controls/controls.css';
 import { ProjectStore } from './core/project-store';
-import { createDemoProject, DEMO_ASSET_ID } from './core/demo-project';
+import { createBlankProject, createDemoProject, DEMO_ASSET_ID } from './core/demo-project';
 import { renderDemoAudio } from './audio/demo-audio';
 import { computeWaveform } from './audio/decode';
 import { appState } from './ui/app-state.svelte';
@@ -26,6 +26,8 @@ import {
   saveProjectNow,
 } from './ui/project-actions';
 import { defaultParams, listGenerators } from './algos/registry';
+import { compileAll } from './effects/compile-all';
+import { registerImageBytes } from './engine/media-assets';
 
 /* 装配顺序：主题 → store → mount。
    主题必须最先注入：它是内联 style，写在 :root 上，任何时候注入都生效，
@@ -152,6 +154,123 @@ const projectDebug = {
   readPixels: () => {
     const { data, w, h } = appState.renderer.readPixels();
     return { data: Array.from(data), w, h };
+  },
+  /**
+   * E2E / 试炼场专用：把当前 WebGL 上下文里**所有**着色器预编译一遍
+   * （特效 + realtime 算法 + 122 条转场），返回逐条成功/失败。
+   *
+   * 之所以要暴露到 `__artmatic`：artmatic 的着色器是惰性编译的，语法错误在你
+   * 点到它之前不会报。E2E 靠这条断言「全量转场在这台机器上都能编译」——
+   * 这是 122 条第三方 GLSL 唯一的自动化防线（见 effects/compile-all.ts）。
+   */
+  compileAll: () => {
+    const { results, okCount, total } = compileAll(appState.renderer.kit);
+    return { okCount, total, failures: results.filter((r) => !r.ok) };
+  },
+  /**
+   * E2E 专用：**现场编一段真视频**当测试素材（红 1s → 蓝 1s，160×90 @10fps）。
+   *
+   * 为什么不往仓库里塞一个 mp4 当 fixture：二进制素材会一直躺在版本库里，
+   * 而它本来就能用项目自己的编码链路生成。顺带这条路径还证明了「导出的
+   * MP4 能被自己的解码链路读回来」—— 这是两个子系统之间一次真实的往返。
+   *
+   * 回传 `number[]`：20 帧的 160×90 只有几 KB，远低于 E2E 的传参上限；
+   * 拿到之后用 Playwright 的 `setFiles({buffer})` 灌进真实的选择器，
+   * 走的就是导入视频的**真实路径**。
+   */
+  makeTestVideo: async () => {
+    const p = createBlankProject('e2e-test-video');
+    p.resolution = { w: 160, h: 90 };
+    p.fps = 10;
+    p.duration = 2;
+
+    /*
+     * 内容的形状是刻意的：**上下两半不同色**，而且颜色随时间变。
+     *
+     *   t ∈ [0,1)： 上半红 / 下半蓝      t ∈ [1,2)： 上半绿 / 下半蓝
+     *
+     * 于是这一份素材同时能验两件事：
+     *   · 取帧跟着 t 走（红 → 绿，纯色视频过不了这一条）
+     *   · 上下方向正确（上半红/绿、下半蓝；上下颠倒会立刻被抓到）
+     *
+     * 两半靠**两条视觉轨 + transform** 做出来（solid 源不能上色曲线），
+     * 顺带也把 placement 的 uv 语义钉住了。
+     */
+    const mk = (id: string, start: number, end: number, color: string, y: number) => ({
+      kind: 'source' as const,
+      id,
+      start,
+      end,
+      label: color,
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'solid' as const, color },
+      blend: 'normal' as const,
+      opacity: 1,
+      transform: { x: 0.5, y, sx: 1, sy: 0.5, rot: 0 },
+      fit: 'stretch' as const,
+    });
+    const top = p.tracks.find((t) => t.kind === 'visual');
+    if (!top || top.kind !== 'visual') return [];
+    // 上半：红 → 绿
+    top.clips.push(mk('tv-top-a', 0, 1, '#ff0000', 0.75), mk('tv-top-b', 1, 2, '#00ff00', 0.75));
+    // 下半：蓝（贯穿两秒）
+    p.tracks.push({
+      kind: 'visual',
+      id: 'tv-bottom',
+      name: 'V2',
+      enabled: true,
+      clips: [mk('tv-bottom-a', 0, 2, '#0000ff', 0.25)],
+    } as never);
+
+    const blob = (await runExport(appState.renderer, p, {
+      sink: new Mp4Sink({ audio: null }),
+      codec: MP4_CODEC,
+    })) as Blob;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    // 导出会临时钉死 canvas 尺寸，导完要还回去，否则预览停在导出分辨率上
+    appState.renderer.clearExportSize();
+    appState.renderer.syncSize(appState.store.project.resolution);
+    return Array.from(bytes);
+  },
+  /** E2E 专用：视频帧缓存的读数（证明解码真的发生了、缓存是有界的）。 */
+  videoStats: () => appState.video.stats(),
+  /**
+   * E2E 专用：把一个 Blob 登记成图片素材（等价于导入图片 / 排版「转为图片」
+   * 走的那一步）。E2E 里造不出真实文件，但可以造真实 PNG 字节。
+   */
+  registerImageAsset: (assetId: string, blob: Blob) => registerImageBytes(assetId, blob),
+  /**
+   * E2E / 性能探针专用：跑真实导出管线但**丢掉帧**，只回传耗时。
+   *
+   * 为什么需要它：视频解码是**异步就绪**的，而预览缺帧时会拿最近的帧顶上，
+   * 所以「连着渲 N 帧然后计时」量到的是渲染缓存纹理的成本，不是解码成本
+   * （实测会得到 3 万 fps 这种荒谬数字）。导出循环每个都 `await prepareFrame`
+   * —— 那才是解码+上传的真实成本，也正是用户关心的「导出要多久」。
+   *
+   * 回传标量摘要：帧数、总耗时、每帧中位数。
+   */
+  exportTiming: async (frames: number) => {
+    const project = { ...appState.store.project, duration: frames / appState.store.project.fps };
+    const per: number[] = [];
+    // 空 sink：只计时，不编码（编码是另一条链路，会把数字搅在一起）
+    const sink = {
+      configure: async () => {},
+      submit: async (i: number) => {
+        void i;
+      },
+      finalize: async () => new Blob(),
+    };
+    await runExport(appState.renderer, project, { sink: sink as never, onFrame: (ms) => per.push(ms) });
+    appState.renderer.clearExportSize();
+    appState.renderer.syncSize(appState.store.project.resolution);
+    const sorted = [...per].sort((a, b) => a - b);
+    return {
+      frames: per.length,
+      totalMs: Math.round(per.reduce((s, v) => s + v, 0)),
+      medianMs: Math.round((sorted[Math.floor(sorted.length / 2)] ?? 0) * 10) / 10,
+      maxMs: Math.round((sorted[sorted.length - 1] ?? 0) * 10) / 10,
+    };
   },
   /** E2E 专用：跑一遍真实导出管线并把 zip 解开——大像素数据不出 page。 */
   exportFrames: async () => {

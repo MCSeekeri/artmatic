@@ -81,6 +81,11 @@ Electron 只在两件事上出现：**读写工程目录**、**跑 ffmpeg 子进
 
 - 禁止：`hydra-synth`（AGPL-3.0）、`Coollab`（GPL-3.0）
 - 可用：`gl-transitions`（MIT）、openmosh 全部（MIT）、`lucide`（ISC）
+- **`gl-transitions`（MIT，2026-10-03 接入）**：转场。**包是 MIT，不等于每条都能用** ——
+  集合内每个条目自带 `author` / `license`。逐条核对 `1.71.0`：125 条 =
+  MIT 123 + BSD 3 Clause 1 + BSD 2 Clause 1，全部宽松。
+  `transitions/catalog.ts` 有一道**白名单**把非宽松许可挡在目录外（测试同时断言），
+  明细见 `CREDITS.md`。**这条是数过 125 条 license 字段之后写的，不是推断。**
 - **`mediabunny`（MPL-2.0，不是 MIT —— 原先记错了，2026-10-02 更正）**：
   MP4 封装。**MPL-2.0 属文件级弱 copyleft**：本地工具/自用分发零义务，
   只在「你改了它的源文件并分发改了的那部分」时才需开源。本项目按 `npm` 装、
@@ -118,8 +123,13 @@ Electron 只在两件事上出现：**读写工程目录**、**跑 ffmpeg 子进
 renderer/                     标准 Web 应用，可在 Chrome 里独立运行
 ├── core/                     schema · 曲线求值 · 命令栈      ← 纯 TS，无 DOM / WebGL，必须可单测
 ├── engine/                   WebGL2：Program / Target / Pass 调度 · 纹理池 · 预览尺寸 · 确定性时钟
+│   ├── media-assets.ts       ★ 运行期素材登记：图片（canvas）/ 视频（Blob 引用）
+│   └── video-source.ts       ★ 视频取帧：mediabunny + WebCodecs + 有界纹理缓存
 ├── effects/                  声明式特效定义 + GLSL
+│   └── transitions/          ★ 转场：gl-transitions 目录 + GLSL 规范化 + runner
 ├── algos/                    算法生成器注册表 + 烘焙 Worker
+├── audio/                    离线 FFT · BPM/offset 估计 · 波形桶 · 播放器
+├── render/                   合成根：把源/算法/特效装到一台 Renderer 上（见下）
 ├── audio/                    离线 FFT · BPM 估计 · 拍网格 · 跟随包络
 ├── typography/               TypographyDocument 模型 + 光栅化后端
 ├── timeline/                 UI（Canvas2D 绘制 + DOM 片段）
@@ -127,6 +137,13 @@ renderer/                     标准 Web 应用，可在 Chrome 里独立运行
 ├── project/                  工程目录格式 · 素材台账 · 原子写 · 句柄持久化（见 ADR-011）
 ├── i18n/                     文案表 + tr()（见 ADR-013）
 └── platform/                 Platform 接口（浏览器实现 ↔ Electron 实现）
+
+lab/                          ★ 试炼场：第二个 HTML 入口（/lab/），见 §3.1
+├── index.html · main.ts · lab.css
+├── build-project.ts          合成一棵最小 Project 喂给 renderFrame
+├── patterns.ts               程序化测试图（彩条/网格/渐变，**不进 algos 注册表**）
+├── lab-state.svelte.ts       状态 + rAF 循环 + fps/编译读数
+└── LabApp / LabList / LabStage / LabParams.svelte
 
 electron/
 ├── main/                     工程目录 fs · ffmpeg 子进程 · 菜单
@@ -137,9 +154,40 @@ shared/
 └── ipc-contract.ts           两侧共用的通道名与载荷类型
 ```
 
-**依赖方向**：`core` 不依赖任何东西；`engine` 只依赖 `core`；UI 层依赖全部；`platform` 被所有人依赖。
+**依赖方向**：`core` 不依赖任何东西；`engine` 只依赖 `core`；
+`{effects, algos}` 依赖 `engine`；**`render` 依赖 `{engine, effects, algos}`**；
+`ui` 与 `lab` 依赖全部；`platform` 被所有人依赖。
+
+> **`render/` 为什么必须单独一层**：它装配 Renderer + SourceManager + AlgoRuntime +
+> EffectRunner，因而要 import `algos/` 与 `effects/`——而这两者本就在 `engine/`
+> **之上**。放进 `engine/` 会形成 `engine → algos/effects → engine` 的层次倒挂。
+> 它是**合成根（composition root）**：主应用 `ui/app-state.svelte.ts::attachPreview`
+> 与 `lab/` 共用同一份 `createRenderCore`，两边各写一份的 bug 形态是
+> 「试炼场里好好的，主应用里某类源不工作」，而且不会有任何报错。
+> 它刻意**不 import** `typography/` `audio/` `exporters/`——那些是主应用专属，
+> 拉进来会把整棵排版/音频子树拖进 lab 的 bundle 图。
 
 `core/` 是全局关键路径——**它定死之前不要写时间轴 UI**，否则等于把返工写进计划。
+
+### 3.1 试炼场（`/lab/`）
+
+第二个 Vite HTML 入口，与主应用**完全隔离**（独立 canvas、独立 Renderer、不引导主应用）。
+它的存在理由只有一条：**决定哪些特效/生成器值得留下、默认参数该定多少**。
+
+- **进 build**（`vite.config.ts` 的 `rollupOptions.input` 双入口），而不是
+  dev-only。本项目的 E2E 走 `scripts/e2e.mjs` 的 build → vite preview 管线，
+  产物里没有它就没有任何自动化覆盖——试炼场会长期用来给注册表做准入判断，
+  这种工具恰恰最该有回归。
+- `/lab`（无尾斜杠）会被 SPA fallback 静默端上**主应用**，所以
+  `labRedirect()` 插件必须**同时**注册 `configureServer` 与 `configurePreviewServer`
+  （openmosh 只做了前者，而我们的 E2E 跑的是 preview）。E2E 一律访问 `/lab/`。
+- **不能照抄 openmosh 的 lab**：那是「把真实视频拖进来审外部 shader」，
+  而本项目 `video` 源是空壳（`engine/sources.ts` 的 `default: return null`）、
+  `setImage` 至今零调用方。审特效的素材只能是**算法生成器 + 程序化测试图**——
+  这也正是「算法 lab 与特效 lab 合成一个」的原因：两者天然耦合。
+  `lab/isf.ts`（ISF 运行时）**不移植**，那是重复建设。
+- 测试图用 `lab:` 前缀的伪 generator id，由 lab 内一层 resolver 拦截，
+  **不注册进 `algos/registry.ts`、不改 `schema.ts`**。
 
 ---
 
@@ -840,6 +888,90 @@ interface AudioClip extends ClipBase {
 }
 ```
 
+### 出画转场（2026-10-03）
+
+```ts
+interface SourceClip extends ClipBase {
+  // …
+  transitionOut?: { defId: string; duration: number; values: Record<string, number> }
+}
+```
+
+挂在**出画片段**上，剪切点 `cut = clip.end`，窗口**以剪切点为中心**：
+`[cut - d/2, cut + d/2)`。入画片段 = 同轨 `start` 紧邻（`|Δ| ≤ 1e-6`）的下一个
+SourceClip，**按相邻关系解析、不存 id** —— 存 id 会引入悬空引用与它的一整套清理，
+而片段几何（push / trim）本来就会保持相邻。
+
+| 约定 | 内容 | 为什么 |
+|---|---|---|
+| 全部钳制在 `core/transitions.ts` | 窗口长度上限 = `2 × min(左侧可用, 右侧可用)`，两侧各扣掉相邻转场已占的半宽 | 渲染（`engine/stack.ts`）、store、检查器、时间轴共用一份；各写一套的 bug 形态是「UI 上看着没问题、渲染没生效」 |
+| `transitionAt()` 必须在 span 过滤**之前**判 | `buildStack` 的循环 | 窗口后半段的 t 已越过 `from.end`，先过滤就整段漏掉，表现是「转场只在前半段生效」 |
+| 命中后 `i++` 跳过入画片段 | 同上 | 否则它会被再单独画一遍 |
+| 两侧各自烘 opacity 进各自 alpha | `placement.frag.ts` 的 `u_opacity`（普通通路传 1，行为逐位不变） | 转场着色器只认贴图，没有地方接收「这一侧的不透明度」 |
+| 合成用**入画片段**的 blend | `TransitionOp.blend` | 窗口结束后下一帧就是它，用它的不会有跳变。已知代价：出画片段 blend ≠ normal 时窗口开始处有一次跳变（blend 是离散枚举，插值没有定义） |
+| 窗口内 `fadeSec` 照常生效 | 不做特判 | 会叠加成二次淡出，检查器给提示而不改机制 |
+| 超范围求值是刻意的 | `to` 在 `t < to.start` 时停在首帧（`algos/runtime.ts` 的 `Math.max(0, …)`）；`from` 在 `t ≥ from.end` 时继续走 | 程序化源自然延展、无余量素材冻结 —— 与 Premiere「居中于剪切点」一致 |
+| `SCHEMA_VERSION` 2 → 3 | `MIGRATIONS[2]` 是**恒等**迁移 | 加可选字段不需要变换，抬版本号是为了让「旧版打开新版工程」显式报错，而不是静默丢掉转场再保存 |
+
+**明确不做**：跨轨转场（V1 溶到 V2）、转场参数打关键帧、`transitionIn`。
+
+**GLSL 规范化**（`effects/transitions/glsl.ts`）——第三方集合里混着按 GLSL ES 1.00
+写的条目，两类改写，都是**运行时、不改上游文件**：
+
+1. `texture2D` → `texture`、`gl_FragColor` → `outColor`
+2. **「依赖 uniform 的全局变量初始化」→ `#define`**。ES 1.00 允许、ES 3.00 不允许
+   （`global variable initializers must be constant expressions`）。上游 10 条用了
+   这个惯用法：`float nQuick = clamp(zoom_quickness,0.2,1.0)`、
+   `vec2 ratio2 = vec2(1.0, 1.0/ratio)`、`float s = pow(2.0*abs(progress-0.5),3.0)`…
+   这类变量是只读派生量，宏展开语义相同。
+
+判据都收窄到「可机械判定」：只改引用 uniform 的初始化式，真常量全局变量一律不动。
+`tests/unit/transition-catalog.test.ts` 用 fixture 与上游真实清单把两条都钉死。
+
+**目录准入**（`catalog.ts`）：许可白名单 + 名字唯一 + `vec4 transition(` 入口 +
+**`paramsTypes` 覆盖检查**（body 声明了但 metadata 里没有的 uniform → 运行时恒为 0，
+而 0 往往是退化取值）。最后这条拒掉了 3 条：
+`luma` / `displacement`（需要规范之外的额外贴图输入，结构性给不出）、
+`burn`（上游生成器不认 `/* = */` 形式的默认值注释，拿不到可信默认值；`burn0` 覆盖同一意图）。
+拒收是**数据驱动**的，不是黑名单 —— 上游改了会自动放行，明细进 `CREDITS.md`。
+
+### trim-in：拖左边界 = 改长度 **并且** 改源内偏移（2026-10-03）
+
+**判据只有一条：起点动、终点也动 = 整体平移（`push` 挤开邻居），不动 `srcIn`；
+起点动、终点不动 = 头部被裁 / 被拉长，`srcIn += Δ × speed`。**
+实现是 `core/clips.ts` 的 `applyTrimIn` / `earliestTrimStart` / `trimInOf`。
+
+| 场景 | 期望 |
+|---|---|
+| 拖片段中部 | 整体平移，`srcIn` 不变 |
+| 拖左边界往右（裁掉 1s） | 长度 −1s，**`srcIn` +1s**（音频从第 1 秒开始播） |
+| 拖左边界往左 | 只有在 `srcIn > 0` 时才能扩 —— 素材头部没有更多内容。这条正是「裁掉之后还能拖回来」 |
+| 视频 | 按 `speed` 折算：2× 的片段裁 1s 时间轴 = 素材 2s |
+| `trim` 策略吃掉邻居的**头部** | 邻居的 `srcIn` 跟着进（它的头确实没了） |
+| `push` 挤开邻居 | 邻居两端一起动 → `srcIn` **不能**动 |
+
+用户报的原始症状是「选中开头拖曳和选中身体拖曳，鼠标样式不同但最终操作一样」——
+现在两者语义彻底分开了。**`splitClipAt` 是同一族的第三处落点**：右半段必须补
+`srcIn += atRel × speed`，否则切开后后半段从头重放（这是个一直存在的 bug）。
+
+### 视频素材与图片素材（2026-10-03）
+
+- `Asset.kind` 现在有 `'audio' | 'image' | 'video'`（台账层从 M5a 起就有 video 了，schema 落后一格）。
+- **渲染期的素材载体在 `engine/media-assets.ts`**：图片是「已解码的 canvas」，
+  视频是「`Blob`/`File` 或 `Uint8Array` 的引用」。**视频绝不在这里摊开字节** ——
+  本地导入拿的是磁盘背书的 `File`，mediabunny 从它 seek 读。
+- **取帧是异步就绪的**，与 algo 烘焙/排版光栅化同构：`resolve` 返回 null 表示这帧缺席。
+  差别是**预览缺帧时用「最近的已解码帧」顶上**（视频播放器的常规做法），
+  而导出每帧前 `await prepare()` 拿到精确帧 —— 所以导出不会走「顶上」那条路。
+- 解码出来的 `VideoSample` **必须立刻 `close()`**：它占的是 WebCodecs 解码器池，
+  不 close 会让 `decode()` 在几十帧后**静默停住**（不报错，只是不再出帧）。
+- 上传宽度取 `min(素材宽, 当前渲染宽)`：预览（≈960）下内存小一个量级，
+  导出（1920）时自动全分辨率。缓存按字节预算 LRU（192 MB）淘汰并删纹理。
+- **预览质量档位**（帧率 1×/½/⅓、画质 100/75/50/25%、暂停回全质）只影响预览：
+  缩放乘在 `fitPreviewSize` 的结果上（**不能走 `setExportSize`** —— 那会让
+  `syncSize` 直接 return，窗口缩放/切工程/改分辨率全都不会再适配）。
+  帧率节流只在**播放中**生效：暂停时永远渲，那是「改一个参数立刻看到结果」的路径。
+
 ### 合成求值
 
 ```ts
@@ -979,15 +1111,34 @@ follower(attack, release)                            // 非对称攻放包络
 - [ ] 特效 ×12 全词汇（后续按「两个文件」纪律逐个加）
 - [x] 合成模式 8 种（normal / multiply / add / screen / overlay / difference / exclusion / subtract，CPU 参考实现钉死）
 - [ ] 摄像机 / 画幅做成 `EffectClip`（参数化，不是枚举具名动作）
-- [ ] `gl-transitions` 接进来
-- [ ] 特效试炼场（照抄 openmosh 的 `lab/`）
+- [x] `gl-transitions` 接进来（2026-10-03 完成）
+- [x] 特效试炼场（`/lab/`，2026-10-03 落地，与算法试炼场合成一体，见 §3.1）
+
+**转场实测（2026-10-03）**：
+
+| 结论 | 证据 |
+|---|---|
+| 上游 125 条里 **122 条可用** | 逐条核许可（MIT 123 / BSD-3 1 / BSD-2 1，全宽松）+ 形状检查，拒收 `luma` / `displacement` / `burn`，理由见 §5 |
+| **122 条全部在这台机器上编译通过** | E2E `transitions.spec.ts` 的「全量编译」；`__artmatic.compileAll()` 现在覆盖特效 + realtime 算法 + 转场 |
+| 10 条需要 `#define` 规范化 | 都是「依赖 uniform 的全局初始化」；不改造就 `global variable initializers must be constant expressions` |
+| 管线语义正确 | E2E：窗口外纯红/纯蓝、`p=0` 只显示 from（规范不变量）、`p=0.5` 单通道均值 127.5、窗口后半段仍混合、窗口内 `renderTwiceDiff === 0`、删掉转场画面必变、不相邻时静默失效且不报错 |
+| 122 条常驻主包约 **104 KB gzip** | `compile-all` 那个 chunk ≈335 KB raw。要降的话只能把 GLSL 改成按需动态 import —— 而 runner 是同步的，做不到。取舍已记：这是「全量」的代价 |
+| 集合里有名字与算法对不上的条目 | `dissolve` 其实是**亮度驱动的烧灼**（`show = burn(from) - progress`），纯红 from 的 burn=0.6495，p=0.5 时整帧仍是红的。拿它写「p=0.5 应该红蓝各半」会得到一个看起来像 bug 的假失败 |
 
 **验收**：能在一个片段的参数上实时拖动并看到画面变化，UI 不掉帧。
 **实测**：检查器滑杆实时拖动 + 关键帧打点（可锚拍）可用；「新增特效 = 两个文件」由 `effects/registry.ts` 的 glob 配对强制执行，缺一半启动报错。
 
-> **新增一个特效 = 两个文件**（定义 + GLSL）。这是 openmosh 的官方纪律，当作硬指标。摩擦成本决定了这个工具三年后还有没有生命力。
+**试炼场实测（2026-10-03）**：
 
-> **警告**：angel-echo 里没有"分形靠 10 帧跳帧"这回事——分形是逐帧实时算的，全仓库唯一的 `stride` 是频谱图**行**降采样。带着错误预设做帧缓存会破坏确定性。真正的性能手段是：内部半分辨率 + nearest 放大、90 帧均值超 30ms 自动降档、粒子预算随档位缩放 `[1, 0.55, 0.3]`、渲染目标尺寸不变则复用。
+| 结论 | 证据 |
+|---|---|
+| 主应用侧**零行为变化** | 抽出 `render-core` 前后各跑 3 轮 `effects.spec.ts`，失败项与数值逐位相同（见 §7 的 A/B 记录） |
+| 分辨率档位必须 `setExportSize` | `preview-size.ts` 的 `k = Math.min(1, scale)` **只缩不放**；中间舞台列在 1280 视口下约 640px，不钉死的话 100% 档会被悄悄缩成一半。实测 100% / 50% / 25% = 1280×720 / 640×360 / 320×180 |
+| 特效轨必须排在源轨**之前** | `buildStack` 把 `tracks[0]` 映射成最大 z（最前景）。写反的表现是「特效完全无效且不报错」——`lab.spec.ts` 有一条断言钉它 |
+| 「全部编译」可以零侵入 | `Kit.quad(fs, name)` **按名字缓存**，而 runner 用的名字是 `fx-${defId}`。用同名预编译命中的就是运行期那一份，不必给 runner/kit 加钩子 |
+| 随机必须带种子 | openmosh 的 Rnd 按钮用裸 `Math.random()`；移植时换成 `mulberry32(hashSeed(LAB_SEED,'rnd',scope,n))`，于是「第 1 次点随机」在任何机器上都是同一组参数 |
+| 换选中项**不重置播放头** | 试炼场的核心动作是「同一时刻换一个源/特效对比」。归零会让每次对比从头再来，且生长型算法（Rule 110）在 t=0 本来就是全黑 |
+| 烘焙未就绪有出口 | bake 型首帧返回 `null`（这层缺席）；试炼场工具栏的「源：等待中/就绪」把它显式化。实测 Rule 110 的烘焙约 4ms 就绪，慢的是大网格 |
 
 > **新增一个特效 = 两个文件**（定义 + GLSL）。这是 openmosh 的官方纪律，当作硬指标。摩擦成本决定了这个工具三年后还有没有生命力。
 
@@ -1138,9 +1289,28 @@ MP4 比 PNG 序列小一到两个数量级，但 16s/1080p 仍有 ~32 MB。三�
 
 **验收**：导出 5 秒 1080p MP4，音画同步。**（待人工做，E2E 不做长时）**
 
-### M6 · 打包与打磨（MVP 之后）
+### M6 · 打包与打磨 ◐（2026-10-03 收尾中）
 
-稳定 Electron 版本、错误处理、进度条与可取消、长时导出稳定性、性能档位 UI。
+**已完成的四项（用户点名的那批）**：
+
+| 能力 | 落点 | 实测 |
+|---|---|---|
+| **本地视频素材** | `engine/media-assets.ts`（字节/句柄登记）+ `engine/video-source.ts`（mediabunny 解封装 + WebCodecs 解码，帧精确取帧 + 有界纹理缓存） | 导入 7.2MB 1080p MP4：**101 ms**；导出每帧 **中位数 23.5 ms / 峰值 46 ms**（≈43 fps，30 fps 实时绰绰有余）；首帧就绪 26 ms；缓存 20 帧 ≈166 MB（预算 192 MB，LRU 生效） |
+| **音频自动估拍** | `audio/fft.ts`（自研 radix-2 FFT）+ `audio/tempo.ts`（谱通量 → 自相关 → 相位扫描 → 下拍） | 合成点击串：BPM 误差 < 1；offset 三级定位（网格 → 长窗峰 → 短窗精修）从 ±30 ms 收敛到 **< 8 ms** |
+| **工程设置可改** | 侧栏「工程」面板的「画幅与帧率」；`ProjectStore.setFps` | 预设 + 自定义；分辨率钳成偶数（H.264 4:2:0）；改帧率会改逐帧随机种子（UI 有说明） |
+| **预览降质 + rail 一致** | `ui/PreviewToolbar.svelte`（悬浮半透明）+ `ui/RailShell.svelte`（主应用与 `/lab/` 共用骨架）+ 侧栏 `/lab` 入口 | 帧率 1×/½/⅓、画质 100/75/50/25%、暂停回全质；导出不受影响（`setExportSize` 那条路不过档位） |
+
+**顺带修掉的两个现存缺陷**：
+
+- **`image` 片段一直是空白**：`SourceManager.setImage` 从 M4 起零调用方，而排版
+  「转为图片」产出的正是 `{type:'image'}` 片段。现在字节经 `media-assets` 解码、
+  由 `SourceManager` 懒上传（图片与视频共用 `uploadImage` 一条路）。
+- **切分片段不补 `srcIn`**：`splitClipAt` 的右半段继承了原 `srcIn`，于是切开之后
+  后半段**从头重放**。已按 `srcIn += atRel × speed` 修正，单测钉死。
+
+**未做**：Electron 打包（M5b 已取消）、错误处理/进度条打磨、长时导出稳定性。
+另有两条**未决**记在 §8：视频素材的流式读写（打开工程仍整份读进内存）、
+`ProjectStore.addTrack` 的命名与位置自相矛盾。
 
 ---
 
@@ -1194,6 +1364,46 @@ npm run dist                # electron-builder 打包（M5 才有）
      `elementFromPoint` 拿到的是 `.drawer`，**手势被静默吞掉**（不报错、几何不变）。
      写涉及时间轴的指针测试时，起手点取 `tl-scroll` 的 `x + 200` 一类靠左的位置。
      实测踩过一次：一度以为是「拖音频片段不卡」的性能结论，其实是手势根本没打到片段。
+- **第三方代码要有一道「全量编译」的守卫**（2026-10-03 立）。artmatic 的着色器是
+  **惰性编译**的，语法错误在你点到它之前不报，所以 122 条转场不能只靠"抽样看起来没问题"。
+  `__artmatic.compileAll()`（`effects/compile-all.ts`）覆盖特效 + realtime 算法 + 转场，
+  E2E 断言 `failures == []`。**这套守卫是 `luma`/`displacement`/`burn` 那三条被发现的途径** ——
+  目录层的静态检查只能挡"结构性不可能"，语法/版本问题只有真编一次才知道。
+  - 代价：122 次编译是**秒级**（几条有 voronoi / fbm 循环）。所以它是按钮与 E2E 的动作，
+    **不在启动路径上**。
+  - 改转场相关的目录/规范化之后，先跑 `node scripts/e2e.mjs transitions.spec` 再跑全量。
+- **片段 id 在 E2E 里不能写死**。`ProjectStore.findClip` 返回**第一个** id 匹配的片段，
+  同一个页面里搭两次同 id 的舞台时，第二次的 `setTransitionOut` 会落到第一次那条
+  （已禁用的）轨道上——画面里根本没有转场，断言却"看起来过了"。
+  `_stage.ts::buildTransitionStage` 因此给每次调用加了序号后缀。
+- **`UNPACK_FLIP_Y_WEBGL` 对 `ImageBitmap` 源**在 Chromium 上**被忽略**（2026-10-03 实测）。
+  `tests/e2e/m6.spec.ts` 的「上红下蓝」断言先抓到图片整体上下颠倒；把标志从 `true`
+  改成 `false` 之后**结果逐像素完全一样** —— 这才定位到是源类型的问题，而不是标志的问题。
+  对策：**上传源统一成 canvas**（`media-assets.registerImageBytes` 解码后画进 canvas），
+  翻转在 `SourceManager.uploadImage` 一处定义、图片与视频同时正确。
+  > 教训：这条一开始是**推断**（「DOM 行序自上而下所以要翻」），而且推断本身没错 ——
+  > 错的是没注意到「标志在某些源类型上根本不生效」。**方向类问题必须有一条
+  > 能区分上下半张画面的断言**，只比均值或哈希是抓不到的。
+  > 排版那条路（ADR-003 规则②）有自己的纹理上传，不要照搬这里的结论。
+- **视频/音频这类异步就绪的东西，性能只能从导出路径量。** 预览缺帧时用最近的帧顶上
+  （很快），所以「连着渲 N 帧再计时」量到的是渲染缓存纹理的成本 —— 实测得到
+  **33333 fps** 这种荒谬数字。`ExportOptions.onFrame`（`export-runner.ts`）给出每帧
+  真实耗时（含 `prepareFrame`），`__artmatic.exportTiming(n)` 是它的 E2E 出口。
+- **E2E 里点轨道菜单别用 `.first()`**：demo 的轨道还在列表里（只是被禁用），
+  `.first()` 会点到它们的菜单，片段落进看不见的轨里，断言随后在「找不到片段」处
+  以令人困惑的方式失败。用 `.last()`（新建的轨在末尾），或者按轨名定位。
+- **浮层里不要用 `transform` / `filter` / `backdrop-filter`**（2026-10-03 实测踩到）。
+  `Select` 的弹层是 `position: fixed` + `getBoundingClientRect()` 算出的**视口**坐标；
+  上面三个属性里任何一个都会让祖先成为 fixed 后代的**包含块**，于是那些视口坐标被
+  当成「相对祖先」解释 —— 表现是弹层整体偏到一边（预览工具栏的下拉曾经右移一整个
+  工具栏宽度）。居中请用 `left/right: 0 + margin-inline: auto + width: fit-content`。
+  另外**预览画质的缩放乘在 `fitPreviewSize` 的结果上、不动 CSS 盒** —— 只缩后备缓冲
+  的话画面会跟着变小（canvas 不设 CSS 尺寸时，显示尺寸就等于缓冲像素数）。
+- **断言要写成不变量，不要写成两点相等**（2026-10-03）。修「暗色下太阳图标是主题色」
+  时，第一版断言只比了「主题切换 vs 设置图标」两个——够不到同批引入的
+  「`/lab` 入口用浏览器默认链接蓝」那个 bug。改成「**rail 上所有图标必须同色**」
+  之后它一次就抓住了。配套：量颜色前先把指针移开，`.ic-btn:hover` 是 `text-primary`
+  （近白），点完直接量到的是 hover 色 —— 很容易误判成「已经修好了」。
 
 ### ⚠️ 时间轴重绘必须与**工程时长**解耦（2026-10-02 立）
 
@@ -1426,10 +1636,13 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   结果是选择框整体偏移、把手完全点不中（拖拽会变成框选）。
   `toBeVisible()` 抓不到这个，所以另有一条**位置断言**（比对 `boundingBox()` 与
   元素真实屏幕矩形）。改动那段 DOM 结构时它会挡住你。
-- **⚠️ 已知 flaky（2026-10-01 实测确认，非本次改动引入）**：`determinism.spec.ts`、
+- **⚠️ 已知 flaky（2026-10-01 记录）**：`determinism.spec.ts`、
   `algos.spec.ts`、`effects.spec.ts` 里凡是断言「同一 t 多次求值逐像素一致」的用例，
   **约 60–75% 的失败率**，且**与代码版本无关**——用 `git worktree` 检出改动前的提交
   实测同样失败（基线 8 次：通过 3 失败 5；当前 8 次：通过 2 失败 6，统计上无差别）。
+  > **⚠️ 这一段的结论已在 2026-10-03 被推翻**（"60–75% 失败率""个别 1–2 个像素"
+  > 都不准确，而且把它们当成一类 flaky 本身有害）。**先读本节末尾那份根因分析**，
+  > 再决定要不要引用这里的话。
   > **2026-10-02 复测（i18n 改造后）**：这三个 spec 连跑 4 轮，失败 5 / 6 / 5 / 4、
   > 通过 3 / 2 / 3 / 4 —— **每一轮都有通过**，与 10-01 的基线分布一致。
   >
@@ -1445,6 +1658,131 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   # 复现（跑 8 次看通过率）
   for i in $(seq 1 8); do node scripts/e2e.mjs determinism; done
   ```
+  > **⚠️ 2026-10-03 根因查清：这 7 条里只有 1 条是真问题，其余 6 条是测试自身的 bug。**
+  > 探针在 `.workbuddy/probe-flaky-root{,2,3}.mjs`（Phase A/B/C 三步，可重跑）。
+  >
+  > **一、3 条「同一 t 连渲两次逐像素一致」—— 测试违反了自己写下的契约**
+  > 本文件上面那条注释已经把契约写清楚了（「连渲同一 t 不清历史是在泵历史，
+  > 本身就不该一致」），`determinism.spec.ts` 也照做了（每次渲前 `onSeek()`）。
+  > 但 `effects.spec.ts` slices、`algos.spec.ts` Rule 110 / Mandelbrot 三条
+  > 既不清历史、栈里又留着 demo 的 `echo`（反馈型、全长、顶层轨）。
+  > 实测（同一环境、同一次页面加载，数字是逐通道差异计数）：
+  >
+  > | 场景 | 连渲两次（照抄用例） | 每次渲前 onSeek |
+  > |---|---|---|
+  > | slices | 85540 | **0** |
+  > | Rule 110 | 233142 | **0** |
+  > | Mandelbrot | 36745 | **0** |
+  > | 只留 echo 一条轨 | 777023 | **0** |
+  > | 关掉 demo 全部特效轨 | **0** | 0 |
+  >
+  > 单一变量（只开关 echo）就能把差异从 0 推到 77 万 —— 它不是 GPU 竞态，
+  > 是**反馈特效的定义**。
+  >
+  > **二、2 条把 z 序搞反了 —— 它们断言的东西根本不在画面上**
+  > `ProjectStore.addTrack` 是 `p.tracks.push(...)`：新轨落在**数组末尾 =
+  > z 最低 = 最底层**；而 demo 自己的约定是「V 号越大越靠前」。测试全按
+  > 「新轨在最上面」写的，于是：
+  > - `effects.spec.ts` slices：把画面隔离到只剩它自己那两条轨后，
+  >   **开关 slices 轨对画面的影响是 0 个像素** —— 被上层轨道完全遮住。
+  >   它那两条「通过」的断言其实在测 demo 工程本身。
+  > - `effects.spec.ts` echo：flash 先加、echo 后加 → echo 在 flash **下面**，
+  >   读到的输入恒为透明黑 → 反馈恒为黑。实测把 echo 挪到 flash 上面后拖尾立刻正常：
+  >
+  >   | echo 的位置 | t=0 | t=0.5 | t=1.0 | t=1.5 |
+  >   |---|---|---|---|---|
+  >   | 在 flash 下面（照抄用例） | 255 | 0 | 0 | 0 |
+  >   | 在 flash 上面 | 255 | 242 | 111 | 50 |
+  >
+  >   用例注释写的是「echo 层：z 序在亮闪之上」，与它自己的代码相反。
+  > - `algos.spec.ts` 生命游戏：没等烘焙落地（Rule 110 那条等了 2500ms，它没等），
+  >   「缺席 → 在场」被误判成非确定。**它是唯一真会翻转的一条。**
+  >
+  > **三、只有 1 条是真问题，而且是单像素级的一次性过渡**
+  > `determinism.spec.ts` 遵守契约仍会偶发失败。探针刻画（60 轮/次 × 5 次加载，
+  > 每次 `onSeek()` 后同 t 求值）：
+  > - 差异**恒为同一个像素 (279,17)** —— 558×314 画布的水平正中；
+  > - 量级 110，且**只在那一个像素上**（相邻两轮的全帧差异恒为 3 个通道值）；
+  > - 出现 3/5 次加载，**过渡点恒在第 2–3 次求值之间**，之后 60 轮再不变；
+  > - 该像素的值在 `[47,58,72]` 与 `[109,156,182]` 两态之间翻一次。
+  > - 另观察到过一次约 100 像素的变体（`diffPixels = 300`），同一类。
+  >
+  > 已排除：烘焙迟到（那会改变整帧，实测只有 1 个像素）、画布尺寸变化、反馈历史。
+  > **机制未定位** —— 但它不影响用户看到的东西（单像素、且稳定）。
+  >
+  > **修法（已落地）**：基线取样前渲到「**连续 6 帧完全一致**」为止。
+  > 注意**不能用「空渲固定 N 帧」** —— 过渡时机随负载浮动，固定 2 帧实测仍会挂，
+  > 必须用收敛判据。这条测试现在失败时会把诊断
+  > （`transitions` / `firstTransition` / 预热帧数）打进断言消息，
+  > 下次再挂能直接分辨「一次性过渡没吃掉」还是「真非确定」。
+  >
+  > **四、上面那段「60–75% 失败率 / 症状固定个别 1–2 个像素」的记录本身是有害的**
+  > 它把「测试 bug」「异步就绪」「单像素预热」混成一类"已知 flaky"，
+  > 结果是**任何失败都变得可以解释**。这 6 条测试 bug 能一路挂着、
+  > 还让人以为它在测 slices / echo，靠的就是这条记录。
+  > 以后再看到这片红，先按上面三类分诊，不要直接引用"已知 flaky"。
+  >
+  > **五、已按分类修完（2026-10-03，全部是测试侧改动，产品行为一行没动）**
+  >
+  > | 改动 | 内容 |
+  > |---|---|
+  > | `tests/e2e/_stage.ts` | **新增**共用脚手架。`buildStage`（关掉 demo 轨道、搭「源 → 特效」、**保证特效在源之上**）、`setTrackEnabled`、`renderTwiceDiff`（默认每次渲前 `onSeek` = 契约）、`meanAt`、`hashAt`、`settle`、`waitForSourceReady`（**从 Node 侧**轮询等烘焙） |
+  > | `effects.spec.ts` | 两条改用 `buildStage`；**新增覆盖率断言「关掉特效轨画面必须变」** —— 这条要是早就有，当初就写不出测不到东西的用例 |
+  > | `algos.spec.ts` | 三条改用 `buildStage`；Rule 110 换成收敛式等烘焙；生命游戏不再依赖 demo 的烘焙 |
+  > | `determinism.spec.ts` | 基线取样前 `settle`；失败时把 `transitions`/`firstTransition`/预热帧数打进断言消息 |
+  >
+  > **结果：全量 84 条全过**（改之前是 78 通过 / 6 失败，且其中 4 条永远不会绿）。
+  >
+  > 两个必须记住的坑：
+  > 1. **`page.evaluate` 的回调读不到模块作用域。** 抽了个 `api()` 助手进
+  >    `_stage.ts`，运行期报 `api is not defined`。每个回调里必须就地写
+  >    `(window as never as { __artmatic: StageApi }).__artmatic`。
+  > 2. **warm-up 不能用固定帧数。** 那个一次性过渡的时机随负载浮动，
+  >    「空渲 2 帧」实测仍会挂（`effects.spec.ts` 的 slices 在全量跑里挂过一次）。
+  >    必须用**收敛判据**：`settle()` 渲到连续 `SETTLE_FRAMES` 帧完全一致为止。
+  >
+  > **遗留（未改，需要做决定）**：`ProjectStore.addTrack` 命名 `V${n}`（暗示
+  > V 号越大越靠前）与位置（`push` 到列表底部 = z 最低）自相矛盾。这次选择
+  > 「只修测试」，所以产品行为没动；但用户新建轨道后加特效片段就会踩到
+  > 「特效看不见」。改法二选一：保留位置改命名，或改成 `unshift` 让新轨在最上层。
+  >
+  > **顺带记一个比 `git worktree` 更省的 A/B 办法**：当改动只落在一两个文件上时
+  > （比如这次只动了 `ui/app-state.svelte.ts`），不必建 worktree——
+  > `cp` 备份后 `git show HEAD:<path> > <path>` 覆盖，跑完再 `cp` 回来即可，
+  > 省掉一次完整依赖安装。前提是 `git status` 里没有别的未提交改动混进来。
+
+  > **⚠️ 2026-10-03 补：`algos.spec.ts` 的「生命游戏 seek 回放」是一条真的失败，
+  > 而且它**先于**转场功能存在。**
+  >
+  > 做转场时全量跑挂了这条：`生命游戏：seek 回退再前进与顺序播放逐像素一致`，
+  > `diff = 102`（期望 0）。**没有当成 flaky 记一笔就过**，而是先刻画再 A/B：
+  >
+  > 探针（`tests/e2e/` 下临时 spec，用完已删）在 t=40/30 上跑四组对比，四次结果：
+  >
+  > | 对比 | 结果 |
+  > |---|---|
+  > | 顺序 vs 顺序（`onSeek()` 后重跑 0→16） | 0（4 次里 1 次 102） |
+  > | seek 回放 vs seek 回放（两次独立回放） | 0 或 102（3/4 次是 102） |
+  > | **顺序 vs 回放** | **恒为 102** |
+  >
+  > 差异形状**完全固定**：34 个像素、全部落在**同一行 y=78**、x ∈ [195, 359]；
+  > 逐通道计数 102。分辨率 558×314。
+  >
+  > **A/B 结论：不是转场引入的。** 把 `placement.frag.ts` 还原成改动前的版本
+  > （去掉 `u_opacity`、去掉进 pass 前的 `clear`）并还原 `placeLayer` 的旧语义后，
+  > **同一个 34 像素 / y=78 / [195,359] 签名照样出现**。
+  >
+  > 于是它是一条**预存在的、未定位的 sim/replay 确定性问题**：违反硬约束 1.3
+  > （「有状态模拟必须确定」，`game-of-life.ts` 的注释也承诺 `seek(f) ≡ 从 0 顺序 step f 次`）。
+  > 单测里 `seek ≡ 顺序推进` 是被钉死的，所以嫌疑在**渲染路径**（R8 上传 / tint pass /
+  > `outPool` 复用）而不在 `lifeStep` 本身 —— 但那只是排除法，**没有定位到确切层**。
+  >
+  > 用户可见性：单行 34 像素，且只在「先回退再前进」的路径上出现；预览几乎看不出。
+  > **但导出与预览走的正是这两条不同路径**，所以它不是纯粹的测试噪声 —— 该修。
+  > 保留 `algos.spec.ts` 的严格断言（`diff === 0`）是对的：**不要为了绿而放宽它**。
+  >
+  > 复现：`for i in 1 2 3; do node scripts/e2e.mjs algos.spec; done`
+  > （单跑常常绿，全量跑才挂 —— 负载相关）。
 
 ### 前端实现坑（2026-10-01 UI 改版实测，条条都真咬过）
 
@@ -1604,6 +1942,24 @@ favicon 同样成对（`public/brand/`），用 `media="(prefers-color-scheme: �
     `insp.anchorTip` 只差斜杠两边的空格。抽取时按「逐字保留」原则没动它，
     但同一个功能的 tooltip 有两份文案本身就是维护负担。合并需要一次独立的、
     显式的文案改动（会同时改到设置面板与关键帧控件的提示）。
+15. **视频素材的读写还是「整份进内存」**（2026-10-03 新增，`engine/media-assets.ts` 的文件头）：
+    本地导入那条路是干净的（只拿磁盘背书的 `File`，mediabunny 从它 seek 读），
+    但**打开工程**时 `AssetStore.loadFrom` 会把 `assets/` 下的每个素材读回
+    `Uint8Array`（§8 第 12 条的同一个根），保存时也要从内存取字节。
+    于是「打开一个含 2 GB 视频的工程」仍然会一次性吃 2 GB 堆。
+    修法是把素材字节改成**流式**：`AssetStore` 存 `File`/`Blob` 引用（`FsFile`
+    加一个 `readBlob()`，原生实现直接 `getFile()`）、`SaveInput.bytesFor` 允许
+    返回 `Blob`、`writeBytesAtomic` 接受 Blob（FSA 的 writable 原生支持）。
+    内存实现（E2E 用的 memoryRoot）回落到读字节即可。**没做，因为动到的是
+    保存/打开的公共路径，需要单独一轮回归。**
+16. **`ProjectStore.addTrack` 的命名与位置仍然自相矛盾**（2026-10-03 再次确认，
+    见 §7）：命名 `V${n}` 暗示「V 号越大越靠前」，而 `push` 到数组末尾意味着
+    **z 最低**。转场那批测试里又踩了一次（`.first()` 点到了 demo 的轨道菜单）。
+    改法二选一：保留位置改命名，或改成 `unshift` 让新轨在最上层。**仍未拍板。**
+17. **视频解码在无 GPU 的环境里没有兜底文案**（2026-10-03 新增）：
+    `video-source.ts` 把失败记进 `stats().failures` 并 `console.error`，界面上
+    只表现为「这一层不出画面」。容器/编解码不支持时应当在底栏给一条
+    `err.video.unreadable`（现在只有**导入时** probe 失败会提示，播放期失败是静默的）。
 
 ---
 

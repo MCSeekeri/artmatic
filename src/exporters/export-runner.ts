@@ -31,6 +31,15 @@ export interface ExportOptions {
   sink: FrameSink;
   codec?: string;
   onProgress?: (frac: number) => void;
+  /**
+   * 每帧耗时（毫秒，含 `prepareFrame` 的异步预热）。
+   *
+   * 存在的理由：视频素材的解码成本**只能**从这里量到。预览缺帧时会拿最近的
+   * 帧顶上（很快），所以「连着渲 N 帧再计时」量的是渲染成本而不是解码成本 ——
+   * 实测会得到 3 万 fps 这种荒谬数字。导出循环每帧都 `await prepareFrame`，
+   * 那才是真实成本。性能探针与 E2E 用它，产品路径不读。
+   */
+  onFrame?: (ms: number, index: number) => void;
   signal?: AbortSignal;
 }
 
@@ -60,9 +69,11 @@ export async function runExport(
       const t = timeOf(i, project.fps);
       // 本帧的文字层预热到导出分辨率。命中缓存时是一次 Map 查询，
       // 未命中才真的光栅化 —— 静态文档整个片段只会在这里付一次代价。
+      const frameStart = opts.onFrame ? performance.now() : 0;
       await renderer.prepareFrame(project, t);
       renderer.renderFrame(project, t);
       await opts.sink.submit(i, renderer.kit.canvas);
+      if (opts.onFrame) opts.onFrame(performance.now() - frameStart, i);
       opts.onProgress?.((i + 1) / total);
       if (i % 10 === 9) await new Promise((r) => setTimeout(r, 0));
     }

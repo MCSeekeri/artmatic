@@ -1,0 +1,273 @@
+<script lang="ts">
+  /**
+   * LabParams — 右栏：源参数 + 特效参数 + 编译日志。
+   *
+   * 为什么两块参数同时显示，而不是"跟着左栏选中项走"：
+   * 试炼场最常做的动作是**同时**调源与特效（源给一个更锐利的测试图、
+   * 特效再压一层），一次只显示一块的话每次都要点回去。
+   * 左边两张清单本来就是并置的，右边也并置才对称。
+   *
+   * 控件按 `ParamDef` 生成 —— 与 `ui/Inspector.svelte` 走同一套类型系统
+   * （effects 与 algos 共用），所以这里不需要知道任何一个具体特效长什么样。
+   */
+  import Field from '../src/ui/controls/Field.svelte';
+  import Slider from '../src/ui/controls/Slider.svelte';
+  import NumberInput from '../src/ui/controls/NumberInput.svelte';
+  import Select from '../src/ui/controls/Select.svelte';
+  import Checkbox from '../src/ui/controls/Checkbox.svelte';
+  import IconButton from '../src/ui/controls/IconButton.svelte';
+  import { labState, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
+  import { tr } from '../src/i18n/index.svelte';
+  import type { ParamDef } from '../src/effects/types';
+
+  const sourceParams = $derived(paramsFor('source', labState.sourceId));
+  const effectParams = $derived(paramsFor('effect', labState.effectId ?? NO_EFFECT_ID));
+  const failures = $derived((labState.compileResults ?? []).filter((r) => !r.ok));
+
+  function valueOf(scope: 'source' | 'effect', p: ParamDef): number | string {
+    const bag = scope === 'source' ? labState.sourceParams : labState.effectParams;
+    return bag[p.key] ?? p.defaultValue;
+  }
+</script>
+
+<aside class="lab-panel" data-testid="lab-params">
+  <div class="lab-scroll">
+    <section class="lab-section">
+      <header class="lab-section-head">
+        <h3 class="lab-section-title">{tr('lab.paramsSource')}</h3>
+        <IconButton
+          icon="rotate-cw"
+          label={tr('lab.reset')}
+          size="sm"
+          tipPlacement="top"
+          testid="lab-reset-source"
+          onclick={() => labState.resetParams('source')}
+        />
+        <IconButton
+          icon="wand-sparkles"
+          label={tr('lab.randomize')}
+          tipText={tr('lab.randomizeTip')}
+          size="sm"
+          tipPlacement="top"
+          testid="lab-random-source"
+          onclick={() => labState.randomizeParams('source')}
+        />
+      </header>
+
+      {#if sourceParams.length === 0}
+        <p class="lab-note">{tr('lab.noParams')}</p>
+      {:else}
+        {#each sourceParams as p (p.key)}
+          <div data-testid={`lab-source-param-${p.key}`}>
+            {#if p.type === 'range'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <Slider
+                  value={Number(valueOf('source', p))}
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  ariaLabel={tr(p.labelKey)}
+                  testid={`lab-source-slider-${p.key}`}
+                  oninput={(v) => labState.setParam('source', p.key, v)}
+                />
+                <NumberInput
+                  value={Number(valueOf('source', p))}
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  width={62}
+                  testid={`lab-source-num-${p.key}`}
+                  oninput={(v) => labState.setParam('source', p.key, v)}
+                  onchange={(v) => labState.setParam('source', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'select'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <Select
+                  value={String(valueOf('source', p))}
+                  options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
+                  testid={`lab-source-select-${p.key}`}
+                  optionTestidPrefix={`lab-source-select-${p.key}-opt`}
+                  onchange={(v) => labState.setParam('source', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'checkbox'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <Checkbox
+                  checked={Number(valueOf('source', p)) !== 0}
+                  testid={`lab-source-check-${p.key}`}
+                  onchange={(v) => labState.setParam('source', p.key, v ? 1 : 0)}
+                />
+              </Field>
+            {:else}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <input
+                  class="lab-color"
+                  type="color"
+                  value={String(valueOf('source', p))}
+                  data-testid={`lab-source-color-${p.key}`}
+                  oninput={(e) => labState.setParam('source', p.key, e.currentTarget.value)}
+                />
+              </Field>
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    </section>
+
+    <section class="lab-section">
+      <header class="lab-section-head">
+        <h3 class="lab-section-title">{tr('lab.paramsEffect')}</h3>
+        <IconButton
+          icon="rotate-cw"
+          label={tr('lab.reset')}
+          size="sm"
+          tipPlacement="top"
+          testid="lab-reset-effect"
+          onclick={() => labState.resetParams('effect')}
+        />
+        <IconButton
+          icon="wand-sparkles"
+          label={tr('lab.randomize')}
+          tipText={tr('lab.randomizeTip')}
+          size="sm"
+          tipPlacement="top"
+          testid="lab-random-effect"
+          onclick={() => labState.randomizeParams('effect')}
+        />
+      </header>
+
+      {#if !labState.effectId}
+        <p class="lab-note">{tr('lab.none')}</p>
+      {:else if effectParams.length === 0}
+        <p class="lab-note">{tr('lab.noParams')}</p>
+      {:else}
+        {#each effectParams as p (p.key)}
+          <div data-testid={`lab-effect-param-${p.key}`}>
+            {#if p.type === 'range'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <Slider
+                  value={Number(valueOf('effect', p))}
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  ariaLabel={tr(p.labelKey)}
+                  testid={`lab-effect-slider-${p.key}`}
+                  oninput={(v) => labState.setParam('effect', p.key, v)}
+                />
+                <NumberInput
+                  value={Number(valueOf('effect', p))}
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  width={62}
+                  testid={`lab-effect-num-${p.key}`}
+                  oninput={(v) => labState.setParam('effect', p.key, v)}
+                  onchange={(v) => labState.setParam('effect', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'select'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <Select
+                  value={String(valueOf('effect', p))}
+                  options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
+                  testid={`lab-effect-select-${p.key}`}
+                  optionTestidPrefix={`lab-effect-select-${p.key}-opt`}
+                  onchange={(v) => labState.setParam('effect', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'checkbox'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <Checkbox
+                  checked={Number(valueOf('effect', p)) !== 0}
+                  testid={`lab-effect-check-${p.key}`}
+                  onchange={(v) => labState.setParam('effect', p.key, v ? 1 : 0)}
+                />
+              </Field>
+            {:else}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <input
+                  class="lab-color"
+                  type="color"
+                  value={String(valueOf('effect', p))}
+                  data-testid={`lab-effect-color-${p.key}`}
+                  oninput={(e) => labState.setParam('effect', p.key, e.currentTarget.value)}
+                />
+              </Field>
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    </section>
+  </div>
+
+  {#if failures.length > 0}
+    <div class="lab-errors">
+      <h4 class="lab-section-title">{tr('lab.errorLog')}</h4>
+      <pre class="lab-error-text" data-testid="lab-error-log">{failures
+          .map((f) => `${f.id}: ${f.error ?? ''}`)
+          .join('\n\n')}</pre>
+    </div>
+  {/if}
+</aside>
+
+<style>
+  .lab-panel {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    background: var(--surface-1);
+    border-left: 1px solid var(--border);
+    min-height: 0;
+  }
+  .lab-scroll {
+    overflow-y: auto;
+    padding-bottom: var(--sp-4);
+  }
+  .lab-section {
+    padding-top: var(--sp-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .lab-section-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+  }
+  .lab-section-title {
+    flex: 1;
+    margin: 0;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+  .lab-note {
+    margin: 0 var(--sp-3) var(--sp-3);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+  }
+  .lab-color {
+    width: 32px;
+    height: var(--control-h, 22px);
+    padding: 0;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .lab-errors {
+    max-height: 40%;
+    overflow: auto;
+    padding: var(--sp-2) var(--sp-3);
+    border-top: 1px solid var(--border);
+  }
+  .lab-error-text {
+    margin: var(--sp-1) 0 0;
+    font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    color: var(--danger);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
