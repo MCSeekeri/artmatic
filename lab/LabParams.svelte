@@ -18,10 +18,16 @@
   import IconButton from '../src/ui/controls/IconButton.svelte';
   import { labState, itemFor, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
   import { tr } from '../src/i18n/index.svelte';
-  import type { ParamDef } from '../src/effects/types';
+  import { visibleParams, type ParamDef } from '../src/effects/types';
 
-  const sourceParams = $derived(paramsFor('source', labState.sourceId));
-  const effectParams = $derived(paramsFor('effect', labState.effectId ?? NO_EFFECT_ID));
+  // 两处都要过 `visibleWhen`。**主应用的 Inspector 一直是这么做的，试炼场漏了** ——
+  // 于是 clock 的 `division`、channel-split-prism 的分模式参数在 lab 里全都常显。
+  // 试炼场是「新增参数类型（含 visibleWhen）的 testbed」，这里与产品端不一致，
+  // 等于 testbed 测不到产品行为。
+  const sourceParams = $derived(visibleParams(paramsFor('source', labState.sourceId), labState.sourceParams));
+  const effectParams = $derived(
+    visibleParams(paramsFor('effect', labState.effectId ?? NO_EFFECT_ID), labState.effectParams),
+  );
   const failures = $derived((labState.compileResults ?? []).filter((r) => !r.ok));
 
   /**

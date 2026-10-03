@@ -156,11 +156,16 @@ export function clockParams(speed: {
  *
  * `u_beat` 必须在 JS 侧算：`BeatGrid` 是 `bpm / offset / beatsPerBar` 三件套，
  * GLSL 侧拿不到。用了 `clockPhase()` 的 fragment 都要配上这个 setter。
+ *
+ * **`u_sync` 这里必须用 `uniform1f`**：fragment 里它声明成 `uniform float u_sync`，
+ * 而对 float uniform 调 `uniform1i` 会触发 GL `INVALID_OPERATION` 并且**静默不写**
+ * —— uniform 保持 0，于是「按拍」永远退回 `t * speed`，看起来像功能没做。
+ * 8 个 clock 特效一起中过这一枪。**写 uniform 的类型必须与声明逐字对应。**
  */
 export function clockUniforms<Ctx extends { t: number; grid: BeatGrid }>(): Setter<Ctx> {
   return (gl, l, v, ctx) => {
     const sync = l['u_sync'];
-    if (sync) gl.uniform1i(sync, v.sync === 'beat' ? 1 : 0);
+    if (sync) gl.uniform1f(sync, v.sync === 'beat' ? 1 : 0);
     const speed = l['u_speed'];
     if (speed) gl.uniform1f(speed, Number(v.speed) || 0);
     const div = l['u_division'];

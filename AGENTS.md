@@ -498,8 +498,16 @@ interface Curve {
    另外注意 `HUE_ROTATE_GLSL` 的 `hueRotate` 收的是**度**，上游有些 shader 自带的
    `hrot` 收的是**弧度**。
 
-**判定「参数有没有接上」目前只能靠肉眼**：`compileAll` 只证明编得过。
-`/lab/` 里开关该特效轨画面必须变，`select` 改了必须跟着变。
+**判定「参数有没有接上」的自动关卡**：`tests/unit/effect-uniforms.test.ts` ——
+用伪 gl 跑一遍每个特效的 `setUniforms`，断言「fragment 里声明的每个 uniform 都被写到」
+且「写它的函数类型与声明一致」。它守的是**协议层**（`shader-def.ts` 的 setter 助手），
+新加一个助手或改一个 uniform 声明都会在这里被拦下。
+
+> **写 uniform 的类型必须与 fragment 的声明逐字对应。** 对 `uniform float` 调
+> `gl.uniform1i`（或反过来）会触发 GL `INVALID_OPERATION` 并且**静默不写** ——
+> 值保持 0，功能像没做。真实事故：`clockUniforms()` 用 `uniform1i` 写 `u_sync`，
+> 8 个 clock 特效的「按拍对齐」全部退回 `speed`，无任何报错（2026-10-03）。
+> 自动冒烟的 `compileAll` **看不见这一类**，所以要靠上面那份静态自检。
 - **出画转场**挂在 `SourceClip.transitionOut`，剪切点 `cut = clip.end`，窗口**以剪切点为中心**
   `[cut - d/2, cut + d/2)`。入画片段 = 同轨 `start` 紧邻（`|Δ| ≤ 1e-6`）的下一个 SourceClip，
   **按相邻关系解析、不存 id** —— 存 id 会引入悬空引用与它的一整套清理，而片段几何

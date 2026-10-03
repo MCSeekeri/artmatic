@@ -146,6 +146,57 @@ test('右栏标题并排给出显示名与 id（id 不能被 uppercase 改写）
   await expect(page.getByTestId('lab-effect-name')).toContainText('霓虹边缘');
 });
 
+test('时钟特效：按拍对齐真的接管了相位（speed 归零后相位仍由拍网格给）', async ({ page }) => {
+  await boot(page);
+  const result = await page.evaluate((meanSrc: string) => {
+    const mean = eval(meanSrc) as (d: number[]) => number;
+    const L = (window as unknown as LabWindow).__lab!;
+    const shot = (t: number): number[] => {
+      L.renderAt(t, true);
+      return L.readPixels().data;
+    };
+    const count = (a: number[], b: number[]): number => {
+      let d = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+
+    // screen-jump 在 intensity=1 时整帧回绕：相位为 0 就是恒等，非 0 必变。
+    L.selectSource('mandelbrot');
+    L.selectEffect('screen-jump');
+    L.setParam('effect', 'intensity', 1);
+
+    // speed = 0 时自由模式的相位恒为 0 —— 这就是「什么都不动」的基线。
+    L.setParam('effect', 'sync', 'free');
+    L.setParam('effect', 'speed', 0);
+    const freeZero = shot(1);
+
+    // LAB_BEAT_GRID = 120bpm / offset 0 → beat(1s) = 2；division 0.25 → 相位 0.5。
+    // 与上面那张**完全不同**才算按拍真的接管了 —— 这一条正是回归守卫：
+    // 若 u_sync 写不进去（类型不匹配会静默不写），这里会退化成同一个相位 0，
+    // 两张图逐像素一致，diff 为 0。
+    L.setParam('effect', 'sync', 'beat');
+    L.setParam('effect', 'division', '0.25');
+    const beatAt1 = shot(1);
+    const beatAt15 = shot(1.5);
+
+    return {
+      diffFreeVsBeat: count(freeZero, beatAt1),
+      diffBeatAcross: count(beatAt1, beatAt15),
+      beatMean: mean(beatAt1),
+      px: beatAt1.length / 4,
+    };
+  }, meanExpr());
+
+  // ① 按拍模式与「相位 0」不是同一张图 → u_sync + u_beat 真的接上了。
+  expect(result.diffFreeVsBeat).toBeGreaterThan(0);
+  // ② 同一个按拍模式下，相位随 t 前进（0.5 → 0.75）→ u_beat 是时间的函数而不是常数。
+  expect(result.diffBeatAcross).toBeGreaterThan(0);
+  // ③ 不是黑屏 / NaN 雪花 —— 回绕过的 Mandelbrot 仍该有内容。
+  expect(result.beatMean).toBeGreaterThan(1);
+  expect(result.px).toBeGreaterThan(0);
+});
+
 test('分辨率档位真的改后备缓冲尺寸（不被显示区压掉）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {
