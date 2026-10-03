@@ -485,11 +485,17 @@ interface Curve {
    `uniform sampler2D u_texture;` / `uniform float u_time;` / `uniform vec2 u_resolution;`
    —— 与 `EFFECT_HEAD` 重复，**直接编译失败**。移植前先搜一遍 head 里那几个名字。
    （`u_resolution` 这一条在 51 个里出现了 **6 次**。）
-2. **`u_time` 是秒还是相位。** openmosh 的 `getEffectTime` **只对有 `speed` 参数的特效**
-   把 `u_time` 换成累积相位（`phase += dt * speed`，`sync === 'beat'` 时读拍网格）。
-   所以：def 里有 `speed` 而上游 shader 直接用 `u_time` ⇒ **移植时必须自己把它乘出来**
-   （`u_time * u_speed`，或用 `clockPhase()`），否则那个滑杆**完全失效且不报错**。
-   反过来，shader 里本来就写了 `u_time * u_speed` 的，**不要再乘一次**。
+2. **`u_time` 是秒还是相位，以及 `speed` 是「时间倍率」。** openmosh 的
+   `getEffectTime` **只对有 `speed` 参数的特效**把 `u_time` 换成累积相位
+   （`phase += dt * speed`，`sync === 'beat'` 时读拍网格），**同时**把
+   `u_delta` 换成 `dt * speed`。所以：def 里有 `speed` 而上游 shader 直接用
+   `u_time` ⇒ **移植时必须自己把它乘出来**（`u_time * u_speed`，或用 `clockPhase()`），
+   否则那个滑杆**完全失效且不报错**。反过来，shader 里本来就写了 `u_time * u_speed`
+   的，**不要再乘一次**。**若 shader 还读 `u_delta`，它也要乘**（`melt` 是典型：
+   只乘一个的话「下淌速度」与「愈合速度」会以不同比例跑，画面就散了）。
+   - 口径：**`u_delta` 是「本特效用于动画的那个量」的每帧增量，不是固定的秒。**
+     非 clock 特效那个量是秒（runner 直接给 `1/fps`）；clock 特效那个量是相位，
+     `clockUniforms()` 会按 `speed` / `division` 换算好。
 3. **hash / noise 的形状与 seed。** `HASH_GLSL`（掺 seed，逐帧换图案）与
    `HASH_PLAIN_GLSL`（坐标的纯函数）用途不同，拿错会让图案从「随时间爬行」变成
    「逐帧闪烁」。`NOISE_GLSL` / `FBM6_GLSL` 建在**不掺 seed** 的那支上。
@@ -497,6 +503,11 @@ interface Curve {
    `12.9898/78.233`）就是不同的图案，换过去是改画面，不是「统一实现」。
    另外注意 `HUE_ROTATE_GLSL` 的 `hueRotate` 收的是**度**，上游有些 shader 自带的
    `hrot` 收的是**弧度**。
+4. **`u_feedback` 要显式开。** openmosh 是「fragment 用了 `u_feedback` 就自动分配
+   历史缓冲」（它查 program 的活跃 uniform），Artmatic 的协议要求写
+   `feedback: true`。漏写的表现是 sampler 没人绑、采样读回未绑定纹理 ——
+   像「没有拖尾」，不报错。同理任何 runner 绑不了的 sampler（如 `u_spectrum`）
+   都会被 `effect-uniforms.test.ts` 拦下。
 
 **判定「参数有没有接上」的自动关卡**：`tests/unit/effect-uniforms.test.ts` ——
 用伪 gl 跑一遍每个特效的 `setUniforms`，断言「fragment 里声明的每个 uniform 都被写到」

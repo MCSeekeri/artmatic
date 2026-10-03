@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { getEffect, listEffects } from '../../src/effects/registry';
+import { EFFECT_HEAD } from '../../src/effects/shader-def';
 import type { EffectClip } from '../../src/core/schema';
 import type { EffectUniformCtx } from '../../src/effects/shader-def';
 
@@ -30,6 +31,15 @@ const HEAD_OWNED = new Set([
   'u_resolution',
 ]);
 
+/**
+ * runner **能**绑定的 sampler。声明了别的就没人给它绑 —— 采样会读回未绑定纹理
+ * （黑/垃圾），而 GL 自己不会说话。
+ *
+ * 特别是 `u_spectrum`（openmosh 的音频频谱通道）：Artmatic 还没做那条通道
+ * （Phase 1f），现在移植任何声明它的特效都会静默变瞎。
+ */
+const BINDABLE_SAMPLERS = new Set(['u_texture', 'u_original', 'u_feedback']);
+
 /** 写入函数 → 它允许写的 GLSL 类型。 */
 const WRITER_TYPES: Record<string, string[]> = {
   uniform1f: ['float'],
@@ -48,6 +58,10 @@ interface Probe {
   written: Map<string, string>;
   /** 被 setUniforms 摸到、但 fragment 里根本没声明的名字（拼错就是这样）。 */
   undeclared: Set<string>;
+  /** 这个特效的 fragment 有没有**用到** `u_feedback`（决定 runner 要不要绑它）。 */
+  usesFeedback: boolean;
+  /** 这个特效有没有声明 `feedback: true`。 */
+  declaresFeedback: boolean;
 }
 
 function probeEffect(defId: string): Probe {
@@ -55,7 +69,12 @@ function probeEffect(defId: string): Probe {
   if (!entry) throw new Error(`注册表里没有 ${defId}`);
 
   const declared = new Map<string, string>();
-  for (const m of entry.shader.fragment.matchAll(
+  // **必须按实际编译的源码来解析**（head + fragment）。只解析 fragment 的话，
+  // `u_feedback` / `u_texture` / `u_delta` 这些 head 里的声明根本看不到，
+  // 于是「声明了 u_feedback 就必须带 feedback: true」那条断言永远不会触发 ——
+  // 一条结构上不可能失败的假防线（初版就是这么写的，改回 bug 跑一遍才发现）。
+  const source = EFFECT_HEAD + entry.shader.fragment;
+  for (const m of source.matchAll(
     /uniform\s+(float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\s+(u_\w+)\s*;/g,
   )) {
     declared.set(m[2]!, m[1]!);
@@ -67,11 +86,15 @@ function probeEffect(defId: string): Probe {
 
   // 未声明的名字返回 null —— 与真实 `Program.u()` 的行为一致（静默跳过），
   // 但这里**记一笔**，于是拼错的 uniform 名会被断言抓到。
+  //
+  // head 自己提供的名字（HEAD_OWNED）除外：setter 那侧会**防御性地**读它们
+  // （比如 `clockUniforms` 会读 `u_delta`，而并非每个 clock fragment 都声明它），
+  // 那是合法用法，不是拼错。
   const locs = new Proxy({} as Record<string, WebGLUniformLocation | null>, {
     get(_t, prop) {
       if (typeof prop !== 'string') return undefined;
       if (!declared.has(prop)) {
-        undeclared.add(prop);
+        if (!HEAD_OWNED.has(prop)) undeclared.add(prop);
         return null;
       }
       const loc = { name: prop };
@@ -110,7 +133,13 @@ function probeEffect(defId: string): Probe {
   } satisfies EffectUniformCtx;
 
   entry.shader.setUniforms(gl, locs, values, ctx);
-  return { declared, written, undeclared };
+  return {
+    declared,
+    written,
+    undeclared,
+    declaresFeedback: entry.shader.feedback === true,
+    usesFeedback: /\bu_feedback\b/.test(entry.shader.fragment),
+  };
 }
 
 const EFFECTS = listEffects().map((e) => e.id);
@@ -140,5 +169,28 @@ describe('特效接线自检', () => {
   test.each(EFFECTS)('%s：没有摸到未声明的 uniform', (id) => {
     const { undeclared } = probeEffect(id);
     expect([...undeclared], `${id} 摸了不存在的 uniform → 名字拼错了`).toEqual([]);
+  });
+
+  // openmosh 是「fragment 里用了 u_feedback 就自动分配历史」，Artmatic 要**显式**
+  // `feedback: true`。漏写的表现是：sampler 没人绑，`texture(u_feedback, ...)`
+  // 读回未绑定纹理 —— 画面看着像「没有拖尾」，不报错。
+  //
+  // 判据必须是「fragment **用到**了 u_feedback」而不是「声明了」：head 无条件声明
+  // 它，按声明判定会变成一条永远为真的假断言（初版就是这么错的）。
+  test.each(EFFECTS)('%s：用到 u_feedback 就必须带 feedback: true', (id) => {
+    const { usesFeedback, declaresFeedback } = probeEffect(id);
+    if (!usesFeedback) return;
+    expect(declaresFeedback, `${id} 用了 u_feedback 但没写 feedback: true → sampler 不会绑定`).toBe(
+      true,
+    );
+  });
+
+  test.each(EFFECTS)('%s：声明的 sampler 都是 runner 能绑的', (id) => {
+    const { declared } = probeEffect(id);
+    const samplers = [...declared.entries()]
+      .filter(([, t]) => t === 'sampler2D')
+      .map(([n]) => n)
+      .filter((n) => !BINDABLE_SAMPLERS.has(n));
+    expect(samplers, `${id} 声明了 runner 绑不了的 sampler → 采样会读回未绑定纹理`).toEqual([]);
   });
 });

@@ -388,6 +388,40 @@ export const media = {
   'fx.fiberDisplace.chrome': '虹彩',
   'fx.fiberDisplace.smoothness': '平滑',
 
+  /* --- Phase 1c 反馈类（都要 u_feedback） --- */
+
+  'fx.melt': '熔融',
+  'fx.melt.amount': '强度',
+  'fx.melt.speed': '速度',
+
+  'fx.tunnel': '隧道',
+  'fx.tunnel.zoom': '缩放',
+  'fx.tunnel.spin': '旋转',
+  'fx.tunnel.decay': '衰减',
+
+  'fx.feedbackLoop': '反馈循环',
+  'fx.feedbackLoop.decay': '衰减',
+  'fx.feedbackLoop.scale': '缩放',
+  'fx.feedbackLoop.rotate': '旋转',
+  'fx.feedbackLoop.warp': '扰动',
+  'fx.feedbackLoop.hue': '色相偏移',
+  'fx.feedbackLoop.blend': '混合方式',
+  'fx.feedbackLoop.blendMax': '最大值',
+  'fx.feedbackLoop.blendScreen': '滤色',
+  'fx.feedbackLoop.blendAdd': '相加',
+
+  'fx.liquidLight': '液体光',
+  'fx.liquidLight.scale': '胞元大小',
+  'fx.liquidLight.flow': '流动',
+  'fx.liquidLight.refraction': '折射',
+  'fx.liquidLight.dispersion': '色散',
+
+  'fx.flowContours': '流线等高',
+  'fx.flowContours.bands': '层数',
+  'fx.flowContours.flow': '流动',
+  'fx.flowContours.cycle': '色相周期',
+  'fx.flowContours.sheen': '光泽',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */

@@ -162,7 +162,7 @@ export function clockParams(speed: {
  * —— uniform 保持 0，于是「按拍」永远退回 `t * speed`，看起来像功能没做。
  * 8 个 clock 特效一起中过这一枪。**写 uniform 的类型必须与声明逐字对应。**
  */
-export function clockUniforms<Ctx extends { t: number; grid: BeatGrid }>(): Setter<Ctx> {
+export function clockUniforms<Ctx extends { t: number; grid: BeatGrid; fps: number }>(): Setter<Ctx> {
   return (gl, l, v, ctx) => {
     const sync = l['u_sync'];
     if (sync) gl.uniform1f(sync, v.sync === 'beat' ? 1 : 0);
@@ -172,6 +172,23 @@ export function clockUniforms<Ctx extends { t: number; grid: BeatGrid }>(): Sett
     if (div) gl.uniform1f(div, Number(v.division) || 1);
     const beat = l['u_beat'];
     if (beat) gl.uniform1f(beat, beatAtTime(ctx.t, ctx.grid));
+
+    // `u_delta` 的口径是「**本特效用于动画的那个量**的每帧增量」，不是固定的秒/帧。
+    // 对 clock 特效那个量是**相位**（自由模式是 `t·speed`，按拍是 `beat·division`），
+    // 所以这里要按各自的关系换算。上游正是这么给的
+    // （`out.delta = dt * perBeat * beatsPerSecond`）。
+    // 目前 8 个 clock 特效都没读 `u_delta` —— 给对是为了不留地雷：
+    // 若照旧传秒，将来某个 clock 特效读它就会得到差一个 `speed`/`division` 的量。
+    const delta = l['u_delta'];
+    if (delta) {
+      const perFrame = ctx.fps > 0 ? 1 / ctx.fps : 0;
+      gl.uniform1f(
+        delta,
+        v.sync === 'beat'
+          ? perFrame * (ctx.grid.bpm / 60) * (Number(v.division) || 1)
+          : perFrame * (Number(v.speed) || 0),
+      );
+    }
   };
 }
 

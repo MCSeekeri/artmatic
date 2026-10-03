@@ -21,6 +21,7 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | `openmosh` | MIT | 单 pass 特效（**Phase 1b·② 频闪与时序故障**，8 个）：`strobe`、`rgb-strobe`、`rgb-burst`、`resize-glitch`、`stylize-glitch`、`shockwave`、`ring-warp`，以及从上游 `channel-split` 拆出的新特效 `channel-split-prism`（只列径向 / 棱镜两模式，着色器保留上游分支） | 同上 |
 | 同上，二级来源 `Vidvox/ISF-Files` | MIT | 其中 `hsv-swap`、`trio-tone`、`circle-warp`、`pixel-shifter`、`rgb-strobe`、`ring-warp`、`shockwave`、`resize-glitch`、`stylize-glitch` 是 openmosh 从 Vidvox ISF 集合按行为重写的端口（非逐行复制） | 同上 |
 | `openmosh` | MIT | 单 pass 特效（**Phase 1b·③ 信号与噪声**，9 个）：`grain`、`soft-glitch`、`data-bend`、`vhs`、`composite`、`optical-flow`、`smear`、`relief`、`fiber-displace` | 同上 |
+| `openmosh` | MIT | 反馈类特效（**Phase 1c**，5 个）：`melt`、`tunnel`、`feedback`、`liquid-light`、`flow-contours`。上游靠「fragment 声明了 `u_feedback`」隐式分配历史，本项目改成显式 `feedback: true` | 同上 |
 | `openmosh` | MIT | `gl/preview-size.ts` 预览尺寸策略（含 `UNMEASURED_MAX_PIXELS` 兜底） | `src/engine/preview-size.ts` |
 | `openmosh` | MIT | `timeline/clips.ts` 片段几何（`moveClip` 钳制、`freeRangeAt`、`MIN_CLIP_LENGTH`、`clipFadeWeight`） | `src/core/clips.ts` |
 | `openmosh` | MIT | `effects/types.ts` 参数定义类型（Range/Select/Checkbox/Color，去掉 mosh/volumeLink/fontPicker） | `src/effects/types.ts` |
