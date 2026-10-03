@@ -147,6 +147,9 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
         // fast-mosh 的 u_hold、motion-mask 的 u_persistence/u_erode/u_blur 都是）。
         // 只派发 head uniform 的话这些参数恒为 0 —— 画面会明显不对，但不报错。
         shader.setUniforms(gl, prog.uniforms, values, uniformCtx);
+        // 与参数一样，**每个 pass 都尝试绑频谱**：没声明 u_spectrum 的 program
+        // 里 `bindTo` 直接返回，绝大多数特效走的就是这条路径。
+        ctx.spectrum?.bindTo(prog, inst.instanceId, ctx.t, delta, values);
         kit.pass(prog, out);
         if (restore) restore();
 
@@ -172,6 +175,7 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       .u('u_resolution', [ctx.w, ctx.h]);
     if (fb) prog.tex('u_feedback', fb.read.tex);
     shader.setUniforms(gl, prog.uniforms, values, uniformCtx);
+    ctx.spectrum?.bindTo(prog, inst.instanceId, ctx.t, delta, values);
 
     if (fb) {
       // 主 pass 写历史，换手，再把刚写的那份拷到链上。

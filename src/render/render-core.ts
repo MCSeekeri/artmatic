@@ -22,6 +22,7 @@
 
 import { Renderer } from '../engine/renderer';
 import { SourceManager } from '../engine/sources';
+import { SpectrumTextures, type SpectrumSource } from '../engine/spectrum-texture';
 import { createVideoSourceManager, type VideoSourceManager } from '../engine/video-source';
 import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
@@ -48,6 +49,12 @@ export interface RenderCoreOpts {
    * lab → 请求重绘一帧。
    */
   onAlgoReady: () => void;
+  /**
+   * 频谱来源（`u_spectrum`）。**数据以接口注入**，所以这个文件依然不 import
+   * `audio/` —— 「谁供数」是宿主的事：主应用给工程音频的频谱，lab 给合成频谱。
+   * 不传也能跑：声明了 `u_spectrum` 的特效会读到一张零纹理（静音）。
+   */
+  spectrum?: SpectrumSource | null;
 }
 
 export interface RenderCore {
@@ -56,6 +63,8 @@ export interface RenderCore {
   /** 视频取帧器。导出前要逐帧 `prepare()`，关闭工程时 `dispose()`。 */
   video: VideoSourceManager;
   kit: Kit;
+  /** 频谱纹理池。宿主换音频来源时调 `setSource`。 */
+  spectrumTextures: SpectrumTextures;
 }
 
 export function createRenderCore(
@@ -90,5 +99,9 @@ export function createRenderCore(
   renderer.setEffectRunner(createEffectRunner(renderer.kit, () => opts.getProject().seed));
   renderer.setTransitionRunner(createTransitionRunner(renderer.kit));
 
-  return { renderer, sources, video, kit: renderer.kit };
+  const spectrumTextures = new SpectrumTextures(renderer.kit);
+  spectrumTextures.setSource(opts.spectrum ?? null);
+  renderer.setSpectrumTextures(spectrumTextures);
+
+  return { renderer, sources, video, kit: renderer.kit, spectrumTextures };
 }

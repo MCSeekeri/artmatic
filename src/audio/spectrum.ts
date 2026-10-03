@@ -22,6 +22,8 @@ import { Fft, hannWindow } from './fft';
 export const SPECTRUM_FPS = 50;
 /** 与 tempo 的 N_FFT 一致：44.1 kHz 下 bin 宽 ≈ 21.5 Hz。 */
 export const SPECTRUM_FFT = 2048;
+/** 单边谱的 bin 数。**唯一的真源** —— 消费方与纹理宽度都从这里取。 */
+export const SPECTRUM_BINS = (SPECTRUM_FFT >> 1) + 1;
 /** 对齐 AnalyserNode 的默认 dB 窗口。 */
 const MIN_DB = -100;
 const MAX_DB = -30;

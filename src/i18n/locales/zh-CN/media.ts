@@ -471,6 +471,24 @@ export const media = {
   'fx.petri.scale': '胞元大小',
   'fx.petri.takeover': '画面侵蚀',
 
+  /* --- Phase 1f 音频 --- */
+
+  'fx.audioBars': '频谱条',
+  'fx.audioBars.bars': '条数',
+  'fx.audioBars.height': '高度',
+  'fx.audioBars.gain': '增益',
+  'fx.audioBars.smoothing': '平滑',
+  'fx.audioBars.punch': '打击感',
+  'fx.audioBars.opacity': '不透明度',
+  'fx.audioBars.anchor': '锚点',
+  'fx.audioBars.anchorBottom': '底部',
+  'fx.audioBars.anchorTop': '顶部',
+  'fx.audioBars.anchorCenter': '居中',
+  'fx.audioBars.style': '样式',
+  'fx.audioBars.styleSolid': '实心',
+  'fx.audioBars.styleSegmented': '分段',
+  'fx.audioBars.color': '颜色',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */

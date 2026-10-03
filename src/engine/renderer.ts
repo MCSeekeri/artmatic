@@ -8,6 +8,7 @@
 
 import { Compositor, type EffectRunner, type SourceResolver, type TransitionRunner } from './compositor';
 import { Kit } from './kit';
+import type { SpectrumTextures } from './spectrum-texture';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
 import type { Project } from '../core/schema';
 
@@ -33,6 +34,15 @@ export class Renderer {
   /** 转场执行器（`effects/transitions/runner.ts`）。未装配时 compositor 用降级实现。 */
   setTransitionRunner(runTransition: TransitionRunner): void {
     this.compositor.runTransition = runTransition;
+  }
+
+  /**
+   * 频谱纹理（`u_spectrum`）。由 `render-core` 装配：
+   * 主应用供工程音频的频谱，lab 供合成频谱，都没有时照样建 ——
+   * 声明了 `u_spectrum` 的特效会读到一张零纹理（静音）而不是未绑定的 sampler。
+   */
+  setSpectrumTextures(spectrum: SpectrumTextures): void {
+    this.compositor.spectrum = spectrum;
   }
 
   /** 预览画布显示区域的容器元素（量设备像素尺寸用）。 */

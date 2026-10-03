@@ -30,6 +30,7 @@ import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
 import { buildStack, type ResolvedSource, type TransitionOp } from './stack';
 import type { Kit, Program, Target } from './kit';
+import type { SpectrumTextures } from './spectrum-texture';
 import type { BeatGrid } from '../core/time';
 import type { EffectClip, EffectInstance, Project, SourceClip } from '../core/schema';
 
@@ -53,6 +54,12 @@ export interface EffectCtx {
   /** 特效片段本体（曲线的宿主）：曲线键 `${instanceId}.${paramKey}`。 */
   clip: EffectClip;
   grid: BeatGrid;
+  /**
+   * 频谱纹理（`u_spectrum`）。由 `render-core` 装配。
+   * `null` = 没有音频来源 —— 那时声明了 `u_spectrum` 的特效会读到一张零纹理
+   * （静音），而不是未绑定的 sampler。
+   */
+  spectrum: SpectrumTextures | null;
 }
 
 /** 特效执行器：B8 由 effects/registry 装配；之前特效片段是 no-op。 */
@@ -112,6 +119,13 @@ export class Compositor {
    * 赋值在构造函数体内，因为默认实现要用到 `passProg`。
    */
   public runTransition: TransitionRunner;
+
+  /**
+   * 频谱纹理（`u_spectrum`）。**可变字段而不是构造参数**：它由 `render-core`
+   * 在装配后注入，而 lab 给的是合成频谱、主应用给的是工程音频 —— 构造签名
+   * 不该为「谁来供数」而变。
+   */
+  public spectrum: SpectrumTextures | null = null;
 
   constructor(
     private readonly kit: Kit,
@@ -179,6 +193,7 @@ export class Compositor {
           compositor: this,
           clip: op.clip,
           grid: project.beatGrid,
+          spectrum: this.spectrum,
         };
         for (const inst of op.clip.chain) {
           if (!inst.enabled) continue;

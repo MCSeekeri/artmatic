@@ -38,13 +38,18 @@ const HEAD_OWNED = new Set([
 ]);
 
 /**
+ * runner 在 head 之外**还**负责绑定的 sampler：`setUniforms` 不碰它们。
+ *
+ * `u_spectrum` 由 `engine/spectrum-texture.ts` 的 `bindTo` 每帧绑上
+ * （每实例一张纹理），所以「声明了就必须被 setUniforms 写到」这条对它不适用。
+ */
+const RUNNER_BOUND = new Set(['u_spectrum']);
+
+/**
  * runner **能**绑定的 sampler。声明了别的就没人给它绑 —— 采样会读回未绑定纹理
  * （黑/垃圾），而 GL 自己不会说话。
- *
- * 特别是 `u_spectrum`（openmosh 的音频频谱通道）：Artmatic 还没做那条通道
- * （Phase 1f），现在移植任何声明它的特效都会静默变瞎。
  */
-const BINDABLE_SAMPLERS = new Set(['u_texture', 'u_original', 'u_feedback']);
+const BINDABLE_SAMPLERS = new Set(['u_texture', 'u_original', 'u_feedback', ...RUNNER_BOUND]);
 
 /** 写入函数 → 它允许写的 GLSL 类型。 */
 const WRITER_TYPES: Record<string, string[]> = {
@@ -204,7 +209,9 @@ describe('特效接线自检', () => {
   test.each(PASS_CASES)('%s：这一 pass 声明的参数都被 setUniforms 写到', (_label, id, kind) => {
     const { passes, written } = probeEffect(id);
     const p = passes.find((x) => x.kind === kind)!;
-    const missed = [...p.own.keys()].filter((n) => !HEAD_OWNED.has(n) && !written.has(n));
+    const missed = [...p.own.keys()].filter(
+      (n) => !HEAD_OWNED.has(n) && !RUNNER_BOUND.has(n) && !written.has(n),
+    );
     expect(missed, `${id} 的 ${kind} 声明了却没写 → 这些 uniform 恒为默认值且不报错`).toEqual([]);
   });
 

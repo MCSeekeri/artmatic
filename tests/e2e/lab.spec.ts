@@ -227,6 +227,50 @@ test('pre-pass 的参数真的生效（blur 的 radius 只活在 pre-pass 里）
   expect(result.diff).toBeGreaterThan(0);
 });
 
+test('频谱通道：audio-bars 真的被频谱驱动（拍点与拍中的画面不同）', async ({ page }) => {
+  await boot(page);
+  const result = await page.evaluate(() => {
+    const L = (window as unknown as LabWindow).__lab!;
+    const shot = (t: number): number[] => {
+      L.renderAt(t, true);
+      return L.readPixels().data;
+    };
+    const count = (a: number[], b: number[]): number => {
+      let d = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+
+    // 源必须**时间不变**：`lab:grid` 只吃 uv 与分辨率。
+    //
+    // 一开始这里用的是 `lab:gradient` —— 它本身随 `u_time` 旋转，于是「把频谱
+    // 整个摘掉之后测试仍然通过」，测到的是渐变的旋转而不是柱子。假防线。
+    L.selectSource('lab:grid');
+    L.selectEffect('audio-bars');
+    L.setParam('effect', 'bars', 32);
+    L.setParam('effect', 'height', 0.9);
+    L.setParam('effect', 'opacity', 1);
+    // 关掉平滑：让单帧就能看出差别，而不是要跑一长串帧才显形。
+    L.setParam('effect', 'smoothing', 0);
+
+    // 试炼场的合成频谱按 120 bpm 走：1.00 s 是拍点（底鼓），1.25 s 是拍中（踩镲）。
+    const onBeat = shot(1);
+    L.setBypass(true);
+    const bypassed = shot(1);
+    L.setBypass(false);
+    const offBeat = shot(1.25);
+
+    return { drawn: count(onBeat, bypassed), driven: count(onBeat, offBeat) };
+  });
+
+  // ① 柱子确实画在画面上了。
+  expect(result.drawn).toBeGreaterThan(0);
+  // ② 而且它的高度来自频谱。这条守的是**整条频谱链路**：
+  //    provider → 归一化 → 逐实例平滑 → 纹理 → runner 绑定 u_spectrum。
+  //    任何一环断了，频谱恒为静音 → 每根柱子都是空的 → 两张图一致。
+  expect(result.driven).toBeGreaterThan(0);
+});
+
 test('分辨率档位真的改后备缓冲尺寸（不被显示区压掉）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {

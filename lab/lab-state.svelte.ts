@@ -13,6 +13,7 @@
 
 import { createRenderCore, type RenderCore } from '../src/render/render-core';
 import { PatternRenderer, PATTERNS, isPatternId } from './patterns';
+import { createLabSpectrum } from './spectrum';
 import {
   buildLabProject,
   LAB_BASE_H,
@@ -225,6 +226,9 @@ class LabState {
       getProject: () => ({ beatGrid: LAB_BEAT_GRID, seed: LAB_SEED, fps: LAB_FPS }),
       // rAF 循环一直在跑，不需要"叫醒"，留着是为了 render-core 的接口完整。
       onAlgoReady: () => {},
+      // 试炼场没有工程音频，给合成频谱 —— 否则 audio-bars 在 lab 里恒为静音、
+      // 根本没法目视验收（与 patterns.ts 给合成测试图同一个思路）。
+      spectrum: createLabSpectrum(),
     });
     this.core = core;
     this.patterns = new PatternRenderer(core.kit);
