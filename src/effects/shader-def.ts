@@ -9,10 +9,11 @@
  * glsl/<id>.ts（本协议实现），registry 按文件名自动配对。
  */
 
-import type { BeatGrid } from '../core/time';
 import type { EffectClip } from '../core/schema';
-
+import { beatAtTime, type BeatGrid } from '../core/time';
 import { colorVec3 } from '../core/color';
+import type { MessageKey } from '../i18n/locales';
+import type { ParamDef } from './types';
 
 /** hex 颜色 → [0..1] 的三分量，供 `setUniforms` 里给 vec3 uniform 用。 */
 export { colorVec3 };
@@ -69,6 +70,103 @@ export function selectInt<Ctx = EffectUniformCtx>(
     if (!loc) return;
     const n = map[String(v[key])];
     gl.uniform1i(loc, n === undefined ? fallback : n);
+  };
+}
+
+/* --------------------------------------------------------------- 时钟 */
+
+/**
+ * 时钟驱动的特效共用的相位函数。
+ *
+ * openmosh 给这些特效的 `u_time` 是**累积相位**（它引擎侧做 `phase += dt * speed`），
+ * 所以它的 fragment 直接写 `fract(u_time)` / `floor(u_time)`。
+ * 那是 dt 驱动的有状态量 —— 违反硬约束 1.1、seek 不可复现，**不能照搬**：
+ * 直接传 `u_time = t` 的话，`speed` 参数会**完全失效且不报错**。
+ *
+ * 这里把相位算成**闭式**：自由模式是 `t * speed`，按拍模式是 `拍相位 * division`。
+ * `u_beat` 由 `clockUniforms()` 在 JS 侧算好传进来（`BeatGrid` 只有 JS 侧有）。
+ */
+export const CLOCK_GLSL = `float clockPhase(float t, float sync, float speed, float div, float beat) {
+  return sync > 0.5 ? beat * div : t * speed;
+}
+`;
+
+/** 一拍里跑几个循环。`0.25` = 4 拍一个循环。 */
+const CLOCK_DIVISIONS: { value: string; labelKey: MessageKey }[] = [
+  { value: '0.25', labelKey: 'fx.clock.div025' },
+  { value: '0.5', labelKey: 'fx.clock.div05' },
+  { value: '1', labelKey: 'fx.clock.div1' },
+  { value: '2', labelKey: 'fx.clock.div2' },
+  { value: '3', labelKey: 'fx.clock.div3' },
+  { value: '4', labelKey: 'fx.clock.div4' },
+  { value: '8', labelKey: 'fx.clock.div8' },
+];
+
+/**
+ * 时钟三件套：`sync` + `speed` + `division`。
+ *
+ * `speed` 只在自由模式显示、`division` 只在按拍模式显示 —— 这是
+ * `ParamDef.visibleWhen` 的首次实战（在此之前没有任何特效用过它）。
+ * 文案键是**共用的** `fx.clock.*`，不给每个特效各写一套。
+ */
+export function clockParams(speed: {
+  labelKey: MessageKey;
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+  curve?: number;
+}): ParamDef[] {
+  return [
+    {
+      key: 'sync',
+      labelKey: 'fx.clock.sync',
+      type: 'select',
+      defaultValue: 'free',
+      options: [
+        { labelKey: 'fx.clock.syncFree', value: 'free' },
+        { labelKey: 'fx.clock.syncBeat', value: 'beat' },
+      ],
+    },
+    {
+      key: 'speed',
+      labelKey: speed.labelKey,
+      type: 'range',
+      min: speed.min,
+      max: speed.max,
+      step: speed.step,
+      defaultValue: speed.defaultValue,
+      ...(speed.curve === undefined ? {} : { curve: speed.curve }),
+      // 按拍模式下速度由拍网格决定，这个滑杆没有意义。
+      visibleWhen: (v) => v.sync !== 'beat',
+    },
+    {
+      key: 'division',
+      labelKey: 'fx.clock.division',
+      type: 'select',
+      defaultValue: '1',
+      options: CLOCK_DIVISIONS,
+      visibleWhen: (v) => v.sync === 'beat',
+    },
+  ];
+}
+
+/**
+ * 派发时钟三件套，并把 `u_beat`（当前拍相位，可带小数）算好传进去。
+ *
+ * `u_beat` 必须在 JS 侧算：`BeatGrid` 是 `bpm / offset / beatsPerBar` 三件套，
+ * GLSL 侧拿不到。用了 `clockPhase()` 的 fragment 都要配上这个 setter。
+ */
+export function clockUniforms<Ctx extends { t: number; grid: BeatGrid }>(): Setter<Ctx> {
+  return (gl, l, v, ctx) => {
+    const sync = l['u_sync'];
+    if (sync) gl.uniform1i(sync, v.sync === 'beat' ? 1 : 0);
+    const speed = l['u_speed'];
+    if (speed) gl.uniform1f(speed, Number(v.speed) || 0);
+    const div = l['u_division'];
+    if (div) gl.uniform1f(div, Number(v.division) || 1);
+    const beat = l['u_beat'];
+    if (beat) gl.uniform1f(beat, beatAtTime(ctx.t, ctx.grid));
   };
 }
 
@@ -156,9 +254,30 @@ in vec2 vUv;
 out vec4 outColor;
 `;
 
-/** openmosh 的 hash 噪声（移植）。随机必须掺 u_seed——见 slices。 */
+/**
+ * openmosh 的 hash 噪声（移植）。随机必须掺 `u_seed`——见 slices。
+ *
+ * **三个 hash 变体的选择**（移植时别拿错）：
+ * - 本常量（**带 seed**）：用于「每次求值都该换个图案」的随机处置，如 slices 的行位移。
+ * - `HASH_PLAIN_GLSL`（**不带 seed**）：坐标的纯函数。用于「图案要稳定、只随时间平滑
+ *   演化」的场合（pixel-shifter、grain、composite 这类）。
+ *   openmosh 的同名常量就是这一支 —— **移植时不要直接换成本常量**，否则图案会从
+ *   「随时间爬行」变成「逐帧闪烁」。
+ * - `HASH_FAST_GLSL`（Dave Hoskins 无 sin 族）：大像素坐标下更稳定。
+ */
 export const HASH_GLSL = `float hash(vec2 p) {
   return fract(sin(dot(p, vec2(12.9898, 78.233)) + u_seed * 937.0) * 43758.5453);
+}
+`;
+
+/**
+ * openmosh `HASH_GLSL` 的**原样**版本：同样的常数，但不掺 `u_seed`。
+ *
+ * 分成两支是因为用途不同：掺 seed 的那支让图案逐帧变，不掺的这支是坐标的纯函数。
+ * 见 `HASH_GLSL` 的说明。
+ */
+export const HASH_PLAIN_GLSL = `float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
 `;
 

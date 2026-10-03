@@ -38,6 +38,19 @@ export const media = {
 
   /* --- 以下 9 个移植自 openmosh gl/effect-shaders.ts（MIT，见 CREDITS.md） --- */
 
+  /* 时钟三件套（effects/shader-def.ts 的 clockParams，多个特效共用一套文案） */
+  'fx.clock.sync': '同步',
+  'fx.clock.syncFree': '自由',
+  'fx.clock.syncBeat': '按拍',
+  'fx.clock.division': '分频',
+  'fx.clock.div025': '4 拍一轮',
+  'fx.clock.div05': '2 拍一轮',
+  'fx.clock.div1': '每拍一轮',
+  'fx.clock.div2': '每拍 2 轮',
+  'fx.clock.div3': '每拍 3 轮',
+  'fx.clock.div4': '每拍 4 轮',
+  'fx.clock.div8': '每拍 8 轮',
+
   'fx.posterize': '色阶量化',
   'fx.posterize.levels': '色阶数',
 
@@ -182,6 +195,72 @@ export const media = {
   'fx.halftone.modeDots': '网点',
   'fx.halftone.modeLines': '刻线',
   'fx.halftone.invert': '反相',
+
+  /* --- Phase 1b·① 位移与抖动 --- */
+
+  'fx.jitter': '逐行抖动',
+  'fx.jitter.amount': '幅度',
+  'fx.jitter.speed': '速度',
+
+  'fx.wobble': '游移',
+  'fx.wobble.amount': '幅度',
+  'fx.wobble.frequency': '频率',
+  'fx.wobble.speed': '速度',
+
+  'fx.shake': '整帧抖动',
+  'fx.shake.amount': '幅度',
+  'fx.shake.speed': '抖动频率',
+
+  'fx.screenJump': '画面滚卷',
+  'fx.screenJump.direction': '方向',
+  'fx.screenJump.dirVertical': '垂直',
+  'fx.screenJump.dirHorizontal': '水平',
+  'fx.screenJump.intensity': '强度',
+  'fx.screenJump.speed': '滚动速度',
+
+  'fx.tile': '平铺',
+  'fx.tile.size': '平铺数',
+  'fx.tile.offset': '偏移',
+  'fx.tile.angle': '角度',
+  'fx.tile.speed': '滚动速度',
+
+  'fx.swirl': '漩涡',
+  'fx.swirl.angle': '扭转角',
+  'fx.swirl.radius': '作用半径',
+  'fx.swirl.speed': '呼吸速度',
+
+  'fx.ripple': '涟漪',
+  'fx.ripple.amount': '幅度',
+  'fx.ripple.frequency': '频率',
+  'fx.ripple.speed': '速度',
+
+  'fx.pixelShifter': '行列偏移',
+  'fx.pixelShifter.hFrequency': '横向频率',
+  'fx.pixelShifter.hPhase': '横向相位',
+  'fx.pixelShifter.hRandom': '横向随机',
+  'fx.pixelShifter.vFrequency': '纵向频率',
+  'fx.pixelShifter.vPhase': '纵向相位',
+  'fx.pixelShifter.vRandom': '纵向随机',
+  'fx.pixelShifter.sinusoidal': '正弦',
+  'fx.pixelShifter.mirror': '镜像',
+
+  'fx.transform3d': '3D 变换',
+  'fx.transform3d.rotX': '绕 X',
+  'fx.transform3d.rotY': '绕 Y',
+  'fx.transform3d.rotZ': '绕 Z',
+  'fx.transform3d.perspective': '透视',
+  'fx.transform3d.zoom': '缩放',
+  'fx.transform3d.spin': '自转速度',
+  'fx.transform3d.axis': '自转轴',
+  'fx.transform3d.axisX': 'X 轴',
+  'fx.transform3d.axisY': 'Y 轴',
+  'fx.transform3d.axisZ': 'Z 轴',
+  'fx.transform3d.axisTumble': '翻滚',
+  'fx.transform3d.edge': '边缘',
+  'fx.transform3d.edgeNone': '透明',
+  'fx.transform3d.edgeClamp': '钳制',
+  'fx.transform3d.edgeTile': '平铺',
+  'fx.transform3d.edgeMirror': '镜像',
 
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
