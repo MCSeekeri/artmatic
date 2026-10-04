@@ -14,9 +14,12 @@
  * 编译失败时 `new Program` 抛错且不写缓存，所以失败项下次仍会重编，
  * 不存在"坏 program 被缓存住"的污染。
  *
- * 覆盖面：所有特效的主 pass **与 pre-pass** + 所有 `realtime` 算法 + 所有转场。
- * 未覆盖 —— 算法的 `bake` / `sim` 通路共用的 reveal / tint program
- * （定义在 algo/runtime.ts 内部且未导出）。
+ * 覆盖面：所有特效的主 pass **与 pre-pass** + 所有 `realtime` 算法 + 所有转场
+ * + `sim` 型生成器的**自定义着色**（`def.tintFragment`）。
+ *
+ * 仍未覆盖 —— `bake` / `sim` 共用的 reveal / 默认 tint program。它们在
+ * `algos/runtime.ts` 里是常量（`REVEAL_FRAG` / `TINT_FRAG`），与任何 def 无关，
+ * 是同一个 program 反复用；自定义 tint 则**每个 def 一份**，所以那一批必须编。
  *
  * ## 转场这一批为什么非编不可
  *
@@ -31,7 +34,7 @@
 
 import { getEffect, listEffects } from './registry';
 import { getGenerator, listGenerators } from '../algos/registry';
-import { ALGO_HEAD, algoProgramName } from '../algos/shader-lib';
+import { ALGO_HEAD, TINT_HEAD, algoProgramName, algoTintProgramName } from '../algos/shader-lib';
 import { listTransitions } from './transitions/registry';
 import { EFFECT_HEAD, effectProgramName } from './shader-def';
 import type { Kit } from '../engine/kit';
@@ -72,18 +75,27 @@ export function compileAllEffects(kit: Kit): CompileResult[] {
   return out;
 }
 
-/** 编译全部 `realtime` 算法的着色器。名字与 algos/runtime.ts 同源。 */
+/**
+ * 编译全部算法的着色器：`realtime` 的主 fragment + `sim` 的自定义着色。
+ * 名字与 `algos/runtime.ts` 同源（同一个 `Kit.quad` 具名缓存）。
+ */
 export function compileAllAlgoShaders(kit: Kit): CompileResult[] {
   const out: CompileResult[] = [];
   for (const { id, kind } of listGenerators()) {
-    if (kind !== 'realtime') continue;
+    if (kind !== 'realtime' && kind !== 'sim') continue;
     const def = getGenerator(id);
-    if (!def || def.kind !== 'realtime') {
+    if (!def || (def.kind !== 'realtime' && def.kind !== 'sim')) {
       out.push({ id, ok: false, error: `注册表里没有 ${id}` });
       continue;
     }
     try {
-      kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
+      if (def.kind === 'realtime') {
+        kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
+      } else if (def.tintFragment !== undefined) {
+        // ⚠️ 漏掉这一支的后果不是「少编一个 program」，而是**新写的 tint shader
+        // 完全没有语法守卫** —— 它在预览里被点到之前不会报任何错。
+        kit.quad(TINT_HEAD + def.tintFragment, algoTintProgramName(id));
+      }
       out.push({ id, ok: true });
     } catch (e) {
       out.push({ id, ok: false, error: message(e) });

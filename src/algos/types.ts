@@ -55,27 +55,98 @@ export interface SimHandle {
   readonly gridW: number;
   readonly gridH: number;
   readonly stepsPerSec: number;
+  /**
+   * 通道数：`1`（默认，R8）/ `2`（RG8）/ `4`（RGBA8）。**不支持 3** ——
+   * 纹理内部格式没有 24 位这一档，多出来的那一通道浪费掉比造一个奇怪格式划算。
+   *
+   * 缺省即单通道 ⇒ 现有生成器（生命游戏 / 兰顿蚂蚁）**逐字节走同一条旧路径**，
+   * 这是 `algos.spec.ts` 的 seek 确定性用例继续成立的前提。
+   */
+  readonly channels?: 1 | 2 | 4;
   /** 第 simFrame 步的状态（0/255）。seek 必须满足：seek(f) ≡ 从 0 顺序 step f 次。 */
   seek(simFrame: number): void;
+  /**
+   * 当前状态，**通道交错**排列，长度 = `gridW * gridH * channels`。
+   *
+   * 交错而不是分平面：`texSubImage2D` 一次上传就吃交错数据，分平面要么多次
+   * `pixelStorei` 偏移、要么在 JS 侧重排一遍。`channels === 1` 时逐字节等于
+   * 旧的单通道布局，所以这个改动对老生成器是透明的。
+   */
   current(): Uint8Array;
 }
 
 export type SimFactory = (params: Record<string, number | string>, seed: number) => SimHandle;
+
+/**
+ * `realtime` 生成器可以申请的**内部生成纹理**。
+ *
+ * 目前只有字形图集一项（ASCII 类生成器要）：它在运行时用 Canvas2D +
+ * 系统等宽字体画出来，所以**不引入任何字体资产** —— 也就没有授权问题。
+ * 做成声明式（而不是「生成器自己 import 一个 builder」）是为了让运行时
+ * 能统一按 kind 缓存与销毁。
+ */
+export type AlgoAuxKind = 'glyph-atlas';
+
+export interface AlgoAuxRef {
+  /** 绑到哪个 sampler 上，如 `'u_glyph'`。 */
+  uniform: string;
+  kind: AlgoAuxKind;
+}
+
 
 interface GeneratorBase {
   id: string;
   /** 展示名。存的是**文案键**而不是字符串——理由见 effects/types.ts 的注释。 */
   nameKey: MessageKey;
   params: ParamDef[];
+  /**
+   * **不参与「算一次、缓存起来」那段计算**的参数键（配色、调色板、显示开关、
+   * 揭示速度…）—— 对 `bake` 是烘焙入参，对 `sim` 是构造参数。
+   *
+   * 哈希会把这些键排除，所以改它们**不会重烘 / 不会重建模拟**。对两类都是刚需：
+   * 反应扩散跑了几千步、或 L-system 烘了一张 1024×512，拉一下配色就从头再来
+   * 是不可接受的。
+   *
+   * ⚠️ 列进来就等于承诺「这个键不参与 `bake()` / `create()`」。把 `size`、
+   * `rule`、`mask` 这类真入参写进来，会得到「改了参数但画面不变」的静默 bug。
+   *
+   * 速度不算在内 —— `bake` 的 `speed` 是揭示速度（渲染期读），sim 的 `rate`
+   * 由运行时每帧从当前参数读（`liveRate`），两者都不该进哈希。但显式列上
+   * 也无害，反而更明确。
+   */
+  volatile?: string[];
 }
 
 export type GeneratorDef =
   | (GeneratorBase & { kind: 'bake'; bake: BakeFn; reveal?: BakeReveal })
-  | (GeneratorBase & { kind: 'sim'; create: SimFactory })
+  | (GeneratorBase & {
+      kind: 'sim';
+      create: SimFactory;
+      /**
+       * 自定义着色：**替代**共享的 `TINT_FRAG`（双色调）。
+       *
+       * 不含头 —— 运行时会把 `TINT_HEAD` 拼在前面（那一份里已经声明了
+       * `u_tex` / `u_colorBg` / `u_colorLive` / `vUv` / `outColor` 与
+       * contain 适配的 `u_srcAspect` / `u_outAspect`）。所以多通道模拟
+       * （如 Gray-Scott 的 u/v）只写 `main`，直接读 `u_tex.r` / `u_tex.g`。
+       */
+      tintFragment?: string;
+      /** 上面的自定义着色需要的额外 uniform。 */
+      setTintUniforms?: AlgoSetUniforms;
+    })
   | (GeneratorBase & {
       kind: 'realtime';
       /** fragment **不含头** —— 由 `ALGO_HEAD` 拼在前面（见 shader-lib.ts）。 */
       fragment: string;
       /** 把求值后的参数派发到 `u_<key>`。缺了它参数永远拿不到值且不报错。 */
       setUniforms: AlgoSetUniforms;
+      /**
+       * 需要运行时创建的内部纹理（见 `AlgoAuxRef`）。
+       *
+       * ⚠️ 这里声明的 sampler 由**运行时**绑定，不经 `setUniforms` ——
+       * 所以 `algo-uniforms.test.ts` 的「声明了的都被写到」判据会把它
+       * 误判成漏写。用 aux 的 def 落地时，必须把这些名字并进那份测试的
+       * `HEAD_OWNED` 集合。
+       */
+      auxTextures?: AlgoAuxRef[];
     });

@@ -18,6 +18,20 @@ import type { SelectParam, RangeParam } from '../effects/types';
 import type { MessageKey } from '../i18n/locales';
 import type { AudioFeatures } from './feature-source';
 
+/**
+ * 运行时创建的内部纹理绑好之后的样子。生成器可以读它的**度量**
+ * （如字形图集的列数/格宽），避免把布局硬编码进 shader。
+ */
+export interface AlgoAuxTexture {
+  readonly tex: WebGLTexture;
+  readonly w: number;
+  readonly h: number;
+  /** 图集的分格信息；非图集类纹理可缺省。 */
+  readonly cols?: number;
+  readonly rows?: number;
+  readonly cell?: number;
+}
+
 export interface AlgoUniformCtx {
   t: number;
   frame: number;
@@ -36,6 +50,13 @@ export interface AlgoUniformCtx {
    * 这个对象是**复用**的，只在本次 `setUniforms` 调用内有效。
    */
   features: AudioFeatures;
+  /**
+   * `def.auxTextures` 声明的内部纹理，按 uniform 名索引。
+   *
+   * **必须是可选字段** —— `tests/unit/algo-uniforms.test.ts` 用
+   * `satisfies AlgoUniformCtx` 构造 ctx，加必填字段会让那份测试直接编译失败。
+   */
+  aux?: ReadonlyMap<string, AlgoAuxTexture>;
 }
 
 export type AlgoSetUniforms = (
@@ -89,6 +110,17 @@ export function intResParam(): SelectParam {
  */
 export function algoProgramName(id: string): string {
   return `algo-${id}`;
+}
+
+/**
+ * `sim` 型自定义着色（`def.tintFragment`）的 program 名。
+ *
+ * 与 `algoProgramName` 分开命名（`algo-tint-*` vs `algo-*`）是必须的：
+ * 同一个 `Kit.quad` 按名缓存 program，撞名就意味着「另编一份」或者
+ * 「拿错的那份」—— 前者白做预编译，后者是画面直接错。
+ */
+export function algoTintProgramName(id: string): string {
+  return `algo-tint-${id}`;
 }
 
 /* ------------------------------------------------------------ 程序化场景 */
@@ -223,3 +255,57 @@ export function sceneUniforms(): AlgoSetUniforms {
     floats<AlgoUniformCtx>('density', 'warp', 'tone', 'cut', 'lift', 'prog')(gl, l, v, ctx);
   };
 }
+
+/* ------------------------------------------------- sim 的状态着色协议 */
+
+/**
+ * contain 适配：把输出 UV 映射回源图的 UV。
+ *
+ * `bake` 的 reveal 与 `sim` 的 tint 都要把「源的比例」放进「整帧的比例」里
+ * 居中留边，两处共用同一段 —— 各写一份的话，改了一处另一处会静默错位。
+ */
+export const FIT_GLSL = `
+uniform float u_srcAspect;
+uniform float u_outAspect;
+vec2 containUv(vec2 uv) {
+  vec2 p = uv - 0.5;
+  if (u_outAspect > u_srcAspect) p.x *= u_outAspect / u_srcAspect;
+  else p.y *= u_srcAspect / u_outAspect;
+  return p + 0.5;
+}
+float insideUv(vec2 uv) {
+  vec2 e = step(vec2(0.0), uv) * step(uv, vec2(1.0));
+  return e.x * e.y;
+}
+`;
+
+/**
+ * `sim` 型着色的共享头。
+ *
+ * 默认着色器直接用它的全部内容（下面的 `TINT_FRAG`）；`def.tintFragment`
+ * 的自定义着色**只写 `main`**，头由运行时拼在前面 —— 于是多通道模拟
+ * （Gray-Scott 的 u/v）不必各自再声明一遍 `u_tex` / contain 适配 / 输出。
+ *
+ * 放在 `shader-lib.ts` 而不是 `runtime.ts`：它是**协议**（和 `ALGO_HEAD` 同层），
+ * 而且 `effects/compile-all.ts` 要靠它预编译每个自定义 tint program ——
+ * 放在 runtime 里就得让 compile-all 去 import 整个运行时（拖进 bake-client /
+ * glyph-atlas 一大串），而 compile-all 本来就只该认识协议。
+ */
+export const TINT_HEAD = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D u_tex;
+uniform vec3 u_colorBg;
+uniform vec3 u_colorLive;
+${FIT_GLSL}
+`;
+
+/** `sim` 型的默认着色：单通道 R8 状态 + 双色调。 */
+export const TINT_FRAG = `${TINT_HEAD}
+void main() {
+  vec2 uv = containUv(vUv);
+  float cell = texture(u_tex, clamp(uv, 0.0, 1.0)).r;
+  vec3 c = mix(u_colorBg, u_colorLive, cell * insideUv(uv));
+  outColor = vec4(c, 1.0);
+}`;

@@ -456,6 +456,9 @@ class LabState {
       if (p.type === 'range') values[p.key] = p.min + rng() * (p.max - p.min);
       else if (p.type === 'select') values[p.key] = p.options[Math.floor(rng() * p.options.length)]!.value;
       else if (p.type === 'checkbox') values[p.key] = rng() < 0.5 ? 0 : 1;
+      else if (p.type === 'bitmask') values[p.key] = Math.floor(rng() * 2 ** p.bits);
+      // pattern 保持默认值：随机位图是一团噪声，既没有「图案」可言，
+      // 也会把「随机出一组好看的参数」这件事直接毁掉。
       else values[p.key] = p.defaultValue;
     }
     if (scope === 'source') this.sourceParams = values;

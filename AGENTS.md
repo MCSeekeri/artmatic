@@ -106,7 +106,8 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 ```
 src/
 ├── core/          纯 TS，无 DOM / WebGL，必须可单测
-│                  schema · 曲线求值 · 命令栈 · 片段几何（clips）· 转场钳制 · prng · 颜色（color.ts）
+│                  schema · 曲线求值 · 命令栈 · 片段几何（clips）· 转场钳制 · prng
+│                  · 颜色（color.ts）· 位掩码（bitmask.ts：位序映射 + B/S 打包）
 ├── engine/        WebGL2：Program / Target / Pass 调度 · 纹理池 · 预览尺寸 · 确定性时钟
 │   ├── media-assets.ts   运行期素材登记（图片 = 已解码 canvas；视频 = Blob / File 引用）
 │   └── video-source.ts   视频取帧：mediabunny + WebCodecs + 有界纹理缓存
@@ -117,7 +118,9 @@ src/
 │   ├── compile-all.ts    全量编译守卫（E2E 与按钮用，不在启动路径上）
 │   └── transitions/      gl-transitions 目录 + GLSL 规范化 + runner
 ├── algos/         算法生成器注册表 + 烘焙 Worker
-│   └── shader-lib.ts     realtime 生成器的头（ALGO_HEAD）· intResParam · program 命名
+│   ├── shader-lib.ts     realtime 生成器的头（ALGO_HEAD）· intResParam · program 命名
+│   ├── pattern-codec.ts  手绘位图的编解码（永不抛 / 自带尺寸 / 跨环境稳定）
+│   └── pattern-presets.ts 标准种子图案（滑翔机 / 滑翔机枪 / 脉冲星 …）
 ├── render/        ★ 合成根，见下
 ├── audio/         离线 FFT · BPM/offset 估计 · 波形桶 · 播放器
 ├── typography/    TypographyDocument 模型 + 光栅化后端 + 字体注册表 / HarfBuzz 子集化
@@ -491,6 +494,25 @@ interface Curve {
 - **`ParamDef.visibleWhen`** 控参数的条件可见性；特效检查器里 range / select / **checkbox** / color
   四种都必须有分支（缺 checkbox 的表现是「参数不显示」，不报错）。
 
+#### 新增一种 `ParamDef` 变体时（2026-10-04 加 `bitmask` / `pattern` 之后总结）
+
+**参数类型有四个消费方，必须一起改 —— 漏掉任何一个都不报错**：
+
+| 消费方 | 漏掉的症状 |
+|---|---|
+| `ui/Inspector.svelte`（源参数 + 特效参数**两个循环**） | 参数在检查器里**什么都不显示**（`{#if}` 链没有 `else`） |
+| `lab/LabParams.svelte`（同样两个循环） | 参数在试炼场里被 `{:else}` 兜成**一个颜色选择器** |
+| `lab/lab-state.svelte.ts` 的 `randomizeParams` | 「随机」按钮**不随机这一项**（静默回落 defaultValue） |
+| `effects/types.ts` 的 `defaultValues` | 新片段写入时缺这个键 —— 只有自带 `defaultValue` 才没事 |
+
+- 试炼场是「新参数类型的 testbed」：**它和产品端不一致，等于这个类型没有被测过**。
+  所以新参数类型要在 lab 侧也加一条 DOM 断言。
+- 守卫：`tests/unit/algo-params.test.ts` 遍历所有注册的生成器与特效，断言参数类型在
+  已知集合内、`labelKey`/选项文案能解析、`select.defaultValue` 在选项里、
+  `bitmask` 的分组位数之和 = `bits` 且默认值 < 2^bits、`visibleWhen` 引用的键
+  **真的存在于同一张参数表**（`v.seedModeX` 这种拼写错误类型系统拦不住 —— `v` 是 `Record`）。
+- **自研控件必须 `data-exempt`**（见 §6.5）——位表与绘画 canvas 都踩这条。
+
 #### 从外部移植一个特效时（2026-10-03 移植 51 个之后总结）
 
 **照抄会静默坏掉的三类，按出现频率排**：
@@ -716,6 +738,129 @@ interface Curve {
   `ExportOptions.onFrame`（`export-runner.ts`）给出每帧真实耗时，`__artmatic.exportTiming(n)`
   是它的 E2E 出口。
 
+#### 参数类型：`bitmask` 与 `pattern`（2026-10-04）
+
+两个新变体是为「规则可调 / 种子可画」加的，它们**都不需要抬 `SCHEMA_VERSION`**
+（运行期逐键 `?? defaultValue` 合并，见 `runtime.evalParams`）。代价是参数表多了一个键
+→ bake/sim 的缓存哈希变了一次 → 老工程第一次打开会重烘一遍。**这是正确行为，不是 bug。**
+
+- **`bitmask`**（`bits` / `groups` / `slider?` / `presets?`）：一个 `0..2^bits-1` 的整数，
+  UI 是「可点击的位表 + 数值框」。存在的理由是**同一个控件要服务两种规则**：一维 CA 的
+  规则号（8 位）与生命类 CA 的 B/S 掩码（18 位 = 出生 9 + 存活 9）。做成 `range` 的话
+  B/S 会得到一条 `0..262143` 的滑杆（毫无语义），而且 `evalParams` 对 `range` 有关键帧
+  分支，混进来会让「这参数能不能打关键帧」说不清。
+  - 位号 → 行的映射在 **`core/bitmask.ts` 唯一定义**：`'eca'` **高位在前**（111 那一行是
+    bit7，`Rule 30 = 00011110₂` 就是这么读的）／`'count'` 低位在前（邻居数 0 起）。
+    界面点亮的位与生成器生效的规则必须是同一套映射，各写一份的 bug 形态是
+    「点亮的位与画面不符」，看代码看不出来。
+  - B/S 的打包：**出生占低 9 位、存活占高 9 位**（`masksFromBS` / `birthFromMask` /
+    `surviveFromMask`）。Conway = 6152、HighLife = 6216，**用 `masksFromBS([3],[2,3])`
+    算，不要写魔数**。
+  - `rule = 0` 是**合法**规则。读值一律 `clampMask(v, bits)`，**绝不要写 `Number(v) || 110`**
+    （那会把用户选的 0 换成 110）。
+
+- **`pattern`**（`defaultValue` 是串、`editorSize?`、`mode: '2d'|'1d'`）：一枚
+  `WxH:<base64>` 编码串，**空串 = 没有图案**。编解码在 `algos/pattern-codec.ts`，三条纪律：
+  1. **永不抛异常。** 它读的是磁盘上的 `project.json`（手改过、旧版本写过、截断过）——
+     一律降级成 `null` / 补 0 / 截断，绝不把工程卡在打不开的状态。
+  2. **自带尺寸。** 图案不是网格的附属：同一张 32×32 的图案要能盖到 112² 或 256² 上。
+  3. **跨环境逐位稳定。** 自带 base64 实现（不用 `btoa`），于是浏览器 / Worker / Node
+     三处一致，且能在 vitest 里纯测。
+  - **全零图案是合法值**（语义是「清空」），与 `null`（坏串 → 回退随机）是两回事。
+  - 盖印一律 `stampCentered`（**居中 + 裁剪**，不缩放）；一维 CA 用 `stampRow`（只取第 0 行）。
+    居中而不是左上角对齐：网格远大于手绘图案时，左上角对齐会让图案缩在角落，
+    而且改网格尺寸时位置会漂。
+  - `seedMode` 语义：`game-of-life` 是 `random | pattern`，`rule110` 是
+    `single | random | pattern`。**pattern 模式不消耗 RNG** —— 于是 `seek ≡ 顺序 step`
+    这条不变量与旧实现同构，不需要额外的确定性论证。
+  - 编辑器（`ui/pattern/PatternEditorModal.svelte`）是**精简版**：涂/擦（经典拖拽语义，
+    没有独立笔刷开关）、清空/反相/随机、网格尺寸、几个标准预设。**刻意不做**
+    旋转/镜像/平移/洪水填充 —— 它存在的唯一理由是「画出随机撒种给不出的初始条件」。
+  - 画布必须 `data-exempt`、DPR 比较必须 `Math.round`、随机走 `mulberry32(hashSeed(…))`
+    （§1.2 禁止裸 `Math.random()`）。全部改动是**本地草稿**，只有「应用」才回写参数
+    → 整个编辑过程是一笔撤销。
+
+#### sim 多通道 与 realtime 辅助纹理（协议形状已定，等第一个使用者）
+
+- **`SimHandle.channels?: 1|2|4`** + `current()` 返回**交错**字节（长 = `w*h*channels`）。
+  `undefined/1` 必须**逐字节走旧的 R8 路径** —— 这是 `algos.spec.ts` 的 seek 确定性用例
+  与「生命游戏逐像素不变」的前提。选交错而不是分平面：`texSubImage2D` 一次上传就吃。
+  3 通道**不支持**（没有 24 位内部格式，多出来那一通道浪费掉比造一个奇怪格式划算）。
+- **`sim def.tintFragment` / `setTintUniforms`**：自定义着色，**只写 `main`** ——
+  `runtime.ts` 抽出的 `TINT_HEAD` 已经声明了 `u_tex` / `u_colorBg` / `u_colorLive` /
+  contain 适配。多通道模拟（Gray-Scott 的 u/v）就读 `u_tex.g`。
+  program 名由 `algoTintProgramName(id)` 生成（`algo-tint-*`，与 `algo-*` 分开 ——
+  撞名就意味着另编一份或者拿错的那份）。
+- **`realtime def.auxTextures`** + `AlgoUniformCtx.aux?`（**必须可选** ——
+  `algo-uniforms.test.ts` 用 `satisfies AlgoUniformCtx` 构造 ctx，加必填字段会编译失败）。
+  目前只有 `glyph-atlas`：运行时用 Canvas2D + 系统等宽字体画出来，**不引任何字体资产**。
+  - ⚠️ 用 aux 的 def 落地时，要把它声明的 uniform 名并进 `algo-uniforms.test.ts` 的
+    `HEAD_OWNED` —— 那些 sampler 由运行时绑，不经 `setUniforms`，会被误判成「漏写」。
+- 建纹理 / 上传纹理前**先切到 scratch 单元**（见 §5.5 的 GL 状态事故）。
+
+#### `SimDef.volatile`：哪些参数**不该**参与「算一次、缓存起来」那段
+
+`bake` 的烘焙入参与 `sim` 的构造参数都会进一个哈希（`runtime.ts` 的 `cacheHash`），
+哈希变了就重烘 / 重建。`volatile?: string[]` 里的键被排除在哈希之外。
+
+**为什么需要**：`rate`（速度）、`colorBg`/`colorLive`（配色）、`palette`、`contrast`、
+显示开关都**不参与** `create()` / `bake()` —— 它们只在渲染期读。不排除的话，
+拉一下配色滑杆就会重建整个模拟。
+
+> ⚠️ 代价说准一点：模拟是**确定性**的，重建之后 `seek(t)` 会从 0 重放到同一个状态 ——
+> **画面完全一样**，状态不会丢。重建的真实代价是**时间**：每次重放 `elapsed × rate` 步，
+> 长片子上是秒级卡顿。所以这是一个**延迟**问题，不是数据丢失问题。
+> （也正因如此，它没有 E2E —— 墙钟断言在 headless 里必然 flaky。机制由
+> `tests/unit/reaction-diffusion.test.ts` 的 `cacheHash` 用例钉住。）
+
+**家族约定**：sim 的速度参数一律叫 `rate`，运行时每帧从**当前**参数读它
+（`liveRate`）。所以「改速度」连重建都不需要，只是重新映射 `t → step`。
+
+#### sim 的状态精度与快照
+
+- **内部用高精度 typed array**（`Float32Array` / `Uint16Array` / `Uint32Array`），
+  只有 `current()` 做 8 位量化。**快照必须存内部精度**——存量化后的输出会把每一步的
+  舍入误差累积进重放路径，`seek(f) ≡ 顺序 step f 次` 就不成立了。
+- 量化的口径逐生成器写在自己的 `current()` 里（如反应扩散把 v 乘 3 拉开窄动态范围、
+  沙堆用 `sqrt(h)·96` 让 2 与 3 的差别可见）。**这些是显示处理，不影响状态。**
+- **快照用 `sim-util.ts` 的 `SnapshotRing`**，它做**抽稀阶梯**而不是「只留最近 N 张」：
+  第 0 帧恒存（任何回退都能从它重放），超过 cap 就把阶梯加倍。
+  只留最近 N 张的话，回退到很早的帧就退化成「从第 0 帧重放几万步」。
+- **别在回退时丢弃 newer 快照**：`step` 是确定性的，同一帧的旧快照与重算出来的
+  状态逐位相同，留着还能省一次重放。
+
+#### 元胞自动机家族：默认值必须**实测**选定
+
+Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、循环 CA、沙堆、
+雪花、Lenia、Wireworld）。它们的默认值**不是从文献抄来的就完事** —— 有四处是
+实测才发现的：
+
+| 生成器 | 文献/直觉的默认 | 实测 | 结论 |
+|---|---|---|---|
+| 反应扩散 · 撒点密度 | 15%（看着像噪声） | 整场 ×10% / ×60% **8 个预设全空**；×30% 只有 3 个活着 | 改成**只在中间 60% 区域**撒、密度 0.4 |
+| 反应扩散 · 预设表 | 8 个 (F,k) | `bubbles` 在标准种子下**任何尺寸任何密度都全空**（需强种子） | **删掉 bubbles**；`spots` 要**小**种子（r=4 才得到稳定斑点，r≥8 崩） |
+| 循环 CA | K=12 / θ=2 / Moore（网上常见） | **一步冻死**（8 个邻居落在指定状态的概率只有 1/12） | 改成 **K=8 / θ=2 / Moore**（8.6% 的格子每步在变 = 局域化波前） |
+| Lenia | σ=0.015（Orbium 那套） | 在任何 μ 下**一步就死** | 改成 **σ=0.03**（那套窄 σ 配的是 Orbium 自己的环形位图） |
+
+**判据是「画面活不活」**，而它有个陷阱：`ink = 非零格数` 对多态/连续场是**无意义指标**
+（循环 CA 的 92% 格子非零、雪花的 100% 格子非零）。要按生成器选判据：
+循环 CA 用「相邻两步变了几格」（能抓「冻住」），雪花用「冰的格数」（能抓「不结晶」），
+多通道用「某个通道的非零格数」。
+
+**两个生成器被推迟，不是因为难写，是因为实测证明它们不成立**：
+
+- **SmoothLife**：我拿不到一个有把握的转移函数表述，而错的表述只会在「死」与「炸」
+  之间二选一 —— 那等于发布一个坏掉的生成器。它同时也是最慢的（ra=20 约 11M MAC/步）。
+- **可激发介质（Barkley）**：实现了、也调了 ε×dt 的网格（12 组），但**螺旋与靶形波
+  都在 t≈2000 熄掉**，而真正的可激发介质螺旋是**持续**的。要修得先做对的螺旋初始
+  位形（半平面加缺口那套不产生持续螺旋）与参数搜索 —— 那是独立的一轮工作。
+
+沙堆还带一条**防卡死的闸门**：`stabilize(..., maxTopple)`。逼近饱和时一粒沙能引发
+极大的雪崩（实测能跑几十秒），没有闸门就意味着「撒沙量拉满 + 网格调小」可以直接
+卡死主线程。闸门**不影响确定性**（上限是步数的固定函数），代价只是雪崩特别大的
+那几步堆暂时没稳。撒沙量另外按 `n²/32` 收了口。
+
+
 ### 5.7 排版
 
 - 编辑器形态：**工程内部的一个视图**，UI 是数据驱动的 Ribbon（Tab / 分组 / 按钮，
@@ -821,6 +966,40 @@ npm run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright
 - **文案改动只需跑 `vitest run tests/unit/i18n.test.ts`**。**改一句中文绝不应该需要改组件代码。**
 - **E2E 走 Playwright + 系统 Chrome**（`channel: 'chrome'`），不需要 `playwright install`。
   E2E 服务器要正确返回 `.mjs` 的 `text/javascript` MIME，否则 ESM import 会被拦掉。
+- **加了一个新参数类型 / 新守卫之后要在这里补一条**：
+  - `tests/unit/algo-params.test.ts` —— 遍历**所有**注册生成器与特效的参数表：
+    类型在已知集合内、文案键能解析、`select.defaultValue` 在选项里、`bitmask` 位数自洽、
+    `visibleWhen` 引用的键存在。**「加了参数忘了接 UI / 忘了加文案」在这里变成失败。**
+  - `tests/unit/algo-tint-uniforms.test.ts` —— **`sim` 的自定义着色**（`def.tintFragment`）
+    的接线自检。`algo-uniforms.test.ts` 的 `probeGenerator` 遇到 `kind !== 'realtime'`
+    直接返回 null，所以**它对 sim 的 tint 一无所知**；而 tint 走的是同一套手工派发，
+    同一类静默失效（声明了没写 / 对 vec3 调 uniform1f / 名字拼错）原样存在。
+    它有一条**刻意会红**的非空断言：没有任何 sim 用自定义着色时，
+    上面几条 `test.each` 全是空转 —— 空转的守卫比没有守卫更坏。
+  - `tests/unit/pattern-codec.test.ts` / `bitmask.test.ts` / `pattern-paint.test.ts` ——
+    纯函数（编解码往返、非法输入降级、位序、Bresenham 补线、居中裁剪）。
+  - `tests/unit/cellular-automata.test.ts` / `lenia-wireworld.test.ts` /
+    `reaction-diffusion.test.ts` —— Wave 2 那 7 个 sim。里面有几条**解析不变量**
+    才算真守卫：反应扩散 `F=k=0` 时 `Σ(u+v)` 守恒、沙堆的**阿贝尔性**（fifo 与 lifo
+    两种崩塌顺序的终止态逐格相同）、雪花「冰只增不减」、循环 CA「默认参数下相邻两步
+    必须有格子在变」（这条直接抓「冻死」）。
+  - `tests/e2e/algo-sim.spec.ts` —— sim 的渲染断言。**sim 一律用 `settle`，
+    不要用 `waitForSourceReady`**（后者的 minMean 判据是给整幅非黑准备的）。
+    ⚠️ **空转探针红旗**：任何「两个配置 hash 不同」的断言，前面必须先有一条
+    `meanAt > 阈值` —— 否则两张黑图不同也会「通过」。
+  - **`.spec` 后缀不能省**：`scripts/e2e.mjs` 的位置参数是按完整路径做正则匹配的，
+    而本机路径里有 `\Projects\`（见 §6.1 的 ⚠️）。
+- **新守卫必须被验证过才算守卫**（§6.1 的同一条纪律）：
+  - 位表行序守卫：把 `bitRows` 的 `'eca'` 改成低位在前 → `bitmask.test.ts` 变红。
+  - codec 越界守卫：拿掉尺寸上限那一行 → 「坏头部 → null」变红。
+  - `visibleWhen` 引用守卫：把 `v.seedMode` 改成 `v.seedModeX` → `algo-params.test.ts` 变红
+    （**类型系统拦不住**：`v` 是 `Record<string, number|string>`）。
+  - 边界参数守卫：让 `lifeStepRule` 忽略 `wrap` 恒走环面 → 「固定边界改变下一代」变红。
+  - `volatile` 守卫：把 `cacheHash` 改回 `JSON.stringify(params)` → 「改配色不换哈希」变红。
+  - **sim tint 守卫**（两条都实际跑过）：删掉 `setTintUniforms` 里的一行
+    → 「声明了却没写」变红；把 `set1f('u_contrast', …)` 换成 `set1i`
+    → 「写入类型与声明不匹配」变红。
+  - 以上都是**改回去 → 看红 → 恢复 → 看绿**跑过一遍的。
 - **持久化的 E2E 跑在 OPFS 上，那不是 mock**：`navigator.storage.getDirectory()` 返回的
   就是一个 `FileSystemDirectoryHandle`，与 `showDirectoryPicker()` 是同类对象。
   `__artmatic.project.useOpfs(name)` 把 OPFS 下的一子目录接成当前工程位置，之后走的是与
@@ -999,7 +1178,8 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
 - **跨组件的复用类名加前缀**（`typo-sel` / `rcolor-swatch`），别用
   `sel` / `swatch` / `box` / `row` / `item` 这种通用词。
 - **有守卫**：`tests/unit/css-namespace.test.ts` 解析那两张全局表，再扫 `SCANNED_DIRS`
-  （`src/ui/typography` + `src/ui/ribbon` + `lab`）里所有 `.svelte` 的 `class=` / `class:xxx`，
+  （`src/ui/typography` + `src/ui/ribbon` + `src/ui/effect-picker` + `src/ui/mascot` +
+  `src/ui/pattern` + `lab`）里所有 `.svelte` 的 `class=` / `class:xxx`，
   撞车即失败。加新目录时要把它加进 `SCANNED_DIRS`。
 - 这类 bug 只在「那个元素正好被选中」时才出现，控制台没有任何提示 —— 所以必须靠守卫。
 
@@ -1064,6 +1244,17 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
    **但导出与预览走的正是这两条不同路径，所以它不是纯粹的测试噪声。**
    **不要为了绿而放宽这条断言。** 复现：`for i in 1 2 3; do node scripts/e2e.mjs algos.spec; done`
    （单跑常常绿，全量跑才挂 —— 负载相关）。
+   > **2026-10-04 补到的新证据（Wave 2）**：新建的 `sim` 生成器上有**更便宜的复现**——
+   > **根本不用回退**，同一个 t 连渲两次就会差：Brian's Brain 恒差 **15 字节**、
+   > 沙堆恒差 **489 字节**（出界 700848 字节里），2/3 的运行失败，**每次数值都一样**。
+   > 几个已知量：
+   > - `renderer.onSeek()` 只调 `compositor.clearFeedback()`，**不碰 sim** —— 模拟侧被排除；
+   > - 单元测试里 `seek(f) ≡ 顺序 step f 次` 逐字节相等（`cellular-automata.test.ts` 等），
+   >   所以状态机是确定的；
+   > - 「差异每次都是同一个数」排除了随机噪声，指向一处**固定的渲染层竞态**
+   >   （嫌疑仍是 R8 上传 / tint pass / `outPool` 复用这条链）。
+   > 处置：`tests/e2e/algo-sim.spec.ts` **不断**这条（头注里写了完整理由），
+   > 确定性交给单元测试。**这不等于问题解决了** —— 它只是被放在能精确断言的那一层。
 3. **素材重定位 UI**：`auditLedger` 能检出 `missing` / `changed` 并在「工程」面板列出来，
    但**只能报告不能修**。缺的动作是「重选这个文件」→ `showOpenFilePicker()` → 比对哈希 →
    更新台账并回写工程。

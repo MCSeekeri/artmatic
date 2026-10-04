@@ -56,7 +56,67 @@ export interface ColorParam extends ParamBase {
   defaultValue: string;
 }
 
-export type ParamDef = RangeParam | SelectParam | CheckboxParam | ColorParam;
+/**
+ * 位分组：决定位表编辑器里这一组怎么画。
+ *
+ * - `'eca'`   每行画三格邻域图（■■■ → □），行序 bit 高位在前（bit7 → bit0）。
+ *              一维元胞自动机的规则号就是这么读出来的。
+ * - `'count'` 每行是一个计数 n（生命类 CA 的 B/S：邻居数 0..8）。
+ */
+export interface BitmaskGroup {
+  labelKey: MessageKey;
+  bits: number;
+  style: 'eca' | 'count';
+}
+
+/**
+ * 位掩码参数：一个 `0 .. 2^bits-1` 的整数，UI 是「可点击的位表 + 数值框」。
+ *
+ * 存在的理由是**同一个控件要服务两种八竿子打不着的规则**：一维 CA 的
+ * 规则号（8 位、0..255）与生命类 CA 的 B/S 掩码（18 位 = 出生 9 + 存活 9）。
+ * 做成 `range` 的话，B/S 会得到一条 `0..262143` 的线性滑杆 —— 毫无语义；
+ * 而且 `runtime.evalParams` 对 `range` 有关键帧分支，混进来会让「这个参数
+ * 能不能打关键帧」变得说不清。
+ *
+ * 位掩码是 **bake 入参**，因此天然不可打关键帧（`evalParams` 只对
+ * `type === 'range'` 走曲线）。
+ */
+export interface BitmaskParam extends ParamBase {
+  type: 'bitmask';
+  bits: number;
+  defaultValue: number;
+  groups: BitmaskGroup[];
+  /** 额外给一条 `0..2^bits-1` 的滑杆（一维 CA 要，B/S 不要）。 */
+  slider?: boolean;
+  /** 快捷预设（取代「规则号只能靠手输」）。 */
+  presets?: { labelKey: MessageKey; value: number }[];
+}
+
+/**
+ * 位图参数：值是一枚 `WxH:<base64>` 编码串（见 `algos/pattern-codec.ts`）。
+ *
+ * **空串 = 没有图案**（调用方回退到随机撒种）。图案**自带尺寸** —— 这是
+ * 「改了模拟网格大小之后还能重新居中裁剪」的关键：图案不是网格的附属，
+ * 它是一张独立的、可以在任何网格上盖印的图。
+ *
+ * 与 `bitmask` 同理，它是 bake/sim 入参、不可打关键帧。
+ */
+export interface PatternParam extends ParamBase {
+  type: 'pattern';
+  defaultValue: string;
+  /** 打开编辑器时的初建边长（新建空白图案用）。 */
+  editorSize?: number;
+  /** `'2d'` 手绘图案（生命游戏）；`'1d'` 单行（一维 CA 的初始行）。 */
+  mode?: '2d' | '1d';
+}
+
+export type ParamDef =
+  | RangeParam
+  | SelectParam
+  | CheckboxParam
+  | ColorParam
+  | BitmaskParam
+  | PatternParam;
 
 export function defaultValues(params: ParamDef[]): Record<string, number | string> {
   const out: Record<string, number | string> = {};

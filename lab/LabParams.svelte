@@ -15,6 +15,8 @@
   import NumberInput from '../src/ui/controls/NumberInput.svelte';
   import Select from '../src/ui/controls/Select.svelte';
   import Checkbox from '../src/ui/controls/Checkbox.svelte';
+  import BitmaskField from '../src/ui/controls/BitmaskField.svelte';
+  import PatternField from '../src/ui/controls/PatternField.svelte';
   import IconButton from '../src/ui/controls/IconButton.svelte';
   import { labState, itemFor, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
   import { tr } from '../src/i18n/index.svelte';
@@ -114,7 +116,7 @@
                   onchange={(v) => labState.setParam('source', p.key, v ? 1 : 0)}
                 />
               </Field>
-            {:else}
+            {:else if p.type === 'color'}
               <Field label={tr(p.labelKey)} labelWidth={78}>
                 <input
                   class="lab-color"
@@ -122,6 +124,34 @@
                   value={String(valueOf('source', p))}
                   data-testid={`lab-source-color-${p.key}`}
                   oninput={(e) => labState.setParam('source', p.key, e.currentTarget.value)}
+                />
+              </Field>
+            {:else if p.type === 'bitmask'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <BitmaskField
+                  value={Number(valueOf('source', p))}
+                  bits={p.bits}
+                  slider={p.slider}
+                  groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
+                  presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                  testid={`lab-source-bitmask-${p.key}`}
+                  oninput={(v) => labState.setParam('source', p.key, v)}
+                  onchange={(v) => labState.setParam('source', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'pattern'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <PatternField
+                  value={String(valueOf('source', p))}
+                  label={tr(p.labelKey)}
+                  mode={p.mode}
+                  editorSize={p.editorSize}
+                  colors={{
+                    bg: String(labState.sourceParams.colorBg ?? '#05070f'),
+                    live: String(labState.sourceParams.colorLive ?? '#7fd4ff'),
+                  }}
+                  testid={`lab-source-pattern-${p.key}`}
+                  onchange={(v) => labState.setParam('source', p.key, v)}
                 />
               </Field>
             {/if}
@@ -206,7 +236,7 @@
                   onchange={(v) => labState.setParam('effect', p.key, v ? 1 : 0)}
                 />
               </Field>
-            {:else}
+            {:else if p.type === 'color'}
               <Field label={tr(p.labelKey)} labelWidth={78}>
                 <input
                   class="lab-color"
@@ -214,6 +244,34 @@
                   value={String(valueOf('effect', p))}
                   data-testid={`lab-effect-color-${p.key}`}
                   oninput={(e) => labState.setParam('effect', p.key, e.currentTarget.value)}
+                />
+              </Field>
+            {:else if p.type === 'bitmask'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <BitmaskField
+                  value={Number(valueOf('effect', p))}
+                  bits={p.bits}
+                  slider={p.slider}
+                  groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
+                  presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                  testid={`lab-effect-bitmask-${p.key}`}
+                  oninput={(v) => labState.setParam('effect', p.key, v)}
+                  onchange={(v) => labState.setParam('effect', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'pattern'}
+              <Field label={tr(p.labelKey)} labelWidth={78}>
+                <PatternField
+                  value={String(valueOf('effect', p))}
+                  label={tr(p.labelKey)}
+                  mode={p.mode}
+                  editorSize={p.editorSize}
+                  colors={{
+                    bg: String(labState.effectParams.colorBg ?? '#05070f'),
+                    live: String(labState.effectParams.colorLive ?? '#7fd4ff'),
+                  }}
+                  testid={`lab-effect-pattern-${p.key}`}
+                  onchange={(v) => labState.setParam('effect', p.key, v)}
                 />
               </Field>
             {/if}

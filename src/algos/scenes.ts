@@ -348,19 +348,35 @@ const SCENES: SceneSpec[] = [
     id: 'scene-pulse',
     nameKey: 'algo.scene.pulse',
     body: PULSE_BODY,
-    params: [arrangementParam('density', 0.45), intResParam()],
+    params: [
+      arrangementParam('density', 0.45),
+      arrangementParam('warp', 0.3),
+      arrangementParam('tone', 0.5),
+      intResParam(),
+    ],
   },
   {
     id: 'scene-field',
     nameKey: 'algo.scene.field',
     body: FIELD_BODY,
-    params: [intResParam()],
+    params: [
+      arrangementParam('density', 0.5),
+      arrangementParam('warp', 0.4),
+      arrangementParam('tone', 0.5),
+      intResParam(),
+    ],
   },
   {
     id: 'scene-tunnel',
     nameKey: 'algo.scene.tunnel',
     body: TUNNEL_BODY,
-    params: [arrangementParam('tone', 0.5), arrangementParam('cut', 0), intResParam()],
+    params: [
+      arrangementParam('density', 0.3),
+      arrangementParam('warp', 0.3),
+      arrangementParam('tone', 0.5),
+      arrangementParam('cut', 0),
+      intResParam(),
+    ],
   },
   {
     id: 'scene-datamosh',
@@ -400,7 +416,12 @@ const SCENES: SceneSpec[] = [
     id: 'scene-dissolve',
     nameKey: 'algo.scene.dissolve',
     body: DISSOLVE_BODY,
-    params: [arrangementParam('prog', 0.35), intResParam()],
+    params: [
+      arrangementParam('density', 0.4),
+      arrangementParam('tone', 0.5),
+      arrangementParam('prog', 0.35),
+      intResParam(),
+    ],
   },
 ];
 

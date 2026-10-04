@@ -2,10 +2,12 @@
   import { appState } from './app-state.svelte';
   import KeyableField from './KeyableField.svelte';
   import Button from './controls/Button.svelte';
+  import BitmaskField from './controls/BitmaskField.svelte';
   import Checkbox from './controls/Checkbox.svelte';
   import Field from './controls/Field.svelte';
   import IconButton from './controls/IconButton.svelte';
   import NumberInput from './controls/NumberInput.svelte';
+  import PatternField from './controls/PatternField.svelte';
   import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
   import {
@@ -424,6 +426,35 @@
                   oninput={(e) => setAlgoParam(clip, p.key, e.currentTarget.value)}
                 />
               </Field>
+            {:else if p.type === 'bitmask'}
+              <!-- 规则号 / B/S 掩码：位表 + 数值框。同样是烘焙入参（不可打关键帧）。 -->
+              <Field label={tr(p.labelKey)} tipText={tr('insp.bakedParamTip', { label: tr(p.labelKey) })}>
+                <BitmaskField
+                  value={Number(clip.source.params[p.key] ?? p.defaultValue)}
+                  bits={p.bits}
+                  slider={p.slider}
+                  groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
+                  presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                  testid={`algo-param-${p.key}`}
+                  oninput={(v) => setAlgoParam(clip, p.key, v)}
+                  onchange={(v) => setAlgoParam(clip, p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'pattern'}
+              <Field label={tr(p.labelKey)} tipText={tr('insp.bakedParamTip', { label: tr(p.labelKey) })}>
+                <PatternField
+                  value={String(clip.source.params[p.key] ?? p.defaultValue)}
+                  label={tr(p.labelKey)}
+                  mode={p.mode}
+                  editorSize={p.editorSize}
+                  colors={{
+                    bg: String(clip.source.params.colorBg ?? '#05070f'),
+                    live: String(clip.source.params.colorLive ?? '#7fd4ff'),
+                  }}
+                  testid={`algo-param-${p.key}`}
+                  onchange={(v) => setAlgoParam(clip, p.key, v)}
+                />
+              </Field>
             {/if}
           {/each}
         {/if}
@@ -606,6 +637,34 @@
                     type="color"
                     value={String(inst.values[p.key] ?? p.defaultValue)}
                     oninput={(e) => setEffectParam(clip, inst, p.key, e.currentTarget.value)}
+                  />
+                </Field>
+              {:else if p.type === 'bitmask'}
+                <Field label={tr(p.labelKey)}>
+                  <BitmaskField
+                    value={Number(inst.values[p.key] ?? p.defaultValue)}
+                    bits={p.bits}
+                    slider={p.slider}
+                    groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
+                    presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                    testid={`effect-param-${p.key}`}
+                    oninput={(v) => setEffectParam(clip, inst, p.key, v)}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                  />
+                </Field>
+              {:else if p.type === 'pattern'}
+                <Field label={tr(p.labelKey)}>
+                  <PatternField
+                    value={String(inst.values[p.key] ?? p.defaultValue)}
+                    label={tr(p.labelKey)}
+                    mode={p.mode}
+                    editorSize={p.editorSize}
+                    colors={{
+                      bg: String(inst.values.colorBg ?? '#05070f'),
+                      live: String(inst.values.colorLive ?? '#7fd4ff'),
+                    }}
+                    testid={`effect-param-${p.key}`}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
                   />
                 </Field>
               {/if}

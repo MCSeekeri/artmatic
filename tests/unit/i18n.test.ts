@@ -157,6 +157,10 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   ],
   // Worker 侧回包，只会进 bake-client.ts 的 console.error。
   'algos/bake.worker.ts': ['未知生成器 ${msg.genId}'],
+  // 同理：SnapshotRing 的「第 0 帧不见了」。它在正常路径上**不可达** ——
+  // 构造函数就放了第 0 帧，而抽稀显式跳过它。只有别人绕过 API 掏了内部 Map
+  // 才会抛。属于「代码被改坏了」的诊断，不是用户能看到的提示。
+  'algos/sim-util.ts': ['SnapshotRing: 第 0 帧不见了（构造后被改过？）'],
   // runtime.schedule() 里是 `this.backends.pick()`，**没有 catch** ——
   // 这条抛出来就是整个排版光栅化坏掉，属于「应用被构建坏了」。
   'typography/rasterizer.ts': ['没有可用的排版光栅化后端'],

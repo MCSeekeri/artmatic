@@ -10,6 +10,7 @@
 export const common = {
   'common.cancel': '取消',
   'common.save': '保存',
+  'common.apply': '应用',
   'common.close': '关闭',
   'common.delete': '删除',
   'common.add': '添加',

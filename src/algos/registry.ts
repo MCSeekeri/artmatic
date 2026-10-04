@@ -12,6 +12,13 @@ import { bifurcationDef } from './bifurcation';
 import { langtonsAntDef } from './langtons-ant';
 import { lsystemDef } from './lsystem';
 import { mengerDef } from './menger';
+import { briansBrainDef } from './brians-brain';
+import { cyclicCaDef } from './cyclic-ca';
+import { snowflakeDef } from './snowflake';
+import { leniaDef } from './lenia';
+import { wireworldDef } from './wireworld';
+import { sandpileDef } from './sandpile';
+import { reactionDiffusionDef } from './reaction-diffusion';
 import { sceneDefs } from './scenes';
 import { defaultValues } from '../effects/types';
 import type { GeneratorDef } from './types';
@@ -26,6 +33,13 @@ const DEFS = new Map<string, GeneratorDef>(
     langtonsAntDef,
     lsystemDef,
     mengerDef,
+    reactionDiffusionDef,
+    briansBrainDef,
+    cyclicCaDef,
+    sandpileDef,
+    snowflakeDef,
+    leniaDef,
+    wireworldDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，七个 def
     ...sceneDefs,
   ].map((d) => [d.id, d]),

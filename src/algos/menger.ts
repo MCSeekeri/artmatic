@@ -27,24 +27,44 @@ uniform float u_push;     // 0..1：镜头推进（编排 → 参数/关键帧�
 uniform float u_rate;     // 公转速度倍率
 uniform int   u_depth;    // 递归深度 2..5
 uniform float u_gain;
+uniform int   u_variant;  // 0 = 海绵（三维挖）· 1 = 地毯（只挖 xz 平面后挤出）
+uniform float u_twist;    // 沿 y 轴每单位高度的扭转角（弧度）
+uniform float u_fog;      // 进深处的雾浓度
+uniform int   u_palette;  // 0 = 单色 · 1 = 双色（按法线高度混）
 uniform vec3  u_color;
+uniform vec3  u_colorB;
 
-/* signed distance to a Menger sponge occupying [-1,1]^3 */
-float sdMenger(vec3 p) {
-  float d = max(abs(p.x), max(abs(p.y), abs(p.z))) - 1.0;
+/*
+ * signed distance to a Menger sponge (variant 0) or an extruded Sierpinski
+ * carpet (variant 1) occupying [-1,1]^3.
+ *
+ * 两个变体的差别只有一处：交点运算里用三对面（海绵）还是只用 xz 那一对
+ * （地毯）。做成一个 u_variant 分派而不是两份 shader —— 见文件头。
+ */
+float sdSolid(vec3 p) {
+  float base = u_variant == 1
+    ? max(abs(p.x), abs(p.z)) - 1.0
+    : max(abs(p.x), max(abs(p.y), abs(p.z))) - 1.0;
+  float d = base;
   float s = 1.0;
   for (int m = 0; m < 5; m++) {
     if (m >= u_depth) break;
     vec3 a = mod(p * s, 2.0) - 1.0;
     s *= 3.0;
     vec3 r = abs(1.0 - 3.0 * abs(a));
-    float da = max(r.x, r.y);
-    float db = max(r.y, r.z);
-    float dc = max(r.z, r.x);
-    float c = (min(da, min(db, dc)) - 1.0) / s;
+    float c = u_variant == 1
+      ? (max(r.x, r.z) - 1.0) / s
+      : (min(max(r.x, r.y), min(max(r.y, r.z), max(r.z, r.x))) - 1.0) / s;
     d = max(d, c);
   }
   return d;
+}
+
+/** 绕 y 轴按高度扭转 —— 让方块从「古典几何体」变成「藤蔓」。 */
+vec3 twistY(vec3 p, float k) {
+  float a = k * p.y;
+  float c = cos(a), s = sin(a);
+  return vec3(c * p.x - s * p.z, p.y, s * p.x + c * p.z);
 }
 
 void main() {
@@ -64,7 +84,7 @@ void main() {
   float tt = 0.0;
   float hit = -1.0;
   for (int i = 0; i < 48; i++) {
-    float d = sdMenger(ro + rd * tt);
+    float d = sdSolid(twistY(ro + rd * tt, u_twist));
     if (d < 0.0018 * (1.0 + tt * 0.5)) { hit = tt; break; }
     tt += d * 0.9;
     if (tt > 9.0) break;
@@ -75,17 +95,21 @@ void main() {
     vec3 q = ro + rd * hit;
     float e = 0.0016;
     vec3 n = normalize(vec3(
-      sdMenger(q + vec3(e, 0.0, 0.0)) - sdMenger(q - vec3(e, 0.0, 0.0)),
-      sdMenger(q + vec3(0.0, e, 0.0)) - sdMenger(q - vec3(0.0, e, 0.0)),
-      sdMenger(q + vec3(0.0, 0.0, e)) - sdMenger(q - vec3(0.0, 0.0, e))));
+      sdSolid(twistY(q + vec3(e, 0.0, 0.0), u_twist)) - sdSolid(twistY(q - vec3(e, 0.0, 0.0), u_twist)),
+      sdSolid(twistY(q + vec3(0.0, e, 0.0), u_twist)) - sdSolid(twistY(q - vec3(0.0, e, 0.0), u_twist)),
+      sdSolid(twistY(q + vec3(0.0, 0.0, e), u_twist)) - sdSolid(twistY(q - vec3(0.0, 0.0, e), u_twist))));
     float lam = max(dot(n, normalize(vec3(-0.55, 0.75, 0.55))), 0.0);
     float bak = max(dot(n, normalize(vec3(0.4, -0.2, -0.9))), 0.0) * 0.30;
     float rim = pow(1.0 - max(dot(n, -rd), 0.0), 2.2) * 0.45;
     /* 压在 1.2 以下 —— 见文件头。 */
-    col = vec3(0.06 + lam * 0.60 + bak * 0.7 + rim * 0.8);
+    float shade = 0.06 + lam * 0.60 + bak * 0.7 + rim * 0.8;
     /* 光线爬了多远当环境遮蔽用：洞比面暗，这才读得出体积 */
-    col *= mix(0.60, 1.0, clamp(1.0 - hit * 0.17, 0.0, 1.0));
-    col *= u_color;
+    shade *= mix(0.60, 1.0, clamp(1.0 - hit * 0.17, 0.0, 1.0));
+    vec3 tint = u_color;
+    if (u_palette == 1) tint = mix(u_color, u_colorB, clamp(q.y * 0.5 + 0.5, 0.0, 1.0));
+    col = shade * tint;
+    /* 雾：越远越沉入底色，纵深一下就出来了 */
+    col *= mix(1.0, clamp(1.0 - hit * 0.11, 0.0, 1.0), clamp(u_fog, 0.0, 1.0));
   }
   outColor = vec4(col * u_gain, 1.0);
 }`;
@@ -96,11 +120,40 @@ export const mengerDef: GeneratorDef = {
   kind: 'realtime',
   fragment: MENGER_FRAG,
   params: [
+    {
+      key: 'variant',
+      labelKey: 'algo.menger.variant',
+      type: 'select',
+      defaultValue: 'sponge',
+      options: [
+        { labelKey: 'algo.menger.variantSponge', value: 'sponge' },
+        { labelKey: 'algo.menger.variantCarpet', value: 'carpet' },
+      ],
+    },
     { key: 'push', labelKey: 'algo.menger.push', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0.35 },
     { key: 'rate', labelKey: 'algo.menger.rate', type: 'range', min: 0, max: 6, step: 0.05, defaultValue: 1.6 },
     { key: 'depth', labelKey: 'algo.menger.depth', type: 'range', min: 2, max: 5, step: 1, defaultValue: 4 },
+    { key: 'twist', labelKey: 'algo.menger.twist', type: 'range', min: -2, max: 2, step: 0.01, defaultValue: 0 },
+    { key: 'fog', labelKey: 'algo.menger.fog', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0 },
     { key: 'gain', labelKey: 'algo.menger.gain', type: 'range', min: 0.2, max: 2, step: 0.01, defaultValue: 1.0 },
+    {
+      key: 'palette',
+      labelKey: 'algo.menger.palette',
+      type: 'select',
+      defaultValue: 'single',
+      options: [
+        { labelKey: 'algo.menger.paletteSingle', value: 'single' },
+        { labelKey: 'algo.menger.paletteDual', value: 'dual' },
+      ],
+    },
     { key: 'color', labelKey: 'algo.menger.color', type: 'color', defaultValue: '#dfe9ff' },
+    {
+      key: 'colorB',
+      labelKey: 'algo.menger.colorB',
+      type: 'color',
+      defaultValue: '#3a6ea5',
+      visibleWhen: (v) => v.palette === 'dual',
+    },
     intResParam(),
   ],
   setUniforms: (gl, l, v) => {
@@ -108,15 +161,27 @@ export const mengerDef: GeneratorDef = {
       const loc = l[name];
       if (loc) gl.uniform1f(loc, value);
     };
+    const set1i = (name: string, value: number): void => {
+      const loc = l[name];
+      if (loc) gl.uniform1i(loc, Math.round(value));
+    };
     set1f('u_push', Number(v.push ?? 0.35));
     set1f('u_rate', Number(v.rate ?? 1.6));
     set1f('u_gain', Number(v.gain ?? 1));
-    const depth = l['u_depth'];
-    if (depth) gl.uniform1i(depth, Math.round(Number(v.depth ?? 4)));
+    set1f('u_twist', Number(v.twist ?? 0));
+    set1f('u_fog', Number(v.fog ?? 0));
+    set1i('u_depth', Number(v.depth ?? 4));
+    set1i('u_variant', v.variant === 'carpet' ? 1 : 0);
+    set1i('u_palette', v.palette === 'dual' ? 1 : 0);
     const color = l['u_color'];
     if (color) {
       const [r, g, b] = colorVec3(String(v.color ?? '#dfe9ff'));
       gl.uniform3f(color, r, g, b);
+    }
+    const colorB = l['u_colorB'];
+    if (colorB) {
+      const [r, g, b] = colorVec3(String(v.colorB ?? '#3a6ea5'));
+      gl.uniform3f(colorB, r, g, b);
     }
   },
 };
