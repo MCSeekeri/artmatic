@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addEffectViaPicker } from './_stage';
 
 /**
  * 时间轴交互回归：覆盖 2026-09-27 那批 MVP 反馈。
@@ -123,9 +124,9 @@ test('检查器：增删特效实例立即刷新，不必重选片段', async ({
   await page.locator(`[data-clip-id="${fxId}"]`).click();
   await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(2); // demo 的 V3 带两个实例
 
-  await page.getByTestId('add-effect-instance').click();
+  await addEffectViaPicker(page, 'channel-split');
   await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(3);
-  await page.getByTestId('add-effect-instance').click();
+  await addEffectViaPicker(page, 'bleach');
   await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(4);
 
   await page.locator('[data-testid=effect-instance]').first().locator('[data-testid=effect-remove]').click();

@@ -28,6 +28,7 @@ import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
 import { createEffectRunner } from '../effects/runner';
 import { createTransitionRunner } from '../effects/transitions/runner';
+import type { AudioFeatureSource } from '../algos/feature-source';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
 
@@ -55,6 +56,12 @@ export interface RenderCoreOpts {
    * 不传也能跑：声明了 `u_spectrum` 的特效会读到一张零纹理（静音）。
    */
   spectrum?: SpectrumSource | null;
+  /**
+   * 音频**特征**来源（rms / 分频 / onset 年龄 / 累积行程），供场景生成器读。
+   * 与 `spectrum` 同样以接口注入（本文件依然不 import `audio/`）。
+   * 不传也能跑：声明了这些 uniform 的场景会读到静音特征（画面偏暗、不脉动）。
+   */
+  features?: AudioFeatureSource | null;
 }
 
 export interface RenderCore {
@@ -65,6 +72,8 @@ export interface RenderCore {
   kit: Kit;
   /** 频谱纹理池。宿主换音频来源时调 `setSource`。 */
   spectrumTextures: SpectrumTextures;
+  /** 算法运行时。暴露出来是为了宿主能换特征来源（`setFeatureSource`）。 */
+  algos: AlgoRuntime;
 }
 
 export function createRenderCore(
@@ -77,6 +86,8 @@ export function createRenderCore(
   const sources = new SourceManager(renderer.kit);
   const bake = new BakeClient(renderer.kit, opts.onAlgoReady);
   const algos = new AlgoRuntime(renderer.kit, bake);
+  // 音频特征：与频谱同一条注入路径（见 RenderCoreOpts 的两条注释）。
+  algos.setFeatureSource(opts.features ?? null);
 
   sources.setAlgoResolver((clip, t, frame) => {
     const p = opts.getProject();
@@ -103,5 +114,5 @@ export function createRenderCore(
   spectrumTextures.setSource(opts.spectrum ?? null);
   renderer.setSpectrumTextures(spectrumTextures);
 
-  return { renderer, sources, video, kit: renderer.kit, spectrumTextures };
+  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, algos };
 }

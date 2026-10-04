@@ -52,6 +52,7 @@ mount(LabApp, { target: document.getElementById('lab')! });
     }
   },
   setBypass: (on: boolean) => labState.setBypass(on),
+  setAudioFeatures: (on: boolean) => labState.setAudioFeatures(on),
   setSearch: (q: string) => {
     labState.search = q;
   },

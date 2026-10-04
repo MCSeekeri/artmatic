@@ -7,6 +7,7 @@ import { tr } from '../../src/i18n/index.svelte';
 import { LOCALES, type MessageKey } from '../../src/i18n/locales';
 import { common } from '../../src/i18n/locales/zh-CN/common';
 import { media } from '../../src/i18n/locales/zh-CN/media';
+import { effects } from '../../src/i18n/locales/zh-CN/effects';
 import { app } from '../../src/i18n/locales/zh-CN/app';
 import { project } from '../../src/i18n/locales/zh-CN/project';
 import { timeline } from '../../src/i18n/locales/zh-CN/timeline';
@@ -81,6 +82,7 @@ describe('文案表结构', () => {
   const DOMAINS = {
     common,
     media,
+    effects,
     app,
     project,
     timeline,

@@ -99,7 +99,8 @@ export const errors = {
      对用户来说下一步动作是同一个：换一个文件。 */
   'err.video.unreadable': '「{name}」不是能读的视频文件（容器或编码不支持）',
 
-  /* ------------------------------------------------ 平台能力 */  'err.platform.openDirUnsupported': '这个浏览器不支持打开本地目录（需要 Chrome / Edge）',
+  /* ------------------------------------------------ 平台能力 */  
+  'err.platform.openDirUnsupported': '这个浏览器不支持打开本地目录（需要 Chrome / Edge）',
   'err.platform.saveDirUnsupported': '这个浏览器不支持保存到本地目录（需要 Chrome / Edge）',
   'err.platform.webgl2': '此浏览器没有 WebGL2',
 } as const;

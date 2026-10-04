@@ -15,7 +15,7 @@ import { createBlankProject } from '../core/demo-project';
 import type { Renderer } from '../engine/renderer';
 import type { SourceManager } from '../engine/sources';
 import { AudioPlayer } from '../audio/player';
-import { ProjectSpectrum } from './project-spectrum';
+import { ProjectAudio } from './project-audio';
 // 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
 import { createRenderCore } from '../render/render-core';
 import { FontRegistry } from '../typography/font-registry';
@@ -716,8 +716,8 @@ class AppState {
   /** 视频取帧器（`engine/video-source.ts`）。导出前逐帧 prepare、关工程时 forget。 */
   video!: VideoSourceManager;
   player!: AudioPlayer;
-  /** 工程音频的频谱来源（`u_spectrum`）。数据以接口注入 render-core。 */
-  spectrum!: ProjectSpectrum;
+  /** 工程音频的离线分析来源（频谱 `u_spectrum` + 特征）。数据以接口注入 render-core。 */
+  audio!: ProjectAudio;
   fonts!: FontRegistry;
   textBackends!: TextBackendRegistry;
   textRaster!: TypographyRuntime;
@@ -740,18 +740,19 @@ class AppState {
       // 源解析 / 算法运行时 / 特效执行器的装配在 render-core —— 与 lab 试炼场
       // 共用同一份真源。这里只做「主应用特有的追加装配」（排版、字体、音频）。
       //
-      // 频谱来源先建：两次回调都是**惰性**的（`player` 在下面几行才创建），
-      // 所以这里的顺序不影响正确性。
-      this.spectrum = new ProjectSpectrum(
+      // 音频来源先建：两次回调都是**惰性**的（`player` 在下面几行才创建），
+      // 所以这里的顺序不影响正确性。频谱与特征由它一次走查产出。
+      this.audio = new ProjectAudio(
         () => this.store.project,
         (assetId) => this.player?.buffer(assetId) ?? null,
       );
       const core = createRenderCore(canvas, {
         getProject: () => this.store.project,
         onAlgoReady: () => this.store.touch(),
-        // 频谱来源：读当前工程的音频片段。`player.buffer()` 解码好之前返回 null，
-        // 那时频谱是静音的，解码完成后的首次请求会触发一次计算（之后按 t 查表）。
-        spectrum: this.spectrum,
+        // 频谱 + 特征来源：读当前工程的音频片段。`player.buffer()` 解码好之前返回 null，
+        // 那时是静音的，解码完成后的首次请求会触发一次离线分析（之后按 t 查表）。
+        spectrum: this.audio,
+        features: this.audio,
       });
       this.renderer = core.renderer;
       this.sources = core.sources;

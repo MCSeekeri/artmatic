@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { getEffect, listEffects } from '../../src/effects/registry';
 import { EFFECT_HEAD } from '../../src/effects/shader-def';
+import { makeStubGl, parseUniforms, typeMismatches } from './_uniform-probe';
 import type { EffectClip } from '../../src/core/schema';
 import type { EffectUniformCtx } from '../../src/effects/shader-def';
 
@@ -51,28 +52,6 @@ const RUNNER_BOUND = new Set(['u_spectrum']);
  */
 const BINDABLE_SAMPLERS = new Set(['u_texture', 'u_original', 'u_feedback', ...RUNNER_BOUND]);
 
-/** 写入函数 → 它允许写的 GLSL 类型。 */
-const WRITER_TYPES: Record<string, string[]> = {
-  uniform1f: ['float'],
-  uniform1fv: ['float'],
-  uniform1i: ['int', 'bool'],
-  uniform2f: ['vec2'],
-  uniform3f: ['vec3'],
-  uniform3fv: ['vec3'],
-  uniform4f: ['vec4'],
-};
-
-/** 解析 `uniform <type> u_<name>;`。 */
-function parseUniforms(src: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of src.matchAll(
-    /uniform\s+(float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\s+(u_\w+)\s*;/g,
-  )) {
-    out.set(m[2]!, m[1]!);
-  }
-  return out;
-}
-
 interface PassProbe {
   /** `main` 或 `pre0` / `pre1` … */
   kind: string;
@@ -114,43 +93,7 @@ function probeEffect(defId: string): Probe {
   const declared = new Map<string, string>([...parseUniforms(EFFECT_HEAD)]);
   for (const p of passes) for (const [n, t] of p.own) declared.set(n, t);
 
-  const written = new Map<string, string>();
-  const undeclared = new Set<string>();
-  const byLoc = new Map<object, string>();
-
-  // 未声明的名字返回 null —— 与真实 `Program.u()` 的行为一致（静默跳过），
-  // 但这里**记一笔**，于是拼错的 uniform 名会被断言抓到。
-  //
-  // head 自己提供的名字除外：setter 那侧会**防御性地**读它们
-  // （比如 `clockUniforms` 会读 `u_delta`，而并非每个 clock fragment 都声明它），
-  // 那是合法用法，不是拼错。
-  const locs = new Proxy({} as Record<string, WebGLUniformLocation | null>, {
-    get(_t, prop) {
-      if (typeof prop !== 'string') return undefined;
-      if (!declared.has(prop)) {
-        if (!HEAD_OWNED.has(prop)) undeclared.add(prop);
-        return null;
-      }
-      const loc = { name: prop };
-      byLoc.set(loc, prop);
-      return loc as unknown as WebGLUniformLocation;
-    },
-  });
-
-  const record = (via: string) => (loc: object) => {
-    const name = byLoc.get(loc);
-    if (name) written.set(name, via);
-  };
-
-  const gl = new Proxy(
-    {},
-    {
-      get(_t, prop) {
-        if (typeof prop !== 'string' || !(prop in WRITER_TYPES)) return undefined;
-        return record(prop);
-      },
-    },
-  ) as unknown as WebGL2RenderingContext;
+  const { gl, locs, written, undeclared } = makeStubGl(declared, HEAD_OWNED);
 
   const values: Record<string, number | string> = {};
   for (const p of entry.params) values[p.key] = p.defaultValue;
@@ -219,13 +162,10 @@ describe('特效接线自检', () => {
     const { passes, written } = probeEffect(id);
     const typeOf = new Map<string, string>();
     for (const p of passes) for (const [n, t] of p.own) typeOf.set(n, t);
-    const bad: string[] = [];
-    for (const [name, via] of written) {
-      const glsl = typeOf.get(name);
-      if (!glsl) continue;
-      if (!WRITER_TYPES[via]!.includes(glsl)) bad.push(`${name}: 声明 ${glsl}，却用 ${via} 写`);
-    }
-    expect(bad, `${id} 的写入类型与声明不匹配 → GL INVALID_OPERATION 且静默不写`).toEqual([]);
+    expect(
+      typeMismatches(written, typeOf),
+      `${id} 的写入类型与声明不匹配 → GL INVALID_OPERATION 且静默不写`,
+    ).toEqual([]);
   });
 
   test.each(EFFECTS)('%s：没有摸到未声明的 uniform', (id) => {

@@ -14,6 +14,7 @@
 import { createRenderCore, type RenderCore } from '../src/render/render-core';
 import { PatternRenderer, PATTERNS, isPatternId } from './patterns';
 import { createLabSpectrum } from './spectrum';
+import { createLabFeatures } from './features';
 import {
   buildLabProject,
   LAB_BASE_H,
@@ -27,6 +28,13 @@ import {
 import { defaultEffectValues, getEffect, listEffects } from '../src/effects/registry';
 import { defaultParams, getGenerator, listGenerators } from '../src/algos/registry';
 import { compileAll, type CompileResult } from '../src/effects/compile-all';
+import {
+  DEFAULT_SHOT_HEIGHT,
+  exportAllThumbnails,
+  exportCanvas,
+  shotFilename,
+  type ShotHeight,
+} from './export-thumbs';
 import { hashSeed, mulberry32 } from '../src/core/prng';
 import { tr } from '../src/i18n/index.svelte';
 import type { ParamDef } from '../src/effects/types';
@@ -157,6 +165,12 @@ class LabState {
 
   private core: RenderCore | null = null;
   private patterns: PatternRenderer | null = null;
+  /**
+   * 试炼场的合成特征源。做成字段（而不是在装配处现造）是为了
+   * `setAudioFeatures(false)` 之后还能还原 —— 那条开关是 E2E 判定
+   * 「场景真的被音频特征驱动」的唯一办法：同一 t、同一参数，只有特征不同。
+   */
+  private readonly labFeatures = createLabFeatures();
   private raf = 0;
   private lastNow = 0;
   /** 上一次**渲染**的墙钟时刻（只用于把渲染节流到 LAB_FPS，不参与求值）。 */
@@ -230,7 +244,9 @@ class LabState {
       onAlgoReady: () => {},
       // 试炼场没有工程音频，给合成频谱 —— 否则 audio-bars 在 lab 里恒为静音、
       // 根本没法目视验收（与 patterns.ts 给合成测试图同一个思路）。
+      // 合成特征同理：场景生成器要靠它才动起来。
       spectrum: createLabSpectrum(),
+      features: this.labFeatures,
     });
     this.core = core;
     this.patterns = new PatternRenderer(core.kit);
@@ -403,6 +419,18 @@ class LabState {
     this.dirty = true;
   }
 
+  /**
+   * 摘掉 / 装上音频特征源。**给 E2E 用的**：同一 `t`、同一参数下，
+   * 「有特征」与「没特征」必须是两张不同的图 —— 否则说明特征没接上
+   * （漏传 `features`、`sceneUniforms` 没写、`AlgoRuntime` 没读，
+   * 三者都会静默降级成「画面偏暗」，不报错）。
+   */
+  setAudioFeatures(on: boolean): void {
+    if (!this.core) return;
+    this.core.algos.setFeatureSource(on ? this.labFeatures : null);
+    this.renderNow();
+  }
+
   /* ------------------------------------------------------------ 参数工具 */
 
   resetParams(scope: 'source' | 'effect'): void {
@@ -452,6 +480,77 @@ class LabState {
 
   compiledOkCount(): number {
     return (this.compileResults ?? []).filter((r) => r.ok).length;
+  }
+
+  /* ------------------------------------------------------------ 导出截图
+   *
+   * 目的：把缩略图变成**预先准备好的静态图**。理由有两条 ——
+   *   1. 每次开选择器现渲七十多张，会短暂压帧（实测 240 → 190）；
+   *   2. 有些底图自动选得不够准，需要人工过一遍。
+   * 所以这里给两个动作：单张（当前画面）与批量（按目录底图整套）。
+   */
+
+  /** 批量导出的高度档位。 */
+  shotHeight = $state<ShotHeight>(DEFAULT_SHOT_HEIGHT);
+  /** 批量导出进行中。 */
+  shotBusy = $state(false);
+  /** 批量导出进度 `{done, total}`，未在跑时为 null。 */
+  shotProgress = $state<{ done: number; total: number } | null>(null);
+  /** 上一次导出的结果读数（成功或失败），null = 还没有过。 */
+  shotMessage = $state<string | null>(null);
+
+  /**
+   * 把**当前画面**存成 PNG。文件名取特效 id（没选特效就回退源 id）。
+   *
+   * 暂停播放再存：`toBlob` 是异步的，而播放中的 rAF 循环会在它读画布之前
+   * 再渲一帧 —— 存下来的就不是用户看到的那一帧了。
+   */
+  async exportShot(): Promise<void> {
+    const core = this.core;
+    if (!core) return;
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.togglePlay();
+    try {
+      this.renderNow();
+      const name = shotFilename(this.effectId, this.sourceId);
+      await exportCanvas(core.kit.canvas, name);
+      this.shotMessage = tr('lab.shotOneDone', { name });
+    } catch (err) {
+      this.shotMessage = tr('lab.shotFailed', { msg: String(err) });
+    } finally {
+      if (wasPlaying) this.togglePlay();
+    }
+  }
+
+  /**
+   * 按目录底图逐个特效渲一张，打成一个 zip 下载。
+   *
+   * 与选择器共用 `EffectThumbRenderer`，所以导出的就是选择器里会显示的东西。
+   * 跑的时候暂停播放：批量渲染本身要占满主线程的分片，再叠一个 rAF 循环
+   * 会让进度读数卡顿（画面也看不出变化，没有意义）。
+   */
+  async exportShots(): Promise<void> {
+    if (this.shotBusy) return;
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.togglePlay();
+    this.shotBusy = true;
+    this.shotProgress = { done: 0, total: listEffects().length };
+    this.shotMessage = null;
+    try {
+      const res = await exportAllThumbnails(this.shotHeight, (done, total) => {
+        this.shotProgress = { done, total };
+      });
+      this.shotMessage = tr('lab.shotAllDone', {
+        n: res.count,
+        size: `${(res.bytes / 1048576).toFixed(1)} MB`,
+      });
+    } catch (err) {
+      this.shotMessage = tr('lab.shotFailed', { msg: String(err) });
+    } finally {
+      this.shotBusy = false;
+      this.shotProgress = null;
+      if (wasPlaying) this.togglePlay();
+    }
   }
 
   /* ------------------------------------------------------------------ E2E

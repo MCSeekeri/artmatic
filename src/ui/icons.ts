@@ -88,6 +88,8 @@ import Sparkles from '@lucide/svelte/icons/sparkles';
 import Square from '@lucide/svelte/icons/square';
 import SquareDashed from '@lucide/svelte/icons/square-dashed';
 import Star from '@lucide/svelte/icons/star';
+import LayoutGrid from '@lucide/svelte/icons/layout-grid';
+import ListIcon from '@lucide/svelte/icons/list';
 import Strikethrough from '@lucide/svelte/icons/strikethrough';
 import Sun from '@lucide/svelte/icons/sun';
 import TextAlignCenter from '@lucide/svelte/icons/text-align-center';
@@ -195,6 +197,8 @@ export const ICONS = {
   upload: Upload,
   video: Video,
   'wand-sparkles': WandSparkles,
+  'layout-grid': LayoutGrid,
+  list: ListIcon,
   x: X,
 } as const;
 

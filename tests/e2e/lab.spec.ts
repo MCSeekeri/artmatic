@@ -22,6 +22,7 @@ interface LabHandle {
   setT: (t: number) => void;
   setScale: (s: number) => void;
   setBypass: (on: boolean) => void;
+  setAudioFeatures: (on: boolean) => void;
   renderAt: (t: number, clearFeedback?: boolean) => void;
   readPixels: () => { data: number[]; w: number; h: number };
   renderSize: () => { w: number; h: number };
@@ -282,6 +283,56 @@ test('频谱通道：audio-bars 真的被频谱驱动（拍点与拍中的画面
   expect(result.driven).toBeGreaterThan(0);
   // ③ 贡献为 0 时不许动画面（逐像素完全一致）。
   expect(result.noop).toBe(0);
+});
+
+test('音频特征通道：场景生成器真的被特征驱动（同一 t 摘掉特征源画面必须不同）', async ({ page }) => {
+  await boot(page);
+  const result = await page.evaluate((meanSrc: string) => {
+    const mean = eval(meanSrc) as (d: number[]) => number;
+    const L = (window as unknown as LabWindow).__lab!;
+    const shot = (t: number): number[] => {
+      L.renderAt(t, true);
+      return L.readPixels().data;
+    };
+    const count = (a: number[], b: number[]): number => {
+      let d = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+
+    L.selectSource('scene-pulse');
+    L.selectEffect(null);
+    // t = 1 s 落在拍点上（120 bpm → 每 0.5 s 一拍）。
+    const withAudio = shot(1);
+
+    // 摘掉特征源：**同一 t、同一参数**，唯一的差别是音频特征。
+    //
+    // 这条守的是**整条特征链路**：lab 合成特征 → render-core 注入 →
+    // `AlgoRuntime.at()` → `ctx.features` → `sceneUniforms()` 写
+    // u_rms / u_sub / u_ages / u_travel → 场景 shader。
+    // 任何一环断了（漏传 `features`、漏写某个 uniform、运行期没读源），
+    // 两张图会逐像素一致 —— 而表现形式只是「画面偏暗」，完全不报错。
+    L.setAudioFeatures(false);
+    const noAudio = shot(1);
+    L.setAudioFeatures(true);
+    const restored = shot(1);
+
+    return {
+      driven: count(withAudio, noAudio),
+      restoredDiff: count(withAudio, restored),
+      mean: mean(withAudio),
+      px: withAudio.length / 4,
+    };
+  }, meanExpr());
+
+  // ① 特征确实进了画面。
+  expect(result.driven).toBeGreaterThan(0);
+  // ② 装回来之后与第一次逐像素一致 —— 特征读取是**无状态**的（纯 t 的函数），
+  //    开关切换不污染后续帧。硬约束 1.1 在特征链路上的落实。
+  expect(result.restoredDiff).toBe(0);
+  // ③ 不是黑屏 / NaN 雪花。
+  expect(result.mean).toBeGreaterThan(0.5);
+  expect(result.px).toBeGreaterThan(0);
 });
 
 test('试炼场播放时把渲染节流到 LAB_FPS（反馈类特效按渲染帧累积状态）', async ({ page }) => {

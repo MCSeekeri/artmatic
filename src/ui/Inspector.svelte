@@ -18,7 +18,8 @@
   } from '../core/schema';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { getGenerator } from '../algos/registry';
-  import { defaultEffectValues, getEffect, listEffects } from '../effects/registry';
+  import { defaultEffectValues, getEffect } from '../effects/registry';
+  import EffectPickerModal from './effect-picker/EffectPickerModal.svelte';
   import {
     defaultTransitionValues,
     getTransition,
@@ -28,8 +29,6 @@
   import { visibleParams, type RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
 
-  const effectsList = listEffects();
-  const effectOptions = effectsList.map((e) => ({ value: e.id, label: tr(e.nameKey) }));
   const blendOptions = BLEND_MODES.map((m) => ({ value: m.id, label: tr(m.labelKey) }));
   const fitOptions = [
     { value: 'contain' as const, label: tr('insp.fitContain') },
@@ -50,18 +49,26 @@
   /** 新转场的默认时长。两拍以内、也不至于短到看不见。 */
   const DEFAULT_TRANSITION_SEC = 0.5;
 
-  let addChoice = $state(effectsList[0]?.id ?? '');
+  let pickerOpen = $state(false);
 
-  function addEffectInstance(clip: AnyClip): void {
-    if (!addChoice) return;
+  /**
+   * 按**选择顺序**把若干特效追加到链尾。
+   *
+   * 一次事务（一个 undo 步）：选择器允许多选，若逐个 push 各自成一笔撤销，
+   * 用户按一次「撤销」只退掉最后一个，与"我加了一次特效"的直觉不符。
+   */
+  function addEffectInstances(clip: AnyClip, defIds: readonly string[]): void {
+    if (defIds.length === 0) return;
     upd(clip, tr('insp.addEffect'), (c) => {
       if (c.kind !== 'effect') return;
-      c.chain.push({
-        instanceId: newId(),
-        defId: addChoice,
-        enabled: true,
-        values: defaultEffectValues(addChoice),
-      });
+      for (const defId of defIds) {
+        c.chain.push({
+          instanceId: newId(),
+          defId,
+          enabled: true,
+          values: defaultEffectValues(defId),
+        });
+      }
     });
   }
 
@@ -502,21 +509,27 @@
         {/if}
       {/if}
     {:else if clip.kind === 'effect'}
+      <!-- 添加特效：七十多个特效用一个下拉选不现实（不能搜、不能筛、看不见效果），
+           改成唤起选择器。多选后一次追加到链尾，按选择顺序。 -->
       <Field label={tr('insp.addEffect')}>
-        <Select
-          value={addChoice}
-          options={effectOptions}
-          testid="effect-picker"
-          optionTestidPrefix="effect-picker-opt"
-          onchange={(v) => (addChoice = v)}
-        />
         <Button
-          label={tr('common.add')}
+          label={tr('insp.addEffect')}
           icon="plus"
+          variant="accent"
           testid="add-effect-instance"
-          onclick={() => addEffectInstance(clip)}
+          onclick={() => (pickerOpen = true)}
         />
       </Field>
+
+      {#if pickerOpen}
+        <EffectPickerModal
+          onclose={() => (pickerOpen = false)}
+          onapply={(ids) => {
+            addEffectInstances(clip, ids);
+            pickerOpen = false;
+          }}
+        />
+      {/if}
 
       {#if clip.chain.length === 0}
         <p class="note">{tr('insp.emptyChain')}</p>

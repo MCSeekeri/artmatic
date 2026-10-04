@@ -11,6 +11,14 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | 同上 | 同上 | `js/automata.js` 的 `LIVE=255` 约定、`elementary()`、`sheetSpec/sheetPut`、`gameOfLife/lifeStep`、R8 `upload()` | `src/algos/` |
 | 同上 | 同上 | `js/post.js` 的 ECHO_FS 反馈回声思路（max 合成、floor-then-decay、ping-pong 历史） | `src/effects/glsl/echo.ts` |
 | 同上 | 同上 | `js/scenes.js` 的 `LIB`（`hash11/hash21/hash31`、`vnoise`、6 阶 `fbm`、`ridge`、`rot`）与 `js/post.js` 的 `hash11`、`bayer2/4/8`、`disc()` | `src/effects/shader-def.ts` 的 `HASH_FAST_GLSL`、`FBM6_GLSL`、`BAYER_GLSL`、`DISC_GLSL`、`MATH_GLSL` |
+| 同上 | 同上 | `js/automata.js` 的 `logisticMap()`（逻辑斯蒂分岔图） | `src/algos/bifurcation.ts` |
+| 同上 | 同上 | `js/automata.js` 的 `langtonsAnt()`（**改了类型**：上游烘成 96 格图集，本项目改用 `sim` 型「固定步长 + 快照 + seek 重放」，无需图集采样器） | `src/algos/langtons-ant.ts` |
+| 同上 | 同上 | `js/automata.js` 的 `lsystem()` / `LS_PRESETS`、「纹理是**离根距离场**而非植株画像」「值域从 1 起算、0 表示海龟没来过」两条约定 | `src/algos/lsystem.ts`、`src/algos/types.ts` 的 `BakeReveal` 的 `'value'` 模式 |
+| 同上 | 同上 | `js/scenes.js` `mathfield` mode 3 的 `uMathVariant` 分派（Burning Ship = 迭代前对虚部取绝对值） | `src/algos/mandelbrot.ts`（两个变体共用一个 fragment） |
+| 同上 | 同上 | `js/scenes.js` `mathfield` mode 6 的 `sdMenger` 光线步进 + 法线 + 环境遮蔽（「明暗压在 1.2 以下」） | `src/algos/menger.ts` |
+| 同上 | 同上 | `js/scenes.js` 的七个程序化场景（`pulse` / `field` / `tunnel` / `datamosh` / `flow` / `strands` / `dissolve`）、`COMMON` 的音频特征 uniform 块、`edge()` 软边框，以及 `LIB` 的复用约定 | `src/algos/scenes.ts`、`src/algos/shader-lib.ts` 的 `SCENE_GLSL` |
+| 同上 | 同上 | `js/analysis.js` 的特征曲线口径（rms / flux / 分频 / 谱重心 / 谱平坦度）与 `js/director.js` 的冲量衰减常数（kick 0.085 · hit 0.075 · bar 0.30 s）；**有状态包络改成闭式**（`exp(-距今/decay)`），见 `algos/feature-source.ts` 的说明 | `src/audio/features.ts`、`src/algos/shader-lib.ts` 的 `sceneUniforms()` |
+| 同上 | 同上 | **未移植（明确不做，非遗漏）**：`js/scenes.js` 的 `bars` 场景与 `datamosh` 的频谱条依赖 `js/gl.js::Kit.spectrogram()`（整轨频谱图纹理，shader 采样任意过去/未来）。本项目不建那张纹理，`bars` 因此不做（它退化成「当前帧柱状图」后与已有效果 `audio-bars` 重合），`datamosh` 的对应项改用频段能量。取舍见 `.workbuddy/plans/angel-echo-port-plan.md` | — |
 | `openmosh` | MIT | `gl/effect-shaders.ts` 的 blend mode switch（`TEXT_BLEND_FRAG`）、`LAYER_BOX_GLSL` 层盒、`EffectShaderDef/PrePassDef` 协议、`HASH_GLSL` | `src/engine/blend.frag.ts`、`src/engine/placement.frag.ts`、`src/effects/shader-def.ts` |
 | `openmosh` | MIT | `gl/effect-shaders.ts` 的 `BOUNCE_GLSL`、`HSV_GLSL`（`rgb2hsv/hsv2rgb`）、`HUE_ROTATE_GLSL`（罗德里格旋转） | `src/effects/shader-def.ts` 的共享 GLSL 头 |
 | `openmosh` | MIT | 单 pass 特效（**Phase 1a·① 色彩与色调**，9 个）：`posterize`、`solarize`、`bleach`、`color-correction`、`duotone`、`thermal`、`color-halves`、`hsv-swap`、`trio-tone` | `src/effects/defs/*`、`src/effects/glsl/*` |

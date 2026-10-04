@@ -22,7 +22,8 @@ import type { SourceTexture } from '../engine/compositor';
 import { ALGO_HEAD, algoProgramName, type AlgoUniformCtx } from './shader-lib';
 import { getGenerator } from './registry';
 import { BakeClient } from './bake-client';
-import type { SimHandle } from './types';
+import { REVEAL_MODE, type SimHandle } from './types';
+import { emptyFeatures, zeroFeatures, type AudioFeatureSource } from './feature-source';
 import type { ParamDef } from '../effects/types';
 
 const FIT_GLSL = `
@@ -40,20 +41,32 @@ float insideUv(vec2 uv) {
 }
 `;
 
-/** bake 型：R8 图 + 生长前沿揭示。v=0 是第 0 代（屏幕底部），向上生长。 */
+/**
+ * bake 型：R8 图 + 生长前沿揭示。
+ *
+ * `u_reveal` 决定前沿沿哪个量推进（见 types.ts 的 `BakeReveal`）：
+ *   0 = 输出纵坐标（v=0 是第 0 代，在屏幕底部，向上长）
+ *   1 = 输出横坐标（从左往右，分岔图逐列算出来）
+ *   2 = 像素值本身（离根距离场：值小的先长出来）
+ * 三者都乘 `cell`，所以值为 0 的背景在任何模式下都不会被点亮。
+ */
 const REVEAL_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 outColor;
 uniform sampler2D u_tex;
 uniform float u_front;
+uniform int u_reveal;
 uniform vec3 u_colorBg;
 uniform vec3 u_colorLive;
 ${FIT_GLSL}
 void main() {
   vec2 uv = containUv(vUv);
   float cell = texture(u_tex, clamp(uv, 0.0, 1.0)).r;
-  float revealed = step(uv.y, u_front);
+  float revealed;
+  if (u_reveal == 2) revealed = step(cell, u_front);
+  else if (u_reveal == 1) revealed = step(uv.x, u_front);
+  else revealed = step(uv.y, u_front);
   vec3 c = mix(u_colorBg, u_colorLive, cell * revealed * insideUv(uv));
   outColor = vec4(c, 1.0);
 }`;
@@ -85,6 +98,13 @@ export class AlgoRuntime {
   private readonly tintProg: Program;
   private readonly outPool = new Map<string, Target>();
   private readonly sims = new Map<string, SimEntry>();
+  /**
+   * 音频特征来源（`render-core` 注入）。**没有源时读静音特征**而不是跳过 ——
+   * 场景的 uniform 照常派发，只是值全 0，画面偏暗，而不是 sampler / 参数缺失。
+   */
+  private featureSource: AudioFeatureSource | null = null;
+  /** `at()` 的复用出参（每帧每源都读，不能分配）。 */
+  private readonly features = emptyFeatures();
 
   constructor(
     private readonly kit: Kit,
@@ -92,6 +112,10 @@ export class AlgoRuntime {
   ) {
     this.revealProg = kit.quad(REVEAL_FRAG, 'algo-reveal');
     this.tintProg = kit.quad(TINT_FRAG, 'algo-tint');
+  }
+
+  setFeatureSource(source: AudioFeatureSource | null): void {
+    this.featureSource = source;
   }
 
   readonly resolve = (
@@ -123,6 +147,7 @@ export class AlgoRuntime {
       this.revealProg
         .tex('u_tex', baked.tex)
         .u('u_front', Math.min(1, front))
+        .u1i('u_reveal', REVEAL_MODE[def.reveal ?? 'front-y'] ?? 0)
         .u('u_colorBg', colorVec3(String(params.colorBg ?? '#000000')))
         .u('u_colorLive', colorVec3(String(params.colorLive ?? '#ffffff')))
         .u('u_srcAspect', baked.w / baked.h)
@@ -170,7 +195,12 @@ export class AlgoRuntime {
       .u('u_aspect', w / h);
     // 参数派发交给 def —— 通用化了才可能「场景 = realtime 生成器」。
     // 写死 uniform 名的年代，新 shader 拿不到参数**且不报错**，只是恒用默认值。
-    const uctx: AlgoUniformCtx = { t, frame, seed, w, h, fps, grid, clip };
+    //
+    // 音频特征在同一处读：`at(t)` 是纯函数（离线轨查表），所以 seek 得到的
+    // 特征与顺序播放一致 —— 这正是硬约束 1.1 要的（逐帧累加器做不到）。
+    if (this.featureSource) this.featureSource.at(t, this.features);
+    else zeroFeatures(this.features);
+    const uctx: AlgoUniformCtx = { t, frame, seed, w, h, fps, grid, clip, features: this.features };
     def.setUniforms(this.kit.gl, prog.uniforms, params, uctx);
     this.kit.pass(prog, out);
     return { tex: out.tex, w, h };

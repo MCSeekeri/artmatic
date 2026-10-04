@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 const ROOT = process.cwd();
 const GLOBAL_CSS = ['src/app.css', 'src/ui/controls/controls.css'];
 /** 只扫新写的这几块；controls/ 自己就是全局类的**定义方**，不适用。 */
-const SCANNED_DIRS = ['src/ui/typography', 'src/ui/ribbon', 'lab'];
+const SCANNED_DIRS = ['src/ui/typography', 'src/ui/ribbon', 'src/ui/effect-picker', 'lab'];
 
 /**
  * **刻意**复用全局类的白名单：`相对路径 → [类名]`。

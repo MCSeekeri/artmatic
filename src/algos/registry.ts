@@ -8,12 +8,27 @@
 import { rule110Def } from './rule110';
 import { gameOfLifeDef } from './game-of-life';
 import { mandelbrotDef } from './mandelbrot';
+import { bifurcationDef } from './bifurcation';
+import { langtonsAntDef } from './langtons-ant';
+import { lsystemDef } from './lsystem';
+import { mengerDef } from './menger';
+import { sceneDefs } from './scenes';
 import { defaultValues } from '../effects/types';
 import type { GeneratorDef } from './types';
 import type { MessageKey } from '../i18n/locales';
 
 const DEFS = new Map<string, GeneratorDef>(
-  [rule110Def, gameOfLifeDef, mandelbrotDef].map((d) => [d.id, d]),
+  [
+    rule110Def,
+    gameOfLifeDef,
+    mandelbrotDef,
+    bifurcationDef,
+    langtonsAntDef,
+    lsystemDef,
+    mengerDef,
+    // 程序化场景家族（angel-echo scenes.js）—— 一个文件，七个 def
+    ...sceneDefs,
+  ].map((d) => [d.id, d]),
 );
 
 export function getGenerator(id: string): GeneratorDef | null {

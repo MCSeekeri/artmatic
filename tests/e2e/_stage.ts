@@ -178,6 +178,22 @@ export async function setTrackEnabled(page: Page, trackId: string, enabled: bool
 }
 
 /**
+ * 走「添加特效」选择器加一个特效。
+ *
+ * 选择器换掉了原来那个 `<select>` 下拉：现在要**点开 modal → 选中卡片 → 确认**
+ * 三步。三处用例都要这个动作，所以收在这里 —— 抄三份的话，下次选择器再改一次
+ * 就要改三个地方。
+ *
+ * 卡片用 `data-effect-id` 定位（不是显示名）：名字会随文案变，id 不会。
+ * Playwright 的 `.click()` 会自动把滚出视口的卡片滚进来，所以不必先滚动。
+ */
+export async function addEffectViaPicker(page: Page, defId: string): Promise<void> {
+  await page.getByTestId('add-effect-instance').click();
+  await page.locator(`[data-testid=effect-picker-item][data-effect-id="${defId}"]`).click();
+  await page.getByTestId('effect-picker-confirm').click();
+}
+
+/**
  * warm-up 的收敛判据：连续这么多帧完全一致就认为「稳定了」。
  *
  * 起因是一个**一次性过渡**（刻画见 `.workbuddy/probe-flaky-root*.mjs` 与

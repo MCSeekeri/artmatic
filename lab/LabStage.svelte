@@ -15,6 +15,7 @@
   import Select from '../src/ui/controls/Select.svelte';
   import { labState, LAB_SCALES, type LabScale } from './lab-state.svelte';
   import { LAB_DURATION, LAB_FPS } from './build-project';
+  import { SHOT_HEIGHTS, type ShotHeight } from './export-thumbs';
   import { tr } from '../src/i18n/index.svelte';
 
   let canvas: HTMLCanvasElement;
@@ -27,10 +28,12 @@
     value: String(s),
     label: `${Math.round(s * 100)}%`,
   }));
+  const shotHeightOptions = SHOT_HEIGHTS.map((h) => ({ value: String(h), label: `${h}p` }));
 
   const compiled = $derived(labState.compileResults);
   const okCount = $derived(labState.compiledOkCount());
   const badCount = $derived((compiled?.length ?? 0) - okCount);
+  const shotProgress = $derived(labState.shotProgress);
 </script>
 
 <main class="lab-stage-wrap">
@@ -114,10 +117,51 @@
       onclick={() => labState.runCompile()}
     />
 
+    <!--
+      导出截图：把缩略图变成**预先准备好的静态图**，而不是每次开选择器现渲。
+      单张给的是「当前画面」（比右键另存为省事），批量给的是整套（按目录底图）。
+    -->
+    <Button
+      label={tr('lab.shot')}
+      icon="download"
+      variant="outline"
+      tipText={tr('lab.shotTip')}
+      tipPlacement="top"
+      testid="lab-shot"
+      onclick={() => void labState.exportShot()}
+    />
+    <Select
+      value={String(labState.shotHeight)}
+      options={shotHeightOptions}
+      ariaLabel={tr('lab.shotHeight')}
+      tipText={tr('lab.shotHeight')}
+      testid="lab-shot-height"
+      optionTestidPrefix="lab-shot-height-opt"
+      minWidth={76}
+      onchange={(v) => (labState.shotHeight = Number(v) as ShotHeight)}
+    />
+    <Button
+      label={tr('lab.shotAll')}
+      icon="download"
+      variant="outline"
+      disabled={labState.shotBusy}
+      tipText={tr('lab.shotAllTip')}
+      tipPlacement="top"
+      testid="lab-shot-all"
+      onclick={() => void labState.exportShots()}
+    />
+
     <span class="lab-tail">
       <span class="lab-readout" data-testid="lab-src-status" data-pending={labState.srcPending}>
         {tr('lab.srcLabel')}：{labState.srcPending ? tr('lab.srcPending') : tr('lab.srcReady')}
       </span>
+      {#if shotProgress}
+        <span class="lab-readout" data-testid="lab-shot-progress">
+          {tr('lab.shotRunning', { done: shotProgress.done, total: shotProgress.total })}
+        </span>
+      {:else if labState.shotMessage}
+        <span class="lab-readout" data-testid="lab-shot-message">{labState.shotMessage}</span>
+      {/if}
       {#if compiled}
         <span
           class="lab-readout"

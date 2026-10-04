@@ -17,6 +17,7 @@
  */
 
 import { Fft, hannWindow } from './fft';
+import { frameRms } from './features';
 
 /** 分析帧率。20 ms 一帧够用；内存约 `bins × 50` 字节/秒（1025 bins ≈ 200 KB/s）。 */
 export const SPECTRUM_FPS = 50;
@@ -53,6 +54,31 @@ interface MonoSource {
   getChannelData(channel: number): Float32Array;
 }
 
+/** 一趟走查的形状：多少帧、多少 bin、每帧多长。 */
+export interface SpectrumPlan {
+  frames: number;
+  bins: number;
+  hopSec: number;
+  sampleRate: number;
+}
+
+/**
+ * 帧数 / hop / bin 的**唯一真源**。
+ *
+ * 暴露出来是因为旁路钩子（音频特征累加器）必须**在走查开始前**按同样的帧数
+ * 预分配，否则它会少喂帧、曲线尾部静默变成 0。让调用方自己抄一遍这套算术
+ * 迟早会漂。
+ */
+export function planSpectrum(sampleRate: number, length: number): SpectrumPlan {
+  const hop = Math.max(1, Math.round(sampleRate / SPECTRUM_FPS));
+  return {
+    frames: length >= SPECTRUM_FFT ? 1 + Math.floor((length - SPECTRUM_FFT) / hop) : 0,
+    bins: SPECTRUM_BINS,
+    hopSec: hop / sampleRate,
+    sampleRate,
+  };
+}
+
 function monoOf(buffer: MonoSource): Float32Array {
   const n = buffer.length;
   const out = new Float32Array(n);
@@ -79,17 +105,24 @@ function toByte(mag: number, scale: number): number {
  * 算出一整条频谱轨。
  *
  * `onProgress` 每处理一段调用一次（用来驱动进度条），分段让出主线程。
+ *
+ * `onFrame` 是**同一趟走查**里的旁路钩子：每算完一帧就拿到 `(线性幅度谱, 帧 rms)`。
+ * 音频特征轨（`audio/features.ts`）挂在这里 —— 二者要的是同一个 FFT、同一个窗、
+ * 同一个 hop，再走一趟就是把这件机械劳动抄两遍。`mag` 是**复用缓冲**，
+ * 钩子必须当场取走要用的东西。
  */
 export async function computeSpectrum(
   buffer: MonoSource,
   onProgress?: (done: number, total: number) => void,
+  onFrame?: (mag: Float32Array, rms: number) => void,
 ): Promise<SpectrumTrack> {
   const sampleRate = buffer.sampleRate;
+  const plan = planSpectrum(sampleRate, buffer.length);
   const hop = Math.max(1, Math.round(sampleRate / SPECTRUM_FPS));
-  const hopSec = hop / sampleRate;
+  const hopSec = plan.hopSec;
   const n = SPECTRUM_FFT;
-  const bins = (n >> 1) + 1;
-  const frames = buffer.length >= n ? 1 + Math.floor((buffer.length - n) / hop) : 0;
+  const bins = plan.bins;
+  const frames = plan.frames;
 
   const data = new Uint8Array(frames * bins);
   if (frames > 0) {
@@ -109,6 +142,8 @@ export async function computeSpectrum(
         fft.magnitude(frame, mag);
         const base = f * bins;
         for (let k = 0; k < bins; k += 1) data[base + k] = toByte(mag[k]!, scale);
+        // rms 取**加窗之前**的原始样本：加了窗的帧在两端被压掉，算出来的响度偏低。
+        onFrame?.(mag, frameRms(mono, off, n));
       }
       onProgress?.(stop, frames);
       if (stop < frames) await Promise.resolve();

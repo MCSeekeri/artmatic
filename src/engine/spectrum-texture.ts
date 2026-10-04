@@ -78,6 +78,8 @@ export class SpectrumTextures {
     const gl = kit.gl;
     const max = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) as number;
     this.scratchUnit = Math.max(0, (max || 16) - 1);
+    // 切到 scratch 再建：`makeTexture` 里的 bindTexture 作用在当前激活单元上。
+    gl.activeTexture(gl.TEXTURE0 + this.scratchUnit);
     this.silent = makeTexture(gl, 1, new Uint8Array([0]));
   }
 
@@ -123,7 +125,20 @@ export class SpectrumTextures {
     let entry = this.perInstance.get(instanceId);
     if (!entry || entry.w !== bytes.length) {
       if (entry) this.kit.gl.deleteTexture(entry.tex);
-      entry = { tex: makeTexture(this.kit.gl, bytes.length, bytes), w: bytes.length };
+      /*
+       * **创建也要走 scratch 单元。** `makeTexture` 里的 `bindTexture` 作用在
+       * 「当前激活的单元」上，而此时那个单元正是 `prog.tex('u_texture', ...)`
+       * 留下的 0 号 —— 不先切走的话，频谱纹理会把**链输入**顶掉，
+       * 于是这一帧 `u_texture` 读的是 R8 频谱，被当成 RGBA 读成 `(r,0,0,1)`：
+       * 画面变成一整片红（实测：`audio-bars` 的缩略图整张偏红）。
+       *
+       * 只在**首次**为该实例建纹理的那一帧发生（之后走下面那条已有的分支），
+       * 所以连续渲染的用例看不见它 —— 而「只渲一帧」的场景（缩略图导出、
+       * 单帧导出）会 100% 命中。
+       */
+      const gl = this.kit.gl;
+      gl.activeTexture(gl.TEXTURE0 + this.scratchUnit);
+      entry = { tex: makeTexture(gl, bytes.length, bytes), w: bytes.length };
       this.perInstance.set(instanceId, entry);
       prog.tex('u_spectrum', entry.tex);
       return;

@@ -522,13 +522,23 @@ interface Curve {
    `feedback: true`。漏写的表现是 sampler 没人绑、采样读回未绑定纹理 ——
    像「没有拖尾」，不报错。同理任何 runner 绑不了的 sampler（如 `u_spectrum`）
    都会被 `effect-uniforms.test.ts` 拦下。
-5. **上传纹理不许用「当前激活单元」。** `texSubImage2D` 作用在当前激活的纹理单元上，
+5. **上传纹理不许用「当前激活单元」，而且「创建」与「上传」两条路都要走 scratch。**
+   `bindTexture` / `texImage2D` / `texSubImage2D` 都作用在当前激活的纹理单元上，
    而 `Program.tex()` 会把采样本依次绑到 0..n 并留下最后一个为激活态。更阴的是：
    采样器**没被编译器保留**时（如 `audio-bars` 用不到 `u_original`）`tex()` 会提前返回
    **且不递增 `texUnit`**，激活单元可能停在任何位置 —— 于是上传把某个 sampler
-   指到了错的纹理上。真实事故：频谱纹理把 `u_texture` 换掉，画面变成一片红竖线
-   （R8 读作 rgba=(r,0,0,1)）。**上传一律走 scratch 单元**
-   （见 `engine/spectrum-texture.ts` 的 `scratchUnit`）。
+   指到了错的纹理上。
+   - 事故一（已修）：上传把 `u_texture` 换成频谱纹理，画面变成一片红竖线
+     （R8 读作 rgba=(r,0,0,1)）。修法是上传走 `scratchUnit`。
+   - **事故二（2026-10-04，同一个 bug 的另一半）**：修了「上传」却漏了「**创建**」——
+     `makeTexture()` 里的 `bindTexture` 同样作用在当前激活单元上，而它发生在
+     `prog.tex('u_texture', ...)` **之后**，于是首次建纹理那一帧 u_texture 被顶掉，
+     画面整片发红。**只在每个实例的第一帧发生**（第二帧起走已存在分支），
+     所以任何连续渲染的用例都看不见它 —— 而缩略图 / 单帧导出 100% 命中。
+   - **教训**：这条协议的正确形式是「**任何** bind / upload 之前先切到 scratch」，
+     不是「上传时记得切」。改一个 GL 状态 helper 时，要顺着找**所有**动那个状态的地方。
+   - 守卫：`effect-picker.spec.ts` 的「频谱类特效没把链输入顶掉」——
+     `audio-bars` 的缩略图里「红主导像素占比」必须 < 20%（修好前后实测 0.76% vs 近乎整幅）。
 
 #### 反馈类特效与「渲染帧」
 
@@ -581,8 +591,80 @@ interface Curve {
   纯红 `from` 在 `p=0.5` 时整帧仍是红的。拿它写「p=0.5 应红蓝各半」会得到一个看起来像
   bug 的假失败。
 
-### 5.6 算法生成器
+#### 特效选择器（`添加特效`，2026-10-04）
 
+特效到七十多个之后，检查器里用一个 `<select>` 加特效已经不能用了：搜不了、筛不了、
+看不见效果。现在换成一个 modal（`src/ui/effect-picker/`）。
+
+- **目录表在 `effects/catalog.ts`，不在各 `defs/`**：七十多条说明要**成批读一遍**
+  才能保证语气与长度一致，散在七十多个文件里做不到；而且它是**展示信息**，
+  不是 shader 协议。代价是「新增特效 = 三个地方」，由 `effect-catalog.test.ts`
+  断言「每个注册的特效都有条目」+「没有孤儿条目」变成明确报错。
+- **标签分两半**：`overlay` 与 `category` 是手工的；`feedback` / `multipass` /
+  `audio` / `animated` / `hdr` **从 shader def 推导**（`structuralTags`）——
+  手工维护这些必然与代码漂掉。**「是否为叠加层」在本项目里没有区分度**
+  （所有特效片段本来就是 adjustment layer），所以改成「叠加型 = 在输入之上加东西」。
+  分类名与标签名是**拼出来的键**（`fx.cat.${c}`），TS 覆盖不到 ——
+  由 `effect-catalog.test.ts` 的一条运行期断言兜。
+- **缩略图底图的选择规则**（`effects/thumbnails/bases.ts` 顶部有表）：
+  先问这个特效改的是**颜色 / 阶调 / 形状 / 细节 / 径向 / 运动**，再选底图。
+  两条被需求点名、且已经写进 E2E 的：
+  **去饱和度必须用高饱和彩条**（参考稿这里就是错的：一个把画面变灰的特效配一张
+  本来就灰的底图 = 缩略图上看不出任何变化），**通道错位必须用纯黑白底图**
+  （它在彩条上是一堆分不开的色块）。
+  `mandel` 底图走**注册的** `mandelbrot` 生成器，所以它的默认色改成了纯黑白
+  （顺带改正了 `colorA/colorB` **标签反了**：`t` 随迭代次数增大，`colorA` 是快逃逸端）。
+  `scroll` 底图是唯一会动的 —— `motion-mask` / `fast-mosh` / `kino-datamosh` 在
+  **静止**底图上运动量恒为 0，缩略图会是纯黑。
+- **缩略图用独立的离屏 render-core 渲染**（`ui/effect-picker/thumbnails.ts`），
+  与 lab 同款：`createRenderCore` 挂在一块 320×180 的离屏 canvas 上，`thumb:` 前缀的
+  伪 generator id 由它自己的 resolver 拦截。**不借预览那台** —— 借的话要
+  `setExportSize` 改画布尺寸再还原，一不小心就把预览留在错的尺寸上。
+  建不出上下文时卡片退化成「只有名字与说明」，功能仍可用。
+- **`readPixels` 是自下而上的，必须翻行**（GL 原点在左下，`ImageData` 第 0 行在顶部）。
+  守卫：E2E 拿 `pixelate`（底图 `ramp` 上半灰、下半彩）比上下两半的饱和度，
+  翻转之后关系会反过来。
+- **懒渲染**：IntersectionObserver 只给滚到可见的卡片排队（用 `peek` 而不是 `get`
+  读缓存，否则 `{#each}` 一渲染就把七十多张全排上队）。渲染按**时间预算**分块
+  （10 ms/帧），因为 `relief` 那类重着色器 × 12 帧会一次占住主线程一百多毫秒。
+  有历史的特效（反馈 / 用到「上一帧输入」/ 会动的底图）要**连渲 12 帧**才有内容。
+- **多选**：底部「保存并应用（N）」，按**点击顺序**追加到链尾，**只算一笔撤销**
+  （逐个 push 各自成一笔的话，按一次撤销只退掉最后一个）。
+- **离屏渲染器住在 `render/effect-thumb-renderer.ts`**（不是 `effects/` 也不是
+  `ui/effect-picker/`）：它要 `createRenderCore`，而 `render → effects` 是唯一合法的
+  方向；放 `effects/` 会成环。**只有 lab 的批量导出在用**（选择器读静态资源，见下）。
+
+#### 缩略图资源（`src/assets/effect-thumbnails/`）
+
+- 打包进 `src/assets/`（**不是** `public/`），由 `ui/effect-picker/thumb-assets.ts` 用
+  `import.meta.glob('../../assets/effect-thumbnails/*.webp', { eager: true, query: '?url' })`
+  取：**URL 同步可得**（组件里不需要「加载中」状态），图片字节由浏览器的
+  `<img loading="lazy">` 自己懒加载。**选择器不再现渲** —— 第一版现渲要临时编
+  七十多个着色器，实测帧数 240 → 190。
+- 格式 **WebP**。640×360 q84 实测**整套 1.11 MB**（原始 PNG 6.6 MB），
+  所以不必为了省体积降到 256 高：卡片显示宽约 208 CSS px，360 高在任何 DPI
+  都清晰，且不重采样就是零损失。
+- **仓库里这一套是逐张手挑的**（连同参数一起调，例如 `bleach` 拉到完全去色才是
+  它最好的示意），**不是** `EFFECT_CATALOG[id].base` 那套自动底图。
+  `lab` 的「批量导出缩略图」用的是自动底图 —— 它会给**另一套**图，
+  **别当成「重建同名资源」直接覆盖**。
+- 守卫（`tests/unit/effect-thumb-assets.test.ts` + `effect-picker.spec.ts`）：
+  每个注册的特效都有资源、没有孤儿资源、只放 WebP、整套 < 2.5 MB、
+  界面上**每张卡片都有 `<img>` 而不是占位条**。加特效时忘了导出会明确报错。
+- 渲染侧的两个坑（翻行 / 频谱顶掉链输入）的守卫在 `tests/e2e/lab-shot.spec.ts`
+  —— 它们属于**导出这条渲染路径**，不属于选择器。
+- **lab 的「导出截图」**（`lab/export-thumbs.ts`）：
+  - 单张 = 当前画面存成 `<特效 id>.png`（比右键另存为省事）；
+  - 批量 = 按目录底图逐个渲一张，打成一个 zip（**一个下载**，不触发浏览器的
+    「是否允许下载多个文件」，也不用往下载目录丢七十多个散文件）。
+  - 文件名是**特效 id**，不是显示名 —— id 是这份素材的主键，显示名会随文案变。
+  - 高度可选（128/192/256/384，默认 256）。默认比「128 px / 20 KB」那套算得高，
+    因为缩略图会被显示成 ≈200 CSS px 宽，128 高在 2× 屏上要放大 1.75 倍。
+  - 单个渲染器 **`thumbSize()` 先做 `isFinite` 兜底再取整**：
+    `Math.max(16, Math.round(NaN))` 是 `NaN`，会造出一张 NaN 尺寸的 canvas、
+    导出静默得到 0 字节文件。
+
+### 5.6 算法生成器
 - 二值纹理（元胞自动机）走 **R8**，活性值用 `LIVE = 255` 常量。
   **移植时保留这个常量，不要写裸 `1`** —— 早年写成 `1` 的版本进 R8 后被归一化成 0.0039，
   所有阈值把它抹成 0（画面全黑）。
@@ -595,6 +677,36 @@ interface Curve {
     `AlgoSource.generator` 是自由字符串、realtime 本就渲染整帧，**不需要新的 SourceClip 类型**。
   - 内部渲染高度统一走 `intResParam()`（键 `intRes`，文案 `algo.intRes*` 共用一套），
     别再一个生成器写一份 select。内部低分辨率再放大是性能手段，**不是跳帧缓存**（那破坏确定性）。
+- **bake 型的「揭示」有三种轴**（`types.ts` 的 `BakeReveal` → reveal shader 的 `u_reveal`）：
+  `'front-y'`（默认，输出纵坐标，如 Rule 110 逐代向上）/ `'front-x'`（输出横坐标，如分岔图逐列算出来）/
+  `'value'`（**像素值本身**，如 L-system 的离根距离场 —— 生长顺序编在值里）。
+  三者共用 `cell * step(量, u_front)` 的形状，所以值为 0 的背景在任何模式下都不会被点亮。
+  `BakeResult.frontMax` 的口径随轴变（行数 / 列数 / 255）。守卫：`algo-uniforms.test.ts`
+  断言三种模式都至少被一个生成器用到。
+- **程序化场景 = `realtime` 生成器，共用 `SCENE_GLSL`**（`shader-lib.ts`）。
+  它 = 已登记的 `FBM6_GLSL` + `MATH_GLSL`（就是 angel-echo 的 `LIB`，**不要抄第二份**）
+  + 音频特征 uniform 块 + `edge()`。所以场景体里写 **`fbm6(...)`**，不是上游的 `fbm(...)`。
+  场景 id 一律带 **`scene-`** 前缀 —— 特效注册表里已有 `tunnel`，另有 `kino-datamosh` /
+  `audio-bars` / `flow-contours` 这些近似名；两张表技术上不冲突，但试炼场左栏（源）与
+  右栏（特效）同时出现两个「隧道」是纯粹的误导。
+  - `setUniforms` 一律用共用的 `sceneUniforms()`；编排量（密度 / 扭曲 / 色调 / 切段 / 升调 / 进度）
+    是 `arrangementParam()` 造的**普通 range 参数**，用户自己打关键帧 ——
+    **不要**把 angel-echo 的 `plan.js` 段落表搬进来（AGENTS §8 明确「不要拿」）。
+- **音频特征层**（`audio/features.ts` + `algos/feature-source.ts`）：
+  - **必须离线预计算**。上游的 `Impulse.step(dt)` / `approach` 是逐帧按 `dt` 推进的有状态量，
+    与硬约束 1.1 冲突（seek 不可复现）。这里给的是**曲线的查表**：`at(t)` 是 t 的纯函数。
+  - 与频谱**共用一趟 FFT 走查**：`computeSpectrum(buffer, onProgress, onFrame)` 的钩子挂上
+    特征累加器。帧数 / hop 由 `planSpectrum()` 唯一定义 —— 自己抄一遍那套算术，
+    表现是「特征曲线尾部静默变成 0」。
+  - 接口注入（`AlgoFeatureSource`），`render-core` 依然不 import `audio/`。主应用给
+    `ProjectAudio`（频谱 + 特征一次算完），lab 给 `createLabFeatures()` 的合成特征。
+  - **冲量是闭式的**：`exp(-距今多久 / decay)`，不是累加器。kick / bar 由**拍网格**给
+    （JS 侧才拿得到 `BeatGrid`），hit 由 **onset 年龄**给。
+  - `u_ages` 是 `vec4`（最近四个 onset 的年龄），没有 onset 时给哨兵 9。
+- **生成器也有接线自检**：`tests/unit/algo-uniforms.test.ts`（与 `effect-uniforms.test.ts`
+  共用 `_uniform-probe.ts` 的伪 GL 骨架）。判据：realtime 的 fragment **没有重复声明 head**
+  / **声明的都被写** / **写入类型与声明一致** / **没摸到未声明的名字**。
+  这一类失效全是静默的（拼错名字、`uniform1f` 写 `int`），`compileAll` 看不见。
 - 烘焙是**异步就绪**的：未就绪时该层返回 `null`（「这一层缺席」）。试炼场工具栏把
   「源：等待中 / 就绪」显式化。
 - openmosh 的 Rnd 按钮用裸 `Math.random()`；移植时换成 `mulberry32(hashSeed(...))`，
@@ -988,7 +1100,7 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
 
 | 目录 | 拿什么 | 不要拿什么 |
 |---|---|---|
-| `angel-echo` | `js/gl.js`（WebGL2 微工具箱）、`js/automata.js`（7 类数学生成器）、`js/post.js`（回声→故障→调色三连）、`js/util.js`（三个包络原语）、`tools/analyze_audio.py` 的算法 | `plan.js` / `direction.js` / `app.js` 里的硬编码内容表（那是**一部片**的编排，不是引擎） |
+| `angel-echo` | `js/gl.js`（WebGL2 微工具箱）、`js/automata.js`（7 类数学生成器）、`js/scenes.js`（`LIB` + 程序化场景 + 音频特征均匀块，**已移植**）、`js/post.js`（回声→故障→调色三连）、`js/util.js`（三个包络原语）、`js/analysis.js` 的特征口径、`tools/analyze_audio.py` 的算法 | `plan.js` / `direction.js` / `app.js` 里的硬编码内容表（那是**一部片**的编排，不是引擎）。**还没搬**：`Kit.points()` 与粒子 5 模式（含 flock/eye）、`mathfield` 的 mode 0/1/2/4/5（烘焙图集的闭式揭示器）、`bars` 与 `datamosh` 的频谱条（依赖 `Kit.spectrogram()` 的整轨频谱纹理）、排版/OSD 全套、摄像机 `MOVES/ASPECTS/TINTS` |
 | `openmosh` | 声明式特效协议、66 个 GLSL、ping-pong + hdrFeedback 渲染器、`timeline/clips.ts` 泛型片段几何、`gl/preview-size.ts`、`audio/offline-audio.ts`、`video/decode.ts`、约 40 个 UI 原子件、`lab/` 试炼场模式 | 轨道模型（按类型分轨 + 数量上限，与我们的统一模型相反）、WebM-only 导出、IndexedDB 存工程 |
 | `angel-echo-splitter` | `store.js` 的时间换算与拍吸附、`timeline.js` 的 canvas 网格绘制与拖拽、四档吸附语义 | localStorage 持久化、单轨模型（`assignLanes` 只是重叠时自动分道） |
 

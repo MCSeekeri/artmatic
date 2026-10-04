@@ -12,11 +12,21 @@
  */
 
 import { rule110Def } from './rule110';
-import type { BakeFn, BakeResult } from './types';
+import { bifurcationDef } from './bifurcation';
+import { lsystemDef } from './lsystem';
+import type { BakeFn, BakeResult, GeneratorDef } from './types';
 
-/** 需要进 Worker 烘焙的生成器在这里登记（新增 bake 型生成器 = 这里加一行）。 */
+/**
+ * 需要进 Worker 烘焙的生成器在这里登记（新增 bake 型生成器 = 这里加一行）。
+ *
+ * ⚠️ 这里**没有** `langtons-ant`：它是 `sim` 型（固定步长 + 快照 + seek 重放），
+ * 单步极便宜，走主线程。别照 report 里「langtonsAnt 必须进 Worker」那句话往
+ * 这里加 —— 那句针对的是「一次性烘 320k×96 步」的上游做法。
+ */
 const BAKERS: Record<string, BakeFn> = {};
-if (rule110Def.kind === 'bake') BAKERS[rule110Def.id] = rule110Def.bake;
+for (const def of [rule110Def, bifurcationDef, lsystemDef] as GeneratorDef[]) {
+  if (def.kind === 'bake') BAKERS[def.id] = def.bake;
+}
 
 interface BakeRequest {
   type: 'bake';

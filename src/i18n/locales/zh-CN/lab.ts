@@ -61,6 +61,21 @@ export const lab = {
   'lab.patGrid': '网格',
   'lab.patGradient': '渐变',
 
+  // —— 导出截图
+  /* 「导出截图」用的是**当前舞台**尺寸（把正在看的东西存下来），
+     高度下拉只管批量 —— 所以它叫「批量高度」，别让人以为两个按钮都受它管。 */
+  'lab.shot': '导出截图',
+  'lab.shotTip': '把当前舞台画面存成 PNG（尺寸 = 当前舞台），文件名就是特效 id',
+  'lab.shotAll': '批量导出缩略图',
+  'lab.shotAllTip':
+    '按目录底图给每个特效渲一张，打包成 zip —— 解压进 src/assets/effect-thumbnails/ 即可。' +
+    '注意：那是按目录自动选的底图，会覆盖仓库里手挑过的那一套',
+  'lab.shotHeight': '批量高度',
+  'lab.shotRunning': '导出中 {done}/{total}',
+  'lab.shotOneDone': '已存 {name}',
+  'lab.shotAllDone': '已导出 {n} 张 · {size}',
+  'lab.shotFailed': '导出失败：{msg}',
+
   // —— 空态
   'lab.noSource': '没选源',
 } as const;
