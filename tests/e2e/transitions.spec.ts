@@ -223,6 +223,17 @@ test('检查器：带筛选地选转场、时间轴出现窗口涂层、选「�
   await boot(page);
   page.on('pageerror', (e) => errors.push(String(e)));
 
+  // 基线：demo 工程自带若干转场（那是它的展示内容之一），涂层是**每条轨都画**的，
+  // 与被测轨是否 enabled 无关。所以这里比相对量，不断言绝对条数 —— 写死数字
+  // 等于把「demo 里有几个转场」也一起钉进这个用例。
+  // 先轮询等到时间轴画完第一遍，否则读到的是 0（`boot` 只保证 __artmatic 在了）。
+  await expect
+    .poll(() => page.getByTestId('transition-marker').count(), {
+      message: '开箱 demo 应当自带转场 —— 零个说明它没被渲染出来',
+    })
+    .toBeGreaterThan(0);
+  const demoMarkers = await page.getByTestId('transition-marker').count();
+
   const stage = await buildTransitionStage(page, {
     fromColor: '#ff0000',
     toColor: '#0000ff',
@@ -235,7 +246,7 @@ test('检查器：带筛选地选转场、时间轴出现窗口涂层、选「�
   // 选中出画片段 → 检查器出现转场小节，时间轴出现窗口涂层
   await page.locator(`[data-clip-id="${stage.fromId}"]`).click();
   await expect(page.getByTestId('transition-picker')).toBeVisible();
-  await expect(page.getByTestId('transition-marker')).toHaveCount(1);
+  await expect(page.getByTestId('transition-marker')).toHaveCount(demoMarkers + 1);
 
   // 122 条转场：靠筛选框找目标，而不是滚动列表
   await page.getByTestId('transition-picker').click();
@@ -253,10 +264,10 @@ test('检查器：带筛选地选转场、时间轴出现窗口涂层、选「�
   expect(afterPick?.defId).toBe('circleopen');
   expect(afterPick?.duration).toBeCloseTo(1, 6);
 
-  // 选「无」= 删除，涂层随之消失
+  // 选「无」= 删除，涂层随之消失（回到 demo 自带的那些）
   await page.getByTestId('transition-picker').click();
   await page.getByTestId('transition-opt-').click();
-  await expect(page.getByTestId('transition-marker')).toHaveCount(0);
+  await expect(page.getByTestId('transition-marker')).toHaveCount(demoMarkers);
 
   const afterClear = await page.evaluate((id) => {
     const A = (window as never as {

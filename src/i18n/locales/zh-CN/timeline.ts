@@ -72,16 +72,25 @@ export const timeline = {
   /* ------------------------------------------------ 演示工程（core/demo-project.ts） */
   'tl.demoProjectName': 'Artmatic Demo',
   'tl.demoAudioAsset': '演示节拍 120 BPM',
-  'tl.demoClipMandelbrot': 'Mandelbrot 推近',
-  'tl.demoClipRule110': 'Rule 110 生长',
-  'tl.demoClipGlitch': '局部故障',
-  'tl.demoClipGrade': '回声 + 扫描线',
   'tl.demoClipBeats': '演示节拍',
-  'tl.demoTrackV1': 'V1 底图',
-  'tl.demoTrackV2': 'V2 纹理',
-  'tl.demoTrackV3': 'V3 局部故障',
-  'tl.demoTrackV4': 'V4 全屏调色',
+  /* 轨名：V6 → V1 自上而下 = 前景 → 背景，A1 是唯一的音频轨。 */
+  'tl.demoTrackV6': 'V6 全局调色',
+  'tl.demoTrackV5': 'V5 标题排版',
+  'tl.demoTrackV4': 'V4 故障链',
+  'tl.demoTrackV3': 'V3 叠层',
+  'tl.demoTrackV2': 'V2 主视觉',
+  'tl.demoTrackV1': 'V1 复平面底图',
   'tl.demoTrackA1': 'A1 音乐',
+  /* 片段名：写成「生成器 / 特效链 + 一眼能对上画面的描述」，不写片汤话。 */
+  'tl.demoClipGrade': '调色 · 暗角 · 颗粒',
+  'tl.demoClipTitle': '标题排版',
+  'tl.demoClipGlitch': '切片 · 通道错位 · 扫描线 · 拖尾',
+  'tl.demoClipBifurcation': 'Logistic 分岔图生长',
+  'tl.demoClipFlow': '音频反应墨线',
+  'tl.demoClipStrands': '音频反应丝弦',
+  'tl.demoClipAnt': '兰顿蚂蚁',
+  'tl.demoClipSand': '阿贝尔沙堆',
+  'tl.demoClipMandelbrot': 'Mandelbrot 推近',
 
   /* ------------------------------------------------ 轨道工具条（Transport.svelte） */
   'tp.play': '播放',

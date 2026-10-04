@@ -76,10 +76,15 @@
 </button>
 
 <style>
+  /*
+   * 右下角各留 6px，**留白必须大于 hover 的位移 (4px, 3px)** —— 否则「往角落里
+   * 让了让」会把自己顶到 `.stage` 边界外面（`mascot.spec` 断的就是这条，而它
+   * 在改成 0 之后一直是红的）。
+   */
   .mascot {
     position: absolute;
-    right: 0px;
-    bottom: 0px;
+    right: 6px;
+    bottom: 6px;
     width: 85px;
     height: 92px;
     padding: 0;
@@ -91,7 +96,7 @@
     -webkit-tap-highlight-color: transparent;
   }
   /*
-   * hover = 往右下方缩一下，像躲开凑过来的鼠标。位移与底边留白同量级，所以
+   * hover = 往右下方缩一下，像躲开凑过来的鼠标。位移与角落留白同量级，所以
    * 她只是「往角落里让了让」，不会真的被抽屉或底栏切掉。
    */
   .mascot:hover,

@@ -85,13 +85,26 @@ describe('buildStack 的 z 序 = 列表顶部在前景', () => {
   it('demo 工程：每个 op 的 z 都等于「轨道下标取反」', () => {
     const p = createDemoProject();
     const visual = p.tracks.filter((t) => t.kind === 'visual');
-    expect(visual[0]!.name).toContain('V4');
-    expect(visual[visual.length - 1]!.name).toContain('V1');
+    /*
+     * 轨名约定是 `V{n}`，列表自上而下 = 前景→背景 ⇒ 编号必须**降序**，
+     * 且最大编号等于视觉轨数。
+     *
+     * 这里刻意不写死 `'V4'` / 条数：被守的是「轨道列表顺序 ↔ z 的映射」，
+     * 不是「demo 恰好有几条轨」。写死之后每次调整 demo 的层数都要来改守卫，
+     * 而改守卫的时候很容易顺手把要守的东西也改掉 —— 那时它就只是个装饰。
+     */
+    const nums = visual.map((t) => {
+      const m = /^V(\d+)/.exec(t.name);
+      expect(m, `轨名 ${t.name} 不符合 V{n} 约定`).not.toBeNull();
+      return Number(m![1]);
+    });
+    expect(nums).toEqual([...nums].sort((a, b) => b - a));
+    expect(nums[0]).toBe(visual.length);
 
     const ops = buildStack(p, 0.5);
     expect(ops.length).toBeGreaterThan(0);
     for (const op of ops) {
-      // 转场 op 也是「挂在某条轨道上」的，归属按出画片段算（demo 里目前没有转场）
+      // 转场 op 也是「挂在某条轨道上」的，归属按出画片段算
       const clipId =
         op.type === 'effect'
           ? op.clip.id

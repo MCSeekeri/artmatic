@@ -104,9 +104,10 @@ test('特效链 UI：新建特效片段 + 添加实例 + 渲染无报错', async
   page.on('pageerror', (e) => errors.push(String(e)));
   await boot(page);
   await page.getByTestId('add-visual-track').click();
-  // 新建片段的按钮已收进 ⋯ 菜单（见 Timeline 侧栏行）：开菜单 → 点「+ 特效片段」
-  await page.locator('[data-testid=track-side-row]').nth(5).getByTestId('track-menu').click();
-  await page.getByTestId('add-effect').click(); // 新轨道（demo 有 5 轨）
+  // 新建片段的按钮已收进 ⋯ 菜单（见 Timeline 侧栏行）：开菜单 → 点「+ 特效片段」。
+  // 用 `.last()` 而不是写死下标：`addTrack` 是 push，新轨恒在最后一行。
+  await page.locator('[data-testid=track-side-row]').last().getByTestId('track-menu').click();
+  await page.getByTestId('add-effect').click();
   await addEffectViaPicker(page, 'channel-split');
   const chainLen = await page.evaluate(() => {
     const A = (window as never as {

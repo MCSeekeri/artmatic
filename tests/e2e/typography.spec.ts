@@ -35,17 +35,26 @@ interface DocShape {
   elements: { id: string; frame: { x: number; y: number; w: number; h: number; rot: number } }[];
 }
 
-/** 取排版文档里第一个元素的几何 + 它在屏幕上的映射（不猜布局，从实际矩形换算）。 */
+/**
+ * 取**当前正在编辑**的那个排版片段。
+ *
+ * 不能再用「工程里第一个 text 片段」：开箱 demo 自己就带一个标题排版片段，
+ * 于是「第一个」永远是 demo 的，新加的那个根本读不到 ——
+ * 拖拽用例会表现成「元素纹丝不动」，而真因完全指不到这里。
+ * 编辑页有 `activeTypoClipId`，直接用它。
+ */
 async function readGeom(page: Page) {
   return page.evaluate(() => {
-    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    const A = (window as never as { __artmatic: Hooks & { appState: { activeTypoClipId: string | null } } })
+      .__artmatic;
+    const id = A.appState.activeTypoClipId;
     let doc: DocShape | null = null;
     for (const t of A.store.project.tracks) {
       for (const c of t.clips) {
-        if (c.source?.type === 'text' && c.source.doc) doc = c.source.doc;
+        if (c.id === id && c.source?.type === 'text' && c.source.doc) doc = c.source.doc;
       }
     }
-    if (!doc) throw new Error('找不到排版文档');
+    if (!doc) throw new Error(`找不到当前编辑的排版文档（activeTypoClipId=${id}）`);
     const wrap = document.querySelector('.paper-wrap')!.getBoundingClientRect();
     const zoom = wrap.width / doc.size.w;
     const f = doc.elements[0]!.frame;
@@ -56,30 +65,38 @@ async function readGeom(page: Page) {
 /** 读回第一个元素的 frame.x。 */
 async function readFrameX(page: Page): Promise<number> {
   return page.evaluate(() => {
-    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    const A = (window as never as { __artmatic: Hooks & { appState: { activeTypoClipId: string | null } } })
+      .__artmatic;
+    const id = A.appState.activeTypoClipId;
     for (const t of A.store.project.tracks) {
       for (const c of t.clips) {
-        const d = c.source?.doc;
-        if (c.source?.type === 'text' && d) return d.elements[0]!.frame.x;
+        if (c.id === id && c.source?.type === 'text' && c.source.doc) return c.source.doc.elements[0]!.frame.x;
       }
     }
-    return -1;
+    throw new Error(`找不到当前编辑的排版文档（activeTypoClipId=${id}）`);
   });
 }
 
-/** 通过轨道 ⋯ 菜单新建一个排版片段，返回它的 id。 */
+/** 工程里全部排版片段的 id。 */
+async function textClipIds(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    const out: string[] = [];
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
+    }
+    return out;
+  });
+}
+
+/** 通过轨道 ⋯ 菜单新建一个排版片段，返回它的 id（= 差集里多出来的那一个）。 */
 async function addTextClip(page: Page): Promise<string> {
+  const before = await textClipIds(page);
   await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
   await page.getByTestId('add-text').click();
-  const id = await page.evaluate(() => {
-    const A = (window as never as { __artmatic: Hooks }).__artmatic;
-    for (const t of A.store.project.tracks) {
-      for (const c of t.clips) if (c.source?.type === 'text') return c.id;
-    }
-    return '';
-  });
-  expect(id).not.toBe('');
-  return id;
+  const added = (await textClipIds(page)).filter((id) => !before.includes(id));
+  expect(added, '「+ 排版片段」没有新增片段（落点可能被重叠策略挡了）').toHaveLength(1);
+  return added[0]!;
 }
 
 async function openEditor(page: Page, clipId: string): Promise<void> {

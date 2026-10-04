@@ -9,7 +9,7 @@ import { addEffectViaPicker } from './_stage';
  * 直接调 store 会把它们整个绕过去。
  */
 
-// 行数多（demo 5 轨 + 测试 2 轨）时轨道区会出滚动条，窗口给高一点。
+// 行数多（demo 本身若干轨 + 测试再叠两轨）时轨道区会出滚动条，窗口给高一点。
 //
 // deviceScaleFactor 设成 1.5 是刻意的：本机（Windows 150% 缩放）就是这个 dpr，
 // 而**时间轴的 canvas 位图尺寸、以及新加的那几条像素断言都跟 dpr 直接相关**。
@@ -20,7 +20,7 @@ test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1.5 });
 
 type AnyA = {
   store: {
-    project: { duration: number; beatGrid: { bpm: number }; tracks: { id: string; name: string; kind: string; clips: { id: string; kind: string; start: number; end: number; label: string; opacity?: number; assetId?: string }[] }[] };
+    project: { duration: number; beatGrid: { bpm: number }; tracks: { id: string; name: string; kind: string; clips: { id: string; kind: string; start: number; end: number; label: string; opacity?: number; assetId?: string; chain?: unknown[] }[] }[] };
     addTrack: (k: 'visual' | 'audio', name?: string) => string;
     addClip: (t: string, c: unknown) => void;
     removeTrack: (t: string) => void;
@@ -114,23 +114,30 @@ async function dragEnd(page: Page, id: string, dx: number): Promise<void> {
 
 test('检查器：增删特效实例立即刷新，不必重选片段', async ({ page }) => {
   await boot(page);
-  const fxId = await page.evaluate(() => {
+  // 链长也从工程里读：写死「demo 的 V3 带两个实例」会在 demo 调整时假红。
+  const fx = await page.evaluate(() => {
     const a = (window as never as { __artmatic: AnyA }).__artmatic;
     for (const t of a.store.project.tracks) {
-      for (const c of t.clips) if (c.kind === 'effect') return c.id;
+      for (const c of t.clips) {
+        if (c.kind === 'effect') return { id: c.id, chain: c.chain?.length ?? 0 };
+      }
     }
     return null;
   });
-  await page.locator(`[data-clip-id="${fxId}"]`).click();
-  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(2); // demo 的 V3 带两个实例
+  expect(fx).not.toBeNull();
+  const n = fx!.chain;
+  expect(n).toBeGreaterThan(0);
+
+  await page.locator(`[data-clip-id="${fx!.id}"]`).click();
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(n);
 
   await addEffectViaPicker(page, 'channel-split');
-  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(3);
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(n + 1);
   await addEffectViaPicker(page, 'bleach');
-  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(4);
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(n + 2);
 
   await page.locator('[data-testid=effect-instance]').first().locator('[data-testid=effect-remove]').click();
-  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(3);
+  await expect(page.locator('[data-testid=effect-instance]')).toHaveCount(n + 1);
 });
 
 test('检查器：拖滑杆时同行的数字输入框实时跟随', async ({ page }) => {
@@ -286,7 +293,15 @@ test('时长：与素材长度解耦，可任意改也能被片段撑长', async
   const d2 = await dur();
   expect(d2).toBeLessThan(30);
 
-  // 片段拖到内容末尾之外 → 工程跟着变长
+  // 片段拖到内容末尾之外 → 工程跟着变长。
+  //
+  // 先把时长压回一个**比内容短的**值：这一条要验的正是「时长与素材长度解耦」，
+  // 而原来写死的 960px 拖拽距离（≈17s）只有在 demo 短于 ~17s 时才越得过末尾 ——
+  // 距离跟着工程时长走的用例，会被 demo 变长悄悄搞失效。
+  await page.getByTestId('duration-input').fill('10');
+  await page.getByTestId('duration-input').press('Enter');
+  await expect.poll(dur).toBe(10);
+
   await seed(page);
   await policy(page, 'reject');
   const rows = await page.locator('[data-testid=tl-row]').count();
@@ -296,7 +311,7 @@ test('时长：与素材长度解耦，可任意改也能被片段撑长', async
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 960, drop.y + drop.height / 2, { steps: 14 });
   await page.mouse.up();
-  expect(await dur()).toBeGreaterThan(d2);
+  expect(await dur()).toBeGreaterThan(10);
 });
 
 /* ============================================================================

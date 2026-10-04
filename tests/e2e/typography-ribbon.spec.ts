@@ -41,16 +41,28 @@ interface Hooks {
   appState: { playT: number };
 }
 
+/**
+ * 这些读文档的辅助函数一律按 **`activeTypoClipId`** 取，不再「扫工程里第一个 text 片段」。
+ *
+ * 开箱 demo 自己就带一个标题排版片段，于是「第一个」永远是 demo 的，
+ * 用例新加的那个根本读不到 —— 表现成「拖了但元素没动」，真因指不到这里。
+ */
 async function addTextClip(page: Page): Promise<string> {
+  const ids = (): Promise<string[]> =>
+    page.evaluate(() => {
+      const A = (window as never as { __artmatic: Hooks }).__artmatic;
+      const out: string[] = [];
+      for (const t of A.store.project.tracks) {
+        for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
+      }
+      return out;
+    });
+  const before = await ids();
   await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
   await page.getByTestId('add-text').click();
-  const id = await page.evaluate(() => {
-    const A = (window as never as { __artmatic: Hooks }).__artmatic;
-    for (const t of A.store.project.tracks) for (const c of t.clips) if (c.source?.type === 'text') return c.id;
-    return '';
-  });
-  expect(id).not.toBe('');
-  return id;
+  const added = (await ids()).filter((id) => !before.includes(id));
+  expect(added, '「+ 排版片段」没有新增片段（落点可能被重叠策略挡了）').toHaveLength(1);
+  return added[0]!;
 }
 
 async function openEditor(page: Page, clipId: string): Promise<void> {
@@ -60,11 +72,15 @@ async function openEditor(page: Page, clipId: string): Promise<void> {
 
 async function readDoc(page: Page): Promise<DocShape> {
   return page.evaluate(() => {
-    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    const A = (window as never as { __artmatic: Hooks & { appState: { activeTypoClipId: string | null } } })
+      .__artmatic;
+    const id = A.appState.activeTypoClipId;
     for (const t of A.store.project.tracks) {
-      for (const c of t.clips) if (c.source?.type === 'text' && c.source.doc) return c.source.doc;
+      for (const c of t.clips) {
+        if (c.id === id && c.source?.type === 'text' && c.source.doc) return c.source.doc;
+      }
     }
-    throw new Error('找不到排版文档');
+    throw new Error(`找不到当前编辑的排版文档（activeTypoClipId=${id}）`);
   });
 }
 
@@ -99,12 +115,16 @@ async function domBox(page: Page, index = 0) {
 /** 元素框在屏幕上的位置（用于把把手换算成坐标）。 */
 async function screenRect(page: Page, index = 0) {
   return page.evaluate((i) => {
-    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    const A = (window as never as { __artmatic: Hooks & { appState: { activeTypoClipId: string | null } } })
+      .__artmatic;
+    const id = A.appState.activeTypoClipId;
     let doc: DocShape | null = null;
     for (const t of A.store.project.tracks) {
-      for (const c of t.clips) if (c.source?.type === 'text' && c.source.doc) doc = c.source.doc;
+      for (const c of t.clips) {
+        if (c.id === id && c.source?.type === 'text' && c.source.doc) doc = c.source.doc;
+      }
     }
-    if (!doc) throw new Error('找不到排版文档');
+    if (!doc) throw new Error(`找不到当前编辑的排版文档（activeTypoClipId=${id}）`);
     const wrap = document.querySelector('.paper-wrap')!.getBoundingClientRect();
     const zoom = wrap.width / doc.size.w;
     const f = doc.elements[i]!.frame;
@@ -526,10 +546,12 @@ test('旋转后缩放沿元素自身坐标轴（不是世界坐标轴）', async
 
   // 直接把角度设成 90°：这是**前置条件**，不是被测行为（被测的是缩放手势）。
   await page.evaluate(() => {
-    const A = (window as never as { __artmatic: Hooks & { appState: { store: { touch: () => void } } } })
+    const A = (window as never as { __artmatic: Hooks & { appState: { activeTypoClipId: string | null; store: { touch: () => void } } } })
       .__artmatic;
+    const id = A.appState.activeTypoClipId;
     for (const t of A.store.project.tracks) {
       for (const c of t.clips) {
+        if (c.id !== id) continue;
         const src = c.source as { type?: string; doc?: DocShape } | undefined;
         if (src?.type === 'text' && src.doc) src.doc.elements[1]!.frame.rot = Math.PI / 2;
       }
