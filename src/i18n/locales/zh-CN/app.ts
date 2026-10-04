@@ -129,6 +129,11 @@ export const app = {
   'app.mode': '模式',
   'app.light': '亮色',
   'app.dark': '暗色',
+  /* 彩蛋。文案刻意只说「是什么」，不说「怎么玩」—— 捏一下的乐趣在于自己发现。 */
+  'app.mascot': '看板娘',
+  'app.mascotEnable': '启用',
+  'app.mascotTip': '在左下角放一只可以捏的看板娘。捏太急她会坏掉。',
+  'app.mascotPoke': '捏一下',
 
   /* —— 操作习惯 —— */
   'app.shortcutScheme': '快捷键方案',

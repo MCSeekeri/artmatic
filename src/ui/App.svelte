@@ -11,6 +11,7 @@
   import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
+  import Mascot from './mascot/Mascot.svelte';
   import { handleTypographyKey } from './typography/keys';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
@@ -193,6 +194,15 @@
           <div class="tracks">
             <Timeline />
           </div>
+
+          <!--
+            彩蛋：看板娘（设置 → 外观）。挂在 `.stage` 里 ⇒ 她的右边界自动
+            跟着检查器的宽度走（`.body` 的列是 1fr + --drawer-w）。绝对定位
+            ⇒ 不参与 `.stage` 的网格，其余控件的几何与她在不在无关。
+          -->
+          {#if appState.mascotEnabled}
+            <Mascot />
+          {/if}
         </div>
 
         {#if appState.drawerOpen}
@@ -269,6 +279,15 @@
     grid-template-columns: minmax(0, 1fr);
     min-height: 0;
     min-width: 0;
+    /*
+     * 只为一个东西存在：看板娘（绝对定位，锚在右下角）。它是定位**祖先**，
+     * 且它的右边界就是检查器的左边界（`.body` 的列 = 1fr + --drawer-w），
+     * 所以「位置跟着检查器宽度让开」不需要任何 calc。
+     * 加这一行不改布局：静态→relative 的盒模型完全一致；也没有后代依赖
+     * `.stage` 之上的包含块（悬浮工具条锚 `.preview`、时间轴的绝对元素锚
+     * `.rows`，都是各自组件里显式 relative）。
+     */
+    position: relative;
   }
   .toolbar {
     display: flex;

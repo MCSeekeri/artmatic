@@ -90,6 +90,13 @@
 <style>
   .drawer {
     position: relative;
+    /*
+     * 只为一个东西：看板娘（`.stage` 里的绝对定位元素，z-index: 0）。她贴在
+     * `.stage` 的右下角，也就是抽屉的左边上；抽屉不显式抬起来的话，同级里
+     * 后出现的定位元素不一定压得住她（而她是 `position: absolute`，一定会
+     * 盖过非定位内容）。这里给一个明确的、比她大的值。
+     */
+    z-index: 1;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;

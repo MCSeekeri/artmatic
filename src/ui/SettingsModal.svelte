@@ -86,6 +86,7 @@
   let accent = $state<AccentSource>(theme.accent);
   let fontScale = $state<FontScale>(theme.fontScale);
   let scheme = $state<ShortcutScheme>(appState.shortcutScheme);
+  let mascot = $state(appState.mascotEnabled);
 
   /* ------------------------------------------------------------ 已更改标记 */
 
@@ -99,6 +100,7 @@
   const modeChanged = $derived(mode !== theme.mode);
   const fontScaleChanged = $derived(fontScale !== theme.fontScale);
   const schemeChanged = $derived(scheme !== appState.shortcutScheme);
+  const mascotChanged = $derived(mascot !== appState.mascotEnabled);
   /** 主题色的比较：预设比 id，自定义比 hex（用户可能在两者间来回切）。 */
   const accentChanged = $derived(
     accent.kind !== theme.accent.kind ||
@@ -208,6 +210,7 @@
     }
     if (fontScaleChanged) theme.setFontScale(fontScale);
     if (schemeChanged) appState.setShortcutScheme(scheme);
+    if (mascotChanged) appState.setMascotEnabled(mascot);
 
     onclose();
   }
@@ -481,6 +484,23 @@
               minWidth={110}
               testid="settings-mode"
               onchange={(v) => (mode = v as 'light' | 'dark')}
+            />
+          </div>
+        </div>
+
+        <!-- 彩蛋：默认关，且走同一个草稿模型（点「保存并应用」才生效）。 -->
+        <div class="set-row">
+          <span class="set-lbl">
+            {#if mascotChanged}<i class="star" title={tr('app.changedMark')} aria-hidden="true">*</i>{/if}
+            {tr('app.mascot')}
+          </span>
+          <div class="set-ctl">
+            <Checkbox
+              checked={mascot}
+              label={tr('app.mascotEnable')}
+              tipText={tr('app.mascotTip')}
+              testid="settings-mascot"
+              onchange={(v) => (mascot = v)}
             />
           </div>
         </div>

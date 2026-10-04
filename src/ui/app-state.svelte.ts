@@ -62,6 +62,11 @@ interface UiPrefs {
    * 存 UI 偏好而不是工程：它描述的是**用的人**，不是这份工程。
    */
   shortcutScheme: ShortcutScheme;
+  /**
+   * 左下角的看板娘（彩蛋，默认关）。纯观感，与工程内容无关 —— 所以进
+   * localStorage 而不是 project.json，也不会让工程变脏。
+   */
+  mascotEnabled: boolean;
 }
 
 /** 预览帧率档位（分母）。 */
@@ -98,6 +103,7 @@ function loadUiPrefs(): UiPrefs {
     previewRestoreOnPause: true,
     previewBarCollapsed: false,
     shortcutScheme: 'artmatic',
+    mascotEnabled: false,
   };
   try {
     const raw = localStorage.getItem(UI_KEY);
@@ -117,6 +123,8 @@ function loadUiPrefs(): UiPrefs {
           ? p.previewBarCollapsed
           : fallback.previewBarCollapsed,
       shortcutScheme: normalizeScheme(p.shortcutScheme),
+      mascotEnabled:
+        typeof p.mascotEnabled === 'boolean' ? p.mascotEnabled : fallback.mascotEnabled,
     };
   } catch {
     return fallback;
@@ -261,6 +269,8 @@ class AppState {
   previewRestoreOnPause = $state(true);
   previewBarCollapsed = $state(false);
   shortcutScheme = $state<ShortcutScheme>('artmatic');
+  /** 左下角的看板娘（设置 → 外观）。默认关。 */
+  mascotEnabled = $state(false);
 
   /* ---- 排版编辑器（全局，不跟工程走：这是「怎么看」，不是「看什么」） ---- */
 
@@ -625,6 +635,7 @@ class AppState {
     this.previewRestoreOnPause = prefs.previewRestoreOnPause;
     this.previewBarCollapsed = prefs.previewBarCollapsed;
     this.shortcutScheme = prefs.shortcutScheme;
+    this.mascotEnabled = prefs.mascotEnabled;
   }
 
   /**
@@ -672,6 +683,13 @@ class AppState {
     this.persistUi();
   }
 
+  /** 设置面板「保存并应用」调它（草稿模型：只有点 Apply 才落到这里）。 */
+  setMascotEnabled(v: boolean): void {
+    if (this.mascotEnabled === v) return;
+    this.mascotEnabled = v;
+    this.persistUi();
+  }
+
   setDrawerOpen(open: boolean): void {
     if (this.drawerOpen === open) return;
     this.drawerOpen = open;
@@ -698,6 +716,7 @@ class AppState {
       previewRestoreOnPause: this.previewRestoreOnPause,
       previewBarCollapsed: this.previewBarCollapsed,
       shortcutScheme: this.shortcutScheme,
+      mascotEnabled: this.mascotEnabled,
     });
   }
 

@@ -76,6 +76,13 @@
     color: var(--bar-fg);
     font-size: var(--fs-xs);
     user-select: none;
+    /*
+     * 只为一个东西：看板娘（z-index: 0 的绝对定位元素，挂在 `.stage` 的右下角）。
+     * 它是**定位元素**，会自动盖过没有定位的底栏——底栏必须自己也是定位的、
+     * 且带的 z 比它大，否则她下半截会画在底栏上面。
+     */
+    position: relative;
+    z-index: 2;
   }
   .seg {
     display: inline-flex;

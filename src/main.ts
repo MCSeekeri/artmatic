@@ -28,6 +28,7 @@ import {
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
+import { mascotStats } from './ui/mascot/squeak';
 
 /* 装配顺序：主题 → store → mount。
    主题必须最先注入：它是内联 style，写在 :root 上，任何时候注入都生效，
@@ -310,6 +311,13 @@ const projectDebug = {
     };
   },
   algo: { listGenerators, defaultParams },
+  /**
+   * 彩蛋的 E2E 读数：捏了几次、最近一次是不是已经坏成噪音。
+   *
+   * Web Audio 的**输出**在 Playwright 里读不到（没有可靠的取音路径），
+   * 能证实的是「点击真的走到了合成器，并且每次的计划都不同 / 越点越坏」。
+   */
+  mascotStats,
   /**
    * E2E 专用：直接调排版光栅化，**不经过 compositor / GPU**。
    *
