@@ -74,7 +74,105 @@ interface SimEntry {
   tex: WebGLTexture;
   /** 创建时定下，不可变 —— 换通道数意味着换纹理，走的是「hash 变了重建」那条路。 */
   channels: 1 | 2 | 4;
+  /**
+   * 句柄**精确**所在的那一帧。
+   *
+   * 只有本模块调 `seek`，所以这个数不可能与句柄不一致 —— 于是「没变就不调
+   * `seek`」是安全的，而「上一帧落后了多少」也不用去猜。
+   */
+  frame: number;
+  /** 最近一次**请求**的帧（用来报滞后，`frame` 是实际渲染的帧）。 */
+  target: number;
+  /** 实测的每步成本（ms，指数滑动平均）。预算按它换算成步数。 */
+  msPerStep: number;
+  /** 令牌桶余额（ms）。见 `planSimStep`。 */
+  tokens: number;
 }
+
+/**
+ * 令牌桶的余额上限，按「几帧的预算」计。见 `planSimStep`。
+ *
+ * 上限是为了「不会攒出一个大跳」：攒下的额度一次性放出来的话，那一帧就会
+ * 花掉好几帧的预算 —— 抖动又回来了。
+ */
+export const SIM_TOKEN_FRAMES = 3;
+
+/**
+ * 分块执行时的**块大小上限**。
+ *
+ * 为什么需要分块：`planSimStep` 的整数是按**估出来的**每步成本算的，而有些
+ * 生成器的单步成本会突变两个数量级（沙堆塌一次可能是 0.1 ms，也可能是 10 ms）。
+ * 一口气推完估出来的步数，就可能撞上那一下突变、做出一个几百毫秒的毛刺。
+ * 所以真正的执行是「推一小块 → 看表 → 再决定」。
+ *
+ * 为什么 `max` 而不是固定块：便宜生成器（兰顿蚂蚁实测 0.000 ms/步）一帧要推
+ * 上千步，固定小块会让它每帧循环上千次。块大小取「剩余预算 ÷ 估算成本」，
+ * 用一份便宜的估算换掉绝大多数循环迭代。
+ */
+export const SIM_CHUNK_STEPS = 8;
+
+/**
+ * 拖动 / 追赶时，一帧该把模拟推到哪一帧。
+ *
+ * ## 为什么需要它
+ *
+ * `SimHandle.seek(f)` 的语义是**精确**的：`seek(f) ≡ 从 0 顺序 step f 次`
+ * （硬约束 1.3）。于是向前拖播放头时，「从当前帧跳到目标帧」必须**真的把
+ * 中间那些步全部算完** —— 这是迭代系统绕不开的（Lenia / Gray-Scott 没有
+ * 闭式解，也没有能跳到 t(n) 的算法）。实测一条 24 秒的时间轴从头走到尾要
+ * 沙堆 0.53 s、Lenia 1.04 s、反应扩散 0.51 s。整段同步算完 = 主线程冰住。
+ *
+ * 所以要做的**不是**改 `seek` 的语义（那会破坏确定性），而是**换一个帧渲染**：
+ * 拖动期间这一帧只推进「付得起」的步数，画面显示的是模拟真实经过的某一帧
+ * （只是比播放头早），松手之后继续按预算追赶，追上了就恢复精确。
+ *
+ * ## 令牌桶而不是「预算 ÷ 每步成本」
+ *
+ * 直接取整会在成本接近预算时掉到每帧 1 步，把预算白白浪费掉：Lenia 3.6 ms/步
+ * + 6 ms 预算 → 每帧只花 3.6 ms，追赶时间多出 70%。攒够再花就没有这个损失。
+ * 余额有上限（`SIM_TOKEN_FRAMES` 帧的量），所以不会攒出一个大跳。
+ *
+ * ## 确定性与 1.1
+ *
+ * 这个函数只决定**渲哪一帧**，不改任何一帧的状态；`budgetMs = 0` 时调用方
+ * 根本不进这条路（精确行为），`lab` / 导出 / 单测都走那一侧。
+ * 用到的 `performance.now()` 与 `app-state.tick()` 里那个降帧率节流同类 ——
+ * 是**传输层的节流**，不参与内容求值。
+ */
+export function planSimStep(
+  frame: number,
+  target: number,
+  budgetMs: number,
+  msPerStep: number,
+  tokens: number,
+): { show: number; tokens: number } {
+  if (target <= frame) {
+    // 向后（或原地）：快照环保证回退代价有上界，不必也不该被预算限制。
+    // 余额清零，免得向前拖时攒下的额度在回退之后突然放量。
+    return { show: target, tokens: 0 };
+  }
+  const cap = budgetMs * SIM_TOKEN_FRAMES;
+  const pool = Math.min(tokens + budgetMs, cap);
+  const cost = planCost(msPerStep);
+  const afford = Math.max(1, Math.floor(pool / cost));
+  const steps = Math.min(target - frame, afford);
+  return { show: frame + steps, tokens: Math.max(0, pool - steps * cost) };
+}
+
+/** 每步成本的下限。兼作 `msPerStep` 还没学出来 / 学成 NaN 时的兜底。 */
+function planCost(msPerStep: number): number {
+  return Number.isFinite(msPerStep) && msPerStep > 0.01 ? msPerStep : 0.01;
+}
+
+/**
+ * 宿主设置步进预算时共用的两个档位（毫秒/渲染帧）。放在这里而不是 UI 里：
+ * 主应用与 lab 各写一个数就会出现「试炼场里手感不一样」这种查不出的差异。
+ *
+ * - 拖动中：小一点，60 fps 下给渲染留出余量。
+ * - 松手追赶：大一点 —— 用户已经停手在等结果，宁可每帧多花些也要尽快收敛。
+ */
+export const SCRUB_STEP_BUDGET_MS = 6;
+export const SCRUB_CATCHUP_BUDGET_MS = 12;
 
 export class AlgoRuntime {
   private readonly revealProg: Program;
@@ -101,6 +199,8 @@ export class AlgoRuntime {
   private featureSource: AudioFeatureSource | null = null;
   /** `at()` 的复用出参（每帧每源都读，不能分配）。 */
   private readonly features = emptyFeatures();
+  /** 模拟步进的每帧预算（ms）。0 = 精确。见 `setStepBudget` / `planSimStep`。 */
+  private stepBudgetMs = 0;
 
   constructor(
     private readonly kit: Kit,
@@ -115,6 +215,80 @@ export class AlgoRuntime {
 
   setFeatureSource(source: AudioFeatureSource | null): void {
     this.featureSource = source;
+  }
+
+  /**
+   * 模拟步进的每帧预算（毫秒）。**0 = 不限制**（默认，= 精确行为）。
+   *
+   * 由宿主按交互状态设置：拖动播放头时给小值，松手后追赶时给大一点，
+   * 导出 / 播放 / lab 时给 0。见 `planSimStep` 的长注释。
+   */
+  setStepBudget(ms: number): void {
+    this.stepBudgetMs = Math.max(0, ms);
+  }
+
+  /**
+   * 「上一帧渲染过」的 sim 源（`resolve` 里记，`takeSimLag` 里清）。
+   * 见 `takeSimLag` 的注释：滞后的判据必须是**这一帧真的会渲的源**。
+   */
+  private readonly liveSims = new Set<string>();
+
+  /**
+   * 取「上一帧渲染过的 sim 里最大的滞后」，然后**翻帧标记**。
+   *
+   * 语义是**消费型**的：读一次就清空，下次只看新一帧解析过的条目。这不是
+   * 洁癖，是必需的 —— 播放头停在片段末尾（`t >= clip.end`）时那个源根本不会
+   * 被解析，它的滞后就会永远停在上次的值上。于是底栏永久显示「模拟追赶中」，
+   * 而且预算永久停在追赶档、再也回不到精确路径。（E2E 实测到过：拖到 t = 24
+   * 之后 `simLag` 恒为 259。）
+   *
+   * 宿主每帧读一次（`app-state.tick()` / lab 的 loop），且每个页面只有一个宿主。
+   */
+  takeSimLag(): number {
+    let worst = 0;
+    for (const id of this.liveSims) {
+      const e = this.sims.get(id);
+      if (e && e.target > e.frame) worst = Math.max(worst, e.target - e.frame);
+    }
+    this.liveSims.clear();
+    return worst;
+  }
+
+  /**
+   * 按预算分块推进到 `want`。
+   *
+   * 两件事让「预算」真的成立：
+   *   - 块大小取 `剩余预算 ÷ 估算成本`（有上限 `SIM_CHUNK_STEPS`），
+   *   - **每块之后看表**，超时就停手。
+   *
+   * 只看估算是不够的：沙堆的单步成本能在一帧内从 0.1 ms 跳到 10 ms（一次
+   * 大崩塌），按估算一口气推完就可能做出几百毫秒的毛刺。看表把这种突变的
+   * 影响限制在一块之内。
+   *
+   * `performance.now()` 在这里只用来**量成本 / 判超时**，不参与内容求值 ——
+   * 与 `app-state.tick()` 里那个降帧率节流同类（硬约束 1.1 管的是内容）。
+   */
+  private advanceBudgeted(entry: SimEntry, want: number): void {
+    const budget = this.stepBudgetMs;
+    const deadline = performance.now() + budget;
+    const from = entry.frame;
+    let cur = from;
+    while (cur < want) {
+      const left = deadline - performance.now();
+      // 至少走一块：一块都不走的话 `msPerStep` 永远学不出来，会死锁在 0 步
+      if (cur !== from && left <= 0) break;
+      const chunk = Math.max(
+        1,
+        Math.min(want - cur, Math.floor(Math.max(left, 0.5) / planCost(entry.msPerStep)), SIM_CHUNK_STEPS),
+      );
+      const t0 = performance.now();
+      entry.handle.seek(cur + chunk);
+      const dt = performance.now() - t0;
+      // 滑动平均而不是取上一次的值：单帧的抖动（GC / JIT）不该让预算放量或收紧
+      entry.msPerStep = entry.msPerStep * 0.6 + (dt / chunk) * 0.4;
+      cur += chunk;
+    }
+    entry.frame = cur;
   }
 
   readonly resolve = (
@@ -170,14 +344,45 @@ export class AlgoRuntime {
       if (!entry || entry.hash !== hash) {
         const handle = def.create(createParams, seed);
         const channels = normalizeChannels(handle.channels);
-        entry = { handle, hash, tex: this.createSimTex(handle.gridW, handle.gridH, channels), channels };
+        entry = {
+          handle,
+          hash,
+          tex: this.createSimTex(handle.gridW, handle.gridH, channels),
+          channels,
+          // `create()` 一律把状态造在「第 0 帧」
+          frame: 0,
+          target: 0,
+          // 乐观起步：宁可第一帧多算一点（有 MAX_SIM_STEPS_PER_FRAME 兜着），
+          // 悲观起步会让前几帧每帧只走 1 步、把追赶拖长。
+          msPerStep: 1,
+          tokens: 0,
+        };
         this.sims.set(clip.id, entry);
       }
       // 速度每帧从**当前**参数读（不是 handle 上创建时那份快照）——
       // 这正是 `rate` 能被排除出构造哈希的前提。
       const stepsPerSec = liveRate(params, entry.handle.stepsPerSec);
       const simFrame = Math.floor(Math.max(0, t - clip.start) * stepsPerSec);
-      entry.handle.seek(simFrame);
+      entry.target = simFrame;
+      this.liveSims.add(clip.id); // 见 takeSimLag
+
+      let show = simFrame;
+      let chunked = false;
+      if (this.stepBudgetMs > 0 && simFrame > entry.frame) {
+        const plan = planSimStep(entry.frame, simFrame, this.stepBudgetMs, entry.msPerStep, entry.tokens);
+        entry.tokens = plan.tokens;
+        show = plan.show;
+        chunked = true;
+      }
+      if (show !== entry.frame) {
+        if (chunked) this.advanceBudgeted(entry, show);
+        else {
+          // 精确路径（预算 0）：**原样**一次 seek。导出、播放、lab 的静止态
+          // 与全部单测都走这里，语义必须与加预算之前逐字相同。
+          entry.handle.seek(show);
+          entry.frame = show;
+        }
+      }
       this.uploadSim(entry.tex, entry.handle.gridW, entry.handle.gridH, entry.channels, entry.handle.current());
       const out = this.outFor(renderW, renderH);
       // 自定义着色按 def.id 走 `kit.quad` 的具名缓存 —— 每帧重新拼串会让它

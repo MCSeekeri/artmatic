@@ -24,6 +24,15 @@ export interface MenuItem {
   onselect?: () => void;
   /** 有它就渲染子菜单指示箭头，右键/Enter 进入。 */
   children?: MenuItem[];
+  /**
+   * 预览图 URL。**有它就渲染悬停浮层**（图 + `desc`）。
+   *
+   * 只给「用户得先看看才知道要不要」的项用（算法生成器那一类：光看名字
+   * 不知道它画什么）。浮层贴在**当前高亮项**右侧，跟着键盘导航一起走。
+   */
+  thumb?: string;
+  /** 浮层里的一句话说明（已翻译的文本，不是文案键 —— 菜单是数据层，不认识 i18n）。 */
+  desc?: string;
 }
 
 export interface MenuState {

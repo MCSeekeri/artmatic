@@ -4,10 +4,12 @@
  * 保留原有的全部语义：导出期间禁二次触发、进度写 appState（底栏与侧栏面板
  * 都读它）、可取消。导出本身走 exporters/ 的紧循环，这里只管编排与下载。
  *
- * 两种格式（ADR-001）：
+ * 三种格式（ADR-001）：
  *   mp4   WebCodecs 编码 + mediabunny 封装，含音轨。**主路径**。
  *   png   PNG 序列 zip。永远可用的逃生舱 —— 浏览器不支持 H.264 时它仍在，
  *         而且「帧要一张张交给达芬奇 / Cavalry」本身就是正当用途。
+ *   gif   GIF89a，纯 CPU 软编（gifenc）。**分享格式**：256 色、无音轨，
+ *         但哪里都能直接播。它也是唯一会**主动降分辨率与降帧率**的格式。 
  *
  * ## 关于磁盘占用（重要）
  *
@@ -27,11 +29,13 @@ import { appState } from './app-state.svelte';
 import { ExportCancelled, runExport } from '../exporters/export-runner';
 import { Mp4Sink, MP4_CODEC } from '../exporters/mp4-sink';
 import { PngSequenceSink } from '../exporters/png-sequence';
+import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
+import { planGif, type GifPlan } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
 import { browserPlatform } from '../platform/browser';
 import { tr } from '../i18n/index.svelte';
 
-export type ExportFormat = 'mp4' | 'png';
+export type ExportFormat = 'mp4' | 'png' | 'gif';
 
 /** 本次导出会产出多少帧。帧率来自工程（renderer 与导出共用同一个值）。 */
 export function totalFrames(): number {
@@ -159,6 +163,127 @@ export async function exportPngSequence(name?: string): Promise<void> {
       blob as Blob,
       `${safeBase(name)}-png.zip`,
     );
+  } catch (e) {
+    if (!(e instanceof ExportCancelled)) {
+      appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');
+    }
+  } finally {
+    appState.exportProgress = null;
+    appState.exportAbort = null;
+  }
+}
+
+/* ------------------------------------------------------------------- GIF */
+
+/**
+ * GIF 帧率档位。
+ *
+ * **全都能整除 100**，这是刻意的：GIF 的显示时长单位是厘秒，只有 `100 / n`
+ * 是整数时逐帧时长才落得下。15fps 这种「整数、但不整除 100」的值每帧是 6.67cs，
+ * 无论怎么取整都会漂（见 `gif-plan.ts::gifFrameDelays`）。
+ */
+export const GIF_FPS_CHOICES = [10, 12.5, 20, 25] as const;
+
+/**
+ * GIF 宽度档位（像素）。
+ *
+ * 上限只到 640：GIF 体积随像素数线性涨，而它是**发出去给人看**的格式，
+ * 再宽就该用 MP4 了。高度按工程宽高比换算 —— 竖屏工程选 480 得到的是
+ * 480×853，不是 480×270。
+ */
+export const GIF_WIDTH_CHOICES = [240, 360, 480, 640] as const;
+
+/** 默认档位：480px 宽 @ 12.5fps。480 在聊天窗口里够看，12.5 恰好是 8cs/帧。 */
+export const GIF_DEFAULT_FPS = 12.5;
+export const GIF_DEFAULT_WIDTH = 480;
+
+/** 调色板上限。GIF 的格式上限就是 256；给个常量只是为了让调用点能读懂。 */
+export const GIF_MAX_COLORS = 256;
+
+/** GIF 导出的参数。三项都能在导出面板上改。 */
+export interface GifOptions {
+  /** 目标帧率。应当取 `GIF_FPS_CHOICES` 里的值（理由见那个常量）。 */
+  fps: number;
+  /** 目标宽度（像素）。高度按工程宽高比换算。 */
+  width: number;
+  /**
+   * 只导出工程时间轴上的这一段（秒）。省略 = 整段。
+   *
+   * 这是 GIF 最实用的一个旋钮：体积与「时长 × 面积」成正比，而一段 24 秒的
+   * 片子往往只有几秒值得发出去。**不用自己 clamp** —— `gifPlan` 会夹。
+   */
+  range?: { start: number; end: number };
+}
+
+/**
+ * 按当前工程算一份 GIF 导出计划。
+ *
+ * 面板上的尺寸 / 帧数 / 体积提示，与导出本身，共用这一个入口 ——
+ * 两边各算一遍的 bug 形态是「提示说 12.5fps 300 帧，导出来是别的数」。
+ */
+export function gifPlan(opts: GifOptions): GifPlan {
+  const p = appState.store.project;
+  return planGif({
+    srcSize: p.resolution,
+    srcFps: p.fps,
+    duration: p.duration,
+    range: opts.range,
+    width: opts.width,
+    fps: opts.fps,
+  });
+}
+
+/**
+ * 跑完一条真实的 GIF 导出，回传产物。
+ *
+ * 只做编码：不写 appState 的进度、不触发下载 —— 这样 `exportGif` 那边只剩编排
+ * （进度 / 取消 / 下载），而 page 内的 E2E 探针也能直接拿到字节，不必再走一遍
+ * 「算 plan → 建 sink → runExport」那套（那样测的就不是面板走的那条路了）。
+ */
+export async function gifBlob(
+  opts: GifOptions,
+  hooks: { onProgress?: (frac: number) => void; signal?: AbortSignal } = {},
+): Promise<Blob> {
+  const plan = gifPlan(opts);
+  return (await runExport(appState.renderer, appState.store.project, {
+    sink: new GifSink({
+      width: plan.size.w,
+      height: plan.size.h,
+      maxColors: GIF_MAX_COLORS,
+      delaysMs: plan.delaysMs,
+      loop: 0, // 无限循环：GIF 的默认预期，也是各平台上的实际行为
+    }),
+    codec: GIF_SINK_CODEC,
+    size: plan.size,
+    frameStep: plan.frameStep,
+    // 区间用帧号传：秒 → 帧号的换算只有 gif-plan 那一处，面板的帧数与
+    // 真正渲的帧数因此不可能各算一套。
+    frameRange: plan.frameRange,
+    // 量化是纯 CPU 的（每帧几十毫秒），默认的「10 帧让渡一次」会让取消按钮
+    // 半秒才响应。理由见 ExportOptions.yieldEvery。
+    yieldEvery: 1,
+    onProgress: hooks.onProgress,
+    signal: hooks.signal,
+  })) as Blob;
+}
+
+/** 导出 GIF。重复调用是空操作。 */
+export async function exportGif(name: string | undefined, opts: GifOptions): Promise<void> {
+  if (appState.exportProgress !== null) return;
+
+  const ctrl = new AbortController();
+  appState.exportAbort = ctrl;
+  appState.exportProgress = 0;
+
+  try {
+    const blob = await gifBlob(opts, {
+      onProgress: (f) => {
+        appState.exportProgress = f;
+      },
+      signal: ctrl.signal,
+    });
+    appState.flash(tr('err.export.gifDone', { size: fmtSize(blob.size) }), 'success');
+    await browserPlatform.download(blob, `${safeBase(name)}.gif`);
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
       appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');

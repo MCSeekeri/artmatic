@@ -312,6 +312,19 @@ export const STATIC: Record<string, string> = {
   'z-clip-selected': '3',
   'z-playhead': '4',
   'z-ruler': '5',
+  /*
+   * 抽屉。**必须比时间轴内部那一套（1..5）都大。**
+   *
+   * 为什么这不是「随便给个 1 就行」：抽屉是一个**层叠上下文**，从抽屉里打开的
+   * modal（如特效选择器，backdrop 是 z-modal 150）会被困在抽屉这一层 ——
+   * 于是 z=5 的时间轴 ruler、z=4 的播放头都会盖到 modal 上面（真出现过：
+   * 选择器开着，缩略图上横着一条白色标尺）。给抽屉留出比时间轴内部刻度更高的
+   * 位置，modal 才谈得上「在最上面」。
+   *
+   * 规则：**根上下文里除 modal/tooltip 之外的 z 都必须 < 本值**（工具栏 3、
+   * 底栏 2、时间轴内部 ≤5）。有 E2E 守着（见 timeline-ui.spec 的层叠用例）。
+   */
+  'z-drawer': '10',
   'z-popover': '20',
   'z-menu': '100',
   'z-modal': '150',

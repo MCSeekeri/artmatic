@@ -105,6 +105,23 @@ export function intResParam(): SelectParam {
 }
 
 /**
+ * 解析 `uniform <type> u_<name>;`（一行一个）。返回名字 → 类型。
+ *
+ * 放在这里而不是测试里：它有两个消费方 —— 接线守卫
+ * （`tests/unit/algo-uniforms.test.ts`）与 `effects/compile-all.ts` 的
+ * 「声明了但链接器丢掉了」检查。各写一份正则，迟早有一边漂。
+ */
+export function declaredUniforms(src: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of src.matchAll(
+    /uniform\s+(float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\s+(u_\w+)\s*;/g,
+  )) {
+    out.set(m[2]!, m[1]!);
+  }
+  return out;
+}
+
+/**
  * `realtime` 生成器的 program 名 —— 预编译与运行期必须同名（同
  * `effectProgramName` 的理由：`Kit.quad` 按名缓存，不同名就会「另编一份」）。
  */
@@ -218,8 +235,13 @@ export function arrangementParam(key: ArrangementKey, defaultValue: number): Ran
  *
  * 每个场景的 `setUniforms` 都用它（再拼自己的私有个性化参数）。
  * **参数名 → `u_<key>`** 的约定与特效一致，所以编排参数不需要额外代码。
+ *
+ * `extra` 是**该场景私有的 range 参数键**。走这里而不是各自再写一遍
+ * `floats(...)`：共享的那一套必须**每个场景都派发全**（spectrum 那类
+ * uniform 漏一个是静默失效），把共用的与私有的分开列，就不会出现
+ * 「某个场景自己重写了一遍共享段、却漏了 `u_flux`」。
  */
-export function sceneUniforms(): AlgoSetUniforms {
+export function sceneUniforms(extra: readonly string[] = []): AlgoSetUniforms {
   return (gl, l, v, ctx) => {
     const f = ctx.features;
     const set1f = (name: string, value: number): void => {
@@ -252,7 +274,7 @@ export function sceneUniforms(): AlgoSetUniforms {
     set1f('u_bar', Math.exp((-barFrac * barBeats * secPerBeat) / BAR_DECAY));
     set1f('u_hit', Math.exp(-f.ages[0]! / HIT_DECAY));
 
-    floats<AlgoUniformCtx>('density', 'warp', 'tone', 'cut', 'lift', 'prog')(gl, l, v, ctx);
+    floats<AlgoUniformCtx>('density', 'warp', 'tone', 'cut', 'lift', 'prog', ...extra)(gl, l, v, ctx);
   };
 }
 

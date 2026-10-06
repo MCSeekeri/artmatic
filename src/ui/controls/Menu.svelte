@@ -46,6 +46,26 @@
   // svelte-ignore state_referenced_locally
   let menu: MenuState = $state(initialMenuState(items));
   let positions = $state<{ x: number; y: number }[]>([]);
+  /**
+   * 预览浮层的位置。`null` = 不显示。
+   *
+   * 与菜单面板分开一个状态：浮层贴在**当前高亮项**右侧，而高亮项会随
+   * 键盘上下移动，所以它跟 `positions` 的变化时机并不一样。
+   */
+  let previewAt = $state<{ x: number; y: number } | null>(null);
+  /** 当前高亮项带 `thumb` 时就是要展示的那一项，否则不显示浮层。 */
+  const preview = $derived.by(() => {
+    const level = menu.levels.length - 1;
+    const cur = itemsAtLevel(items, level, menu)[menu.levels[level]!];
+    return cur?.thumb ? cur : null;
+  });
+  /**
+   * 浮层元素。用**单元素数组**而不是 `let`：`bind:this` 挂可变绑定会被
+   * svelte-check 报 `non_reactive_update`，而这里也不需要响应式 ——
+   * `$effect` 在 DOM 更新之后运行，那时已经量得到了。
+   * 与下面的 `panels` 同一个手法。
+   */
+  const previewPanels: HTMLDivElement[] = [];
   /** 每层的面板元素。普通数组即可：$effect 在 DOM 更新之后运行，
    *  那时 bind:this 已经写好了，不需要靠它触发重算。 */
   const panels: HTMLDivElement[] = [];
@@ -100,6 +120,32 @@
 
     // 值相同就不写回，避免 bind:this 与 effect 互相触发成环
     if (JSON.stringify(next) !== JSON.stringify(positions)) positions = next;
+
+    /*
+     * 预览浮层：贴在**当前高亮项**右侧。
+     *
+     * 用与子菜单同一招（按 `data-menu-index` 找到那一行量它的 rect），
+     * 走同一个 `computePopoverPosition`（含贴边翻转）—— 各写一套定位逻辑
+     * 迟早会因为「右边放不下怎么办」而分叉。
+     */
+    let nextPreview: { x: number; y: number } | null = null;
+    const panel = previewPanels[0];
+    if (preview && panel) {
+      const level = menu.levels.length - 1;
+      const row = panels[level]?.querySelector<HTMLElement>(`[data-menu-index="${menu.levels[level]}"]`);
+      const r = row?.getBoundingClientRect();
+      if (r) {
+        const size = { width: panel.offsetWidth, height: panel.offsetHeight };
+        const p = computePopoverPosition(
+          { left: r.right, top: r.top, right: r.right, bottom: r.bottom },
+          size,
+          vp,
+          'right-start',
+        );
+        nextPreview = { x: p.x, y: p.y };
+      }
+    }
+    if (JSON.stringify(nextPreview) !== JSON.stringify(previewAt)) previewAt = nextPreview;
   });
 
   // 外点 / 滚轮 / Esc 关闭
@@ -214,3 +260,27 @@
     {/each}
   </div>
 {/each}
+
+<!--
+  预览浮层。**只在当前高亮项带 `thumb` 时存在**，所以它是「跟着键盘导航走」的，
+  不需要额外的 hover 状态 —— `menu.levels` 就是唯一真源（鼠标划过与方向键
+  都走 `hoverLevel` / `moveLevel`，两条路都会更新它）。
+-->
+<!--
+  浮层的 testid 是**固定**的 `menu-preview`，不跟 `testid` 拼：它是屏幕上
+  唯一一个浮层（同时只可能开一个菜单），而拼出来的名字会让测试绑死
+  「从哪个入口打开的菜单」—— 浮层本身与入口无关。
+-->
+{#if preview}
+  <div
+    class="menu-preview"
+    bind:this={previewPanels[0]}
+    aria-hidden="true"
+    data-testid="menu-preview"
+    style:left={`${previewAt?.x ?? -9999}px`}
+    style:top={`${previewAt?.y ?? -9999}px`}
+  >
+    <img class="menu-preview-img" src={preview.thumb} alt="" decoding="async" />
+    {#if preview.desc}<p class="menu-preview-desc">{preview.desc}</p>{/if}
+  </div>
+{/if}

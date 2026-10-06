@@ -1,5 +1,5 @@
 /**
- * scenes.ts — 程序化场景家族（7 个 `realtime` 生成器）。
+ * scenes.ts — 程序化场景家族（5 个 `realtime` 生成器）。
  *
  * 移植自 angel-echo `js/scenes.js`（同作者内部移植，见 CREDITS.md）。
  * 上游把它们与数学生成器一起放在一个 `SHADERS` 表里供编排层挑；artmatic 的
@@ -23,6 +23,22 @@
  *    `datamosh` 里对 `specAt` 的单点采样已改成「当前帧频段能量 × 单元哈希」，
  *    保留了「信号强度驱动栅格亮度」这层意思。
  *
+ * ## 2026-10 合并：`pulse` + `tunnel` + `dissolve` → `ripple`
+ *
+ * 上游这三个是三条独立的 shader，但**肉眼上它们是同一件事**：一堆同心圆
+ * 涟漪。逐行看也确实如此 —— 三条的主项都是 `f(r)` 的环：
+ *
+ * ```
+ * pulse     ridge(r - age·0.34, w)          等距环，半径由 onset 年龄给
+ * tunnel    pow(sin((-log r)·freq·π), 10)   对数环距（外圈不混叠）
+ * dissolve  pow(sin(r·34 - t·1.6), 26)      等距环 + 噪声啃噬
+ * ```
+ *
+ * 差别只在**环距是线性还是对数**、**环由什么驱动**、**有没有辐条 / 噪点**。
+ * 所以合并成一条 `scene-ripple`，把这些差别做成参数：`spacing`（线性↔对数）
+ * × `drive`（持续↔击发）× `sharp` / `spokes` / `grain` / `falloff`。
+ * 三个原来的观感都在参数空间里，而且中间地带是新的。
+ *
  * ## 噪声库的命名
  *
  * 复用 `effects/shader-def.ts` 里**已登记**的 `FBM6_GLSL` / `MATH_GLSL`
@@ -39,45 +55,87 @@ import {
 import type { MessageKey } from '../i18n/locales';
 import type { GeneratorDef } from './types';
 
-/* ------------------------------------------------------------------ pulse */
+/* ---------------------------------------------------------------- ripple */
 
-const PULSE_BODY = `
+/**
+ * 同心涟漪。合并了上游的 `pulse` / `tunnel` / `dissolve` 三条（见文件头）。
+ *
+ * `u_spacing` 只在**持续环**那一支上生效：击发环是「波前从中心以恒定速度
+ * 推开」，在二维里天然等距，硬套对数坐标只会让它朝内收缩。两支在
+ * `u_drive` 中间叠加 —— 那是有意的「持续底纹 + 击发高光」，不是需要消除的
+ * 过渡态。
+ */
+const RIPPLE_BODY = `
+uniform float u_spacing;   // 0 等距环 .. 1 对数环距
+uniform float u_drive;     // 0 持续环 .. 1 击发环
+uniform float u_sharp;     // 环的锐度
+uniform float u_spokes;    // 角向辐条数（0 = 关）
+uniform float u_grain;     // 噪声溶解量
+uniform float u_falloff;   // 径向衰减
+
 void main() {
   vec2 uv = vUv;
   vec2 p = (uv - 0.5) * vec2(u_aspect, 1.0);
-  float r = length(p);
+  float r = max(length(p), 1e-4);
   float a = atan(p.y, p.x);
 
-  vec3 col = vec3(0.0);
+  /* 径向坐标。「r 的 p 次幂」：p = 1 时环距等分（水面涟漪），p < 1 时坐标在
+     圆心附近变陡 ⇒ **同样的 z 间隔对应的半径间隔更小** ⇒ 环往圆心挤（隧道透视）。
 
-  /* 四个活环 —— 每个对应一记最近的音符，越老越暗 */
-  float rings = 0.0;
+     ⚠️ 这里**不能**写成「把两种坐标线性混合」的形式（例如
+     mix(r, 1.0 - log(r)*0.32, spacing)）—— 第一版就是那么写的，于是 z(r) 在
+     r ≈ 0.18 处有个极小值（线性项 r 递增、对数项 −log r 递减，两者方向相反），
+     **坐标非单调**，圆心附近整片被折回去 ⇒ 默认参数下整幅画只剩两圈。
+     实测就是这么发现的：批量导出的缩略图里只有 2 根粗环，而不是涟漪。
+     幂次族天然单调、两端都钉在 0 与 1，是这里唯一不需要额外论证的选择。 */
+  float z = pow(max(r, 1e-4), mix(1.0, 0.35, u_spacing));
+  float travel = u_travel + u_time * 0.15;
+
+  /* --- 持续环 --------------------------------------------------------- */
+  float freq = mix(4.0, 34.0, u_density);
+  float s = sin((z * freq - travel) * 3.14159);
+  float rings = pow(max(s, 0.0), mix(3.0, 60.0, u_sharp));
+
+  /* --- 击发环：每个 onset 放出一圈，越老越大越淡 ----------------------- */
+  float pulses = 0.0;
   for (int i = 0; i < 4; i++) {
     float age = u_ages[i];
     float live = exp(-age * 0.85);
     float rad = age * 0.34;
     float w = 0.006 + age * 0.010;
-    rings += live * ridge(r - rad, w) * (1.0 - float(i) * 0.18);
+    pulses += live * ridge(r - rad, w) * (1.0 - float(i) * 0.18);
   }
 
-  /* 核：随信号呼吸的硬点。衰减刻意陡 —— 宽核会读成镜头光晕，不是点光源 */
-  float core = ridge(r, 0.010 + u_sub * 0.016);
-  float glow = exp(-r * (34.0 - u_rms * 12.0)) * (0.22 + u_rms * 0.8);
+  float col = rings * (1.0 - u_drive) + pulses * u_drive * (1.5 + u_kick * 2.0);
 
-  /* 极淡的放射丝，条数挂在编排密度上 */
-  float spokes = pow(abs(sin(a * 12.0 + u_travel * 0.4)), 24.0) *
-                 smoothstep(0.02, 0.6, r) * exp(-r * 2.2) * u_density;
+  /* --- 角向辐条：把同心圆切成有方向的轨道 ------------------------------
+     指数给到 60 才够细。22（上游 tunnel 的取值）在 480 高下每根条约有
+     10 个像素宽，六根合起来读成一片光晕而不是「轨道」—— 上游之所以看着
+     还行，是因为它把辐条乘了 wall * depth，条在中段本来就被压得很暗。 */
+  if (u_spokes >= 0.5) {
+    float wob = sin(z * 0.30 + travel * 0.10) * 1.4 * u_warp;
+    float rails = sin(a * u_spokes + wob);
+    col += pow(max(rails, 0.0), 60.0) * 0.34 * (0.5 + u_tone);
+  }
 
-  col += rings * (1.5 + u_kick * 2.0);
-  col += core * 2.2;
-  col += glow * 0.85;
-  col += spokes * 0.35;
+  /* --- 径向衰减：隧道该向远处打开，不是朝观众打开 ---------------------- */
+  col *= mix(1.3, 0.30, u_falloff) * exp(-max(z, 0.0) * mix(0.25, 1.2, u_falloff));
 
-  /* 一点极慢的尘，免得黑场死平 */
-  float dust = step(0.9975, hash21(floor(uv * u_resolution / 3.0) + floor(u_time * 2.0)));
-  col += dust * 0.35 * (0.3 + u_rms);
+  /* --- 噪声溶解 --------------------------------------------------------
+     必须是**成块的斑点**，绝不是一片灰。两个陷阱：高频采样的 fbm 会退化成
+     逐像素噪声，而逐像素噪声一旦进了回声反馈环，它不会读成静电，会平均成
+     一片平灰。场保持粗、阈值切得硬，它才一直是可读的。 */
+  if (u_grain > 0.001) {
+    float n = fbm6(uv * 30.0 + floor(u_time * 6.0) * 3.7);
+    float speck = smoothstep(0.90 - u_grain * 0.55, 1.06 - u_grain * 0.45, n);
+    col *= 1.0 - u_grain * speck * 0.9;
+    col += speck * u_grain * 0.5;
+  }
 
-  col *= edge(uv, 0.06);
+  col *= (0.85 + u_rms * 0.9) * (0.6 + u_tone * 0.9);
+  col += u_hit * 0.15 * (1.0 - u_drive);
+  col += u_cut * 0.35;
+  col *= edge(uv, 0.05);
   outColor = vec4(vec3(max(col, 0.0)), 1.0);
 }`;
 
@@ -111,47 +169,6 @@ void main() {
   col *= (0.30 + u_rms * 1.1);
   col += u_hit * 0.04;
   col *= edge(uv, 0.10);
-  outColor = vec4(vec3(max(col, 0.0)), 1.0);
-}`;
-
-/* ----------------------------------------------------------------- tunnel */
-
-const TUNNEL_BODY = `
-void main() {
-  vec2 uv = vUv;
-  vec2 p = (uv - 0.5) * vec2(u_aspect, 1.0);
-  float r = max(length(p), 0.0009);
-  float a = atan(p.y, p.x);
-
-  /* 对数极坐标，不是 1/r。z = 1/r 的话环的空间频率随 r 增大而升高，外圈
-     混叠成白噪；更糟的是那里的相位几乎是常量，于是大片区域在「全亮」与
-     「全暗」之间整体翻转。z = -log(r) 让环距在整幅画上均匀，且处处在变。 */
-  float z = -log(r);
-  float travel = u_travel;
-
-  float rings = sin((z * 2.1 + travel * 0.55) * 3.14159);
-  rings = pow(max(rings, 0.0), 10.0);
-
-  float rails = sin(a * 6.0 + sin(z * 0.30 + travel * 0.05) * 1.4);
-  rails = pow(max(rails, 0.0), 22.0);
-
-  /* 墙壁向画框边缘退去：隧道该向远处打开，不是朝观众打开 */
-  float wall = smoothstep(1.25, 0.10, r);
-  float depth = exp(-max(z, 0.0) * 0.30);
-  float col = rings * (0.85 + u_kick * 2.2) * wall * depth
-            + rails * 0.45 * wall * depth;
-
-  /* 隧道尽头随低频发光 —— 收得很紧，宽核只会变成压在几何上一颗白球 */
-  col += exp(-r * 44.0) * (0.6 + u_sub * 2.4);
-
-  /* 第二组轨，转过一个角度 —— 画面在引用自己 */
-  float ghost = pow(max(sin(a * 6.0 + 0.6 + sin(z * 0.22) * 1.1), 0.0), 22.0);
-  col += ghost * 0.20 * wall * (0.4 + u_high * 2.0);
-
-  col *= (0.55 + u_rms * 1.2) * (0.5 + u_tone);
-  col += u_hit * 0.12 * wall * 2.0;
-  col += u_cut * 0.4;
-  col *= edge(uv, 0.05);
   outColor = vec4(vec3(max(col, 0.0)), 1.0);
 }`;
 
@@ -299,41 +316,6 @@ void main() {
   outColor = vec4(vec3(max(col, 0.0)), 1.0);
 }`;
 
-/* --------------------------------------------------------------- dissolve */
-
-const DISSOLVE_BODY = `
-void main() {
-  vec2 uv = vUv;
-  float t = u_time;
-  float decay = clamp(u_prog, 0.0, 1.0);
-
-  /* 一个还在勉强维持自己的干涉图案 */
-  vec2 p = (uv - 0.5) * vec2(u_aspect, 1.0);
-  float r = length(p);
-  float ring = pow(max(sin(r * 34.0 - t * 1.6), 0.0), 26.0) * exp(-r * 1.8);
-
-  /* 结构褪去时噪声地板爬上来 —— 但必须是**成块的斑点**，绝不是一片灰。
-     两个陷阱：高频采样的 fbm 会退化成逐像素噪声，而逐像素噪声一旦进了回声
-     反馈环，它不会读成静电，会平均成一片平灰。场保持粗、阈值切得硬，
-     它才一直是可读的。 */
-  float n = fbm6(uv * 34.0 + floor(t * 6.0) * 3.7);
-  float grain = hash21(floor(uv * (u_resolution / 3.0)) + floor(t * 18.0));
-  float speck = smoothstep(0.78, 1.02, n * 0.72 + grain * 0.40);
-
-  float structure = ring * (1.0 - decay) * (0.5 + u_rms * 2.0);
-  float col = structure + speck * (0.06 + decay * 0.95) * 1.5;
-
-  /* 水平同步崩溃：最后画面整条滑开 */
-  float slide = smoothstep(0.55, 1.0, decay);
-  col *= 1.0 - slide * 0.45 * step(0.6, hash11(floor(uv.y * 120.0) + floor(t * 3.0)));
-
-  /* 最后一处光心 */
-  col += exp(-r * 12.0) * (1.0 - decay) * 1.3;
-
-  col *= edge(uv, 0.08);
-  outColor = vec4(vec3(max(col, 0.0)), 1.0);
-}`;
-
 /* ------------------------------------------------------------------ 注册 */
 
 interface SceneSpec {
@@ -341,17 +323,26 @@ interface SceneSpec {
   nameKey: MessageKey;
   body: string;
   params: GeneratorDef['params'];
+  /** 该场景私有的 range 参数键（共享那套之外还要派发的）。 */
+  extra?: readonly string[];
 }
 
 const SCENES: SceneSpec[] = [
   {
-    id: 'scene-pulse',
-    nameKey: 'algo.scene.pulse',
-    body: PULSE_BODY,
+    id: 'scene-ripple',
+    nameKey: 'algo.scene.ripple',
+    body: RIPPLE_BODY,
+    extra: ['spacing', 'drive', 'sharp', 'spokes', 'grain', 'falloff'],
     params: [
-      arrangementParam('density', 0.45),
+      arrangementParam('density', 0.5),
       arrangementParam('warp', 0.3),
       arrangementParam('tone', 0.5),
+      { key: 'spacing', labelKey: 'algo.ripple.spacing', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0.25 },
+      { key: 'drive', labelKey: 'algo.ripple.drive', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0 },
+      { key: 'sharp', labelKey: 'algo.ripple.sharp', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0.62 },
+      { key: 'spokes', labelKey: 'algo.ripple.spokes', type: 'range', min: 0, max: 12, step: 1, defaultValue: 0 },
+      { key: 'grain', labelKey: 'algo.ripple.grain', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0.12 },
+      { key: 'falloff', labelKey: 'algo.ripple.falloff', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0.4 },
       intResParam(),
     ],
   },
@@ -363,18 +354,6 @@ const SCENES: SceneSpec[] = [
       arrangementParam('density', 0.5),
       arrangementParam('warp', 0.4),
       arrangementParam('tone', 0.5),
-      intResParam(),
-    ],
-  },
-  {
-    id: 'scene-tunnel',
-    nameKey: 'algo.scene.tunnel',
-    body: TUNNEL_BODY,
-    params: [
-      arrangementParam('density', 0.3),
-      arrangementParam('warp', 0.3),
-      arrangementParam('tone', 0.5),
-      arrangementParam('cut', 0),
       intResParam(),
     ],
   },
@@ -412,22 +391,11 @@ const SCENES: SceneSpec[] = [
       intResParam(),
     ],
   },
-  {
-    id: 'scene-dissolve',
-    nameKey: 'algo.scene.dissolve',
-    body: DISSOLVE_BODY,
-    params: [
-      arrangementParam('density', 0.4),
-      arrangementParam('tone', 0.5),
-      arrangementParam('prog', 0.35),
-      intResParam(),
-    ],
-  },
 ];
 
 /**
- * 七个场景 def。`setUniforms` 全部是共用的 `sceneUniforms()` ——
- * 音频特征 + 闭式冲量 + 编排参数一套派发，场景之间没有私有的 uniform。
+ * 五个场景 def。`setUniforms` 全部走共用的 `sceneUniforms(extra)` ——
+ * 音频特征 + 闭式冲量 + 编排参数一套派发，场景之间没有别的私有 uniform 机制。
  */
 export const sceneDefs: GeneratorDef[] = SCENES.map((s) => ({
   id: s.id,
@@ -435,5 +403,5 @@ export const sceneDefs: GeneratorDef[] = SCENES.map((s) => ({
   kind: 'realtime',
   fragment: SCENE_GLSL + s.body,
   params: s.params,
-  setUniforms: sceneUniforms(),
+  setUniforms: sceneUniforms(s.extra ?? []),
 }));

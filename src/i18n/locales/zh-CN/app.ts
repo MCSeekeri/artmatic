@@ -63,7 +63,26 @@ export const app = {
   'app.exportPng': 'PNG 序列',
   /* 「未压缩」是**上界**，不是预计值：PNG 的压缩率完全取决于画面内容。 */
   'app.exportPngHint': '未压缩约 {size}',
+  'app.exportGif': 'GIF',
+  /* GIF 独有的参数，只在导出面板出现；标签与「工程帧率」不是一回事。 */
+  'app.gifFps': '帧率',
+  'app.gifWidth': '宽度',
+  'app.gifRange': '区间',
+  /* 只有读屏用户听得到，但仍要抽：输入框里是两个没有上下文的光秃数字。 */
+  'app.gifRangeStart': '开始',
+  'app.gifRangeEnd': '结束',
+  /* 抽帧后的实际帧数，紧跟区间输入框 —— 改区间时唯一的即时反馈。 */
+  'app.gifFrames': '{n} 帧',
+  /* 与 PNG 那条同一个口径：给的是索引数据的**未压缩**大小，不是预计体积 ——
+     LZW 的压缩率同样完全取决于画面内容。 */
+  'app.exportGifHint': '未压缩约 {size}',
   'app.exporting': '导出中 {pct}%',
+  /*
+   * 拖动播放头时画面会比播放头**早**（见 app-state 的 syncSimBudget）——
+   * 模拟是主线程同步的，向前跳必须真把中间每一步算完。追上之前给个明确提示，
+   * 否则用户会以为预览坏了。
+   */
+  'app.simCatchUp': '模拟追赶中',
 
   /* ------------------------------------------------ 工程面板 */
   'app.name': '名称',

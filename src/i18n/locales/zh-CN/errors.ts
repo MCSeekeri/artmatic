@@ -93,6 +93,12 @@ export const errors = {
   'err.export.pngBlobNull': 'canvas.toBlob 返回 null',
   'err.export.notConfigured': 'configure 还没调用',
   'err.export.noBuffer': 'mediabunny 没有产出 buffer',
+  'err.export.gifDone': '已导出 GIF，共 {size}',
+  'err.export.gifSinkCodec': 'GifSink 只支持 {want}，收到 {got}',
+  'err.export.gifNo2d': 'GIF 编码需要一张 2D 暂存 canvas，getContext("2d") 返回了 null',
+  /* gifenc 是惰性写头的：一帧都没写就 finish，得到的是只有 trailer 的 1 字节文件。
+     那种「成功」的空下载比报错更难排查，所以在这里挡死。 */
+  'err.export.gifEmpty': 'GIF 一帧都没有写出（工程时长为 0，或抽帧步长不合理）',
 
   /* ------------------------------------------------ 视频素材 */
   /* 进底栏的 flash。容器认得、轨里没视频、或者编码本机解不动，都归这条 ——

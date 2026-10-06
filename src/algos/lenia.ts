@@ -31,7 +31,7 @@
 
 import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCenteredInto } from './pattern-codec';
-import { SnapshotRing, annulusKernel, convolve, type SparseKernel } from './sim-util';
+import { SnapshotRing, TorusField, annulusKernel } from './sim-util';
 import type { GeneratorDef, SimHandle } from './types';
 
 const SNAPSHOT_OPTS = {
@@ -53,20 +53,23 @@ function growth(u: number, mu: number, sigma: number): number {
 }
 
 /**
- * 一步（双缓冲）。纯函数，单测直接打。
+ * 一步（双缓冲）。纯函数（`field` 只是预计算的核 + 缓冲），单测直接打。
  *
  * 生长函数是**逐格非线性**的，所以卷积必须先全部算完再套 G —— 就地更新会让
- * 后面的格子读到已更新的邻居。
+ * 后面的格子读到已更新的邻居。`field.convolve` 内部就是「先整场算完再返回」，
+ * 所以这条约束由它保证。
+ *
+ * 卷积走 `TorusField`（halo 快路径）而不是逐抽头回绕：实测 2.06×，
+ * 且**逐位相同**，见 `sim-util.ts` 的注释。
  */
 export function leniaStep(
+  field: TorusField,
   a: Float32Array,
-  conv: Float32Array,
   next: Float32Array,
-  n: number,
-  kernel: SparseKernel,
   rule: LeniaRule,
 ): void {
-  convolve(a, n, kernel, conv);
+  field.convolve(a);
+  const conv = field.conv;
   const { mu, sigma, dt } = rule;
   for (let i = 0; i < next.length; i++) {
     const v = a[i]! + dt * growth(conv[i]!, mu, sigma);
@@ -84,9 +87,10 @@ export function createLenia(params: Record<string, number | string>, seed: numbe
     dt: Math.max(0.01, Math.min(0.4, Number(params.dt) || 0.1)),
   };
   const kernel = annulusKernel(R);
+  // 核是常量 → 偏移表算一次就够（每步重建会把 2× 的收益吃回去）
+  const field = new TorusField(n, kernel);
 
   const buf: [Float32Array, Float32Array] = [new Float32Array(n * n), new Float32Array(n * n)];
-  const conv = new Float32Array(n * n);
   const { seedMode } = params;
 
   if (seedMode === 'pattern') {
@@ -112,7 +116,7 @@ export function createLenia(params: Record<string, number | string>, seed: numbe
 
   const stepTo = (target: number): void => {
     while (frame < target) {
-      leniaStep(buf[which]!, conv, buf[1 - which]!, n, kernel, rule);
+      leniaStep(field, buf[which]!, buf[1 - which]!, rule);
       which = 1 - which;
       frame++;
       if (snapshots.shouldStore(frame)) snapshots.store(frame, buf[which]!);

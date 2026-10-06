@@ -24,16 +24,11 @@ export const WRITER_TYPES: Record<string, string[]> = {
   uniform4f: ['vec4'],
 };
 
-/** 解析 `uniform <type> u_<name>;`（一行一个）。 */
-export function parseUniforms(src: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of src.matchAll(
-    /uniform\s+(float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\s+(u_\w+)\s*;/g,
-  )) {
-    out.set(m[2]!, m[1]!);
-  }
-  return out;
-}
+/**
+ * 解析 uniform 声明。**实现在 `algos/shader-lib.ts`**（`compile-all.ts` 也要用，
+ * 正则只能有一份），这里只是转发，保住两份守卫原有的调用点。
+ */
+export { declaredUniforms as parseUniforms } from '../../src/algos/shader-lib';
 
 export interface StubGl {
   gl: WebGL2RenderingContext;

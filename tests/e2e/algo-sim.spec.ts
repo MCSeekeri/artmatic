@@ -204,3 +204,123 @@ test('Wireworld：电子一直在跑、逐帧确定', async ({ page }) => {
   await settle(page, 6);
   expect(await meanAt(page, 6), '导线与电子应当可见').toBeGreaterThan(0.5);
 });
+
+/* ------------------------------------------------------------ 拖动播放头 */
+
+interface ScrubApi {
+  __artmatic: {
+    appState: { playT: number; simLag: number; seek: (t: number) => void };
+  };
+}
+
+const simLagOf = (page: Page): Promise<number> =>
+  page.evaluate(() => (window as never as ScrubApi).__artmatic.appState.simLag);
+
+const waitSimCaughtUp = (page: Page): Promise<unknown> =>
+  page.waitForFunction(
+    () => (window as never as ScrubApi).__artmatic.appState.simLag === 0,
+    undefined,
+    { timeout: 30_000 },
+  );
+
+/**
+ * 在 ruler 上按下去并拖到 `toFrac`（0..1）。**不松手** —— 松手交给调用方，
+ * 这样一条用例可以在一次手势中途插断言（「拖到一半时确实落后了」）。
+ */
+async function pressAndDrag(page: Page, toFrac: number, fromFrac = 0, steps = 10): Promise<void> {
+  const box = await page.locator('canvas.ruler').boundingBox();
+  expect(box, '时间轴 ruler 应当可见').not.toBeNull();
+  const y = box!.y + box!.height / 2;
+  const xAt = (f: number): number => box!.x + (box!.width - 8) * f + 4;
+  await page.mouse.move(xAt(fromFrac), y);
+  await page.mouse.down();
+  await dragTo(page, toFrac, fromFrac, steps);
+}
+
+/** 手指已经在 ruler 上按下时，继续拖到 `toFrac`。 */
+async function dragTo(page: Page, toFrac: number, fromFrac = 0, steps = 10): Promise<void> {
+  const box = await page.locator('canvas.ruler').boundingBox();
+  expect(box).not.toBeNull();
+  const y = box!.y + box!.height / 2;
+  const xAt = (f: number): number => box!.x + (box!.width - 8) * f + 4;
+  for (let i = 1; i <= steps; i++) {
+    await page.mouse.move(xAt(fromFrac + ((toFrac - fromFrac) * i) / steps), y);
+  }
+}
+
+/**
+ * 拖动播放头：预算让画面先落后，松手后**精确**追平。
+ *
+ * 判据分三层，缺一层就会变成空转：
+ *   1. 手指还按着时 `simLag > 0` —— 没有预算的话每帧都会把目标帧算完，
+ *      这个数恒为 0。所以它就是「预算有没有真的接上」的判据。
+ *   2. 松手后在有限时间内收敛到 `simLag === 0`。
+ *   3. 收敛留下的那一帧 == 从 0 **精确**走到同一帧的结果。收敛之后预算已被
+ *      收回 0，所以第二次 seek 走的是精确路径；两者一致才说明拖动没有把模拟
+ *      永久留在「近似」状态上。
+ *
+ * 沙堆是「向前拖最贵」的那个（默认一整条 24 秒轴 0.52 秒），而且单步成本会
+ * 突变（一次雪崩可能贵两个数量级）—— 它同时压到预算机制的两条路径。
+ */
+test('拖动播放头：拖动期间画面落后、松手后精确追平', async ({ page }) => {
+  await boot(page);
+  await buildStage(page, {
+    id: 'scrub-sim',
+    source: { type: 'algo', generator: 'sandpile', params: { size: 160, rate: 30 } },
+    end: 24,
+  });
+  await settle(page, 0);
+  expect(await meanAt(page, 0), '起点要有东西').toBeGreaterThan(0.2);
+
+  // 拖到 80% 处 —— **不能拖到最右**：那里 playT == duration，源落在片段区间
+  // 之外、根本不会被解析，画面是空的（那是下面第二条用例的地盘）。
+  await pressAndDrag(page, 0.8);
+  expect(await simLagOf(page), '拖动期间模拟没有落后 —— 步进预算没接上').toBeGreaterThan(0);
+  await page.mouse.up();
+  await waitSimCaughtUp(page);
+
+  const t = await page.evaluate(() => (window as never as ScrubApi).__artmatic.appState.playT);
+  expect(t, '拖到的地方应当远离起点，但仍在源片段的区间内').toBeGreaterThan(1);
+  expect(t).toBeLessThan(23.9);
+
+  const meanConverged = await meanAt(page, t, false);
+  expect(meanConverged, '收敛后的画面不该是黑的').toBeGreaterThan(0.2);
+
+  await page.evaluate(() => (window as never as ScrubApi).__artmatic.appState.seek(0));
+  await settle(page, 0);
+  const meanExact = await meanAt(page, t, false);
+  // 容差 0.05：GPU 边界采样有一处已知的逐帧噪声（约 15 字节级），在均值上
+  // 不到 0.01，所以这条比的是**模拟状态**，不是渲染噪声。
+  expect(meanConverged, '拖动留下的帧与精确重算的帧不一致').toBeCloseTo(meanExact, 1);
+});
+
+/**
+ * 在「模拟还落后」的状态下把播放头拖出源片段的区间（`playT == duration`），
+ * 滞后必须**归零**。
+ *
+ * 针对真实 bug 的回归守卫：滞后曾经是从「所有 sim 条目」里取的，于是那个
+ * 再也不被解析的源永远报着上次的滞后 —— 底栏永久显示「模拟追赶中」，预算也
+ * 永久停在追赶档、再也回不到精确路径（实测拖到 t = 24 后 `simLag` 恒为 259）。
+ * 判据必须是「这一帧真的会渲的源」（`AlgoRuntime.takeSimLag`）。
+ *
+ * 断言顺序是刻意的：先在 80% 处断「真的落后了」（那一段源还在区间内，滞后
+ * 观测得到），再继续拖到尽头 —— 到了尽头源就不再被解析，这一刻的滞后读数
+ * 正是被测对象。
+ */
+test('带着滞后拖出源片段区间之后，滞后必须归零', async ({ page }) => {
+  await boot(page);
+  await buildStage(page, {
+    id: 'scrub-end',
+    source: { type: 'algo', generator: 'sandpile', params: { size: 160, rate: 30 } },
+    end: 24,
+  });
+  await settle(page, 2);
+
+  await pressAndDrag(page, 0.8);
+  expect(await simLagOf(page), '滞后没出现，下面的断言会是空转').toBeGreaterThan(0);
+  await dragTo(page, 1, 0.8);
+  await page.mouse.up();
+
+  await waitSimCaughtUp(page);
+  expect(await simLagOf(page)).toBe(0);
+});

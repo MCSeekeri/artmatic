@@ -46,6 +46,13 @@
       <Icon name="download" size={11} />
       {tr('app.exporting', { pct })}
     </span>
+  {:else if appState.simLag > 0}
+    <!-- 拖动播放头时模拟会落在播放头后面（见 app-state.syncSimBudget）。
+         排在导出之后、工具提示之前：它是「画面为什么不对」的解释，比提示重要。 -->
+    <span class="seg accent" data-testid="statusbar-simlag">
+      <Icon name="clock" size={11} />
+      {tr('app.simCatchUp')}
+    </span>
   {:else if tooltip.text}
     <span class="seg hint" data-testid="statusbar-hint">{tooltip.text}</span>
     {#if tooltip.shortcut}

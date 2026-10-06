@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { ALGO_HEAD, SCENE_GLSL, declaredUniforms } from '../../src/algos/shader-lib';
 
 /**
  * 试炼场（/lab/）的端到端验证。
@@ -26,7 +27,8 @@ interface LabHandle {
   renderAt: (t: number, clearFeedback?: boolean) => void;
   readPixels: () => { data: number[]; w: number; h: number };
   renderSize: () => { w: number; h: number };
-  compileAll: () => { id: string; ok: boolean; error?: string }[];
+  /** `dropped` = 声明了但被链接器丢掉的 uniform（= shader 没读过它）。 */
+  compileAll: () => { id: string; ok: boolean; error?: string; dropped?: string[] }[];
 }
 
 type LabWindow = { __lab?: LabHandle; __artmatic?: unknown };
@@ -134,6 +136,30 @@ test('全部编译：所有特效与实时算法都编得过', async ({ page }) 
   expect(result.results.length).toBeGreaterThanOrEqual(result.effectCount);
   // 「新增一个特效 = 两个文件」纪律下，注册表里的每一个都必须编得过。
   expect(result.failures).toEqual([]);
+
+  /*
+   * 「声明了但没被 shader 读过」= 那个参数**拨了没反应**。
+   *
+   * 判据来自链接器：没被读的 uniform 会被优化掉，`Program.uniforms`（按
+   * `ACTIVE_UNIFORMS` 建）里就没有它。这是唯一能自动抓到这一类的地方 ——
+   * 伪 GL 的单测看不见（那边的 location 永远有效），而它不报错、不崩、
+   * 只是滑杆动画面不动。重构 `menger` 时 `u_twist` 就这么丢过一次。
+   *
+   * 允许清单**从源码推**（不硬编码）：`ALGO_HEAD` 那批是运行期给所有人的，
+   * 某个分形用不到很正常；`SCENE_GLSL` 那批音频/编排 uniform 是**刻意声明的
+   * 超集**（见 shader-lib 的注释），但只对 `scene-*` 放行 —— 别的生成器漏读
+   * 一个音频 uniform 仍然该失败。
+   */
+  const headOwned = new Set(declaredUniforms(ALGO_HEAD).keys());
+  const sceneShared = new Set(declaredUniforms(SCENE_GLSL).keys());
+  const neverRead = result.results
+    .filter((r) => r.ok)
+    .flatMap((r) =>
+      (r.dropped ?? [])
+        .filter((n) => !headOwned.has(n) && !(r.id.startsWith('scene-') && sceneShared.has(n)))
+        .map((n) => `${r.id}: ${n}`),
+    );
+  expect(neverRead, '这些 uniform 声明了却没被读过 → 对应参数拨了没反应').toEqual([]);
 });
 
 test('右栏标题并排给出显示名与 id（id 不能被 uppercase 改写）', async ({ page }) => {
@@ -300,7 +326,7 @@ test('音频特征通道：场景生成器真的被特征驱动（同一 t 摘�
       return d;
     };
 
-    L.selectSource('scene-pulse');
+    L.selectSource('scene-ripple');
     L.selectEffect(null);
     // t = 1 s 落在拍点上（120 bpm → 每 0.5 s 一拍）。
     const withAudio = shot(1);

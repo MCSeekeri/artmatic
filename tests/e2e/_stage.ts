@@ -462,3 +462,142 @@ export async function rgbMeanAt(
   );
 }
 
+/* -------------------------------------------- 分块统计：「画面变了吗」的判据 */
+
+export interface GridStats {
+  /** 非零像素数。背景纯黑 + 无抗锯齿 ⇒ **非零即几何**，所以它是精确的。 */
+  lit: number;
+  total: number;
+  /** 整幅均值（0–255）。 */
+  mean: number;
+  /** `g×g` 分块均值，行优先。 */
+  grid: number[];
+  /**
+   * `g×g` 个**点采样**，每点 **RGB 三个分量**（长度 = `g*g*3`），行优先。
+   *
+   * ⚠️ **不能把颜色压成一个标量再用它比。** 这是实测踩到的坑：余弦调色板
+   * `0.5 + 0.5·cos(ph + (0, 2π/3, 4π/3))` 的三个通道**恒差 2π/3**，于是
+   * `(R+G+B)/3` 对**任何** `t` 都恰好是 127.5 —— Lyapunov 换成「AB」序列
+   * 明明换了一张图，用亮度比出来的 L1 只有 0.086（= 读回竞态的量级），
+   * 整个判据形同虚设。同理 `mean` 对这类调色板也是常量，别拿它判「有没有东西」。
+   * 要看「有没有结构」用 `spread`。
+   *
+   * 点采样而不是分块均值：分块均值对「铺满整幅的彩色渐变」同样不敏感
+   * （3D 分形是「黑底 + 一块亮形体」，分块均值在那里才有效）。而竞态只翻转
+   * 十来个字节、几乎不可能正好落在你采样的那十几个点上，所以点采样抗噪。
+   */
+  samples: number[];
+  /**
+   * 采样点里**单通道的最大跨度**（`max(R)−min(R)` 等三者取最大，0–255）。
+   *
+   * 「这一帧有没有结构」的判据：整幅纯色（判据退化成恒真、或调色板塌成常量）
+   * 时它必然是 0。**不能用 `mean`** —— 见 `samples` 那条。
+   */
+  spread: number;
+}
+
+/**
+ * 一帧的分块统计量。**「换了参数画面变了吗」的判据就用它算的分块 L1。**
+ *
+ * 为什么不是「覆盖像素数之差」，也不是逐像素哈希（`algos3d.spec` 里踩过）：
+ *
+ * - **覆盖数是个很弱的形状代理。** 幂次 3 与幂次 8 的 Mandelbulb **面积接近
+ *   而形态完全不同** —— 拿覆盖数之差当判据，会把一个完全正确的实现判死。
+ * - **逐像素哈希会撞上那条已知的 GPU 读回竞态**（同帧两渲恒差一个小数，
+ *   见 `algo-sim.spec` 头注）。
+ *
+ * 分块均值对那点噪声不敏感、对形状变化很敏感：实测**同配置两次独立加载的
+ * L1 = 0.000**（噪声底是零），而换幂次是 80.8、换迭代次数是 14.2。
+ */
+export async function gridStats(
+  page: Page,
+  t: number,
+  g = 4,
+  clearFeedback = true,
+): Promise<GridStats> {
+  return page.evaluate(
+    ({ tt, gg, clear }) => {
+      const A = (window as never as { __artmatic: StageApi }).__artmatic;
+      if (clear) A.renderer.onSeek();
+      A.renderFrame(tt);
+      const { data, w, h } = A.readPixels();
+      let lit = 0;
+      let sum = 0;
+      const grid = new Array(gg * gg).fill(0) as number[];
+      const cell = new Array(gg * gg).fill(0) as number[];
+      const samples = new Array(gg * gg * 3).fill(0) as number[];
+      for (let y = 0; y < h; y++) {
+        const by = Math.min(gg - 1, Math.floor((y / h) * gg));
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const v = data[i]! + data[i + 1]! + data[i + 2]!;
+          sum += v;
+          if (v > 0) lit += 1;
+          const b = by * gg + Math.min(gg - 1, Math.floor((x / w) * gg));
+          grid[b]! += v / 3;
+          cell[b]! += 1;
+        }
+      }
+      for (let i = 0; i < grid.length; i++) grid[i] = grid[i]! / (cell[i] || 1);
+      // 点采样取每块中心那一个像素，**三个通道都留着** —— 见 GridStats.samples
+      const lo = [255, 255, 255];
+      const hi = [0, 0, 0];
+      for (let by = 0; by < gg; by++) {
+        const sy = Math.min(h - 1, Math.floor(((by + 0.5) * h) / gg));
+        for (let bx = 0; bx < gg; bx++) {
+          const sx = Math.min(w - 1, Math.floor(((bx + 0.5) * w) / gg));
+          const i = (sy * w + sx) * 4;
+          const b = (by * gg + bx) * 3;
+          for (let ch = 0; ch < 3; ch++) {
+            const v = data[i + ch]!;
+            samples[b + ch] = v;
+            if (v < lo[ch]!) lo[ch] = v;
+            if (v > hi[ch]!) hi[ch] = v;
+          }
+        }
+      }
+      const spread = Math.max(hi[0]! - lo[0]!, hi[1]! - lo[1]!, hi[2]! - lo[2]!);
+      return { lit, total: w * h, mean: sum / (data.length / 4) / 3, grid, samples, spread };
+    },
+    { tt: t, gg: g, clear: clearFeedback },
+  );
+}
+
+/** 两个分块均值之间的 L1 距离（0 = 逐块相同）。适合「黑底 + 形体」的图。 */
+export function gridL1(a: number[], b: number[]): number {
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d += Math.abs(a[i]! - b[i]!);
+  return d;
+}
+
+/**
+ * 两个点采样之间的 L1 距离（**逐通道**，所以对任何调色板都有效）。
+ *
+ * 「两张都铺满整幅彩色渐变」的图必须用这个：分块均值在那里分不开，而把它压成
+ * 亮度之后连余弦调色板本身都成了常量（见 `GridStats.samples`）。
+ */
+export function sampleL1(a: GridStats, b: GridStats): number {
+  let d = 0;
+  for (let i = 0; i < a.samples.length; i++) d += Math.abs(a.samples[i]! - b.samples[i]!);
+  return d;
+}
+
+/**
+ * **重载页面**、搭一条只有这个源的舞台，量 `t` 处的分块统计量。
+ *
+ * ⚠️ 内部必须先 `goto('/')`：`buildStage` 是「加一条新轨」，而 `addTrack` 是
+ * push（新轨 z 更低）—— 连着量两个配置而不重载，第一条轨会一直盖在上面，
+ * 于是**每个配置量到的都是第一个源**。量 3D 帧成本时被骗过一次
+ * （10 个配置量出来一模一样）。
+ */
+export async function shootAlgo(
+  page: Page,
+  gen: string,
+  params: Record<string, number | string>,
+  t = 4,
+): Promise<GridStats> {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await buildStage(page, { id: `m-${gen}`, source: { type: 'algo', generator: gen, params }, end: 8 });
+  return gridStats(page, t);
+}

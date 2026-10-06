@@ -65,6 +65,7 @@ Artmatic 的实现移植或参考了以下代码与库。本文件是硬约束�
 | 包 | 许可 | 用途 |
 |---|---|---|
 | `fflate` | MIT | PNG 序列导出打 zip |
+| `gifenc` | MIT | GIF 导出（ADR-001 的 `gif` 后端）：感知量化（PnnQuant 端口）+ LZW + GIF89a 组装。零依赖、无 worker 脚本，按依赖引入，不复制源码入库 |
 | Lucide | ISC | UI 图标（`@lucide/svelte`，按组件 tree-shaking） |
 | `@zumer/snapdom` | MIT | 排版层光栅化（ADR-003 的 `dom-snap` 后端）。把 DOM 子树序列化并栅格化为位图 |
 | `mediabunny` | **MPL-2.0** | MP4 封装（ADR-001 的 `webcodecs` 后端）。见下方说明 |

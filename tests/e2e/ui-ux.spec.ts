@@ -308,22 +308,24 @@ test('图层列表可拖曳排序，数组顺序跟着变', async ({ page }) => 
 
 /* ------------------------------------------------------------ 导出面板 */
 
-test('导出面板：MP4 与 PNG 在同一行且水平居中', async ({ page }) => {
+test('导出面板：MP4 / PNG / GIF 三个入口在同一行且水平居中', async ({ page }) => {
   await boot(page);
   await page.getByTestId('rail-export').click();
   await expect(page.getByTestId('modal-export')).toBeVisible();
 
   const mp4 = (await page.getByTestId('export-mp4').boundingBox())!;
   const png = (await page.getByTestId('export-png').boundingBox())!;
+  const gif = (await page.getByTestId('export-gif').boundingBox())!;
   const modal = (await page.getByTestId('modal-export').boundingBox())!;
 
-  // 同一行：两者的垂直区间重叠
+  // 同一行：三者的垂直区间都重叠
   expect(Math.abs(mp4.y - png.y)).toBeLessThanOrEqual(2);
+  expect(Math.abs(gif.y - png.y)).toBeLessThanOrEqual(2);
   expect(mp4.height).toBeGreaterThan(0);
 
-  // 水平居中：两个按钮整体（含间隙）的中心与面板中心之差在半像素级
-  const left = Math.min(mp4.x, png.x);
-  const right = Math.max(mp4.x + mp4.width, png.x + png.width);
+  // 水平居中：三个按钮整体（含间隙）的中心与面板中心之差在半像素级
+  const left = Math.min(mp4.x, png.x, gif.x);
+  const right = Math.max(mp4.x + mp4.width, png.x + png.width, gif.x + gif.width);
   const mid = (left + right) / 2;
   expect(Math.abs(mid - (modal.x + modal.width / 2))).toBeLessThanOrEqual(2);
 

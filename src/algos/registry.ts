@@ -12,6 +12,14 @@ import { bifurcationDef } from './bifurcation';
 import { langtonsAntDef } from './langtons-ant';
 import { lsystemDef } from './lsystem';
 import { mengerDef } from './menger';
+import { mandelbulbDef } from './mandelbulb';
+import { apollonianDef } from './apollonian';
+import { newtonDef } from './newton';
+import { kleinianDef } from './kleinian';
+import { lyapunovDef } from './lyapunov';
+import { buddhabrotDef } from './buddhabrot';
+import { chaosGameDef } from './chaos-game';
+import { dlaDef } from './dla';
 import { briansBrainDef } from './brians-brain';
 import { cyclicCaDef } from './cyclic-ca';
 import { snowflakeDef } from './snowflake';
@@ -33,6 +41,14 @@ const DEFS = new Map<string, GeneratorDef>(
     langtonsAntDef,
     lsystemDef,
     mengerDef,
+    mandelbulbDef,
+    apollonianDef,
+    newtonDef,
+    kleinianDef,
+    lyapunovDef,
+    buddhabrotDef,
+    chaosGameDef,
+    dlaDef,
     reactionDiffusionDef,
     briansBrainDef,
     cyclicCaDef,

@@ -3,6 +3,8 @@
   import IconButton from '../ui/controls/IconButton.svelte';
   import Menu from '../ui/controls/Menu.svelte';
   import { separator, submenu, type MenuItem } from '../ui/controls/menu-model';
+  import { algoThumbUrl } from '../ui/algo-thumb-assets';
+  import { ALGO_CATALOG } from '../algos/catalog';
   import ClipView from './ClipView.svelte';
   import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
   import { xOfTime, timeAtX, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
@@ -530,12 +532,25 @@
 
   /** 算法生成器的二级子菜单。放二级是为了将来加特效/素材类型时不撑爆一级。 */
   function generatorItems(at: number | undefined, prefix: string): MenuItem[] {
-    return generators.map((g) => ({
-      id: `${prefix}algo-${g.id}`,
-      label: tr(g.nameKey),
-      testid: `${prefix}algo-${g.id}`,
-      onselect: () => addAlgo(currentTrackId!, g.id, at),
-    }));
+    return generators.map((g) => {
+      const entry = ALGO_CATALOG[g.id];
+      return {
+        id: `${prefix}algo-${g.id}`,
+        label: tr(g.nameKey),
+        testid: `${prefix}algo-${g.id}`,
+        onselect: () => addAlgo(currentTrackId!, g.id, at),
+        /*
+         * 缩略图 + 一句话说明。名字（「李雅普诺夫分形」）不足以让人知道
+         * 插进去会长什么样，而这个菜单有二十多项 —— 悬停预览是这里唯一
+         * 能让人不逐个试的办法。
+         *
+         * 图缺失时 `thumb` 是 `undefined`，浮层就不出现（条目照常可点）：
+         * 这是刻意的降级，没有缩略图不该让菜单少一项。
+         */
+        thumb: algoThumbUrl(g.id) ?? undefined,
+        desc: entry ? tr(entry.descKey) : tr(g.nameKey),
+      };
+    });
   }
 
   /** 右键菜单的 trackId 在构造时可能是动态的，用一个可变引用接住。 */
@@ -589,7 +604,12 @@
         testid: prefix === 'ctx-' ? `${prefix}video` : 'import-video',
         onselect: () => void addVideo(track.id, at),
       },
-      submenu(`${prefix}algo`, tr('tl.addAlgo'), generatorItems(at, prefix), 'sigma'),
+      // `submenu()` 不接 testid，但这一项需要能被测试点到（`add-algo`）。
+      // 子项带 `add-algo-<id>`，父项没名字就没法定位到那个二级菜单。
+      {
+        ...submenu(`${prefix}algo`, tr('tl.addAlgo'), generatorItems(at, prefix), 'sigma'),
+        testid: `${prefix}algo`,
+      },
     ];
   }
 
@@ -630,9 +650,13 @@
       const x = ev.clientX - rect.left + scrollEl.scrollLeft;
       appState.seek(Math.max(0, timeAtX(x, appState.pxPerBeat, grid)), { snap: true });
     };
+    // 拖动期间给模拟步进压预算：向前跳要真把中间每一步算完（迭代系统没有
+    // 闭式解），不给预算就会在拖动时冰住几秒。松手后 appState 自己切追赶档。
+    appState.beginScrub();
     seekTo(e);
     const mv = (ev: PointerEvent): void => seekTo(ev);
     const up = (): void => {
+      appState.endScrub();
       el.removeEventListener('pointermove', mv);
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);

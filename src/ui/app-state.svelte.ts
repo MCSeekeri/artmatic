@@ -13,6 +13,11 @@ import { ProjectStore } from '../core/project-store';
 import { newId, type AnyClip, type AudioClip } from '../core/schema';
 import { createBlankProject } from '../core/demo-project';
 import type { Renderer } from '../engine/renderer';
+import {
+  type AlgoRuntime,
+  SCRUB_CATCHUP_BUDGET_MS,
+  SCRUB_STEP_BUDGET_MS,
+} from '../algos/runtime';
 import type { SourceManager } from '../engine/sources';
 import { AudioPlayer } from '../audio/player';
 import { ProjectAudio } from './project-audio';
@@ -253,6 +258,19 @@ class AppState {
   fps = $state(0);
   private fpsFrames = 0;
   private fpsAt = 0;
+
+  /**
+   * 时间轴 ruler 的拖动手势是否在进行中。见 `beginScrub`。
+   */
+  scrubActive = $state(false);
+  /**
+   * 还有多少模拟帧没追上播放头（0 = 已经落在精确帧上）。
+   *
+   * 拖动时画面会比播放头**早**（见 `syncSimBudget`），不提示的话用户会以为
+   * 预览坏了。底栏拿它显示「计算中」。非响应式的 `simBudgetMs` 是去重用的。
+   */
+  simLag = $state(0);
+  private simBudgetMs = 0;
 
   /** 右侧检查器抽屉。默认展开，宽度可拖，两者都持久化。 */
   drawerOpen = $state(true);
@@ -731,6 +749,14 @@ class AppState {
      服务本身（renderer / player / fonts / 排版运行时）是进程级的：
      它们渲染「当前工程」，不持有任何工程数据。 */
   renderer!: Renderer;
+  /**
+   * 算法运行时（`render-core` 装配的那一份）。
+   *
+   * 暴露出来只为一件事：拖动播放头时给它设**步进预算**。模拟是主线程同步的，
+   * 「向前跳 N 帧」必须真把中间 N 步算完（见 `AlgoRuntime.planSimStep` 的长注释），
+   * 不设预算就会在拖动时冰住几秒。lab 用同一份运行时，所以两边行为一致。
+   */
+  algos!: AlgoRuntime;
   sources!: SourceManager;
   /** 视频取帧器（`engine/video-source.ts`）。导出前逐帧 prepare、关工程时 forget。 */
   video!: VideoSourceManager;
@@ -774,6 +800,7 @@ class AppState {
         features: this.audio,
       });
       this.renderer = core.renderer;
+      this.algos = core.algos;
       this.sources = core.sources;
       this.video = core.video;
 
@@ -908,6 +935,55 @@ class AppState {
     await this.estimateBeatGrid({ announce: true });
   }
 
+  /**
+   * 时间轴 ruler 按下 / 松开。
+   *
+   * 拖动期间把模拟步进的预算压到 `SCRUB_STEP_BUDGET_MS`：模拟是主线程同步的，
+   * 向前跳 N 帧必须真把中间 N 步算完（迭代系统没有闭式解），不设预算就会在
+   * 拖动时冰住 —— 实测出厂默认的沙堆把整条 24 秒轴走完要 5.3 秒（优化后 0.53 秒），
+   * Lenia 1.04 秒。设了预算之后每帧最多花掉那些毫秒，画面显示的是模拟**真实
+   * 经过**的某一帧（只是比播放头早），松手后由 `tick()` 切到追赶档，
+   * 追上（`simLag === 0`）再回到精确。
+   *
+   * `SimHandle.seek` 的精确语义一个字都没改（硬约束 1.3）—— 变的只是
+   * 「这一帧渲哪一帧」，而落后状态永远不会被当成最终结果（导出前必然追平）。
+   */
+  beginScrub(): void {
+    this.scrubActive = true;
+  }
+
+  endScrub(): void {
+    this.scrubActive = false;
+  }
+
+  /**
+   * 每帧算一次模拟步进的预算。**必须放在 `tick()` 所有提前返回之前** ——
+   * 导出期间 `tick()` 会立刻返回，而那时预算必须已经是 0。
+   *
+   * 三档：
+   * - 导出中 / 播放中 → **0（精确）**。导出是逐帧权威输出，渲一张落后于
+   *   播放头的帧就是错的；播放是顺序推进，本来就用不上预算。
+   * - 拖动中 → 小预算。
+   * - 其余情况且还没追上 → 追赶档（大一点，用户已停手在等）。
+   */
+  private syncSimBudget(): void {
+    if (!this.servicesReady) return;
+    const lag = this.algos.takeSimLag();
+    if (lag !== this.simLag) this.simLag = lag;
+    const ms =
+      this.exportProgress !== null || this.playing
+        ? 0
+        : this.scrubActive
+          ? SCRUB_STEP_BUDGET_MS
+          : lag > 0
+            ? SCRUB_CATCHUP_BUDGET_MS
+            : 0;
+    if (ms !== this.simBudgetMs) {
+      this.simBudgetMs = ms;
+      this.algos.setStepBudget(ms);
+    }
+  }
+
   seek(t: number, opts: { snap?: boolean } = {}): void {
     const p = this.store.project;
     let nt = Math.max(0, Math.min(t, p.duration));
@@ -942,6 +1018,8 @@ class AppState {
 
   /** Preview 的 rAF 每帧调一次：播放中推进播放头，然后渲染当前帧。 */
   tick(): void {
+    this.syncSimBudget();
+
     // 导出期间预览循环停手：rAF 在预览尺寸下渲染会重排反馈历史
     // （feedbackFor 按尺寸重建目标），污染正在进行的顺序导出。
     if (this.exportProgress !== null) return;

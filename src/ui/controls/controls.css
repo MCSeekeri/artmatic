@@ -482,6 +482,36 @@
   background: var(--menu-separator);
 }
 
+/*
+ * 菜单项的**预览浮层**（`MenuItem.thumb` / `.desc`）。
+ *
+ * 与菜单同 z（它是菜单的一部分，不是独立弹层），贴在当前高亮项右侧。
+ * 宽度固定而不是跟图自适应：一列菜单项hover过去时浮层宽度跳动会让整块区域
+ * 视觉上抖，而缩略图是 16:9，定宽就等于定了高。
+ */
+.menu-preview {
+  position: fixed;
+  z-index: var(--z-menu);
+  width: 236px;
+  padding: var(--sp-2);
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
+  border-radius: var(--radius-md);
+}
+.menu-preview-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+.menu-preview-desc {
+  margin: var(--sp-2) 2px 0;
+  color: var(--menu-item-fg-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
 /* ------------------------------------------------------------ 通用浮层 */
 
 .pop {

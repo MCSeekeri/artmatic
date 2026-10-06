@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createLenia, leniaStep } from '../../src/algos/lenia';
 import { createWireworld, seedRing, wireworldStep, WW_CONDUCTOR, WW_HEAD, WW_TAIL } from '../../src/algos/wireworld';
-import { annulusKernel } from '../../src/algos/sim-util';
+import { TorusField, annulusKernel, type SparseKernel } from '../../src/algos/sim-util';
 import { getGenerator } from '../../src/algos/registry';
 import { encodePattern, bitmapFromRows } from '../../src/algos/pattern-codec';
 
@@ -20,26 +20,78 @@ const ink = (out: Uint8Array, t = 8): number => {
 /**
  * ⚠️ Lenia 的每个用例都要显式给超时。
  *
- * 卷积是 O(格数 × 抽头数)，实测 112²/R=10 约 12 ms/步 —— 一个「跑到 t=400」
- * 的用例本身就是 3 秒，在整套跑（50 个文件并行）时会顶破 vitest 默认的 5 秒。
- * 给它 30 秒是**如实反映它的成本**，不是掩盖慢；要让它变快得先换 FFT 卷积。
+ * 卷积是 O(格数 × 抽头数)，实测 112²/R=10 约 4 ms/步（走 `TorusField` 的
+ * halo 快路径之后；朴素回绕写法是 7.8 ms）—— 一个「跑到 t=400」的用例本身
+ * 就是 1.6 秒，在整套跑（50 个文件并行）时仍可能顶破 vitest 默认的 5 秒。
+ * 给它 30 秒是**如实反映它的成本**，不是掩盖慢；要再快得换 FFT 卷积。
  */
 const LENIA_TIMEOUT = 30_000;
+
+/**
+ * 朴素参照实现：逐抽头做环面回绕。`TorusField` 的正确性判据就是「与它逐位相同」
+ * ——halo 最容易错的地方是**四个角**（上下 halo 只复制了中段没连左右一起复制）。
+ */
+function naiveConvolve(src: Float32Array, n: number, k: SparseKernel): Float32Array {
+  const out = new Float32Array(n * n);
+  const taps = k.w.length;
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      let acc = 0;
+      for (let t = 0; t < taps; t++) {
+        const yy = y + k.dy[t]!;
+        const xx = x + k.dx[t]!;
+        const wy = yy < 0 ? yy + n : yy >= n ? yy - n : yy;
+        const wx = xx < 0 ? xx + n : xx >= n ? xx - n : xx;
+        acc += k.w[t]! * src[wy * n + wx]!;
+      }
+      out[y * n + x] = acc;
+    }
+  }
+  return out;
+}
+
+describe('TorusField 卷积', () => {
+  it('与朴素环面卷积**逐位相同**（覆盖 R 比网格小得多、以及 R 接近网格的两种情形）', () => {
+    for (const [n, R] of [
+      [64, 10],
+      [24, 6],
+      [20, 9], // R 接近 n/2：halo 的四个角最容易错
+    ] as const) {
+      const k = annulusKernel(R);
+      const src = new Float32Array(n * n);
+      for (let i = 0; i < src.length; i++) src[i] = Math.sin(i * 0.7) * 0.5 + 0.5;
+      const ref = naiveConvolve(src, n, k);
+      const field = new TorusField(n, k);
+      field.convolve(src);
+      expect(Array.from(field.conv), `n=${n} R=${R}`).toEqual(Array.from(ref));
+    }
+  });
+
+  it('抽头数就是 πR² —— 环状核在 width=0.15 下实际是**整个圆盘**', () => {
+    // 这条钉住的是**成本模型**而不是函数值：谁把 width/eps 调窄、或者以为
+    // 稀疏化已经剪掉了大半抽头，都会在这里看到真实数字。317 = π·10²。
+    // 想降成本要动的是 halo 快路径或 R，不是 eps。
+    for (const R of [4, 6, 10, 12]) {
+      const taps = annulusKernel(R).w.length;
+      const disc = Math.PI * R * R;
+      expect(Math.abs(taps - disc) / disc, `R=${R} 抽头=${taps}`).toBeLessThan(0.08);
+    }
+  });
+});
 
 describe('Lenia', () => {
   it('场恒在 [0,1] 内（输出字节恒在 0..255，且不小于 0）', () => {
     const n = 24;
     const k = annulusKernel(6);
     const a = new Float32Array(n * n).fill(1.4); // 故意给越界初值
-    const conv = new Float32Array(n * n);
     const next = new Float32Array(n * n);
-    leniaStep(a, conv, next, n, k, { mu: 0.15, sigma: 0.03, dt: 0.1 });
+    leniaStep(new TorusField(n, k), a, next, { mu: 0.15, sigma: 0.03, dt: 0.1 });
     for (const v of next) {
       expect(v).toBeGreaterThanOrEqual(0);
       expect(v).toBeLessThanOrEqual(1);
     }
     const a2 = new Float32Array(n * n).fill(-3);
-    leniaStep(a2, conv, next, n, k, { mu: 0.15, sigma: 0.03, dt: 0.1 });
+    leniaStep(new TorusField(n, k), a2, next, { mu: 0.15, sigma: 0.03, dt: 0.1 });
     for (const v of next) expect(v).toBe(0);
   }, LENIA_TIMEOUT);
 

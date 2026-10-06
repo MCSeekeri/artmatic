@@ -20,6 +20,33 @@
  *
  * 崩塌的**顺序不影响最终稳定态** —— 这是能单测的强不变量（打乱队列顺序、
  * 甚至用两种完全不同的顺序各跑一遍，终止状态逐格相同）。
+ *
+ * ⚠️ 它有个前提：**总沙量 ≤ 容量**（容量 = `3 × 格数`，稳定态每格最多 3 粒）。
+ * 超过容量时环面上根本不存在稳定态，稳定化永不终止，只能靠 `maxTopple` 截断
+ * —— 而截断点与处理顺序有关，性质随之失效。单测里那条「阿贝尔性」用例原先
+ * 用 4000 粒跑 24² 网格（容量 1728），是靠运气过的。
+ *
+ * 这条性质也是「去重优化不改变任何一帧画面」的依据：去重只改**顺序**，
+ * 不改每步之后的稳定态。而每步只把稳定化**之后**的状态送上纹理。
+ *
+ * ## ⚠️ 成本表（实测，这决定了默认参数）
+ *
+ * 中心落点模式下所有沙都倒进**同一个格子**，要把它推到边界只能靠一次次崩塌，
+ * 所以总崩塌数 ≈ (总沙量)^1.5，**与网格大小无关**。于是「把网格铺得多满」
+ * 这个看似审美的选择直接决定了能不能算得完：
+ *
+ * | 配置（24 秒轴） | 总沙量 | 沙/容量 | 整条轴 | 最坏未稳定格 |
+ * |---|---|---|---|---|
+ * | 256² 200/步@30 | 144,000 | 73% | 3.39 s | **418** ← 撞闸门 |
+ * | 160² 60/步@60 | 172,800 | 75% | 1.28 s | **192** ← 撞闸门 |
+ * | 256² 40/步@30 | 43,200 | 15% | 0.22 s | 0 |
+ * | **160² 60/步@30（默认）** | 43,200 | 56% | **0.52 s** | 0 |
+ * | 128² 50/步@30 | 36,000 | 73% | 0.42 s | 0 |
+ *
+ * 「未稳定格」= 一步结束之后还有 `h >= 4` 的格子，也就是**画面已经不在表达
+ * 模型状态**了（`MAX_TOPPLE_PER_STEP` 把它截断了）。判据是**绝对沙量**：
+ * 四万多粒随便跑，十四万粒必截断。默认值按「四万多粒 + 尽量铺得满」取。
+ * 有单测钉着「出厂默认跑满 demo 长度不许出现未稳定格」。
  */
 
 import { hashSeed, mulberry32 } from '../core/prng';
@@ -63,30 +90,81 @@ export function stabilize(
   seedQueue: number[] = [],
   order: 'fifo' | 'lifo' = 'lifo',
   maxTopple: number = MAX_TOPPLE_PER_STEP,
+  scratch?: Uint8Array,
 ): number {
   const q = seedQueue;
+  /*
+   * 入队去重（`queued[i] === 1` 表示「已经在队列里等着」）。
+   *
+   * 这一条不是微优化，是沙堆的**主要**开销所在：一次崩塌会把四个邻居各推一次，
+   * 而那些邻居多半早就排着队了。不去重的话队列吞吐是「崩塌数 × 4 + 陈旧条目」，
+   * 实测占掉稳定态每一步 6 ms 里的大头；去重后每个格的每个「排队回合」只进一次。
+   *
+   * **不改变结果**：阿贝尔性质保证稳定态与处理顺序无关，而单步的中间过程
+   * 从不上传到画面（只有稳定化之后的 `current()` 才走纹理）。唯一的例外是
+   * `maxTopple` 真的截断时 —— 那种情况本来就与顺序有关，闸门的意义就是
+   * 「宁可暂时不稳，也不卡死」。
+   */
+  const queued = scratch ?? new Uint8Array(n * n);
+  queued.fill(0);
   if (q.length === 0) {
-    for (let i = 0; i < n * n; i++) if (h[i]! >= TOPPLE_AT) q.push(i);
+    for (let i = 0; i < n * n; i++) {
+      if (h[i]! >= TOPPLE_AT) {
+        queued[i] = 1;
+        q.push(i);
+      }
+    }
+  } else {
+    // 种子（`stepOnce` 那边撒进来的）：**只打标记，不去重**。
+    // 去重要就地重排 `q`，而 `q` 是调用方传进来的数组 —— 就地改它是个
+    // 看不见的副作用（调用方可能还要用，单测就拿同一个起点集合跑两种顺序）。
+    // 种子里重复的条目代价很小：弹出时一次 `h < 4` 的比较就过去了。
+    for (let r = 0; r < q.length; r++) {
+      const i = q[r]!;
+      if (h[i]! >= TOPPLE_AT) queued[i] = 1;
+    }
   }
   let head = 0;
   let done = 0;
   while (order === 'fifo' ? head < q.length : q.length > 0) {
     if (done >= maxTopple) break;
     const i = order === 'fifo' ? q[head++]! : q.pop()!;
+    queued[i] = 0;
     if (h[i]! < TOPPLE_AT) continue;
     done++;
     h[i] = h[i]! - TOPPLE_AT;
+    // **崩塌之后如果还 >= 4 就要重新入队。** 少了这一句、只靠「被邻居推高时才入队」，
+    // 高塔会停在一半：沙堆的中心模式一次往同一格倒 200 粒，先前的写法靠
+    // 「同一格重复入队 200 次」蒙对了，去重之后就直接暴露成「塌一次就停手」。
+    if (h[i]! >= TOPPLE_AT && !queued[i]) {
+      queued[i] = 1;
+      q.push(i);
+    }
     const x = i % n;
     const y = (i - x) / n;
-    // von Neumann + 环面
-    const up = ((y === 0 ? n - 1 : y - 1) * n + x) | 0;
-    const dn = ((y === n - 1 ? 0 : y + 1) * n + x) | 0;
-    const lf = (y * n + (x === 0 ? n - 1 : x - 1)) | 0;
-    const rt = (y * n + (x === n - 1 ? 0 : x + 1)) | 0;
-    for (const j of [up, dn, lf, rt]) {
-      h[j] = h[j]! + 1;
-      if (h[j]! >= TOPPLE_AT) q.push(j);
-    }
+    // von Neumann + 环面。
+    //
+    // **四个邻居写开、不写成 `for (const j of [a,b,c,d])`**：那个数组字面量是
+    // **每次崩塌分配一个数组**，而稳定态下一步要塌十万次上下（见文件头的成本表）。
+    // 实测 8.8 → 6.4 ms/步 —— 有收益但不是数量级，真正的开销在队列进出上（见
+    // 上面「去重」那段注释）。
+    const up = (y === 0 ? n - 1 : y - 1) * n + x;
+    const dn = (y === n - 1 ? 0 : y + 1) * n + x;
+    const row = y * n;
+    const lf = row + (x === 0 ? n - 1 : x - 1);
+    const rt = row + (x === n - 1 ? 0 : x + 1);
+    let v = h[up]! + 1;
+    h[up] = v;
+    if (v >= TOPPLE_AT && !queued[up]!) { queued[up] = 1; q.push(up); }
+    v = h[dn]! + 1;
+    h[dn] = v;
+    if (v >= TOPPLE_AT && !queued[dn]!) { queued[dn] = 1; q.push(dn); }
+    v = h[lf]! + 1;
+    h[lf] = v;
+    if (v >= TOPPLE_AT && !queued[lf]!) { queued[lf] = 1; q.push(lf); }
+    v = h[rt]! + 1;
+    h[rt] = v;
+    if (v >= TOPPLE_AT && !queued[rt]!) { queued[rt] = 1; q.push(rt); }
   }
   return done;
 }
@@ -105,6 +183,8 @@ export function createSandpile(params: Record<string, number | string>, seed: nu
   const snapshots = new SnapshotRing<Uint32Array>(SNAPSHOT_OPTS, h);
   const out = new Uint8Array(n * n);
   const queue: number[] = [];
+  /** `stabilize` 的去重标记（复用，避免每步分配 65KB 再填零）。 */
+  const queued = new Uint8Array(n * n);
 
   /** 一步 = 撒 `batch` 粒沙 + 稳定化。 */
   const stepOnce = (): void => {
@@ -115,7 +195,7 @@ export function createSandpile(params: Record<string, number | string>, seed: nu
       h[i] = h[i]! + 1;
       if (h[i]! >= TOPPLE_AT) queue.push(i);
     }
-    stabilize(h, n, queue);
+    stabilize(h, n, queue, 'lifo', MAX_TOPPLE_PER_STEP, queued);
     queue.length = 0;
   };
 
@@ -158,7 +238,13 @@ export const sandpileDef: GeneratorDef = {
   kind: 'sim',
   volatile: ['rate', 'colorBg', 'colorLive', 'palette'],
   params: [
-    { key: 'size', labelKey: 'algo.sandpile.grid', type: 'range', min: 64, max: 512, step: 32, defaultValue: 256 },
+    // ⚠️ 默认网格是 160 而**不是** 256。理由不是审美，是**成本随倒在中间的沙量
+    // 超线性增长**：所有沙都落在同一个格子，得靠崩塌把它推到边界，总崩塌数
+    // ≈ (总沙量)^1.5，与网格大小无关。于是「把 256² 铺到七成满」需要 14.4 万粒，
+    // 单步崩塌量能到 440 万次 —— 既慢（整条 24 秒轴 3.4 秒）又**会撞上
+    // `MAX_TOPPLE_PER_STEP` 被静默截断**（实测 t=8s 起就有 h>=4 的格子残留，
+    // 也就是画面已经不在表达模型的状态了）。实测见文件头。
+    { key: 'size', labelKey: 'algo.sandpile.grid', type: 'range', min: 64, max: 512, step: 32, defaultValue: 160 },
     {
       key: 'batch',
       labelKey: 'algo.sandpile.batch',
@@ -166,9 +252,11 @@ export const sandpileDef: GeneratorDef = {
       min: 1,
       max: 2000,
       step: 1,
-      // 200/步 × 30 步/秒 = 6000 粒/秒：约十秒长到能看出分形。
-      // 取 1 的话要跑几十分钟才有一张可看的图。
-      defaultValue: 200,
+      // 60/步 × 30 步/秒 = 1800 粒/秒 → 24 秒 4.3 万粒（网格容量的 56%）。
+      // 这是实测出来的上限附近：43,200 粒能完整稳定化且整条轴只花 0.52 秒，
+      // 而 7.2 万粒就已经开始偶发截断了。取 200 那种「看起来更壮观」的值，
+      // 代价是模型静默失真 —— 见 size 的注释。
+      defaultValue: 60,
     },
     {
       key: 'dropMode',

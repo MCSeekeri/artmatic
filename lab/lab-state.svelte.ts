@@ -12,6 +12,7 @@
  */
 
 import { createRenderCore, type RenderCore } from '../src/render/render-core';
+import { SCRUB_CATCHUP_BUDGET_MS, SCRUB_STEP_BUDGET_MS } from '../src/algos/runtime';
 import { PatternRenderer, PATTERNS, isPatternId } from './patterns';
 import { createLabSpectrum } from './spectrum';
 import { createLabFeatures } from './features';
@@ -312,6 +313,10 @@ class LabState {
      * 暂停时永远渲：那是「改参数立刻看到结果」的路径。
      */
     if (this.playing) {
+      // 播放中一律精确：顺序推进本来就用不上预算，而落后于播放头的画面
+      // 在播放语境下是错的。放在节流 `return` **之前**，否则被节流掉的那些
+      // 帧会把上一轮拖动设的预算留在原地。
+      this.core?.algos.setStepBudget(0);
       const minGap = 1000 / Math.max(1, LAB_FPS);
       if (now - this.lastRender < minGap - 1) return;
       this.lastRender = now;
@@ -319,6 +324,15 @@ class LabState {
 
     const t0 = performance.now();
     this.renderNow();
+    /*
+     * 步进预算的**收回**（设置那侧见 `setT`）。播放中一律 0：顺序推进本来
+     * 就用不上预算，而落后于播放头的画面在播放语境下是错的。静止且已追上
+     * （`simLag === 0`）也回到 0 —— 此时任何一次 seek 都精确，于是
+     * 「批量导缩略图」那种非交互路径不会渲出落后帧。
+     */
+    this.core?.algos.setStepBudget(
+      !this.playing && this.core.algos.takeSimLag() > 0 ? SCRUB_CATCHUP_BUDGET_MS : 0,
+    );
     // 帧耗时与 fps **只用于读数**，不参与任何渲染求值（硬约束 1.1）。
     this.smoothMs = this.smoothMs * 0.9 + (performance.now() - t0) * 0.1;
     this.frames++;
@@ -394,6 +408,16 @@ class LabState {
   setT(t: number): void {
     this.t = Math.max(0, Math.min(t, LAB_DURATION));
     this.core?.renderer.onSeek();
+    /*
+     * 时间滑杆的每次 pointermove 都会走到这里 —— 于是「有没有在拖」不用额外
+     * 手势协议，这个 setter 本身就是手势信号。给模拟压一个步进预算：
+     * 向前跳必须真把中间每一步算完（迭代系统没有闭式解），不压就会在拖动时
+     * 冰住（实测 Lenia 一整条 24 秒轴 1.04 秒、沙堆 0.53 秒）。
+     *
+     * 收敛之后由 `loop` 的末尾把预算收回 0（精确）——放在 setter 里设、
+     * 放在渲染之后收，是因为「设置的那一帧就得生效」而「收的时候要看真实滞后」。
+     */
+    this.core?.algos.setStepBudget(SCRUB_STEP_BUDGET_MS);
     this.dirty = true;
   }
 

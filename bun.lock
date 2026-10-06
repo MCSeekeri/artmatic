@@ -8,6 +8,7 @@
         "@lucide/svelte": "^1.49.0",
         "@zumer/snapdom": "^3.2.0",
         "fflate": "^0.8.2",
+        "gifenc": "^1.0.3",
         "gl-transitions": "^1.71.0",
         "harfbuzzjs": "^1.6.2",
         "mediabunny": "^1.61.0",
@@ -222,6 +223,8 @@
     "fflate": ["fflate@0.8.3", "", {}, "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="],
 
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
+
+    "gifenc": ["gifenc@1.0.3", "", {}, "sha512-xdr6AdrfGBcfzncONUOlXMBuc5wJDtOueE3c5rdG0oNgtINLD+f2iFZltrBRZYzACRbKr+mSVU/x98zv2u3jmw=="],
 
     "gl-transitions": ["gl-transitions@1.71.0", "", {}, "sha512-fpCpeT5B0vQOAu1/XuTmOIWD3dJoMIuedmYdPqK/oGHMz8vexJzsCXVo8TQZVo7G2irAYhdhq+9wWtohj/IjZQ=="],
 

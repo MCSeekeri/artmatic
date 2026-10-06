@@ -34,7 +34,13 @@
 
 import { getEffect, listEffects } from './registry';
 import { getGenerator, listGenerators } from '../algos/registry';
-import { ALGO_HEAD, TINT_HEAD, algoProgramName, algoTintProgramName } from '../algos/shader-lib';
+import {
+  ALGO_HEAD,
+  TINT_HEAD,
+  algoProgramName,
+  algoTintProgramName,
+  declaredUniforms,
+} from '../algos/shader-lib';
 import { listTransitions } from './transitions/registry';
 import { EFFECT_HEAD, effectProgramName } from './shader-def';
 import type { Kit } from '../engine/kit';
@@ -43,6 +49,11 @@ export interface CompileResult {
   id: string;
   ok: boolean;
   error?: string;
+  /**
+   * 编译成功时：**声明了但被链接器丢掉**的 uniform 名 —— 也就是 shader
+   * 从来没读过它们。非空即「这个参数拨了没反应」。见下面 realtime 分支的注释。
+   */
+  dropped?: string[];
 }
 
 function message(e: unknown): string {
@@ -90,7 +101,20 @@ export function compileAllAlgoShaders(kit: Kit): CompileResult[] {
     }
     try {
       if (def.kind === 'realtime') {
-        kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
+        const prog = kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
+        /*
+         * 「声明了但**链接器丢掉了**」= shader 从来没读过它。
+         *
+         * 这是**唯一**能自动抓到「参数拨了没反应」的口子：`Program.uniforms` 是
+         * 按 `ACTIVE_UNIFORMS` 建的，没被读的 uniform 会被优化掉、`getUniformLocation`
+         * 返回 null、`Program.u()` 静默跳过。伪 GL 的单测看不见（那边的 location
+         * 永远是有效的），而它**不报错、不崩、只是滑杆动画面不动** —— 重构
+         * `menger` 时 `u_twist` 就这么丢过一次。
+         */
+        const declared = declaredUniforms(ALGO_HEAD + def.fragment);
+        const dropped = [...declared.keys()].filter((n) => !(n in prog.uniforms));
+        out.push({ id, ok: true, dropped });
+        continue;
       } else if (def.tintFragment !== undefined) {
         // ⚠️ 漏掉这一支的后果不是「少编一个 program」，而是**新写的 tint shader
         // 完全没有语法守卫** —— 它在预览里被点到之前不会报任何错。

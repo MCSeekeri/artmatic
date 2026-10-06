@@ -91,12 +91,16 @@
   .drawer {
     position: relative;
     /*
-     * 只为一个东西：看板娘（`.stage` 里的绝对定位元素，z-index: 0）。她贴在
-     * `.stage` 的右下角，也就是抽屉的左边上；抽屉不显式抬起来的话，同级里
-     * 后出现的定位元素不一定压得住她（而她是 `position: absolute`，一定会
-     * 盖过非定位内容）。这里给一个明确的、比她大的值。
+     * 两件事：
+     *
+     * 1. 压住看板娘（`.stage` 里的绝对定位元素，z-index: 0）—— 她贴在抽屉左边上。
+     * 2. ⚠️ **必须高过时间轴内部那一整套（`--z-ruler` 等，1..5）。** 抽屉是
+     *    一个层叠上下文，从抽屉里打开的 modal（特效选择器）会被困在这里 ——
+     *    给 1 的话，z=5 的 ruler 与 z=4 的播放头会盖到 modal 上面（真出现过：
+     *    选择器开着，缩略图上横着一条白色标尺）。见 tokens.ts 里 `z-drawer`
+     *    那段注释与 timeline-ui.spec 的层叠用例。
      */
-    z-index: 1;
+    z-index: var(--z-drawer);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
