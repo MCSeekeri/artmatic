@@ -113,3 +113,25 @@ describe('生命类 CA 的 B/S 打包', () => {
     expect(surviveFromMask(2 ** 18)).toBe(0x1ff); // 钳到 2^18-1 → 高 9 位全 1
   });
 });
+
+describe('边界值补测（由 Stryker 变异测试暴露的缺口）', () => {
+  it('setBit / toggleBit 的越界分支：bit<0、bit===bits、bit>bits，且掩码不落在钳位上界', () => {
+    // 原测试只用了 bit=3、bit=-1（掩码为 0）、bit=99，恰好绕开了「越界但掩码非零」这一组，
+    // 于是守卫写成 `bit < 0 && bit >= bits` / `bit > bits` / `bit <= 0` 时测试照样全绿。
+    expect(setBit(255, -1, true, 8)).toBe(255);
+    expect(setBit(255, -1, false, 8)).toBe(255);
+    expect(setBit(0, 0, true, 8)).toBe(1);
+    expect(setBit(0, 8, true, 8)).toBe(0);
+    expect(setBit(0, 9, true, 8)).toBe(0);
+    expect(toggleBit(255, -1, 8)).toBe(255);
+    expect(toggleBit(0, 0, 8)).toBe(1);
+    expect(toggleBit(5, 8, 8)).toBe(5);
+    expect(toggleBit(0, 9, 8)).toBe(0);
+  });
+
+  it('parseBS 的锚点与空白：前后缀垃圾必须拒绝，分隔符两侧的空白必须接受', () => {
+    expect(parseBS('xxB3/S23', 7)).toBe(7);
+    expect(parseBS('B3/S23xx', 7)).toBe(7);
+    expect(parseBS('B3/ S23', 7)).toBe(6152);
+  });
+});

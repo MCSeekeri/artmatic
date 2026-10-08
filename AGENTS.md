@@ -1209,6 +1209,7 @@ npm run build        # 生产构建（产出 dist/，静态站点）
 npm run preview      # 预览构建产物（http://localhost:4173）
 npm run check        # svelte-check 类型检查
 npm run test         # vitest，只测纯逻辑（配置里限死 tests/unit，不收 e2e）
+npm run test:mutate  # Stryker 变异测试（见 §6.9）：逐处改错源码再跑测试，报出「假守卫」
 npm run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright（系统 Chrome）
 ```
 
@@ -1248,7 +1249,8 @@ npm run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright
     `meanAt > 阈值` —— 否则两张黑图不同也会「通过」。
   - **`.spec` 后缀不能省**：`scripts/e2e.mjs` 的位置参数是按完整路径做正则匹配的，
     而本机路径里有 `\Projects\`（见 §6.1 的 ⚠️）。
-- **新守卫必须被验证过才算守卫**（§6.1 的同一条纪律）：
+- **新守卫必须被验证过才算守卫**。**纯函数层用 `npm run test:mutate` 自动验（见 §6.9）；
+  手工 A/B 只留给你够不到的那一层 —— E2E 的 GPU 读回标量。** 下面这些是手工跑过的样本：
   - 位表行序守卫：把 `bitRows` 的 `'eca'` 改成低位在前 → `bitmask.test.ts` 变红。
   - codec 越界守卫：拿掉尺寸上限那一行 → 「坏头部 → null」变红。
   - `visibleWhen` 引用守卫：把 `v.seedMode` 改成 `v.seedModeX` → `algo-params.test.ts` 变红
@@ -1518,6 +1520,46 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
 > 也就是 `mode === 'light'` 取 `-dark` 文件，反之亦然。
 > 搞反的后果不是「颜色不太对」而是 **logo 整块隐形**，肉眼验收很容易放过 ——
 > 所以有 `tests/e2e/brand.spec.ts` 钉着（查墨色取值 + 与底色的对比度）。
+
+### 6.9 变异测试（测试的测试）
+
+`npm run test:mutate` 走 **Stryker**：把源码逐处改错（一个 mutant = 一处改动）再跑测试。
+测试挂了 = **killed**（守卫有效）；测试照样绿 = **survivor**（守卫其实没挡住）。
+这就是「把 bug 改回去、看它红不红」那件事的自动化版本，也是 §6.1 那条纪律的执行者。
+
+```bash
+npm run test:mutate -- --mutate src/core/bitmask.ts    # 单文件（秒级）
+STRYKER_MUTATE=src/core/curve.ts npm run test:mutate   # 或走环境变量
+bun scripts/mutate-triage.mjs --diff HEAD              # 只看本次改动命中的行
+```
+
+- 配置在 `stryker.config.mjs`：`testRunner: 'vitest'` + `vitest.configFile: 'vite.config.ts'` +
+  **`coverageAnalysis: 'perTest'`**（每个 mutant 只跑覆盖到它的那几条测试，5–10× 提速）。
+  `mutate` 默认 `src/core/**/*.ts`。
+- **范围要收窄到本次改动** —— 全量 `src/core/**` 会明显更慢。这正是上游实践的粒度：
+  Google 是**只变异本次 changelist 涉及的行**、并在代码评审时增量跑。
+- `.stryker-report.json` 是 200KB 级，**别直接读**。`scripts/mutate-triage.mjs` 压成
+  「一行一条」，`--diff <ref>` 只留改动命中的行，`--limit N` 截断，`--json` 给上层脚本。
+  用 `bun` 跑它（个别沙箱里 node 起不了 git，脚本会降级成不过滤并提示）。
+- ⚠️ **survivor 只有三种成因，必须靠「补一条候选测试再重跑」来判，不能眼看行号推断**：
+
+  | 成因 | 判据 | 处置 |
+  |---|---|---|
+  | 真缺口 | 补一条能区分的输入 → 变 Killed | 测试留下 |
+  | 等价 mutant | 任何输入都不可区分（末尾有 `clampMask` 兜底、`undefined` 为 falsy 之类） | 忽略，用源码内 `Stryker disable` 注释钉掉 |
+  | 不可达 | 分支被调用方契约钳死 | 同上 |
+
+- ⚠️ **同一个 `replacement` 会在同一行出现多次，只有 start/end 列不同** ——
+  `ConditionalExpression` 对 `a || b` 的**每个操作数**都生成 mutant。按行号去重或推断必错。
+- ⚠️ **survivor 是 backlog，不是 gate。** 看前 3-5 条就停，别追 100% 分数 ——
+  等价 mutant 是天花板的一部分。
+- ⚠️ `UpdateOperator` 的 `i-- → i++` 会 **Timeout**（死循环）。那是**真信号**，别当噪声丢掉。
+- **边界**：Stryker 只覆盖 vitest 那一层（纯函数，`test.include` 限死 `tests/unit`）。
+  E2E 的 GPU 读回标量它够不到 —— 那层要么继续手工 A/B，要么把已知 buggy 的输出录成
+  **负样本 fixture**，让守卫在 CI 里自证。
+- 环境：`node_modules/.bin` 里只有 `stryker.bunx` / `stryker.exe`（**没有裸 `stryker`**），
+  `bunx` 也不在 PATH —— 一律走 `bun run test:mutate` 或 `bun x`。
+  `.stryker-tmp/` 与报告产物已 gitignore。
 
 ---
 

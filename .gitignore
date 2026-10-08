@@ -5,3 +5,7 @@ release/
 playwright-report/
 test-results/
 *.log
+.stryker-tmp/
+.stryker-reports/
+.stryker-report.json
+.stryker-incremental.json
