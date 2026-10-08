@@ -196,8 +196,8 @@ export async function addEffectViaPicker(page: Page, defId: string): Promise<voi
 /**
  * warm-up 的收敛判据：连续这么多帧完全一致就认为「稳定了」。
  *
- * 起因是一个**一次性过渡**（刻画见 `.workbuddy/probe-flaky-root*.mjs` 与
- * AGENTS §7）：页面加载后的头几次求值之内，画面水平正中的一个像素会翻到
+ * 起因是一个**一次性过渡**（刻画与结论见 AGENTS §7）：页面加载后的头几次求值
+ * 之内，画面水平正中的一个像素会翻到
  * 另一个值（量级 110），然后彻底稳定。它触发在**第 2–3 次求值之间**，
  * 时机随机器负载浮动。
  *
