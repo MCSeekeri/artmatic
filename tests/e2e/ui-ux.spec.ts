@@ -268,7 +268,7 @@ test('图层列表可拖曳排序，数组顺序跟着变', async ({ page }) => 
   await page.getByTestId('typo-layer-row').first().click();
   await page.getByTestId('ribbon-tab-insert').click();
   await page.getByTestId('typo-shape').click();
-  await page.getByTestId('typo-shape-option-rect').click();
+  await page.getByTestId('typo-shape-card-rect').click();
   await expect(page.getByTestId('typo-layer-row')).toHaveCount(2);
 
   const order = () =>

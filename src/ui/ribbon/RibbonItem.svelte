@@ -17,6 +17,7 @@
   import RibbonToggle from './RibbonToggle.svelte';
   import RibbonColor from './RibbonColor.svelte';
   import RibbonSegment from './RibbonSegment.svelte';
+  import RibbonGallery from './RibbonGallery.svelte';
   import { itemWidth, type RibbonItemSpec } from './ribbon-model';
 
   interface Props {
@@ -66,6 +67,8 @@
       optionTestidPrefix={item.optionTestidPrefix}
       minWidth={item.minWidth ?? w}
       ariaLabel={item.label}
+      editable={item.editable}
+      numeric={item.numeric}
       onchange={item.onchange}
     />
     <span class="lbl">{item.label}</span>
@@ -83,10 +86,21 @@
       disabled={item.disabled}
       testid={item.testid}
       ariaLabel={item.label}
+      oninput={item.oninput}
+      onliveend={item.onliveend}
       onchange={item.onchange}
     />
     <span class="lbl">{item.label}</span>
   </div>
+{:else if item.kind === 'gallery'}
+  <RibbonGallery
+    cards={item.cards}
+    label={item.label}
+    columns={item.columns}
+    disabled={item.disabled}
+    testid={item.testid}
+    onselect={item.onselect}
+  />
 {:else if item.kind === 'segment'}
   <div class="stack" style:--stack-w={`${w}px`}>
     <RibbonSegment

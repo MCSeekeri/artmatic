@@ -1053,8 +1053,27 @@ export const media = {
   'shape.ellipse': '椭圆',
   'shape.triangle': '三角形',
   'shape.star': '五角星',
+  'shape.star6': '六角星',
   'shape.hexagon': '六边形',
+  'shape.pentagon': '五边形',
+  'shape.octagon': '八边形',
+  'shape.diamond': '菱形',
+  'shape.trapezoid': '梯形',
+  'shape.parallelogram': '平行四边形',
+  'shape.pie': '扇形',
+  'shape.ring': '圆环',
+  'shape.frame': '方框',
+  'shape.arrow': '箭头',
   'shape.line': '直线',
+
+  /* 纹理图案的名字（填充用）。前缀 `paint.` —— 与 `shape.*` 分开，
+     因为它们是「填充的一种参数」，不是图形。 */
+  'paint.dots': '圆点',
+  'paint.grid': '网格',
+  'paint.diagonal': '斜线',
+  'paint.cross': '交叉',
+  'paint.checker': '棋盘',
+  'paint.wave': '波浪',
 
   /* ------------------------------------------------ 排版动画预设（typography/animation） */
   'anim.fadeIn': '淡入',

@@ -12,7 +12,7 @@
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
   import Mascot from './mascot/Mascot.svelte';
-  import { handleTypographyKey } from './typography/keys';
+  import { handleTypographyKey, handleTypingFormatKey } from './typography/keys';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
   import { installTheme, applyFontScale } from './theme-apply';
@@ -33,6 +33,15 @@
 
   onMount(() => {
     const onKey = (e: KeyboardEvent): void => {
+      /*
+       * **编辑文本时也要能用的**快捷键必须在豁免检查之前拦。
+       *
+       * contenteditable 命中了 `isExempt`（打字当然不能被全局键吃掉），
+       * 但 Ctrl+B/I/U 是「正在打字时才最想按的」那三个键 —— 放在豁免之后
+       * 等于它们只在没编辑时可用，正好把用处反过来了。
+       */
+      if (appState.editorOpen && handleTypingFormatKey(e)) return;
+
       // 控件自己处理键盘的（自研控件带 data-exempt）一律让路，
       // 否则在下拉上按 Space 会「打开下拉 + 开始播放」同时发生。
       if (isExempt(e.target)) return;

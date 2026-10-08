@@ -19,7 +19,7 @@
  *    artmatic 的模型是用户自己编排 → 它们是普通 range 参数，**能打关键帧**。
  * 3. **不建 uSpec。** `bars` 场景通篇是整轨频谱图的采样，不建 uSpec 的话它
  *    只剩「当前帧的柱状图」，而那正是已有效果 `audio-bars` 已有的东西 ——
- *    所以**本轮不做 `bars`**（见 `.workbuddy/plans/angel-echo-port-plan.md`）。
+ *    所以**本轮不做 `bars`**。
  *    `datamosh` 里对 `specAt` 的单点采样已改成「当前帧频段能量 × 单元哈希」，
  *    保留了「信号强度驱动栅格亮度」这层意思。
  *

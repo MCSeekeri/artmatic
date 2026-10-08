@@ -18,11 +18,21 @@ import { appState } from '../app-state.svelte';
 import type { Project, SourceClip } from '../../core/schema';
 import {
   reorderElements,
+  type ShapeElement,
   type TypographyDocument,
   type TypographyElement,
   type ZOrderOp,
 } from '../../typography/document';
 import { boundsOf, toRects, type Guide, type Rect } from '../../typography/geometry';
+import {
+  expandToGroups,
+  groupsInSelection,
+  isGroupFullySelected,
+  membersOf,
+  pruneGroups,
+  reorderSelection,
+  type GroupedFragment,
+} from '../../typography/groups';
 import { tr } from '../../i18n/index.svelte';
 
 /** 在工程里找到某个排版片段的文档。找不到返回 null（片段可能刚被删）。 */
@@ -54,6 +64,64 @@ class TypographyEditorState {
 
   /** 正在编辑文本的元素 id（P4 用）。 */
   editingTextId = $state<string | null>(null);
+
+  /**
+   * 正在编辑的文本选区（**只记非空区间**）。`null` = 没有行内选区。
+   *
+   * 它是「这次格式改的是整块还是选中的那一段」的**唯一判据**：光标收起时
+   * （start === end）不记 —— 那时把整段都加粗是很意外的行为，用户只是把光标
+   * 放在那儿而已。
+   *
+   * ⚠️ **它比 `editingTextId` 活得更久**：点 Ribbon 上的字号输入框会让编辑区
+   * 失焦，但用户的心智里「我刚选的那一段」还在。所以失焦只结束编辑态，
+   * 不清这个；只有**选到别处去**（`setSelection` 不再包含它）或清空选择时才清。
+   */
+  textRange = $state.raw<{ elId: string; start: number; end: number } | null>(null);
+
+  /**
+   * 正在做**顶点 / 控制点编辑**的那个元素 id。null = 普通选择模式。
+   *
+   * 与 `editingTextId` 是同一类东西（「这个元素处于更细的编辑态」），区别是
+   * 文本编辑改内容、它改形状。**只在单选时成立**，且选区一变就退出
+   * （见 `setSelection`）—— 多选状态下同时拖八个图形的锚点没有任何意义，
+   * 而混着来会让「拖的到底是哪个」变成猜谜。
+   */
+  nodeEditId = $state<string | null>(null);
+
+  /** 处于顶点 / 控制点编辑态的那个图形元素（不是图形就当作没有）。 */
+  get nodeEdit(): ShapeElement | null {
+    const id = this.nodeEditId;
+    if (!id) return null;
+    const el = this.doc?.elements.find((e) => e.id === id);
+    return el && el.kind === 'shape' ? el : null;
+  }
+
+
+  /**
+   * 编辑器内部的剪贴板（**不碰系统剪贴板**：那需要权限、无头 E2E 里还不一定可用，
+   * 而这套功能只在编辑器内部闭环）。存的是未偏移的原件，偏移随粘贴次数累加。
+   *
+   * 为什么是 `$state` 而不是 actions.ts 里的模块级变量：**右键菜单的「粘贴」
+   * 可用性要跟着它变**。模块级普通变量不是响应式的，菜单会拿着打开那一刻算出来的
+   * `disabled` 不放 —— 表现是「刚复制完，粘贴项还是灰的」（E2E 抓到的）。
+   *
+   * 为什么是 **`$state.raw` 而不是 `$state`**：`$state` 会**深代理**数组与元素，
+   * 而 `structuredClone` 遇到 Proxy 直接抛 `DataCloneError`（V8 实测），
+   * 于是粘贴静默失败。这里本来也是「整份换掉」而不是原地改，raw 正合适。
+   */
+  clipboard = $state.raw<GroupedFragment | null>(null);
+
+  /** 连续粘贴的偏移计数。纯非响应式：它不影响任何界面状态。 */
+  pasteCount = 1;
+
+  /**
+   * 已经「进入」的组合 id。
+   *
+   * 单击语义（PPT / Figma 同款）：点组里的元素 → 选中**整个组**；在组已经
+   * 整体选中的状态下再点 → 进入组，只选中被点的那一个子元素。
+   * 这个字段记住「我在组里面」，于是再点子元素时不会又跳回整组。
+   */
+  enteredGroupId = $state<string | null>(null);
 
   private inGesture = false;
 
@@ -98,8 +166,88 @@ class TypographyEditorState {
     return this.doc?.size ?? { w: 1920, h: 1080 };
   }
 
+  /** 选区里涉及的全部组合 id（去重，按 z 序）。 */
+  get selectedGroupIds(): string[] {
+    const doc = this.doc;
+    if (!doc) return [];
+    return groupsInSelection(doc, this.selectedIds);
+  }
+
+  /** 选区是不是**恰好一个完整的组**（图形/组合格式选项卡据此切换）。 */
+  get soleSelectedGroupId(): string | null {
+    const doc = this.doc;
+    if (!doc) return null;
+    const ids = this.selectedGroupIds;
+    if (ids.length !== 1) return null;
+    return isGroupFullySelected(doc, ids[0]!, new Set(this.selectedIds)) ? ids[0]! : null;
+  }
+
+  /**
+   * 「组语义」展开后的选择集 —— **所有按元素逐个操作的动作都该用它**。
+   *
+   * 组内编辑态（`enteredGroupId` 非空）下**不展开**：那时用户就是在跟子元素
+   * 打交道，展开会把「拖一个子元素」变成「拖整组」，与画布上的拖拽手势
+   * （它只动实际选中的那几个）对不上。
+   */
+  get groupAwareIds(): string[] {
+    const doc = this.doc;
+    if (!doc || this.enteredGroupId) return this.selectedIds;
+    return expandToGroups(doc, this.selectedIds);
+  }
+
   isSelected(id: string): boolean {
     return this.selectedIds.includes(id);
+  }
+
+  /**
+   * 点中某个元素时的选择语义（组内外两态）。
+   *
+   * 返回 true 表示「选中了整个组」，false 表示「只选中被点的那个」。规则：
+   *  - 元素不在组里 → 单选它，并退出「组内」态；
+   *  - **已经在组里**（`enteredGroupId === gid`）→ 直接选子元素，点兄弟也换兄弟，
+   *    不会又跳回整组；
+   *  - 组里、但该组已整体选中且还没进来 → 进入组，只选被点的那个（第二次单击）；
+   *  - 其余情况 → 选中整组（第一次单击）。
+   *
+   * 判据必须是「已进入」而不是「已整体选中」：后者在进入之后就不再成立
+   * （只剩一个子元素被选中），第三次单击会莫名其妙又跳回整组。
+   */
+  pickElement(el: TypographyElement): boolean {
+    const doc = this.doc;
+    const gid = el.groupId;
+    if (!doc || !gid) {
+      this.enteredGroupId = null;
+      this.setSelection([el.id]);
+      return false;
+    }
+
+    if (this.enteredGroupId === gid) {
+      this.setSelection([el.id]);
+      return false;
+    }
+
+    if (isGroupFullySelected(doc, gid, new Set(this.selectedIds))) {
+      this.enteredGroupId = gid;
+      this.setSelection([el.id]);
+      return false;
+    }
+
+    this.enteredGroupId = null;
+    this.setSelection(membersOf(doc, gid).map((m) => m.id));
+    return true;
+  }
+
+  /** 直接选中整组（图层列表的组行点击走它）。 */
+  selectGroup(groupId: string): void {
+    const doc = this.doc;
+    if (!doc) return;
+    this.enteredGroupId = null;
+    this.setSelection(membersOf(doc, groupId).map((m) => m.id));
+  }
+
+  /** 进入组（双击组行 / 展开时用）。 */
+  enterGroup(groupId: string): void {
+    this.enteredGroupId = groupId;
   }
 
   /* ------------------------------------------------------------ 文本编辑 */
@@ -107,6 +255,7 @@ class TypographyEditorState {
   beginEditing(id: string): void {
     if (this.editingTextId === id) return;
     this.editingTextId = id;
+    this.textRange = null;
   }
 
   /**
@@ -120,6 +269,7 @@ class TypographyEditorState {
     const active = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
     if (active && active.isContentEditable) active.blur();
     this.editingTextId = null;
+    this.textRange = null;
   }
 
   /* ------------------------------------------------------------ 生命周期 */
@@ -130,6 +280,9 @@ class TypographyEditorState {
     this.selectedIds = [];
     this.guides = [];
     this.editingTextId = null;
+    this.textRange = null;
+    this.nodeEditId = null;
+    this.enteredGroupId = null;
   }
 
   close(): void {
@@ -138,12 +291,19 @@ class TypographyEditorState {
     this.selectedIds = [];
     this.guides = [];
     this.editingTextId = null;
+    this.textRange = null;
+    this.nodeEditId = null;
+    this.enteredGroupId = null;
     appState.registerGestureCancel(null);
   }
 
   /* ------------------------------------------------------------ 选择 */
 
   setSelection(ids: string[]): void {
+    // 选区一旦挪到别处，之前记下的行内选区就失效了（见 textRange 的说明）。
+    if (this.textRange && !ids.includes(this.textRange.elId)) this.textRange = null;
+    // 顶点编辑态同理：选的已经不是那个元素了，编辑态自然结束。
+    if (this.nodeEditId && !ids.includes(this.nodeEditId)) this.nodeEditId = null;
     // 去重但保序：z 序是有意义的（后选中的应当是最后绘制的）。
     const next = [...new Set(ids)];
     // 被编辑的元素不在新选择集里就收尾（提交在 focusout 里做）。
@@ -169,6 +329,9 @@ class TypographyEditorState {
 
   clearSelection(): void {
     this.selectedIds = [];
+    this.textRange = null;
+    this.nodeEditId = null;
+    this.enteredGroupId = null;
     this.stopEditing();
   }
 
@@ -180,7 +343,17 @@ class TypographyEditorState {
     if (!id) return;
     appState.store.commit(label, (p) => {
       const doc = findTextDoc(p, id);
-      if (doc) fn(doc);
+      if (!doc) return;
+      fn(doc);
+      /*
+       * 写库之后统一收口：成员少于 2 个、或成员在数组里已经不连续的组，直接解掉。
+       *
+       * 会不连续的唯一路径是图层拖曳把一个成员挪到别处。与其在那一条路径上
+       * 到处补判断（还有下一次加别的入口时又会漏），不如每次落库后统一收拾 ——
+       * 表现是「拖散了就自动解组」，比留下一个半坏不坏的组清楚。
+       */
+      const pruned = pruneGroups(doc);
+      if (pruned.groups !== doc.groups) doc.groups = pruned.groups;
     });
   }
 
@@ -225,10 +398,14 @@ class TypographyEditorState {
   /* ------------------------------------------------------------ 常用动作 */
 
   nudge(dx: number, dy: number): void {
-    const ids = new Set(this.selectedIds);
+    const doc = this.doc;
+    if (!doc) return;
+    // 组内任一成员被选中 ⇒ 整组一起走（组内编辑态除外，见 groupAwareIds）。
+    // 在每一处各补一次「再算上同组成员」迟早会漏，所以收口成一个 getter。
+    const ids = new Set(this.groupAwareIds);
     if (!ids.size) return;
-    this.commit(tr('typo.undo.move'), (doc) => {
-      for (const el of doc.elements) {
+    this.commit(tr('typo.undo.move'), (d) => {
+      for (const el of d.elements) {
         if (!ids.has(el.id) || el.locked) continue;
         el.frame.x += dx;
         el.frame.y += dy;
@@ -239,13 +416,18 @@ class TypographyEditorState {
   /**
    * 层级调整。**唯一实现**：Ribbon 的四个按钮与图层面板的上下移都走这里，
    * 两处各写一份的话「上移一层」在两个入口下的行为迟早会不一致。
+   *
+   * 选中的是一整段连续区间（组合就是这种情况）时走**整块移动**，
+   * 否则逐层移动会把块拆散 —— 成员一旦不连续，组合就散了。
    */
   order(op: ZOrderOp): void {
-    const ids = this.selectedIds;
+    const doc = this.doc;
+    if (!doc) return;
+    const ids = this.groupAwareIds;
     if (!ids.length) return;
-    this.commit(tr('typo.undo.order'), (doc) => {
-      const next = reorderElements(doc, ids, op);
-      doc.elements = next.elements;
+    this.commit(tr('typo.undo.order'), (d) => {
+      const next = reorderSelection(d, ids, op, (dd, ii, oo) => reorderElements(dd, ii, oo));
+      d.elements = next.elements;
     });
   }
 

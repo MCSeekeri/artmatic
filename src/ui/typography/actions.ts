@@ -14,12 +14,14 @@ import { appState } from '../app-state.svelte';
 import { editorState } from './editor-state.svelte';
 import { newId } from '../../core/schema';
 import {
+  applyPaintPatch,
   createImageElement,
   createShapeElement,
   createTextElement,
   type ImageElement,
   type MixBlend,
   type ShapeElement,
+  type ShapePaintPatch,
   type TextStyle,
   type TypographyDocument,
   type TypographyElement,
@@ -41,7 +43,34 @@ import {
   type AnimTiming,
 } from '../../typography/animation';
 import { putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
-import type { ShapePreset } from '../../typography/shapes';
+import {
+  cloneFragment,
+  expandToGroups,
+  extractFragment,
+  groupElements,
+  groupList,
+  groupsInSelection,
+  ungroupElements,
+  type GroupedFragment,
+} from '../../typography/groups';
+import { shapeGeometry, type ShapePreset } from '../../typography/shapes';
+import {
+  insertNodeOnSegment,
+  mapNodes,
+  parsePathNodes,
+  removeNode,
+  serializePathNodes,
+} from '../../typography/path-nodes';
+import { booleanOp, multiToShape, shapeToMultiPolygon, type BoolOp } from '../../typography/path-ops';
+import {
+  applySpanStyle,
+  clearSpanStyle as clearRunsSpanStyle,
+  plainTextOf,
+  SPAN_STYLE_KEYS,
+  uniformSpanValue,
+  type SpanStyleKey,
+  type SpanStylePatch,
+} from '../../typography/rich-text';
 import { tr } from '../../i18n/index.svelte';
 
 /* ------------------------------------------------------------ 选择集工具 */
@@ -64,12 +93,75 @@ function onlyShape(doc: TypographyDocument) {
   return writable(doc).filter((el): el is ShapeElement => el.kind === 'shape');
 }
 
+/**
+ * 把参数化图形**就地**转成路径（`shape: 'svg'`）。返回是否真的转了。
+ *
+ * 像素盒坐标 → 0..100 authored。各轴**分别**缩放是必须的：`svg` 图形渲染时会
+ * 套一层 `scale(w/100, h/100)`，所以这里存 `100/w`、`100/h`，渲染时正好抵消。
+ * 用统一的 100/短边的话，非等比盒里的圆角会变成椭圆弧。
+ *
+ * 参数化字段一并清掉：留着它们会让「图形格式」面板继续显示一排对当前形状
+ * 毫无作用的滑杆（形状已经是那串路径了）。
+ */
+function shapeToPath(el: ShapeElement): boolean {
+  if (el.shape === 'svg') return false;
+  const geo = shapeGeometry(el.shape, {
+    w: el.frame.w,
+    h: el.frame.h,
+    radius: el.radius,
+    sides: el.sides,
+    waist: el.waist,
+    inner: el.inner,
+    angle: el.angle,
+  });
+  if (!geo.d) return false;
+  const kx = 100 / Math.max(1, el.frame.w);
+  const ky = 100 / Math.max(1, el.frame.h);
+  const subs = mapNodes(parsePathNodes(geo.d), (p) => ({ x: p.x * kx, y: p.y * ky }));
+  const path = serializePathNodes(subs);
+  if (!path) return false;
+  el.path = path;
+  el.shape = 'svg';
+  el.radius = undefined;
+  el.sides = undefined;
+  el.waist = undefined;
+  el.inner = undefined;
+  el.angle = undefined;
+  return true;
+}
+
+/**
+ * 当前处于**顶点编辑态**的那个图形元素。
+ *
+ * 与 `onlyShape` 的区别很关键：那个返回「选择集里的图形」（可能多个、可能为空），
+ * 这个返回「正在被编辑的那**一个**」。顶点写入必须唯一确定目标 —— 用 `onlyShape`
+ * 的话，多选时拖一个锚点会把所有选中图形的路径一起改掉（而它们在几何上毫无关系）。
+ */
+function nodeEditShape(doc: TypographyDocument): ShapeElement | null {
+  const id = editorState.nodeEditId;
+  if (!id) return null;
+  const el = doc.elements.find((e) => e.id === id);
+  return el && el.kind === 'shape' ? el : null;
+}
+
 function onlyImage(doc: TypographyDocument) {
   return writable(doc).filter((el): el is ImageElement => el.kind === 'image');
 }
 
 function anyElement(doc: TypographyDocument): TypographyElement[] {
   return writable(doc);
+}
+
+/**
+ * 写一个文本属性。**唯一实现** —— 提交路径与「拖动实时预览」路径共用，
+ * 两处各写一份的话，「提交生效、预览不变」这类不一致迟早出现。
+ */
+function writeTextProp<K extends keyof TextStyle>(
+  doc: TypographyDocument,
+  key: K,
+  value: TextStyle[K],
+): void {
+  for (const el of onlyText(doc)) el.style = { ...el.style, [key]: value };
 }
 
 /** 对齐目标框：画布，或选区外接框。 */
@@ -87,6 +179,22 @@ function targetRect(): Rect {
 export interface TypographyActions {
   /* 文本 */
   setTextProp<K extends keyof TextStyle>(key: K, value: TextStyle[K]): void;
+  /**
+   * 文本属性的**统一写入口**：编辑中且选中了一段字 ⇒ 写行内覆盖；
+   * 否则写元素级。Ribbon 上的文本控件一律走它 —— 让每个控件自己判断
+   * 「现在改的是整块还是一段」等于把这个判断抄了 N 份。
+   */
+  setTextStyle<K extends SpanStyleKey>(key: K, value: TextStyle[K]): void;
+  /** 直接写行内覆盖（`null` = 删掉这条覆盖，回到元素级）。 */
+  setSpanStyle(patch: SpanStylePatch): void;
+  /** 清掉选中范围的**全部**行内覆盖。 */
+  clearSpanFormats(): void;
+  /** 现在有没有「行内选区」（「清除格式」的可用性）。 */
+  hasSpanRange(): boolean;
+  /** 拖动调值时的实时预览（不入撤销栈，松手时 `endTextPropLive` 结算一笔）。 */
+  setTextPropLive<K extends keyof TextStyle>(key: K, value: TextStyle[K]): void;
+  /** 实时预览收尾。没在实时改就什么都不做。 */
+  endTextPropLive(): void;
   setTextAlign(value: TextStyle['align']): void;
   setVAlign(value: TextStyle['vAlign']): void;
   toggleTextFlag(key: 'bold' | 'italic' | 'underline' | 'strike'): void;
@@ -104,12 +212,52 @@ export interface TypographyActions {
   deleteSelection(): void;
   order(op: ZOrderOp): void;
 
+  /* 剪贴板（编辑器内部，不碰系统剪贴板） */
+  copySelection(): void;
+  cutSelection(): void;
+  pasteClipboard(): void;
+  /** 剪贴板里有没有东西（右键菜单据此置灰「粘贴」）。 */
+  hasClipboard(): boolean;
+
+  /* 组合 */
+  groupSelection(): void;
+  ungroupSelection(): void;
+  /** 选区里有没有可成组的东西（≥2 个元素）。 */
+  canGroup(): boolean;
+  /** 选区里有没有落在组合里的元素。 */
+  canUngroup(): boolean;
+  setGroupPaint(patch: ShapePaintPatch): void;
+  setGroupStrokeColor(color: string): void;
+  setGroupStrokeWidth(width: number): void;
+  setGroupNumber(key: 'radius' | 'padding', value: number): void;
+
   /* 图形 */
   setShapeFill(color: string): void;
+  /** 填充类型 / 渐变 / 纹理的**一处**写入路径（见 document.ts 的 applyPaintPatch）。 */
+  setShapePaint(patch: ShapePaintPatch): void;
+  /**
+   * 布尔运算（并 / 差 / 交 / 异或）。作用于选中的图形，结果为**一个** `svg` 图形。
+   * 差集是「最前景那个减去其余」，与设计工具一致。
+   */
+  booleanShapes(op: BoolOp): void;
+  /** 选中的图形够不够做布尔运算（≥2 个）。 */
+  canBoolean(): boolean;
   setShapeStroke(color: string): void;
   setShapeStrokeWidth(width: number): void;
   setShapeStrokeStyle(style: 'solid' | 'dashed' | 'dotted'): void;
   setShapeRadius(radius: number): void;
+  /** 形状参数（边数 / 锐利度 / 壁厚 / 张角）。所有图形共用一条写入路径。 */
+  setShapeParam(key: 'sides' | 'waist' | 'inner' | 'angle', value: number): void;
+
+  /* 顶点 / 控制点编辑 */
+  /** 进入 / 退出顶点编辑（Ribbon 按钮与快捷键共用同一个入口）。 */
+  toggleNodeEdit(): void;
+  /** 把参数化图形转成路径。之后它的形状由顶点决定，参数控件不再适用。 */
+  convertToPath(): void;
+  /** 双击路径：在命中位置插一个锚点（de Casteljau 细分，形状不变）。 */
+  addPathNode(hit: { sub: number; seg: number; t: number }): void;
+  /** 双击锚点：删掉它（相邻两段合并成一段）。 */
+  deletePathNode(index: number): void;
 
   /* 图片 */
   setImageFit(value: ImageElement['fit']): void;
@@ -127,6 +275,14 @@ export interface TypographyActions {
 
   /* 字体 */
   importFont(): void;
+  /**
+   * 读**本机已安装**的字体族，并进字体下拉。
+   *
+   * 与 `importFont` 的区别：那个是把字体**文件**注册进 `FontRegistry`（有字节、
+   * 导出时可子集化嵌入）；这个只是拿到一串系统的族名 —— 不产生任何资产，
+   * 换台机器就没有了。
+   */
+  loadLocalFonts(): void;
 
   /* 逃生舱 */
   /** 把排版文档 1:1 烘焙成一张 PNG，并把片段改成 image 源。 */
@@ -135,14 +291,128 @@ export interface TypographyActions {
 
 const r2 = (n: number): number => Math.round(n * 100) / 100;
 
+/* ------------------------------------------------------------ 剪贴板
+ *
+ * 状态存在 `editorState.clipboard`（响应式），不在这里的模块作用域 ——
+ * 原因见那边的注释：右键菜单的「粘贴」可用性必须跟着它变。
+ * 这里只留纯函数。
+ */
+const PASTE_OFFSET = 24;
+
+function writeClipboard(frag: GroupedFragment): void {
+  editorState.clipboard = frag;
+  editorState.pasteCount = 1;
+}
+
+/**
+ * 当前的行内选区（**校验过它确实落在一个存在的文本元素上**）。
+ *
+ * 校验这一步不能省：编辑中切换元素 / 文档被重建时 `textRange` 可能指向一个
+ * 已经不存在的元素，直接拿 start/end 去切片会切到别人身上。
+ */
+function textSpanRange(): { elId: string; start: number; end: number } | null {
+  const r = editorState.textRange;
+  if (!r) return null;
+  const doc = editorState.doc;
+  const el = doc?.elements.find((x) => x.id === r.elId);
+  if (!el || el.kind !== 'text') return null;
+  const total = plainTextOf(el.runs).length;
+  const start = Math.max(0, Math.min(r.start, total));
+  const end = Math.max(0, Math.min(r.end, total));
+  return end > start ? { elId: r.elId, start, end } : null;
+}
+
+/**
+ * 当前**格式上下文**里某个文本属性的生效值。
+ *
+ * 有行内选区 ⇒ 取区间上的统一值（混合时取区间起点的值，交给调用方决定要不要
+ * 当作「不定态」）；没有 ⇒ 取首个选中文本元素的元素级值。
+ * 返回 null = 根本没有作用对象（按钮那时本来就是禁用态）。
+ */
+function currentTextValue<K extends SpanStyleKey>(key: K): TextStyle[K] | null {
+  const doc = editorState.doc;
+  const range = textSpanRange();
+  if (doc && range) {
+    const el = doc.elements.find((x) => x.id === range.elId);
+    if (el && el.kind === 'text') {
+      return uniformSpanValue(el.runs, range.start, range.end, el.style, key).value;
+    }
+  }
+  const t = editorState.selected.find((e) => e.kind === 'text');
+  return t && t.kind === 'text' ? t.style[key] : null;
+}
+
+/** 把片段复制一份并落进文档（粘贴 / 复制 / Ctrl 拖曳共用）。 */
+function placeFragment(
+  frag: GroupedFragment,
+  offset: number,
+  select: boolean,
+  label: string,
+): TypographyElement[] {
+  const clone = cloneFragment(frag, offset, newId);
+  editorState.commit(label, (doc) => {
+    doc.elements = [...doc.elements, ...clone.elements];
+    if (clone.groups.length) doc.groups = [...(doc.groups ?? []), ...clone.groups];
+  });
+  if (select) {
+    queueMicrotask(() => editorState.setSelection(clone.elements.map((e) => e.id)));
+  }
+  return clone.elements;
+}
+
 export function createTypographyActions(): TypographyActions {
   return {
     /* ---------------------------------------------------------- 文本 */
 
     setTextProp(key, value) {
-      editorState.commit(tr('typo.undo.textProp'), (doc) => {
-        for (const el of onlyText(doc)) el.style = { ...el.style, [key]: value };
+      // 实时预览进行中：这一笔属于那个手势事务，不能再开一条撤销记录
+      // （否则一次拖拽会变成「预览一条 + 提交一条」两条，Ctrl+Z 要按两次）。
+      if (editorState.gestureActive) {
+        editorState.live((doc) => writeTextProp(doc, key, value));
+        return;
+      }
+      editorState.commit(tr('typo.undo.textProp'), (doc) => writeTextProp(doc, key, value));
+    },
+
+    setTextStyle(key, value) {
+      // 行内选区只对「可以行内覆盖」的属性有意义；行高 / 对齐这类段落属性
+      // 永远写元素级（同一行里两种行高谁也画不对，见 rich-text.ts）。
+      if (this.hasSpanRange() && (SPAN_STYLE_KEYS as readonly string[]).includes(key)) {
+        this.setSpanStyle({ [key]: value } as SpanStylePatch);
+        return;
+      }
+      this.setTextProp(key, value);
+    },
+
+    setSpanStyle(patch) {
+      const r = textSpanRange();
+      if (!r) return;
+      editorState.commit(tr('typo.undo.spanStyle'), (d) => {
+        const el = d.elements.find((x) => x.id === r.elId);
+        if (el && el.kind === 'text') el.runs = applySpanStyle(el.runs, r.start, r.end, patch);
       });
+    },
+
+    clearSpanFormats() {
+      const r = textSpanRange();
+      if (!r) return;
+      editorState.commit(tr('typo.undo.clearFormat'), (d) => {
+        const el = d.elements.find((x) => x.id === r.elId);
+        if (el && el.kind === 'text') el.runs = clearRunsSpanStyle(el.runs, r.start, r.end);
+      });
+    },
+
+    hasSpanRange() {
+      return textSpanRange() !== null;
+    },
+
+    setTextPropLive(key, value) {      if (!editorState.gestureActive) editorState.beginGesture();
+      editorState.live((doc) => writeTextProp(doc, key, value));
+    },
+
+    endTextPropLive() {
+      if (!editorState.gestureActive) return;
+      editorState.endGesture(tr('typo.undo.textProp'));
     },
 
     setTextAlign(value) {
@@ -158,23 +428,29 @@ export function createTypographyActions(): TypographyActions {
     },
 
     toggleTextFlag(flag) {
-      editorState.commit(tr('typo.undo.fontStyle'), (doc) => {
-        for (const el of onlyText(doc)) {
-          const s = el.style;
-          if (flag === 'bold') {
-            el.style = { ...s, fontWeight: s.fontWeight >= 600 ? 400 : 700 };
-          } else if (flag === 'italic') {
-            el.style = { ...s, fontStyle: s.fontStyle === 'italic' ? 'normal' : 'italic' };
-          } else if (flag === 'underline') {
-            el.style = { ...s, textDecoration: s.textDecoration === 'underline' ? 'none' : 'underline' };
-          } else {
-            el.style = {
-              ...s,
-              textDecoration: s.textDecoration === 'line-through' ? 'none' : 'line-through',
-            };
-          }
-        }
-      });
+      /*
+       * 开关的语义是「在**当前生效值**上取反」，不是「把元素级取反」。
+       * 一段字已经被行内加粗过、而元素级不是粗体时，按钮是按下态 —— 再点一次
+       * 必须取消它，而不是把元素级设成粗体（那看起来像「点了没反应，反而更粗了」）。
+       */
+      if (flag === 'bold') {
+        const v = currentTextValue('fontWeight');
+        if (v === null) return;
+        this.setTextStyle('fontWeight', v >= 600 ? 400 : 700);
+        return;
+      }
+      if (flag === 'italic') {
+        const v = currentTextValue('fontStyle');
+        if (v === null) return;
+        this.setTextStyle('fontStyle', v === 'italic' ? 'normal' : 'italic');
+        return;
+      }
+      const v = currentTextValue('textDecoration');
+      if (v === null) return;
+      const want = flag === 'underline' ? 'underline' : 'line-through';
+      // 两种装饰共用一个 CSS 属性，所以「当前是另一种装饰」时直接换成新的，
+      // 而不是先取消——用户的意图是「要这个」，不是「不要那个」。
+      this.setTextStyle('textDecoration', v === want ? 'none' : want);
     },
 
     /* ---------------------------------------------------------- 插入 */
@@ -192,6 +468,8 @@ export function createTypographyActions(): TypographyActions {
         const el = createShapeElement(doc.size, preset.id, {
           radius: preset.radius,
           sides: preset.sides,
+          waist: preset.waist,
+          angle: preset.angle,
         });
         doc.elements = [...doc.elements, el];
         queueMicrotask(() => editorState.selectOnly(el.id));
@@ -245,23 +523,11 @@ export function createTypographyActions(): TypographyActions {
     },
 
     duplicateSelection() {
-      const source = editorState.selected.filter((e) => !e.locked);
-      if (!source.length) return;
-      const offset = 24;
-      const fresh: TypographyElement[] = [];
-      for (const el of source) {
-        const copy = structuredClone(el) as TypographyElement;
-        copy.id = newId();
-        copy.frame = { ...copy.frame, x: copy.frame.x + offset, y: copy.frame.y + offset };
-        // 动画 id 也要换：不换的话两份元素会共用同一个 @keyframes 选择器，
-        // 一改动画另一份跟着变。
-        copy.animations = copy.animations.map((a) => ({ ...a, id: newId() }));
-        fresh.push(copy);
-      }
-      editorState.commit(tr('typo.undo.duplicate'), (doc) => {
-        doc.elements = [...doc.elements, ...fresh];
-        queueMicrotask(() => editorState.setSelection(fresh.map((e) => e.id)));
-      });
+      const doc = editorState.doc;
+      if (!doc) return;
+      const frag = extractFragment(doc, editorState.groupAwareIds);
+      if (!frag.elements.length) return;
+      placeFragment(frag, 24, true, tr('typo.undo.duplicate'));
     },
 
     deleteSelection() {
@@ -278,11 +544,129 @@ export function createTypographyActions(): TypographyActions {
       editorState.order(op);
     },
 
+    /* ---------------------------------------------------------- 剪贴板 */
+
+    copySelection() {
+      const doc = editorState.doc;
+      if (!doc) return;
+      writeClipboard(extractFragment(doc, editorState.groupAwareIds));
+    },
+
+    cutSelection() {
+      const doc = editorState.doc;
+      if (!doc) return;
+      const frag = extractFragment(doc, editorState.groupAwareIds);
+      if (!frag.elements.length) return;
+      writeClipboard(frag);
+      this.deleteSelection();
+    },
+
+    pasteClipboard() {
+      const frag = editorState.clipboard;
+      if (!frag?.elements.length) return;
+      // 连续粘贴要一份比一份更靠右下，否则第二份会**完全盖住**第一份，
+      // 看起来像「粘贴没反应」。剪贴板里存的始终是**未偏移**的原件，
+      // 所以偏移量随次数累加，而不是在已偏移的副本上再偏移。
+      placeFragment(frag, PASTE_OFFSET * editorState.pasteCount, true, tr('typo.undo.paste'));
+      editorState.pasteCount += 1;
+    },
+
+    hasClipboard() {
+      return (editorState.clipboard?.elements.length ?? 0) > 0;
+    },
+
+    /* ---------------------------------------------------------- 组合 */
+
+    groupSelection() {
+      const doc = editorState.doc;
+      if (!doc) return;
+      const ids = editorState.selectedIds;
+      if (ids.length < 2) return;
+      const name = tr('typo.groupName');
+      editorState.commit(tr('typo.undo.group'), (d) => {
+        const next = groupElements(d, ids, name);
+        if (next === d) return;
+        d.elements = next.elements;
+        d.groups = next.groups;
+      });
+      // 成组后整体选中（成员 id 没变，但 selection 的语义要落到「整组」）
+      queueMicrotask(() => {
+        const gid = editorState.selectedGroupIds[0];
+        if (gid) editorState.selectGroup(gid);
+      });
+    },
+
+    ungroupSelection() {
+      const doc = editorState.doc;
+      if (!doc) return;
+      const ids = editorState.selectedIds;
+      if (!groupsInSelection(doc, ids).length) return;
+      editorState.commit(tr('typo.undo.ungroup'), (d) => {
+        const next = ungroupElements(d, ids);
+        d.elements = next.elements;
+        d.groups = next.groups;
+      });
+    },
+
+    canGroup() {
+      return editorState.selectedIds.length >= 2;
+    },
+
+    canUngroup() {
+      const doc = editorState.doc;
+      return !!doc && groupsInSelection(doc, editorState.selectedIds).length > 0;
+    },
+
+    setGroupPaint(patch) {
+      const doc = editorState.doc;
+      const gid = editorState.soleSelectedGroupId;
+      if (!doc || !gid) return;
+      editorState.commit(tr('typo.undo.groupStyle'), (d) => {
+        d.groups = groupList(d).map((g) => (g.id === gid ? { ...g, fill: applyPaintPatch(g.fill, patch) } : g));
+      });
+    },
+
+    setGroupStrokeColor(color) {
+      const gid = editorState.soleSelectedGroupId;
+      if (!gid) return;
+      editorState.commit(tr('typo.undo.groupStyle'), (d) => {
+        d.groups = groupList(d).map((g) =>
+          g.id === gid
+            ? { ...g, stroke: g.stroke ? { ...g.stroke, color } : { color, width: 2, style: 'solid' } }
+            : g,
+        );
+      });
+    },
+
+    setGroupStrokeWidth(width) {
+      const gid = editorState.soleSelectedGroupId;
+      if (!gid) return;
+      const w = Math.max(0, width);
+      editorState.commit(tr('typo.undo.groupStyle'), (d) => {
+        d.groups = groupList(d).map((g) => (g.id === gid ? { ...g, stroke: { ...(g.stroke ?? { color: '#ffffff', style: 'solid' as const }), width: w } } : g));
+      });
+    },
+
+    setGroupNumber(key, value) {
+      const gid = editorState.soleSelectedGroupId;
+      if (!gid) return;
+      const v = Math.max(0, value);
+      editorState.commit(tr('typo.undo.groupStyle'), (d) => {
+        d.groups = groupList(d).map((g) => (g.id === gid ? { ...g, [key]: v } : g));
+      });
+    },
+
     /* ---------------------------------------------------------- 图形 */
 
     setShapeFill(color) {
       editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
         for (const el of onlyShape(doc)) el.fill = { kind: 'solid', color };
+      });
+    },
+
+    setShapePaint(patch) {
+      editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
+        for (const el of onlyShape(doc)) el.fill = applyPaintPatch(el.fill, patch);
       });
     },
 
@@ -315,6 +699,132 @@ export function createTypographyActions(): TypographyActions {
       editorState.commit(tr('typo.undo.radius'), (doc) => {
         for (const el of onlyShape(doc)) el.radius = Math.max(0, radius);
       });
+    },
+
+    setShapeParam(key, value) {
+      editorState.commit(tr('typo.undo.shapeParam'), (doc) => {
+        for (const el of onlyShape(doc)) el[key] = value;
+      });
+    },
+
+    /* ---------------------------------------------------- 顶点 / 控制点编辑 */
+
+    toggleNodeEdit() {
+      const el = editorState.selected[0];
+      if (!el || el.kind !== 'shape') return;
+      if (editorState.nodeEditId === el.id) {
+        editorState.nodeEditId = null;
+        return;
+      }
+      /*
+       * 参数化图形还没有「顶点」可编辑 —— 它的形状由公式给出。这里顺手转成
+       * 路径，与进入编辑**合成一笔撤销**：按一次 Ctrl+Z 应当回到「还是参数化
+       * 图形、也没在编辑」，而不是先退回一个「已经是路径但已退出编辑」的
+       * 中间态（那对用户毫无意义）。
+       */
+      if (el.shape !== 'svg') {
+        editorState.commit(tr('typo.undo.toPath'), (doc) => {
+          const target = doc.elements.find((e) => e.id === el.id);
+          if (target && target.kind === 'shape') shapeToPath(target);
+        });
+      }
+      editorState.nodeEditId = el.id;
+    },
+
+    convertToPath() {
+      editorState.commit(tr('typo.undo.toPath'), (doc) => {
+        for (const el of onlyShape(doc)) shapeToPath(el);
+      });
+    },
+
+    addPathNode(hit) {
+      editorState.commit(tr('typo.undo.addNode'), (doc) => {
+        const el = nodeEditShape(doc);
+        if (!el) return;
+        const subs = parsePathNodes(el.path ?? '');
+        const sp = subs[hit.sub];
+        if (!sp) return;
+        subs[hit.sub] = insertNodeOnSegment(sp, hit.seg, hit.t);
+        el.path = serializePathNodes(subs);
+      });
+    },
+
+    deletePathNode(index) {
+      editorState.commit(tr('typo.undo.deleteNode'), (doc) => {
+        const el = nodeEditShape(doc);
+        if (!el) return;
+        const subs = parsePathNodes(el.path ?? '');
+        const sp = subs[0];
+        if (!sp) return;
+        const next = removeNode(sp, index);
+        // 少于下限时 `removeNode` 原样返回 —— 那是「拒绝删除」，不该留一条空撤销。
+        if (next === sp) return;
+        subs[0] = next;
+        el.path = serializePathNodes(subs);
+      });
+    },
+
+    /* ---------------------------------------------------- 布尔运算 */
+
+    canBoolean() {
+      return editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).length >= 2;
+    },
+
+    booleanShapes(op) {
+      const doc = editorState.doc;
+      if (!doc) return;
+      // 只取图形，并按 **z 序**排列 —— 差集的语义依赖顺序（最前景减去其余）。
+      const picked = new Set(
+        editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).map((e) => e.id),
+      );
+      const ordered = doc.elements.filter((e) => picked.has(e.id)) as ShapeElement[];
+      if (ordered.length < 2) return;
+
+      const top = ordered[ordered.length - 1]!;
+      const freshId = newId();
+      let empty = false;
+
+      editorState.commit(tr('typo.undo.boolean'), (d) => {
+        const result = booleanOp(op, ordered.map(shapeToMultiPolygon));
+        const shaped = multiToShape(result);
+        if (!shaped) {
+          // 交集为空 / 被减没了。改成一个空图形没有意义，干脆不动，让用户看到提示。
+          empty = true;
+          return;
+        }
+        const fresh: ShapeElement = {
+          ...structuredClone(top),
+          id: freshId,
+          kind: 'shape',
+          shape: 'svg',
+          path: shaped.path,
+          frame: { x: shaped.frame.x, y: shaped.frame.y, w: shaped.frame.w, h: shaped.frame.h, rot: 0 },
+          // 形状参数只对原始图形有意义，转成自定义路径后全部清掉。
+          radius: undefined,
+          sides: undefined,
+          waist: undefined,
+          inner: undefined,
+          angle: undefined,
+          // 动画与组合都不跟着走：多个操作数各有一套，没有共同的解释。
+          animations: [],
+          groupId: undefined,
+          fill: { ...top.fill },
+          stroke: top.stroke ? { ...top.stroke } : null,
+        };
+
+        const ids = new Set(ordered.map((o) => o.id));
+        const topIndex = d.elements.findIndex((e) => e.id === top.id);
+        let insertAt = 0;
+        for (let i = 0; i < topIndex; i++) if (!ids.has(d.elements[i]!.id)) insertAt += 1;
+        const kept = d.elements.filter((e) => !ids.has(e.id));
+        d.elements = [...kept.slice(0, insertAt), fresh, ...kept.slice(insertAt)];
+      });
+
+      if (empty) {
+        appState.flash(tr('typo.booleanEmpty'), 'error');
+        return;
+      }
+      queueMicrotask(() => editorState.setSelection([freshId]));
     },
 
     /* ---------------------------------------------------------- 图片 */
@@ -411,6 +921,11 @@ export function createTypographyActions(): TypographyActions {
         }
       });
       return true;
+    },
+
+    loadLocalFonts() {
+      // 异步但不 await：提示在 `appState.loadLocalFonts` 里发。
+      void appState.loadLocalFonts();
     },
 
     importFont() {

@@ -78,7 +78,8 @@ function cjkDoc(text: string, family = 'simhei') {
         visible: true,
         locked: false,
         animations: [],
-        text,
+        // v4（富文本）之后文档里只有 runs，没有 text。
+        runs: [{ text }],
         autoHeight: false,
         style: {
           fontFamily: family,

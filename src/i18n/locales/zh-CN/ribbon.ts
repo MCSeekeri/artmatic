@@ -15,6 +15,7 @@ export const ribbon = {
   'rib.home': '开始',
   'rib.insert': '插入',
   'rib.anim': '动画',
+  'rib.view': '视图',
   'rib.shapeFormat': '图形格式',
   'rib.imageFormat': '图片格式',
 
@@ -37,6 +38,61 @@ export const ribbon = {
   'rib.group.effects': '艺术效果',
   'rib.group.imageStyle': '图片样式',
 
+  /* ------------------------------------------------ 视图 */
+  'rib.group.grid': '网格',
+  'rib.group.gridLines': '参考线',
+  'rib.gridShow': '显示网格',
+  'rib.gridSnap': '吸附网格',
+  'rib.gridUnit': '网格单位',
+  'rib.gridPx': '像素',
+  'rib.gridPercent': '画幅 %',
+  'rib.gridSize': '间距',
+  'rib.gridVertical': '竖线',
+  'rib.gridHorizontal': '横线',
+  'rib.canvasFrame': '画幅线框',
+
+  /* ------------------------------------------------ 图形格式 → 形状参数 */
+  'rib.sides': '边数',
+  'rib.starWaist': '锐利度',
+  'rib.borderWidth': '壁厚',
+  'rib.pieAngle': '张角',
+  'rib.nodeEdit': '编辑顶点',
+  'rib.group.nodes': '顶点',
+  'rib.toPath': '转为路径',
+
+  /* ------------------------------------------------ 图形格式 → 布尔运算 */
+  'rib.group.boolean': '布尔运算',
+  'rib.boolUnion': '并集',
+  'rib.boolSubtract': '差集',
+  'rib.boolIntersect': '交集',
+  'rib.boolXor': '异或',
+
+  /* ------------------------------------------------ 图形格式 → 填充 */
+  'rib.fillKind': '填充类型',
+  'rib.fillNoneShort': '无填充',
+  'rib.fillSolid': '纯色',
+  'rib.fillLinear': '线性渐变',
+  'rib.fillRadial': '径向渐变',
+  'rib.fillTexture': '纹理',
+  'rib.gradientFrom': '起始色',
+  'rib.gradientTo': '结束色',
+  'rib.gradientAngle': '渐变角度',
+  'rib.textureInk': '纹理色',
+  'rib.textureBg': '底色',
+  'rib.texturePattern': '图案',
+  'rib.textureScale': '周期',
+  'rib.textureThickness': '线宽',
+
+  /* ------------------------------------------------ [Contextual] 组合格式 */
+  'rib.groupFormat': '组合格式',
+  'rib.group.groupBox': '组合外框',
+  'rib.groupBackdrop': '背景',
+  'rib.groupBorder': '边框色',
+  'rib.groupBorderWidth': '边框宽度',
+  'rib.groupRadius': '外框圆角',
+  'rib.groupPadding': '内边距',
+  'rib.groupAction': '组合',
+  'rib.ungroup': '解除组合',
   /* ------------------------------------------------ 开始 → 字体 */
   'rib.fontFamily': '字体',
   'rib.fontSize': '字号',
@@ -44,6 +100,7 @@ export const ribbon = {
   'rib.italic': '斜体',
   'rib.underline': '下划线',
   'rib.strike': '删除线',
+  'rib.loadLocalFonts': '本机字体',
   'rib.importFont': '导入字体',
 
   /* ------------------------------------------------ 开始 → 段落 */

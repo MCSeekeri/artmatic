@@ -44,6 +44,7 @@ export const errors = {
   'err.schema.effectClipMissingChain': '特效片段 {id} 缺少 chain',
   'err.schema.typographyBadDoc': '排版片段 {id} 的 doc 非法',
   'err.schema.typographyBadSize': '排版片段 {id} 的文档尺寸非法',
+  'err.schema.typographyBadTextRuns': '排版片段 {id} 里有文本元素缺少内容段（runs）',
   'err.schema.transitionBadDefId': '片段 {id} 的转场缺少 defId',
   'err.schema.transitionBadDuration': '片段 {id} 的转场时长非法',
   'err.schema.transitionBadValues': '片段 {id} 的转场参数非法',

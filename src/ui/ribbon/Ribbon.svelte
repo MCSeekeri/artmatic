@@ -83,7 +83,25 @@
   }
 </script>
 
-<div class="ribbon" data-testid="ribbon">
+<!--
+  `mousedown` 上拦一道：**除文本输入外，按面板不让焦点离开编辑区**。
+  不拦的话，在文本里选了一段再点「加粗」，编辑区先失焦 —— 选区没了、行内格式
+  也就无从作用（表现是「点了加粗，整块变粗」）。这是工具条的通行做法。
+  文本输入（字号、字距）必须能聚焦，所以对 input / textarea 放行；
+  那种情况下靠 editorState 保留 textRange 兜住（见它的注释）。
+-->
+<div
+  class="ribbon"
+  role="toolbar"
+  aria-label={tr('rib.ariaTools')}
+  // -1：不进 Tab 序（面板里的控件自己排），但满足 toolbar 角色的可达性要求。
+  tabindex="-1"
+  data-testid="ribbon"
+  onmousedown={(e) => {
+    const t = e.target as HTMLElement | null;
+    if (!t?.closest('input, textarea')) e.preventDefault();
+  }}
+>
   <div class="ribbon-tabs" role="tablist" aria-label={tr('rib.ariaTools')} data-testid="ribbon-tabs">
     {#each resolved.visible as tab (tab.id)}
       <button

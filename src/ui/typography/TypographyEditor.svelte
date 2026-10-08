@@ -17,21 +17,41 @@
   import { contextualTabIds } from '../ribbon/ribbon-model';
   import { appState } from '../app-state.svelte';
   import { editorState } from './editor-state.svelte';
+  import { registerTextRangeRefresher } from './keys';
   import { createTypographyActions } from './actions';
   import { buildTypographyTabs } from './ribbon-defs';
   import SelectionLayer from './SelectionLayer.svelte';
-  import LayersPanel from './LayersPanel.svelte';
+  import NodeEditor from './NodeEditor.svelte';
+  import SidePanel from './SidePanel.svelte';
   import {
     startMoveGesture,
+    startNodeDrag,
     startResizeGesture,
     startRotateGesture,
+    startShapeHandleDrag,
     type GestureEnv,
   } from './gestures';
-  import { buildDocDom, docSignature, syncDocDom } from '../../typography/render-dom';
+  import {
+    buildDocDom,
+    caretRange,
+    docSignature,
+    serializeRuns,
+    setCaretRange,
+    syncDocDom,
+  } from '../../typography/render-dom';
+  import { normalizeRuns, runsEquivalent, runsSignature } from '../../typography/rich-text';
+  import { GUARDS_ATTR, RUNS_SIG_ATTR, type ShapeElement } from '../../typography/document';
+  import { parsePathNodes, type SubPath } from '../../typography/path-nodes';
+  import { shapeHandles, type ShapeHandle } from '../../typography/shape-handles';
+  import { resolveImageAsset } from '../../typography/image-assets';
+  import Menu from '../controls/Menu.svelte';
+  import type { MenuItem } from '../controls/menu-model';
   import { animationSpecs, seekAnimations } from '../../typography/bake-animation';
   import { keyframeBodyOf } from '../../typography/animation';
   import CustomCssModal from './CustomCssModal.svelte';
   import { SNAP_PX, hitTest, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
+  import { gridSpacing } from '../../typography/grid';
+  import { groupById } from '../../typography/groups';
   import { tr } from '../../i18n/index.svelte';
 
   const { clipId }: { clipId: string } = $props();
@@ -50,6 +70,17 @@
   let marquee = $state<Rect | null>(null);
   let activeRibbonTab = $state('home');
   let customCssOpen = $state(false);
+  /** 中键拖拽平移中（只为光标形态）。 */
+  let panning = $state(false);
+  /** 右栏宽度拖曳中（与检查器一致：拖动中分隔条保持高亮）。 */
+  let panelResizing = $state(false);
+  /** 右键菜单的屏幕坐标。null = 关着。 */
+  let ctxMenu = $state<{ x: number; y: number } | null>(null);
+
+  /** 关掉右键菜单。所有菜单项动作都先调它，免得菜单留在屏幕上。 */
+  function closeCtx(): void {
+    ctxMenu = null;
+  }
 
   /* ------------------------------------------------------------ 生命周期 */
 
@@ -119,7 +150,61 @@
     return rad ? `rotate(${(rad * 180) / Math.PI}deg)` : undefined;
   }
 
-  const contextualActive = $derived(contextualTabIds(selection));
+  /**
+   * 正在做顶点 / 控制点编辑的那个图形。
+   *
+   * 包一层 `$derived`：`editorState.nodeEdit` 是个 getter，模板里直接读它在
+   * 路径每帧变化时不一定重算（它返回的是同一个元素对象），而节点层必须跟着
+   * `el.path` 变。
+   */
+  const nodeEditEl = $derived(editorState.nodeEdit);
+
+  /**
+   * 单选一个图形 —— **形状控制点**的显示条件。
+   *
+   * 控制点不需要任何模式：它改的是图形自身的参数（圆角 / 谷半径 / 壁厚 / 张角），
+   * 与「拖右下角把手改尺寸」是同一层级的东西，选中就该能拖。要求用户先点一次
+   * 「编辑顶点」才看得到圆角手柄，是拿模式去挡一个本来没有模式的操作。
+   *
+   * 多选时不显示：那时把手属于谁没有答案。自定义路径也没有（`shapeHandles`
+   * 对它返回空数组），它的可调之处是顶点。
+   */
+  const soloShape = $derived.by((): ShapeElement | null => {
+    const sel = selection;
+    return sel.length === 1 && sel[0]!.kind === 'shape' ? (sel[0] as ShapeElement) : null;
+  });
+
+  /*
+   * 顶点层的两份数据在这里算好再传下去。
+   *
+   * `void appState.version` 不是仪式：元素是**原地改的普通对象**，读它的属性
+   * 建立不起响应式依赖 —— 少了这一句，拖完锚点锚点不会动、转成路径之后
+   * 形状控制点还赖在屏幕上（都实测过）。与 `selectionRects` 同一套约定。
+   */
+  const nodeSubs = $derived.by((): SubPath[] => {
+    void appState.version;
+    const el = nodeEditEl;
+    return el && el.shape === 'svg' ? parsePathNodes(el.path ?? '') : [];
+  });
+
+  const nodeHandles = $derived.by((): ShapeHandle[] => {
+    void appState.version;
+    const el = nodeEditEl ?? soloShape;
+    return el ? shapeHandles(el) : [];
+  });
+
+  const contextualActive = $derived(
+    contextualTabIds(selection, { soleGroup: !!editorState.soleSelectedGroupId }),
+  );
+
+  /** 选区恰好是一个完整组合时，那个组合的定义（「组合格式」控件的取值来源）。 */
+  const soleGroup = $derived.by(() => {
+    void appState.version;
+    const gid = editorState.soleSelectedGroupId;
+    const d = doc;
+    if (!gid || !d) return null;
+    return groupById(d, gid);
+  });
 
   /** 选中元素挂着的唯一预设动画（决定动画图库里哪一项高亮）。 */
   const activePreset = $derived.by(() => {
@@ -141,10 +226,19 @@
         selection,
         alignTarget: appState.typoAlignTarget,
         fontFamilies: appState.fontFamilies,
+        localFontFamilies: appState.localFontFamilies,
+        supportsLocalFonts: appState.supportsLocalFonts,
         activePreset,
         anim: selection.flatMap((e) => e.animations)[0] ?? null,
         onOpenCustomCss: () => (customCssOpen = true),
         onFlatten: () => actions.flattenToImage(appState.playT - (editorState.clip?.start ?? 0)),
+        grid: gridPrefs,
+        onGrid: (patch) => appState.setTypoGrid(patch),
+        soleGroup,
+        // 行内选区直接给：它比 editingTextId 活得久（点 Ribbon 的输入框会让编辑区
+        // 失焦但选区仍该是作用对象），失效由 setSelection / clearSelection 负责清。
+        spanRange: editorState.textRange,
+        nodeEditing: !!editorState.nodeEditId,
       },
       actions,
     );
@@ -177,8 +271,23 @@
 
   const zoom = $derived(editorState.zoom);
 
+  /* ------------------------------------------------------------ 网格 / 线框 */
+
+  const gridPrefs = $derived.by(() => {
+    void appState.typoGrid;
+    return appState.typoGrid;
+  });
+
+  /** 一格在文档坐标里的尺寸。百分比模式在这里换算成 px，下游只认 px。 */
+  const gridStep = $derived(gridSpacing(gridPrefs, docSize));
+
+  const frameVisible = $derived(gridPrefs.frame);
+
   const missingFonts = $derived.by(() => {
     void appState.version;
+    // 字体表变了（导入 / 注册内置）也要重算 —— 注册不动 project store 的 version，
+    // 只订阅 version 的话「导入完提示不消失」。
+    void appState.fontFamilies;
     const d = doc;
     return d ? appState.fonts.missing(d) : [];
   });
@@ -191,7 +300,10 @@
     const sig = signature;
     const d = doc;
     if (!paperEl || !d || !sig) return;
-    paperEl.replaceChildren(buildDocDom(d));
+    // resolveImage 必须传：文档里图片元素只存 assetId，舞台要靠它解引用成
+    // 对象 URL。漏传的表现是「插入图片后舞台一片空白，但片段预览正常」
+    // —— 光栅化那条路（runtime.ts）自己带了 resolver，所以只有舞台缺。
+    paperEl.replaceChildren(buildDocDom(d, { resolveImage: resolveImageAsset }));
   });
 
   // 版本或播放头变了就就地刷新样式，并把动画 seek 到当前时刻。
@@ -202,7 +314,8 @@
     const root = paperEl;
     if (!d || !root) return;
     // 注意传的是 `.paper` 这个**外层容器**：syncDocDom 自己会往下找文档根。
-    syncDocDom(root, d, { editingId: editorState.editingTextId });
+    syncDocDom(root, d, { editingId: editorState.editingTextId, resolveImage: resolveImageAsset });
+    restoreCaretIfNeeded();
     seekAnimations(root, animationSpecs(d), ls);
   });
 
@@ -273,7 +386,14 @@
     void runtime
       .rasterizeOnce(d, d.size.w, d.size.h, ls)
       .then((canvas) => {
-        if (!cancelled) host.replaceChildren(canvas);
+        if (cancelled) return;
+        // canvas 的固有尺寸是**文档像素**（d.size.w × d.size.h），而 host 是按
+        // 当前 zoom 算的。不显式压到 100% 的话它会按固有尺寸显示 —— 表现为
+        // 「光栅预览比可编辑画面大一圈」（用户报的「一大一小重叠」就是这个）。
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.style.display = 'block';
+        host.replaceChildren(canvas);
       })
       .catch(() => {
         if (!cancelled) host.replaceChildren();
@@ -316,6 +436,83 @@
     if (z > 0) editorState.setZoom(z);
   }
 
+  /**
+   * 以某个屏幕点为锚缩放 —— Ctrl+滚轮 / 触控板双指缩放走这里。
+   *
+   * 数学：内容坐标 = `paperWrap.offsetLeft + 文档坐标 × zoom`。
+   * 想让 (clientX) 底下的那个文档点**不动**，就得让缩放后它的内容坐标
+   * 仍然对应同一个屏幕位置 ⇒ `scrollLeft = offsetLeft' + docX·zoom' - (clientX - rect.left)`。
+   *
+   * `offsetLeft'` 必须**在布局更新后**再读：paper-wrap 是 `margin: auto` 居中的，
+   * 缩小到比视口窄时它的偏移会变，用旧值算出来的锚点会整体偏一截。
+   * 所以缩放先落盘，滚动位置放在 rAF 里补。
+   */
+  function zoomAt(clientX: number, clientY: number, factor: number): void {
+    const vp = viewportEl;
+    const wrap = paperWrapEl;
+    if (!vp || !wrap) return;
+    const rect = vp.getBoundingClientRect();
+    const z0 = editorState.zoom;
+    const docX = (clientX - (rect.left - vp.scrollLeft + wrap.offsetLeft)) / z0;
+    const docY = (clientY - (rect.top - vp.scrollTop + wrap.offsetTop)) / z0;
+
+    autoFit = false;
+    editorState.setZoom(z0 * factor);
+    const z1 = editorState.zoom;
+    if (z1 === z0) return;
+
+    requestAnimationFrame(() => {
+      vp.scrollLeft = wrap.offsetLeft + docX * z1 - (clientX - rect.left);
+      vp.scrollTop = wrap.offsetTop + docY * z1 - (clientY - rect.top);
+    });
+  }
+
+  /** Ctrl（或 ⌘）+ 滚轮 / 双指捏合。浏览器原生缩放必须挡掉。 */
+  $effect(() => {
+    const el = viewportEl;
+    if (!el) return;
+    const onWheel = (e: WheelEvent): void => {
+      // 触控板双指捏合在 Chromium 里就是 `ctrlKey === true` 的 wheel，
+      // 与「Ctrl + 滚轮」共用一条路 —— 不需要单独处理 gesturestart。
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0018));
+    };
+    // 必须 passive:false，否则 preventDefault 无效、页面会跟着缩放。
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  });
+
+  /**
+   * 中键拖拽平移。
+   *
+   * 原生中键在 Windows 上是「自动滚动」（出现那个四向圆圈），必须自己接管 ——
+   * `preventDefault` 掉 pointerdown 还不够，`auxclick` 也要挡，否则某些构建
+   * 里中键松手仍会触发默认行为。
+   */
+  function startPan(e: PointerEvent): void {
+    const vp = viewportEl;
+    if (!vp) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const sl = vp.scrollLeft;
+    const st = vp.scrollTop;
+    panning = true;
+
+    const onMove = (ev: PointerEvent): void => {
+      vp.scrollLeft = sl - (ev.clientX - startX);
+      vp.scrollTop = st - (ev.clientY - startY);
+    };
+    const onUp = (): void => {
+      panning = false;
+      window.removeEventListener('pointermove', onMove);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointercancel', onUp, { once: true });
+  }
+
   /** 缩放百分比（滑杆与读数共用同一个取整口径）。 */
   const zoomPct = $derived(Math.round(zoom * 100));
 
@@ -341,6 +538,8 @@
       docSize,
       setGuides: (g: Guide[]) => (editorState.guides = g),
       snapThreshold: SNAP_PX,
+      // 关掉吸附时不传网格：`snapMove` 里 grid 为 null 就完全不走那条分支。
+      gridSpacing: gridPrefs.snap ? gridStep : null,
     };
   }
 
@@ -349,8 +548,54 @@
     return hitTest(editorState.selectableRects, p.x, p.y);
   }
 
+  /** 右侧面板宽度拖曳。指针动一下写一次（节流交给 setTypoPanelWidth 的去重）。 */
+  function startPanelDrag(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = appState.typoPanelWidth;
+    panelResizing = true;
+    const onMove = (ev: PointerEvent): void => {
+      // 面板在右侧：指针往左移 ⇒ 面板变宽，所以是减。
+      appState.setTypoPanelWidth(startW - (ev.clientX - startX));
+    };
+    const onUp = (): void => {
+      panelResizing = false;
+      window.removeEventListener('pointermove', onMove);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointercancel', onUp, { once: true });
+  }
+
+  /**
+   * 按在**选择框**上。
+   *
+   * 选择框会吞掉 pointerdown（拖整块选区靠它），所以「再单击一次进入组合」
+   * 必须在这里补 —— 而且只能补在**没拖动**的那次上：按下去就进组的话，
+   * 想拖整组的人会发现自己拖走的是组里的一个子元素。
+   *
+   * 只对**组内**的元素做这件事。多选时选择框是整个选区的外接框，随便按一下
+   * 就把选择收缩成指针底下那一个，那是很烦人的事故。
+   */
+  function onSelectionBoxDown(e: PointerEvent): void {
+    const hit = hitAt(e);
+    const el = hit ? (doc?.elements.find((x) => x.id === hit.id) ?? null) : null;
+    startMoveGesture(makeEnv(), toDoc(e), {
+      onClick: () => {
+        if (el?.groupId) editorState.pickElement(el);
+      },
+    });
+  }
+
   /** 空白处的 pointerdown：命中就起手势，落空就框选。 */
   function onStageDown(e: PointerEvent): void {
+    // 中键 = 平移。放在最前面，因为它与选择/框选完全无关，
+    // 而且要挡住原生自动滚动（`preventDefault` 必须在默认行为发生前调）。
+    if (e.button === 1) {
+      startPan(e);
+      return;
+    }
     if (e.button !== 0) return;
     if (!doc) return;
     const hit = hitAt(e);
@@ -364,8 +609,16 @@
       startMarquee(e, toDoc(e));
       return;
     }
-    if (e.shiftKey) editorState.toggle(hit.id);
-    else if (!editorState.isSelected(hit.id)) editorState.selectOnly(hit.id);
+    // Shift = 加/减选，此时不做组合语义（用户明确在按元素挑）。
+    if (e.shiftKey) {
+      editorState.toggle(hit.id);
+    } else {
+      const el = doc.elements.find((x) => x.id === hit.id);
+      // 单击选组合、再单击进组选子元素 —— 规则全在 pickElement 里，
+      // 这里不重复一遍（重复 = 两个真源，迟早不一致）。
+      if (el) editorState.pickElement(el);
+      else editorState.selectOnly(hit.id);
+    }
 
     if (editorState.selectedIds.length) startMoveGesture(makeEnv(), toDoc(e));
   }
@@ -383,6 +636,9 @@
     const el = doc.elements.find((x) => x.id === hit.id);
     if (!el || el.kind !== 'text' || el.locked) return;
     e.preventDefault();
+    // 组里的文本框：双击要**进组**再编辑，否则下一次单击又会跳回整组选中，
+    // 用户会觉得「点了两下还是选不中文字」。
+    if (el.groupId) editorState.enterGroup(el.groupId);
     editorState.selectOnly(el.id);
     editorState.beginEditing(el.id);
     // 等 DOM 真的进入编辑态（contenteditable 打开 + 上面那个 effect 里的 focus
@@ -395,25 +651,141 @@
   }
 
   /**
+   * 编辑区的输入回写。
+   *
+   * **每次都把 DOM 读回模型**（走 live 事务，不落撤销记录）。不这么做的话，
+   * 「打字 → 顺手点一下加粗」会让加粗作用在**过时的 runs** 上：模型里还没有
+   * 刚打进去的那些字，结果是格式跑到别的地方去。
+   *
+   * 整段编辑仍然只结算成**一笔**撤销 —— 撤销记录挂在 `commitEditing` 的
+   * `endGesture` 上，与以前一致。
+   */
+  function onTextInput(e: Event): void {
+    const id = editorState.editingTextId;
+    if (!id) return;
+    const node = (e.target as HTMLElement | null)?.closest?.('.typo-text') as HTMLElement | null;
+    if (!node) return;
+    const runs = serializeRuns(node);
+    if (!editorState.gestureActive) editorState.beginGesture();
+    editorState.live((d) => {
+      const el = d.elements.find((x) => x.id === id);
+      if (el && el.kind === 'text') el.runs = runs;
+    });
+    // DOM 已经和模型一致了 —— 把签名同步过去，下一次 sync 才不会把用户
+    // 刚打的字重建一遍（那会丢光标）。
+    node.setAttribute(RUNS_SIG_ATTR, runsSignature(runs));
+    syncTextRange(node, id);
+  }
+
+  /** 编辑区的选区变化 → 记下「行内选区」。只记**非空**区间。 */
+  function syncTextRange(node: HTMLElement, id: string): void {
+    const r = caretRange(node);
+    // 只记**非空**区间：光标收起时「改整块」才是符合直觉的行为。
+    editorState.textRange = r && r.end > r.start ? { elId: id, start: r.start, end: r.end } : null;
+  }
+
+  /**
+   * 接管回车与粘贴。
+   *
+   * 两件事都只有一个目的：**让编辑区永远只是一串文本节点**。
+   *
+   *  - 回车默认会造 `<div>` / `<br>` / `<p>`，而 `textContent` 对它们视而不见
+   *    （换行会丢），「range 偏移 ↔ 纯文本下标」的换算立刻失真。
+   *    改成直接插一个 `\n`（编辑区是 `white-space: pre-wrap`，换行照样显示）。
+   *  - 粘贴默认会带入外部 HTML（一段从网页复制的文字能带进 `<font>`、`<a>`、
+   *    甚至 `<script>` 标签的残留），既是注入点也让 runs 变得不可控。
+   *    只取纯文本。
+   *
+   * 用 `execCommand` 而不是手改 DOM：它会把这次改动**并入浏览器的撤销栈**、
+   * 并正确移动光标 —— 手改 DOM 两者都要自己实现一遍。该 API 虽已废弃，
+   * 但 Chromium 里是唯一能「在光标处插入且保持选区」的可用手段。
+   */
+  function installTypingGuards(node: HTMLElement): void {
+    if (node.getAttribute(GUARDS_ATTR) === '1') return;
+    node.setAttribute(GUARDS_ATTR, '1');
+    node.addEventListener('beforeinput', (e) => {
+      const it = (e as InputEvent).inputType;
+      if (it !== 'insertParagraph' && it !== 'insertLineBreak') return;
+      e.preventDefault();
+      document.execCommand('insertText', false, '\n');
+    });
+    node.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const text = (e as ClipboardEvent).clipboardData?.getData('text/plain') ?? '';
+      if (text) document.execCommand('insertText', false, text);
+    });
+  }
+
+  /**
    * 失焦即提交。
    *
-   * 提交挂在 `focusout` 而不是每帧同步里，是因为编辑期间同步**不写**
-   * textContent（写了就把用户刚打的字抹掉）。于是文档只在收尾时更新一次 ——
-   * 这正好也是撤销栈想要的一笔。
+   * 提交挂在 `focusout` 而不是每帧同步里：编辑期间同步**不重建**文本节点
+   * （重建就把用户刚打的字和光标一起弄没了）。打字过程走 live 事务，
+   * 这里只负责**结算成一笔撤销**。
    */
   function commitEditing(): void {
     const id = editorState.editingTextId;
     if (!id) return;
     const node = paperEl?.querySelector<HTMLElement>(`[data-el-id="${id}"] .typo-text`);
-    const next = node?.textContent ?? '';
+    const runs = node ? serializeRuns(node) : null;
     // 直接赋值而不是 stopEditing()：那个会再 blur 一次，形成递归。
     editorState.editingTextId = null;
+    // **不清 textRange**：点 Ribbon 的输入框也会走到这里，而那时用户刚选的那一段
+    // 还该是这次格式的作用对象（见 editor-state 里 textRange 的注释）。
     const cur = doc?.elements.find((x) => x.id === id);
-    if (!cur || cur.kind !== 'text' || cur.text === next) return;
-    editorState.commit(tr('typo.undo.editText'), (d) => {
-      const el = d.elements.find((x) => x.id === id);
-      if (el && el.kind === 'text') el.text = next;
-    });
+    if (cur?.kind === 'text' && runs && !runsEquivalent(cur.runs, runs)) {
+      editorState.live((d) => {
+        const el = d.elements.find((x) => x.id === id);
+        if (el && el.kind === 'text') el.runs = normalizeRuns(runs);
+      });
+    }
+    // 有 live 事务就结算成一笔；没打过字则什么都不留（不放空记录）。
+    if (editorState.gestureActive) editorState.endGesture(tr('typo.undo.editText'));
+  }
+
+  /**
+   * 把「当前行内选区」刷新一次。
+   *
+   * **不依赖 `selectionchange`**：那个事件的派发目标在各版本 Chromium 里不稳定
+   * （规范派给 document，带上可编辑宿主之后实测只在某些路径上派发 —— 同一个
+   * 页面里手写探针收得到、E2E 收不到）。只挂它的话表现是「行内选区时有时无」：
+   * 同样的操作，加粗一次生效一次不生效。
+   *
+   * 改成两件事：
+   *   ① 键 / 鼠标一松就重算（覆盖所有用键鼠改变选区的方式）；
+   *   ② 通过 `registerTextRangeRefresher` 暴露给快捷键路径，**在动手之前
+   *      再读一次 DOM 选区** —— 权威来源永远是「此刻的 DOM」，缓存只是为了
+   *      让 Ribbon 上的控件能跟着重渲染。
+   */
+  function refreshTextRange(): void {
+    const id = editorState.editingTextId;
+    if (!id) return;
+    const node = paperEl?.querySelector<HTMLElement>(`[data-el-id="${id}"] .typo-text`);
+    if (node) syncTextRange(node, id);
+  }
+
+  // 注册给快捷键路径（keys.ts 不认识 DOM，也不该认识）。
+  $effect(() => {
+    registerTextRangeRefresher(refreshTextRange);
+    return () => registerTextRangeRefresher(null);
+  });
+
+  /**
+   * 重建文本节点之后把光标放回去（只在选区**确实丢了**时才动手）。
+   *
+   * 挂在同步之后同步调用，而不是另起一个 `requestAnimationFrame`：rAF 与
+   * Svelte 的 flush 谁先谁后并没有保证，实测会出现「还原时 DOM 还是旧的，
+   * 于是光标落在了被替换掉的那个节点上」—— 表现是一加粗光标就没了。
+   */
+  function restoreCaretIfNeeded(): void {
+    const id = editorState.editingTextId;
+    const range = editorState.textRange;
+    if (!id || !range || range.elId !== id) return;
+    const node = paperEl?.querySelector<HTMLElement>(`[data-el-id="${id}"] .typo-text`);
+    if (!node) return;
+    const live = caretRange(node);
+    if (live && live.end > live.start) return; // 选区还在，别去动它
+    setCaretRange(node, range.start, range.end);
   }
 
   /** 框选：拖出矩形，与外接框相交即选中。 */
@@ -445,8 +817,158 @@
     attachWindow(onMove, onUp);
   }
 
-  /** 指针监听挂 window（与 gestures.ts 同一套约定）。 */
-  function attachWindow(onMove: (e: PointerEvent) => void, onUp: () => void): void {
+  /**
+   * 右键菜单。
+   *
+   * 空白处右键**不清空选择集** —— 与 PPT / 设计工具一致：用户往往先选好一批
+   * 元素，再到空白处右键做「置顶 / 组合」。清空的话那批操作就没对象了。
+   * 点在某个未选中的元素上则先把它选上，这样「右键 → 复制这个」符合直觉。
+   */
+  function onStageContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+    if (!doc) return;
+    const hit = hitAt(e);
+    if (hit && !editorState.isSelected(hit.id)) editorState.selectOnly(hit.id);
+    ctxMenu = { x: e.clientX, y: e.clientY };
+  }
+
+  /** 修饰键提示文案。平台相关的部分集中在这里，免得散落成一堆字面量。 */
+  const macLike = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+  function mod(key: string): string {
+    return `${macLike ? '⌘' : 'Ctrl'}+${key}`;
+  }
+
+  const ctxItems = $derived.by<MenuItem[]>(() => {
+    void appState.version;
+    const n = selection.length;
+    const none = n === 0;
+    const a = actions;
+    /** 动作包装：先关菜单再执行 —— 菜单是条件渲染的，动作里若再触发重排会打架。 */
+    const run = (fn: () => void) => () => {
+      closeCtx();
+      fn();
+    };
+    return [
+      {
+        id: 'copy',
+        label: tr('typo.menu.copy'),
+        icon: 'copy',
+        shortcut: mod('C'),
+        testid: 'typo-ctx-copy',
+        disabled: none,
+        onselect: run(() => a.copySelection()),
+      },
+      {
+        id: 'cut',
+        label: tr('typo.menu.cut'),
+        icon: 'scissors',
+        shortcut: mod('X'),
+        testid: 'typo-ctx-cut',
+        disabled: none,
+        onselect: run(() => a.cutSelection()),
+      },
+      {
+        id: 'paste',
+        label: tr('typo.menu.paste'),
+        icon: 'clipboard-paste',
+        shortcut: mod('V'),
+        testid: 'typo-ctx-paste',
+        disabled: !a.hasClipboard(),
+        onselect: run(() => a.pasteClipboard()),
+      },
+      { id: 'sep-1', separator: true },
+      {
+        id: 'group',
+        label: tr('typo.menu.group'),
+        icon: 'group',
+        shortcut: mod('G'),
+        testid: 'typo-ctx-group',
+        disabled: !a.canGroup(),
+        onselect: run(() => a.groupSelection()),
+      },
+      {
+        id: 'ungroup',
+        label: tr('typo.menu.ungroup'),
+        icon: 'ungroup',
+        shortcut: `${mod('Shift')}+G`,
+        testid: 'typo-ctx-ungroup',
+        disabled: !a.canUngroup(),
+        onselect: run(() => a.ungroupSelection()),
+      },
+      { id: 'sep-g', separator: true },
+      {
+        id: 'duplicate',
+        label: tr('rib.duplicate'),
+        icon: 'copy',
+        shortcut: mod('D'),
+        testid: 'typo-ctx-duplicate',
+        disabled: none,
+        onselect: run(() => a.duplicateSelection()),
+      },
+      {
+        id: 'delete',
+        label: tr('common.delete'),
+        icon: 'trash',
+        danger: true,
+        shortcut: 'Del',
+        testid: 'typo-ctx-delete',
+        disabled: none,
+        onselect: run(() => a.deleteSelection()),
+      },
+      { id: 'sep-2', separator: true },
+      {
+        id: 'front',
+        label: tr('rib.toFront'),
+        icon: 'bring-to-front',
+        testid: 'typo-ctx-front',
+        disabled: none,
+        onselect: run(() => a.order('front')),
+      },
+      {
+        id: 'forward',
+        label: tr('typo.menu.forward'),
+        icon: 'move-up',
+        testid: 'typo-ctx-forward',
+        disabled: none,
+        onselect: run(() => a.order('forward')),
+      },
+      {
+        id: 'backward',
+        label: tr('typo.menu.backward'),
+        icon: 'move-down',
+        testid: 'typo-ctx-backward',
+        disabled: none,
+        onselect: run(() => a.order('backward')),
+      },
+      {
+        id: 'back',
+        label: tr('rib.toBack'),
+        icon: 'send-to-back',
+        testid: 'typo-ctx-back',
+        disabled: none,
+        onselect: run(() => a.order('back')),
+      },
+      { id: 'sep-3', separator: true },
+      {
+        id: 'lock',
+        label: tr('rib.lock'),
+        icon: 'lock',
+        testid: 'typo-ctx-lock',
+        disabled: none,
+        onselect: run(() => a.toggleFlag('locked')),
+      },
+      {
+        id: 'hide',
+        label: tr('rib.hide'),
+        icon: 'eye-off',
+        testid: 'typo-ctx-hide',
+        disabled: none,
+        onselect: run(() => a.toggleFlag('visible')),
+      },
+    ];
+  });
+
+  /** 指针监听挂 window（与 gestures.ts 同一套约定）。 */  function attachWindow(onMove: (e: PointerEvent) => void, onUp: () => void): void {
     const up = (): void => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', up);
@@ -473,14 +995,20 @@
     {/if}
   </div>
 
-  <div class="main">
+  <div class="main" class:resizing={panelResizing} style:--typo-panel-w={`${appState.typoPanelWidth}px`}>
     <!-- role="presentation" 与 Timeline 的 .rows 一致：这是指针手势面，不是语义容器。 -->
     <div
       class="viewport"
+      class:panning
       role="presentation"
       bind:this={viewportEl}
       onpointerdown={onStageDown}
       ondblclick={onStageDblClick}
+      oncontextmenu={onStageContextMenu}
+      oninput={onTextInput}
+      onkeyup={refreshTextRange}
+      onmouseup={refreshTextRange}
+      onauxclick={(e) => e.preventDefault()}
       data-testid="typo-stage"
     >
       <div
@@ -498,12 +1026,39 @@
         ></div>
         <div
           class="paper"
+          class:paper-hidden={editorState.rasterPreview}
           bind:this={paperEl}
           style:transform={`scale(${zoom})`}
           onfocusout={commitEditing}
         ></div>
 
         <div class="overlay">
+          <!--
+            画幅线框 + 网格。两者都画在**文档坐标系**里（这里就是 paper-wrap 的原点），
+            所以随 zoom 一起缩放，位置天然与元素一致。
+            网格用两个元素 + CSS mask 做「虚线」：一个元素画满实线、mask 把它切成
+            短划线。逐条渲染要 75～750 个 DOM 节点，而且每条都要绑 zoom。
+          -->
+          {#if frameVisible}
+            <i class="canvas-frame" data-testid="typo-canvas-frame"></i>
+          {/if}
+          {#if gridPrefs.enabled}
+            {#if gridPrefs.showX}
+              <i
+                class="grid grid-v"
+                data-testid="typo-grid-v"
+                style:background-size={`${gridStep.x * zoom}px 100%`}
+              ></i>
+            {/if}
+            {#if gridPrefs.showY}
+              <i
+                class="grid grid-h"
+                data-testid="typo-grid-h"
+                style:background-size={`100% ${gridStep.y * zoom}px`}
+              ></i>
+            {/if}
+          {/if}
+
           <!--
             用 selectionRects（每项是**新对象**）而不是 selection（元素本身原地改）。
             Svelte 5 的模板 effect 靠 `===` 判断传播，直接读 `el.frame.x` 会因为
@@ -555,20 +1110,55 @@
           挂到 viewport 上就会以 viewport 的左上角为基准，而 paper 是水平居中
           且带 PAD 边距的 —— 结果是选择框整体偏移、把手完全点不中。
         -->
-        <SelectionLayer
-          rect={selectionBox}
-          {zoom}
-          editing={!!editorState.editingTextId &&
-            selection.length === 1 &&
-            selection[0]!.id === editorState.editingTextId}
-          onMove={(e) => startMoveGesture(makeEnv(), toDoc(e))}
-          onHandle={(h: HandleId, e: PointerEvent) => startResizeGesture(makeEnv(), h, toDoc(e))}
-          onRotate={(e) => startRotateGesture(makeEnv(), toDoc(e))}
-        />
+        <!--
+          顶点编辑态下**不渲染**选择层：它的 8 个缩放把手画在框边上，而椭圆这类
+          路径的四个锚点正好落在框边的中点上 —— 叠加时锚点会被把手盖住，点下去
+          是缩放而不是拖点。退出编辑（Escape）后选择层回来。
+
+          控制点（`paths: false`）则**与选择层并存**，所以它必须排在选择层**之后**
+          （DOM 靠后 = 叠在上面）：选择层的框会吞掉整片 pointerdown。
+        -->
+        {#if !nodeEditEl}
+          <SelectionLayer
+            rect={selectionBox}
+            {zoom}
+            editing={!!editorState.editingTextId &&
+              selection.length === 1 &&
+              selection[0]!.id === editorState.editingTextId}
+            onMove={(e) => onSelectionBoxDown(e)}
+            onHandle={(h: HandleId, e: PointerEvent) => startResizeGesture(makeEnv(), h, toDoc(e))}
+            onRotate={(e) => startRotateGesture(makeEnv(), toDoc(e))}
+          />
+        {/if}
+
+        {#if nodeEditEl ?? soloShape}
+          {@const target = (nodeEditEl ?? soloShape)!}
+          <NodeEditor
+            el={target}
+            {zoom}
+            paths={!!nodeEditEl}
+            subs={nodeSubs}
+            handles={nodeHandles}
+            {toDoc}
+            onShapeHandle={(h, e) => startShapeHandleDrag(makeEnv(), target.id, h, toDoc(e))}
+            onNodeDrag={(t, e) => startNodeDrag(makeEnv(), target.id, t, toDoc(e))}
+            onAddNode={(hit) => actions.addPathNode(hit)}
+            onDeleteNode={(i) => actions.deletePathNode(i)}
+          />
+        {/if}
       </div>
     </div>
 
-    <LayersPanel />
+    <div
+      class="split"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={tr('typo.panelDrag')}
+      data-testid="typo-panel-split"
+      onpointerdown={startPanelDrag}
+    ></div>
+
+    <SidePanel />
   </div>
 
   <div class="zoombar">
@@ -607,7 +1197,7 @@
       />
     </span>
     <IconButton
-      icon="panel-right"
+      icon="monitor"
       label={tr('typo.rasterPreview')}
       testid="typo-raster-toggle"
       active={editorState.rasterPreview}
@@ -615,6 +1205,10 @@
     />
   </div>
 </div>
+
+{#if ctxMenu}
+  <Menu items={ctxItems} at={ctxMenu} onclose={closeCtx} testid="typo-context-menu" />
+{/if}
 
 {#if customCssOpen}
   <CustomCssModal
@@ -650,9 +1244,26 @@
   }
   .main {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 180px;
+    /* 中间 4px 是拖曳把手列：用独立的 grid 列而不是绝对定位，
+       这样它天然吃满高度、也不会和两侧内容重叠。 */
+    grid-template-columns: minmax(0, 1fr) 4px var(--typo-panel-w, 208px);
     min-height: 0;
     min-width: 0;
+  }
+  .split {
+    /* 与片段编辑器的检查器抽屉（InspectorDrawer 的 .drawer-resize）保持同一套：
+       4px 命中区、ew-resize 光标、hover / 拖动中都是**实心主题色**。
+       之前这里是 col-resize + --accent-weak，同一个交互在两条链路上长得不一样。 */
+    cursor: ew-resize;
+    background: transparent;
+  }
+  .split:hover,
+  .resizing .split {
+    background: var(--accent);
+  }
+  /* 拖动中禁止选中文本，否则整页会变蓝（与检查器同款处理）。 */
+  .resizing {
+    user-select: none;
   }
   .banner {
     padding: 4px var(--sp-4);
@@ -671,6 +1282,10 @@
     background: repeating-conic-gradient(var(--surface-2) 0% 25%, var(--surface-1) 0% 50%) 50% / 16px 16px;
     touch-action: none;
   }
+  /* 中键平移中：光标要有反馈，否则用户不知道手势被接住了。 */
+  .viewport.panning {
+    cursor: grabbing;
+  }
   .paper-wrap {
     position: relative;
   }
@@ -680,6 +1295,15 @@
     left: 0;
     top: 0;
     transform-origin: 0 0;
+  }
+  /*
+   * 光栅预览打开时把可编辑画面整个让出来。
+   * 两者是**同一位置的两张图**，都显示的话就是「一模一样的两幅叠在一起」，
+   * 而且光栅那张按文档像素渲染、不跟 zoom 缩，看起来会比可编辑的大一圈。
+   * 这个开关的语义本来就是 A/B 对照（验证「看到的 = 导出的」），不是叠加。
+   */
+  .paper-hidden {
+    visibility: hidden;
   }
   .raster-host {
     pointer-events: none;
@@ -692,6 +1316,40 @@
     bottom: 0;
     pointer-events: none;
   }
+  /* 画幅线框：常驻，告诉用户「画面范围到哪儿」。用 inset 边框 + 外发光，
+     透明文档（排版层要叠到画面上）也能一眼看出边界。
+     颜色从语义色 mix 出来而不是新增 token：网格是**编辑器 chrome**，
+     不该进主题色板（那会让主题测试与配色面板多两个没有语义的槽位）。 */
+  .canvas-frame {
+    position: absolute;
+    inset: 0;
+    outline: 1px solid color-mix(in srgb, var(--text-secondary) 65%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-0) 55%, transparent);
+    pointer-events: none;
+  }
+  .grid {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* 一个实线格 + 一个 mask 切成虚线：两个元素顶掉几百个 DOM 节点。
+       mask 的虚线周期是**屏幕 px**（不随 zoom 缩），所以任何缩放下
+       网格看起来都是同一套点线。 */
+    --grid: color-mix(in srgb, var(--text-muted) 42%, transparent);
+    -webkit-mask-image: repeating-linear-gradient(to bottom, #000 0 3px, transparent 3px 9px);
+    mask-image: repeating-linear-gradient(to bottom, #000 0 3px, transparent 3px 9px);
+  }
+  .grid-v {
+    background-image: linear-gradient(to right, var(--grid) 0 1px, transparent 1px);
+    background-repeat: repeat;
+  }
+  .grid-h {
+    /* 横线的虚线方向要转 90°，否则短划线顺着线走 —— 看起来还是一条实线。 */
+    -webkit-mask-image: repeating-linear-gradient(to right, #000 0 3px, transparent 3px 9px);
+    mask-image: repeating-linear-gradient(to right, #000 0 3px, transparent 3px 9px);
+    background-image: linear-gradient(to bottom, var(--grid) 0 1px, transparent 1px);
+    background-repeat: repeat;
+  }
+
   /* 多选时每项一个细框，外接框用虚线区分「这是整体」。 */
   .typo-sel {
     position: absolute;
@@ -716,10 +1374,15 @@
     right: 0;
     height: 1px;
   }
+  /*
+   * 框选矩形必须是**半透明**的：它盖在画面之上，不透明的话拖框的过程中
+   * 底下被框住的内容全看不见（用户报的「选框是个实心块」）。
+   * 用 color-mix 而不是 --accent-weak —— 后者是**不透明**的色阶值。
+   */
   .marquee {
     position: absolute;
     border: 1px solid var(--accent);
-    background: var(--accent-weak);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
   .zoombar {

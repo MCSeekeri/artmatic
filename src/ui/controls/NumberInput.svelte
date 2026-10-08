@@ -37,6 +37,15 @@
     onchange: (v: number) => void;
     /** 拖动过程中的实时值（不写撤销栈时用）。 */
     oninput?: (v: number) => void;
+    /**
+     * 拖动结束（含 Esc 取消）时调一次，**在 onchange 之后**。
+     *
+     * 给「实时预览」用：调用方在 oninput 里开一个手势事务把每帧写进文档，
+     * 这里给它一个确定的收尾信号。没有这个回调的话，事务只能等 onchange ——
+     * 而实时预览已经让值等于最终值，`up()` 里的 `v !== value` 判断会短路，
+     * onchange 根本不触发，事务就悬在那儿了（后续每一次 commit 都被并进去）。
+     */
+    onliveend?: () => void;
     min?: number;
     max?: number;
     step?: number;
@@ -58,6 +67,7 @@
     value,
     onchange,
     oninput,
+    onliveend,
     min,
     max,
     step = 1,
@@ -134,6 +144,7 @@
     oninput?.(origin);
     dragging = false;
     detach();
+    onliveend?.();
   }
 
   function detach(): void {
@@ -231,6 +242,8 @@
       inputEl.focus();
       inputEl.select();
     }
+    // 无论 onchange 有没有触发，都要给实时预览一个确定的收尾信号。
+    onliveend?.();
   }
 
   /* --------------------------------------------------------- 文本编辑 */

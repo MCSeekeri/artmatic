@@ -18,7 +18,7 @@ import type { TypographyDocument } from '../typography/document';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -245,6 +245,46 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * （那会把用户的转场悄悄抹掉，是最难查的一类数据丢失）。
    */
   2: (p) => ({ ...p, schemaVersion: 3 }),
+
+  /**
+   * v3 → v4：`TextElement.text: string` → `runs: TextRun[]`（富文本）。
+   *
+   * 这是**真正要改写数据**的一条：v3 的每个文本元素都有一个 `text` 字段，
+   * 升上来之后它必须变成只有一个 run 的 `runs`，否则富文本渲染读到 `undefined`
+   * 会渲染成空白 —— 用户的标题直接消失，而控制台没有任何报错。
+   *
+   * 反向不成立：`runs` 表达不了的文字（被删掉的覆盖样式信息）没法回到 `text`。
+   * 所以升上来之后不要再降回去。
+   */
+  3: (p) => {
+    const tracks = (p.tracks as { clips?: unknown[] }[] | undefined) ?? [];
+    for (const t of tracks) {
+      for (const c of (t.clips ?? []) as {
+        kind?: string;
+        source?: { type?: string; doc?: TypographyDocument };
+      }[]) {
+        if (c.kind !== 'source' || c.source?.type !== 'text') continue;
+        const doc = c.source.doc;
+        if (!doc || !Array.isArray(doc.elements)) continue;
+        for (const el of doc.elements as unknown as (Record<string, unknown> & { kind?: string })[]) {
+          if (el.kind !== 'text') continue;
+          if (Array.isArray(el.runs)) {
+            delete el.text;
+            continue;
+          }
+          const text = typeof el.text === 'string' ? el.text : '';
+          el.runs = [{ text }];
+          delete el.text;
+        }
+        // `groups` 在这一版补齐。**可选字段**，但补上空数组能让
+        // 「老工程 vs 新工程」在 stableStringify 下的差异少一处。
+        if (!Array.isArray((doc as unknown as { groups?: unknown }).groups)) {
+          (doc as unknown as { groups: unknown[] }).groups = [];
+        }
+      }
+    }
+    return { ...p, schemaVersion: 4 };
+  },
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -325,6 +365,14 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
         }
         if (!doc.size || !(doc.size.w > 0) || !(doc.size.h > 0)) {
           throw new SchemaError(tr('err.schema.typographyBadSize', { id: c.id }));
+        }
+        // 富文本的**最小结构校验**：文本元素必须有 runs 数组。
+        // 漏了这一步的话，手改过的 JSON（或想当然是 v3 的旧文件）会一路穿透到
+        // 渲染期，那里读到 undefined 只会渲染出空白 —— 没有报错、也很难定位。
+        for (const el of doc.elements as { kind?: string; runs?: unknown }[]) {
+          if (el?.kind === 'text' && !Array.isArray(el.runs)) {
+            throw new SchemaError(tr('err.schema.typographyBadTextRuns', { id: c.id }));
+          }
         }
       }
       // 转场同样是「形状不对就穿透到渲染期」的那一类，在这里挡住。

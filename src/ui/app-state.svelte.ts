@@ -24,6 +24,7 @@ import { ProjectAudio } from './project-audio';
 // 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
 import { createRenderCore } from '../render/render-core';
 import { FontRegistry } from '../typography/font-registry';
+import { localFontSource, queryLocalFontFamilies } from '../typography/local-fonts';
 import { TypographyRuntime } from '../typography/runtime';
 import {
   createOffscreenHost,
@@ -42,6 +43,7 @@ import type { AssetIssue } from '../project/ledger';
 import type { ProjectRef } from '../project/handles';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import { DENSITY } from './tokens';
+import { DEFAULT_TYPO_GRID, normalizeTypoGrid, type TypoGridPrefs } from '../typography/grid';
 import { tr } from '../i18n/index.svelte';
 
 /* ------------------------------------------------------------ UI 偏好持久化
@@ -72,6 +74,22 @@ interface UiPrefs {
    * localStorage 而不是 project.json，也不会让工程变脏。
    */
   mascotEnabled: boolean;
+  /**
+   * 排版编辑器的网格 / 画幅线框。
+   * 整块存一项而不是拆成 6 个平铺字段：加一个开关只需改 `TypoGridPrefs`，
+   * 不必再回到这里补三处（fallback / normalize / persist）。
+   */
+  typoGrid: TypoGridPrefs;
+  /** 右侧「图层 / 动画」面板宽度。 */
+  typoPanelWidth: number;
+}
+
+/** 排版右栏宽度档位。与检查器抽屉同一套上下限口径。 */
+export const TYPO_PANEL_W = { min: 140, max: 420, default: 208 } as const;
+
+export function clampTypoPanelWidth(w: number): number {
+  if (!Number.isFinite(w)) return TYPO_PANEL_W.default;
+  return Math.min(TYPO_PANEL_W.max, Math.max(TYPO_PANEL_W.min, Math.round(w)));
 }
 
 /** 预览帧率档位（分母）。 */
@@ -109,6 +127,8 @@ function loadUiPrefs(): UiPrefs {
     previewBarCollapsed: false,
     shortcutScheme: 'artmatic',
     mascotEnabled: false,
+    typoGrid: { ...DEFAULT_TYPO_GRID },
+    typoPanelWidth: TYPO_PANEL_W.default,
   };
   try {
     const raw = localStorage.getItem(UI_KEY);
@@ -130,6 +150,8 @@ function loadUiPrefs(): UiPrefs {
       shortcutScheme: normalizeScheme(p.shortcutScheme),
       mascotEnabled:
         typeof p.mascotEnabled === 'boolean' ? p.mascotEnabled : fallback.mascotEnabled,
+      typoGrid: normalizeTypoGrid(p.typoGrid, fallback.typoGrid),
+      typoPanelWidth: clampTypoPanelWidth(Number(p.typoPanelWidth) || fallback.typoPanelWidth),
     };
   } catch {
     return fallback;
@@ -296,6 +318,10 @@ class AppState {
   typoPreviewScale = $state<number>(1);
   /** 对齐目标：「画布」= 相对幻灯片（PPT 叫法），「选区」= 相对选中集外接框。 */
   typoAlignTarget = $state<'canvas' | 'selection'>('canvas');
+  /** 网格 / 画幅线框。整块作为一个偏好项存，避免每加一个开关就改四处持久化代码。 */
+  typoGrid = $state<TypoGridPrefs>({ ...DEFAULT_TYPO_GRID });
+  /** 右侧「图层 / 动画」面板宽度（可拖）。 */
+  typoPanelWidth = $state<number>(TYPO_PANEL_W.default);
   /**
    * 已注册的字体族（Ribbon 的字体下拉读它）。
    * 做成响应式而不是每次读 registry：注册发生在异步导入之后，
@@ -303,9 +329,61 @@ class AppState {
    */
   fontFamilies = $state<string[]>([]);
 
+  /**
+   * 从**本机**枚举来的字体族（只在这台机器上有）。
+   *
+   * 与 `fontFamilies` 分开存是必须的：那个是 `FontRegistry` 的镜像 —— 有 FontFace、
+   * 有字节、导出时能子集化嵌入；这个是系统字体 —— **不可嵌入**，换台机器就没了。
+   * 混成一份的话，「导出时这个字体该不该嵌进去」就失去了判据。
+   */
+  localFontFamilies = $state<string[]>([]);
+
   /** 字体表变更后调一次（注册内置字体、用户导入之后）。 */
   refreshFontFamilies(): void {
     this.fontFamilies = this.fonts.families();
+  }
+
+  /** 当前环境能不能读本机字体（入口按钮据此置灰）。只在 Chromium 桌面版有。 */
+  get supportsLocalFonts(): boolean {
+    return localFontSource() !== null;
+  }
+
+  /**
+   * 读本机字体。
+   *
+   * **必须由用户点击触发** —— 这个 API 要求用户手势，启动时自动调会直接 reject。
+   * 三种失败要分开说：合成一句「读取失败」会让用户不知道该去浏览器设置里授权，
+   * 还是该换个浏览器。
+   */
+  async loadLocalFonts(): Promise<void> {
+    const r = await queryLocalFontFamilies();
+    switch (r.kind) {
+      case 'ok':
+        this.localFontFamilies = r.families;
+        this.flash(tr('typo.localFontsLoaded', { n: r.families.length }), 'success');
+        return;
+      case 'denied':
+        this.flash(tr('typo.localFontsDenied'), 'error');
+        return;
+      case 'unsupported':
+        this.flash(tr('typo.localFontsUnsupported'), 'error');
+        return;
+      default:
+        this.flash(tr('typo.localFontsFailed', { msg: r.message }), 'error');
+    }
+  }
+
+  /** 局部更新网格设置（只写要覆盖的键，与工程的参数覆盖同一套思路）。 */
+  setTypoGrid(patch: Partial<TypoGridPrefs>): void {
+    this.typoGrid = normalizeTypoGrid({ ...this.typoGrid, ...patch });
+    this.persistUi();
+  }
+
+  setTypoPanelWidth(w: number): void {
+    const next = clampTypoPanelWidth(w);
+    if (this.typoPanelWidth === next) return;
+    this.typoPanelWidth = next;
+    this.persistUi();
   }
 
   /* ---------------------------------------------------------- 打开的工程 */
@@ -654,6 +732,8 @@ class AppState {
     this.previewBarCollapsed = prefs.previewBarCollapsed;
     this.shortcutScheme = prefs.shortcutScheme;
     this.mascotEnabled = prefs.mascotEnabled;
+    this.typoGrid = prefs.typoGrid;
+    this.typoPanelWidth = prefs.typoPanelWidth;
   }
 
   /**
@@ -735,6 +815,8 @@ class AppState {
       previewBarCollapsed: this.previewBarCollapsed,
       shortcutScheme: this.shortcutScheme,
       mascotEnabled: this.mascotEnabled,
+      typoGrid: this.typoGrid,
+      typoPanelWidth: this.typoPanelWidth,
     });
   }
 

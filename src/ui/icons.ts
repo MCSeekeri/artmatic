@@ -33,9 +33,13 @@ import Blend from '@lucide/svelte/icons/blend';
 import Bold from '@lucide/svelte/icons/bold';
 import BringToFront from '@lucide/svelte/icons/bring-to-front';
 import Check from '@lucide/svelte/icons/check';
+import ChevronDown from '@lucide/svelte/icons/chevron-down';
 import ChevronRight from '@lucide/svelte/icons/chevron-right';
+import ChevronUp from '@lucide/svelte/icons/chevron-up';
 import Circle from '@lucide/svelte/icons/circle';
+import ClipboardPaste from '@lucide/svelte/icons/clipboard-paste';
 import Clock from '@lucide/svelte/icons/clock';
+import Combine from '@lucide/svelte/icons/combine';
 import Copy from '@lucide/svelte/icons/copy';
 import Crop from '@lucide/svelte/icons/crop';
 import Diamond from '@lucide/svelte/icons/diamond';
@@ -48,6 +52,9 @@ import FilePlus from '@lucide/svelte/icons/file-plus';
 import FlaskConical from '@lucide/svelte/icons/flask-conical';
 import Folder from '@lucide/svelte/icons/folder';
 import FolderOpen from '@lucide/svelte/icons/folder-open';
+import Frame from '@lucide/svelte/icons/frame';
+import Grid2x2 from '@lucide/svelte/icons/grid-2x2';
+import Group from '@lucide/svelte/icons/group';
 import HardDrive from '@lucide/svelte/icons/hard-drive';
 import Hexagon from '@lucide/svelte/icons/hexagon';
 import ImageIcon from '@lucide/svelte/icons/image';
@@ -56,22 +63,28 @@ import ImportIcon from '@lucide/svelte/icons/import';
 import Info from '@lucide/svelte/icons/info';
 import Italic from '@lucide/svelte/icons/italic';
 import Keyboard from '@lucide/svelte/icons/keyboard';
+import Layers from '@lucide/svelte/icons/layers';
 import Lock from '@lucide/svelte/icons/lock';
 import LockOpen from '@lucide/svelte/icons/lock-open';
+import Magnet from '@lucide/svelte/icons/magnet';
 import Megaphone from '@lucide/svelte/icons/megaphone';
 import MegaphoneOff from '@lucide/svelte/icons/megaphone-off';
 import Minimize2 from '@lucide/svelte/icons/minimize-2';
 import Minus from '@lucide/svelte/icons/minus';
+import Monitor from '@lucide/svelte/icons/monitor';
 import Moon from '@lucide/svelte/icons/moon';
+import Move from '@lucide/svelte/icons/move';
 import MoveDown from '@lucide/svelte/icons/move-down';
 import MoveHorizontal from '@lucide/svelte/icons/move-horizontal';
 import MoveUp from '@lucide/svelte/icons/move-up';
 import Music from '@lucide/svelte/icons/music';
+import PaintBrush from '@lucide/svelte/icons/paintbrush';
 import PaintBucket from '@lucide/svelte/icons/paint-bucket';
 import PanelRight from '@lucide/svelte/icons/panel-right';
 import Palette from '@lucide/svelte/icons/palette';
 import Pause from '@lucide/svelte/icons/pause';
 import Pencil from '@lucide/svelte/icons/pencil';
+import PenTool from '@lucide/svelte/icons/pen-tool';
 import Play from '@lucide/svelte/icons/play';
 import Plus from '@lucide/svelte/icons/plus';
 import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -85,6 +98,13 @@ import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
 import Shapes from '@lucide/svelte/icons/shapes';
 import Sigma from '@lucide/svelte/icons/sigma';
 import Sparkles from '@lucide/svelte/icons/sparkles';
+import Spline from '@lucide/svelte/icons/spline';
+import Eraser from '@lucide/svelte/icons/eraser';
+import ALargeSmall from '@lucide/svelte/icons/a-large-small';
+import SquaresExclude from '@lucide/svelte/icons/squares-exclude';
+import SquaresIntersect from '@lucide/svelte/icons/squares-intersect';
+import SquaresSubtract from '@lucide/svelte/icons/squares-subtract';
+import SquaresUnite from '@lucide/svelte/icons/squares-unite';
 import Square from '@lucide/svelte/icons/square';
 import SquareDashed from '@lucide/svelte/icons/square-dashed';
 import Star from '@lucide/svelte/icons/star';
@@ -102,9 +122,11 @@ import Triangle from '@lucide/svelte/icons/triangle';
 import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 import Type from '@lucide/svelte/icons/type';
 import Underline from '@lucide/svelte/icons/underline';
+import Ungroup from '@lucide/svelte/icons/ungroup';
 import Upload from '@lucide/svelte/icons/upload';
 import Video from '@lucide/svelte/icons/video';
 import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
+import Waypoints from '@lucide/svelte/icons/waypoints';
 import X from '@lucide/svelte/icons/x';
 
 /** 名字 → 组件。新增图标只在这里加一行，调用点写 `name="eye"` 即得类型检查。 */
@@ -128,9 +150,13 @@ export const ICONS = {
   bold: Bold,
   'bring-to-front': BringToFront,
   check: Check,
+  'chevron-down': ChevronDown,
   'chevron-right': ChevronRight,
+  'chevron-up': ChevronUp,
   circle: Circle,
+  'clipboard-paste': ClipboardPaste,
   clock: Clock,
+  combine: Combine,
   copy: Copy,
   crop: Crop,
   diamond: Diamond,
@@ -143,6 +169,9 @@ export const ICONS = {
   'flask-conical': FlaskConical,
   folder: Folder,
   'folder-open': FolderOpen,
+  frame: Frame,
+  'grid-2x2': Grid2x2,
+  group: Group,
   'hard-drive': HardDrive,
   hexagon: Hexagon,
   image: ImageIcon,
@@ -151,22 +180,28 @@ export const ICONS = {
   info: Info,
   italic: Italic,
   keyboard: Keyboard,
+  layers: Layers,
   lock: Lock,
   'lock-open': LockOpen,
+  magnet: Magnet,
   megaphone: Megaphone,
   'megaphone-off': MegaphoneOff,
   'minimize-2': Minimize2,
   minus: Minus,
+  monitor: Monitor,
   moon: Moon,
+  move: Move,
   'move-down': MoveDown,
   'move-horizontal': MoveHorizontal,
   'move-up': MoveUp,
   music: Music,
   'paint-bucket': PaintBucket,
+  paintbrush: PaintBrush,
   'panel-right': PanelRight,
   palette: Palette,
   pause: Pause,
   pencil: Pencil,
+  'pen-tool': PenTool,
   play: Play,
   plus: Plus,
   'rotate-cw': RotateCw,
@@ -179,6 +214,13 @@ export const ICONS = {
   shapes: Shapes,
   sigma: Sigma,
   sparkles: Sparkles,
+  spline: Spline,
+  eraser: Eraser,
+  'a-large-small': ALargeSmall,
+  'squares-exclude': SquaresExclude,
+  'squares-intersect': SquaresIntersect,
+  'squares-subtract': SquaresSubtract,
+  'squares-unite': SquaresUnite,
   square: Square,
   'square-dashed': SquareDashed,
   star: Star,
@@ -194,9 +236,11 @@ export const ICONS = {
   'triangle-alert': TriangleAlert,
   type: Type,
   underline: Underline,
+  ungroup: Ungroup,
   upload: Upload,
   video: Video,
   'wand-sparkles': WandSparkles,
+  waypoints: Waypoints,
   'layout-grid': LayoutGrid,
   list: ListIcon,
   x: X,

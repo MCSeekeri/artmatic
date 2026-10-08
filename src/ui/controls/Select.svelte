@@ -43,6 +43,16 @@
      */
     filterable?: boolean;
     filterPlaceholder?: string;
+    /**
+     * 可编辑：触发区变成一个输入框，直接打字即改值；右侧箭头仍然打开预设列表。
+     * PPT 的字号就是这套 —— 能输 37，也能点箭头从预设里挑。
+     *
+     * 键盘分工：输入框聚焦时方向键归光标（否则连"往右挪一格"都做不到），
+     * 只接管 Enter（提交）、Esc（还原）、上下键（打开列表）。
+     */
+    editable?: boolean;
+    /** editable 时，输入非预设值也按数字提交（字号允许 37 这种值）。 */
+    numeric?: boolean;
   }
   const {
     value,
@@ -56,6 +66,8 @@
     minWidth = 0,
     filterable = false,
     filterPlaceholder = '',
+    editable = false,
+    numeric = false,
   }: Props = $props();
 
   /** 弹层 id，供 aria-controls 指向。 */
@@ -66,6 +78,7 @@
   let triggerEl = $state<HTMLDivElement | undefined>(undefined);
   let panelEl = $state<HTMLDivElement | undefined>(undefined);
   let filterEl = $state<HTMLInputElement | undefined>(undefined);
+  let inputEl = $state<HTMLInputElement | undefined>(undefined);
   const pos = $state({ x: -1, y: -1 });
   let panelWidth = $state(0);
 
@@ -74,6 +87,83 @@
   const visible = $derived(filterable ? filterOptions(options, query) : options);
 
   const current = $derived(options.find((o) => o.value === value));
+
+  /* ------------------------------------------------------------ 可编辑模式 */
+
+  /** 触发区里显示的文字。非编辑模式下它只是 current.label 的镜像。 */
+  let text = $state('');
+  let inputFocused = $state(false);
+
+  function labelOf(v: T): string {
+    return options.find((o) => o.value === v)?.label ?? String(v);
+  }
+
+  // 编辑器里没聚焦时才跟随外部值 —— 打字打到一半被覆盖是这类控件最烦的问题。
+  $effect(() => {
+    const v = value;
+    void options;
+    if (!inputFocused) text = labelOf(v);
+  });
+
+  /**
+   * 提交键入的值：先按 label 匹配、再按 value 匹配，都不是才在 `numeric`
+   * 下当数字收。匹配不上一律**还原**成当前值 —— 静默吞掉非法输入
+   * 比报错更糟（用户以为改成功了）。
+   */
+  function commitText(): void {
+    const raw = text.trim();
+    text = labelOf(value);
+    if (!raw) return;
+    const byLabel = options.find((o) => o.label.toLowerCase() === raw.toLowerCase());
+    if (byLabel) {
+      if (byLabel.value !== value) onchange(byLabel.value);
+      return;
+    }
+    const byValue = options.find((o) => String(o.value) === raw);
+    if (byValue) {
+      if (byValue.value !== value) onchange(byValue.value);
+      return;
+    }
+    if (!numeric) return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const next = (typeof value === 'string' ? String(n) : n) as T;
+    if (next !== value) onchange(next);
+  }
+
+  function onEditKey(e: KeyboardEvent): void {
+    if (disabled) return;
+    // 列表开着时把导航整个让给它 —— 否则方向键会被这里重新「打开」一次，
+    // 表现为高亮永远停在第一项。
+    if (open) {
+      onkeydown(e);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitText();
+      inputEl?.blur();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      text = labelOf(value);
+      inputEl?.blur();
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      openWith(indexOfValue(visible, value));
+    }
+  }
+
+  function onTriggerClick(e: MouseEvent): void {
+    if (disabled) return;
+    // 点正文（输入框）是去改文字，不是开列表。
+    const t = e.target as Node | null;
+    if (editable && t && inputEl && (t === inputEl || inputEl.contains(t))) return;
+    open ? close() : openWith(indexOfValue(visible, value));
+  }
   /** 定位完成前不显示，避免在 (-1,-1) 闪一帧。$effect 在 DOM 更新后、绘制前跑，
    *  所以正常情况下这个值在第一次绘制时就已经是 true。 */
   const positioned = $derived(pos.x >= 0 && pos.y >= 0);
@@ -184,9 +274,10 @@
 
 <div
   class="sel"
+  class:editable
   role="combobox"
   bind:this={triggerEl}
-  tabindex={disabled ? -1 : 0}
+  tabindex={editable || disabled ? -1 : 0}
   aria-expanded={open}
   aria-haspopup="listbox"
   aria-controls={open ? listboxId : undefined}
@@ -195,14 +286,50 @@
   data-exempt
   data-testid={testid}
   use:tip={{ text: tipText ?? '', disabled: !tipText }}
-  onclick={() => !disabled && (open ? close() : openWith(indexOfValue(visible, value)))}
-  {onkeydown}
+  onclick={onTriggerClick}
+  onkeydown={(e) => !editable && onkeydown(e)}
 >
-  <span class="sel-label">{current?.label ?? String(value)}</span>
+  {#if editable}
+    <!-- 可编辑触发区：直接打字即改值，右侧箭头仍开预设列表。 -->
+    <input
+      class="sel-input"
+      bind:this={inputEl}
+      type="text"
+      inputmode={numeric ? 'decimal' : 'text'}
+      autocomplete="off"
+      spellcheck="false"
+      aria-label={ariaLabel}
+      {disabled}
+      value={text}
+      data-exempt
+      data-testid={`${testid}-input`}
+      oninput={(e) => (text = e.currentTarget.value)}
+      onfocus={() => {
+        inputFocused = true;
+        text = labelOf(value);
+      }}
+      onblur={() => {
+        inputFocused = false;
+        commitText();
+      }}
+      onkeydown={onEditKey}
+      onclick={(e) => e.stopPropagation()}
+    />
+  {:else}
+    <span class="sel-label">{current?.label ?? String(value)}</span>
+  {/if}
   <span class="sel-arrow"><Icon name="chevron-right" size={11} /></span>
 </div>
 
 {#if open}
+  <!--
+    弹层必须**拦住 wheel 冒泡**。
+
+    不能只靠 CSS 的 `overscroll-behavior: contain`：那条只管**原生滚动链**，
+    而 Ribbon 的横向滚动是自己写的一个 wheel 监听（`el.scrollLeft += e.deltaY`），
+    它直接读事件、根本不走原生滚动 —— 于是「弹层与 Ribbon 重叠的那块滚一下，
+    Ribbon 跟着横向滚」。`stopPropagation` 不影响弹层自己滚动。
+  -->
   <div
     class="sel-pop"
     id={listboxId}
@@ -213,6 +340,7 @@
     style:top={`${pos.y}px`}
     style:min-width={`${panelWidth}px`}
     style:visibility={positioned ? undefined : 'hidden'}
+    onwheel={(e) => e.stopPropagation()}
   >
     {#if filterable}
       <input

@@ -86,6 +86,48 @@ export function familyFromFilename(name: string): string {
   return name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Imported';
 }
 
+/** `familyRenders` 的缓存。字体不会中途消失，命中率接近 100%。 */
+const rendersCache = new Map<string, boolean>();
+
+/**
+ * 这个族名**能不能渲染** —— 系统字体也算。
+ *
+ * 用**双基线宽差**法：同一串字分别在三个差异很大的 fallback 下量宽。
+ *  - 指定的族真的存在 ⇒ 三次都用它，宽度**相同**；
+ *  - 族不存在 ⇒ 各自回落到不同的 fallback，宽度**不同**。
+ *
+ * 为什么不用 `document.fonts.check()`：它在这件事上完全没有判断力 ——
+ * 本机实测 `check('16px "DefinitelyNotARealFont12345"')` 照样返回 `true`
+ * （它问的是「这个规格有没有可用字体」，而 fallback 永远算「有」）。
+ *
+ * Node（没有 document）里返回 `true`：无从判断时**不要误报**。
+ */
+export function familyRenders(family: string): boolean {
+  const name = family.trim();
+  if (!name) return false;
+  const cached = rendersCache.get(name);
+  if (cached !== undefined) return cached;
+  if (typeof document === 'undefined') return true;
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  if (!ctx) return true;
+
+  /*
+   * 探测串必须**纯 ASCII**：`src/` 下（语言文件除外）不许出现中日韩字面量，
+   * 这条有 `i18n.test.ts` 的守卫钉着。而对「宽度是否有差异」来说，一组宽窄
+   * 悬殊的 ASCII 字符已经够了 —— 用中文字符并不会让它更准。
+   */
+  const probe = 'mmmmmmmmmmlliWQXYZ0123456789@#%&';
+  const widths = ['monospace', 'serif', 'sans-serif'].map((fallback) => {
+    ctx.font = `72px "${name}", ${fallback}`;
+    return ctx.measureText(probe).width;
+  });
+  // 三次测量都一样 ⇒ 用的一直是那个族本身（存在）；有差异 ⇒ 发生了回落（不存在）。
+  const ok = Math.max(...widths) - Math.min(...widths) < 0.01;
+  rendersCache.set(name, ok);
+  return ok;
+}
+
 export class FontRegistry implements FontProvider {
   /** face id → face */
   private readonly faces = new Map<string, FontFaceSource>();
@@ -208,8 +250,36 @@ export class FontRegistry implements FontProvider {
   }
 
   /** 文档用到但未注册的族。UI 的「字体未就绪」横幅读这个。 */
+  /**
+   * 文档用到的字体里，**注册表承诺要提供、但还没备好**的族名。
+   *
+   * 判据不能写成「不在注册表里就报缺失」—— 那会把**系统字体**一律报成缺失：
+   * 用户在「本机字体」里选一个（或打开一份从别的机器带来的工程），立刻跳出
+   * 「字体…未就绪，正在用回落字体」，而画面上明明渲染得好好的。
+   *
+   * 也没法靠浏览器来判：`document.fonts.check('16px "编造的族名"')` 同样返回
+   * `true`（本机实测），所以「浏览器说不认识」这条路根本走不通。于是判据收缩成
+   * **只对我们自己登记过的族负责**：
+   *
+   *  - 登记过、但 face 还没 `loaded` ⇒ 真的没就绪（内置字体首次 fetch）；
+   *  - 压根没登记过 ⇒ 不是我们的责任，交给浏览器按系统字体处理。
+   *
+   * ⚠️ 判据是 **`loaded` 而不是 `dataUrl`**，这两个不是一回事：
+   * `loaded` = FontFace 已进 `document.fonts`（**能不能渲染**）；
+   * `dataUrl` = 导出时光栅化要内联的那份字节，只在 `ensure()` 里生成
+   * （**导出能不能内联**）。拿 `dataUrl` 当判据的话，用户导入一个字体之后
+   * 显示完全正常，却一直被告知「未就绪，正在用回落字体」—— 而导出流程本来就
+   * 会自己 await `ensure()`，不需要提前警告。
+   *
+   * 没登记过的族名也不能一律放过：那里面既有**系统字体**（能渲染，不该报），
+   * 也有**拼错的字体名**（该报）。两者的区别只能问渲染层，见 `familyRenders`。
+   */
   missing(doc: TypographyDocument): string[] {
-    return usedFontFamilies(doc).filter((f) => !this.byFamily.has(f));
+    return usedFontFamilies(doc).filter((f) => {
+      const ids = this.byFamily.get(f);
+      if (ids?.length) return ids.some((id) => !this.faces.get(id)?.loaded);
+      return !familyRenders(f);
+    });
   }
 
   ready(doc: TypographyDocument): boolean {

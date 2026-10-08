@@ -214,6 +214,26 @@
   color: var(--text-muted);
   transform: rotate(90deg);
 }
+/*
+ * 可编辑触发区里的输入框。
+ *
+ * 它必须**完全透明**：外层 `.sel` 已经画了底、边、圆角与内边距，输入框再画
+ * 一层就会得到一个「框里有框」的双线（原生 input 默认带 border 与 background）。
+ * 高度也不定死 —— 交给 flex 拉伸，与 .sel-label 的拉伸口径一致。
+ */
+.sel-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
 .sel[aria-expanded='true'] .sel-arrow {
   color: var(--accent);
 }

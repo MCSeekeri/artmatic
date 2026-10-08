@@ -49,6 +49,22 @@ export interface RibbonSelectSpec extends RibbonItemBase {
   optionTestidPrefix?: string;
   /** 弹层最小宽度。 */
   minWidth?: number;
+  /**
+   * 可编辑：触发区变成一个输入框，可以直接打字（PPT 的字号就是这样：
+   * 能直接输数，也能点箭头选预设）。数值型控件用 `numeric: true`
+   * 让「输入的值不在选项里」也能通过（字号允许 37 这种预设之外的值）。
+   */
+  editable?: boolean;
+  /** editable 时：输入非预设值也按数字提交。 */
+  numeric?: boolean;
+}
+
+/** 数值输入的可选实时预览回调（详见 NumberInput 的 `oninput` / `onliveend`）。 */
+export interface RibbonLiveHooks {
+  /** 拖动过程中的实时值。 */
+  oninput?: (value: number) => void;
+  /** 拖动结束（含 Esc 取消）。 */
+  onliveend?: () => void;
 }
 
 export interface RibbonColorSpec extends RibbonItemBase {
@@ -73,7 +89,7 @@ export interface RibbonSegmentSpec extends RibbonItemBase {
  * 数值输入（字距 / 行高 / 描边宽度）。
  * 复用 controls 的 NumberInput：白拿拖拽调值、Pointer Lock、方向键、Esc 取消。
  */
-export interface RibbonNumberSpec extends RibbonItemBase {
+export interface RibbonNumberSpec extends RibbonItemBase, RibbonLiveHooks {
   kind: 'number';
   value: number;
   min?: number;
@@ -84,13 +100,50 @@ export interface RibbonNumberSpec extends RibbonItemBase {
   onchange: (value: number) => void;
 }
 
+/** 「预览图面板」里的一张卡。 */
+export interface GalleryCard {
+  id: string;
+  label: string;
+  /** 预览用的 SVG path 的 `d`，坐标系是 `viewBox`。 */
+  d: string;
+  viewBox: string;
+  /** 带洞的图形（圆环 / 方框）要 evenodd。 */
+  evenOdd?: boolean;
+  /**
+   * 这个图形**没有面积**，只能描边（目前只有直线一条线段）。
+   *
+   * 其余一律实心填充。描边在这里有两个叠加的毛病：
+   *  ① 线宽是**屏幕**像素（`non-scaling-stroke`），卡片只有 34px ⇒ 看着像
+   *     一圈极粗的框；
+   *  ② 图形顶点本来就在 viewBox 的边界上，线宽的一半落在框外被裁掉 ——
+   *     多边形的尖角看起来是平的（八边形、菱形、扇形都中招）。
+   */
+  outline?: boolean;
+}
+
+/**
+ * 预览图面板（插入形状用）。
+ *
+ * 与 `select` 的区别是**每项自带一张图**：形状靠名字挑不出来，必须看见。
+ * 也不用文字说明 —— 图本身就是说明（用户原话：「预览 icon 直接使用形状本身，
+ * 不需要文字说明」）。`label` 只留作 tooltip / 无障碍名。
+ */
+export interface RibbonGallerySpec extends RibbonItemBase {
+  kind: 'gallery';
+  icon?: IconName;
+  cards: GalleryCard[];
+  columns?: number;
+  onselect: (id: string) => void;
+}
+
 export type RibbonItemSpec =
   | RibbonButtonSpec
   | RibbonToggleSpec
   | RibbonSelectSpec
   | RibbonColorSpec
   | RibbonSegmentSpec
-  | RibbonNumberSpec;
+  | RibbonNumberSpec
+  | RibbonGallerySpec;
 
 export interface RibbonGroupDef {
   id: string;
@@ -142,6 +195,8 @@ export function itemWidth(item: RibbonItemSpec): number {
       return item.options.length * SEGMENT_OPTION_W;
     case 'number':
       return NUMBER_ITEM_W;
+    case 'gallery':
+      return item.size === 'small' ? SMALL_ITEM_W : DEFAULT_ITEM_W;
     case 'toggle':
     case 'button':
       return item.size === 'small' ? SMALL_ITEM_W : DEFAULT_ITEM_W;
@@ -179,9 +234,18 @@ export function resolveVisibleTabs(
 }
 
 /** 由选择集推出应当出现的 contextual Tab。 */
-export function contextualTabIds(selection: readonly { kind: string }[]): Set<string> {
+export function contextualTabIds(
+  selection: readonly { kind: string }[],
+  opts: { soleGroup?: boolean } = {},
+): Set<string> {
   const out = new Set<string>();
   if (selection.some((e) => e.kind === 'shape')) out.add('shape-format');
   if (selection.some((e) => e.kind === 'image')) out.add('image-format');
+  // 组合格式是**排他**的：整组选中时给的是组自己的外观，
+  // 此时再并列一个「图形格式」会让人分不清改的到底是组还是组里的图。
+  if (opts.soleGroup) {
+    out.clear();
+    out.add('group-format');
+  }
   return out;
 }

@@ -10,6 +10,7 @@
  */
 
 import type { Size } from './document';
+import { quantizeEdge, quantizeToGrid } from './grid';
 
 export interface Rect {
   id: string;
@@ -43,8 +44,9 @@ export interface Guide {
   axis: 'v' | 'h';
   pos: number;
   kind: 'edge' | 'center';
-  /** 'canvas' 或元素 id。 */
-  target: 'canvas' | string;
+  /** 'canvas' / 'grid' 或元素 id。'grid' 的参考线画法与其它一致（主题色实线），
+   *  但它恰好落在网格线上，视觉上就是「那条网格线变紫了」。 */
+  target: 'canvas' | 'grid' | string;
 }
 
 export interface SnapResult {
@@ -163,9 +165,21 @@ function snapAxis(
 }
 
 /**
- * 拖动吸附。返回吸附后的位置与应当显示的参考线。
+ * 拖动吸附。
  *
- * threshold 为 0 表示不吸附（按住 Alt 关吸附时用），此时返回原位移。
+ * 两种**互斥**的模式：
+ *
+ * 1. `grid` 给了有效间距 ⇒ **网格模式**。位置被量化到格点，且**不参与**元素 /
+ *    画布参考线的吸附。这是刻意的：网格线铺满整个画布，若与智能参考线同权，
+ *    用户精心对齐好的两个元素会被网格拽走。
+ *    （曾经的做法是「元素优先、这一轴没命中才退到网格」+ 三个锚点取最近 —— 实测
+ *    表现是「元素乱飞」：宽一点的元素有三个锚点，各自离不同的格线最近，
+ *    哪条胜出完全取决于毫米级的位移。现在改成只量化**外接框原点**。）
+ *
+ * 2. 否则 ⇒ 智能参考线（画布边/中线 + 其它元素）。
+ *
+ * `threshold` 为 0 表示完全不吸附（按住 Alt 时传 0）—— 网格模式下也一样，
+ * Alt 是用户的显式「我要自由移动」。
  */
 export function snapMove(
   moving: Rect[],
@@ -174,11 +188,14 @@ export function snapMove(
   others: Rect[],
   canvas: Size,
   threshold: number,
+  grid: { x: number; y: number } | null = null,
 ): SnapResult {
   const moved = moving.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy }));
   if (threshold <= 0 || moved.length === 0) {
     return { frames: new Map(moved.map((r) => [r.id, r])), guides: [] };
   }
+
+  if (grid && grid.x > 1 && grid.y > 1) return snapMoveToGrid(moved, grid);
 
   const b = boundsOf(moved);
   const xRes = snapAxis(
@@ -201,6 +218,29 @@ export function snapMove(
   const frames = new Map<string, Rect>();
   for (const r of moved) frames.set(r.id, { ...r, x: r.x + xRes.delta, y: r.y + yRes.delta });
   return { frames, guides };
+}
+
+/**
+ * 网格模式：把**外接框原点**吸到最近的格点，其余元素整体跟着平移。
+ *
+ * 「沿着移动方向上的最近格线」= 对**目标位置**取整（不是对位移取整）：
+ * 后者会让一个本来就偏离格点的元素永远吸不上，用户看到的是「开了吸附却没反应」。
+ */
+function snapMoveToGrid(moved: Rect[], grid: { x: number; y: number }): SnapResult {
+  const b = boundsOf(moved);
+  const at = quantizeToGrid({ x: b.x, y: b.y }, grid);
+  const offX = at.x - b.x;
+  const offY = at.y - b.y;
+  const frames = new Map<string, Rect>();
+  for (const r of moved) frames.set(r.id, { ...r, x: r.x + offX, y: r.y + offY });
+  // 两条参考线都按「外接框左上角贴在哪个格点上」画 —— 视觉上就是那两条网格线变紫。
+  return {
+    frames,
+    guides: [
+      { axis: 'v', pos: at.x, kind: 'edge', target: 'grid' },
+      { axis: 'h', pos: at.y, kind: 'edge', target: 'grid' },
+    ],
+  };
 }
 
 /* ------------------------------------------------------------ 对齐 / 分布 */
@@ -277,6 +317,13 @@ export interface ScaleOptions {
   keepRatio: boolean;
   /** Alt：以选区中心为锚。 */
   fromCenter: boolean;
+  /**
+   * 网格吸附（文档 px）。给了就把**被拖动的那条边**量化到格点上。
+   *
+   * 只量化驱动边，不动锚点边 —— 否则「拖右下角」会连左上角一起跳，
+   * 元素看起来像在原地乱蹦。Alt（以中心为锚）时对面那条边跟着镜像。
+   */
+  grid?: { x: number; y: number } | null;
 }
 
 /**
@@ -325,7 +372,33 @@ export function scaleFrames(
     if (opts.fromCenter) y0 -= dy;
   }
 
-  // 先防塌陷（框跑到另一边去了），再算比例。
+  /*
+   * 网格吸附：把驱动边量到格点，锚点边保持原值（Alt 时对面边镜像回去）。
+   * 放在算比例**之前** —— 先吸后算比例，缩放才是在「吸完之后的框」上均匀展开。
+   * 任意一个把手，west/east 里恰好有一个为真（nw=west、ne=east、n 两个都不），
+   * 所以「驱动边」不需要额外判断方向。
+   */
+  const g = opts.grid;
+  if (g && g.x > 1) {
+    if (west) {
+      x0 = quantizeEdge(x0, g.x);
+      if (opts.fromCenter) x1 = 2 * (b0.x + b0.w / 2) - x0;
+    } else if (east) {
+      x1 = quantizeEdge(x1, g.x);
+      if (opts.fromCenter) x0 = 2 * (b0.x + b0.w / 2) - x1;
+    }
+  }
+  if (g && g.y > 1) {
+    if (north) {
+      y0 = quantizeEdge(y0, g.y);
+      if (opts.fromCenter) y1 = 2 * (b0.y + b0.h / 2) - y0;
+    } else if (south) {
+      y1 = quantizeEdge(y1, g.y);
+      if (opts.fromCenter) y0 = 2 * (b0.y + b0.h / 2) - y1;
+    }
+  }
+
+  // 先防塌陷（框跑到另一边去了），再算比例。吸附可能把边压到锚点边上。
   if (x1 - x0 < MIN_SIZE) {
     if (west) x0 = x1 - MIN_SIZE;
     else x1 = x0 + MIN_SIZE;
@@ -399,6 +472,45 @@ export function rotateVec(v: { x: number; y: number }, rad: number): { x: number
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   return { x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos };
+}
+
+/* ------------------------------------------------------------ 元素局部坐标 ↔ 文档坐标
+ *
+ * 图形的控制点、路径锚点都是**元素局部坐标**（原点在 frame 左上角、未旋转、
+ * 单位是文档 px）算出来的，而 overlay 画在文档坐标系里。这两个换算只写一份 ——
+ * 分头写的话，「旋转过的元素上控制点漂到别处」这种 bug 会只出现在一半的调用点，
+ * 而另一半看着完全正常。
+ *
+ * 旋转中心是元素自身中心（`elementStyle` 里的 `transform-origin: 50% 50%`），
+ * 与 CSS `rotate()` 同一套语义。写成绕左上角的话，元素一转控制点就整体偏出去。
+ */
+export interface LocalFrame {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rot?: number;
+}
+
+export function localToDoc(frame: LocalFrame, p: { x: number; y: number }): { x: number; y: number } {
+  const rot = frame.rot ?? 0;
+  if (!rot) return { x: frame.x + p.x, y: frame.y + p.y };
+  const cx = frame.w / 2;
+  const cy = frame.h / 2;
+  const v = rotateVec({ x: p.x - cx, y: p.y - cy }, rot);
+  return { x: frame.x + cx + v.x, y: frame.y + cy + v.y };
+}
+
+/** `localToDoc` 的逆：拖控制点时把指针换算回元素自身的坐标系。 */
+export function docToLocal(frame: LocalFrame, p: { x: number; y: number }): { x: number; y: number } {
+  const rot = frame.rot ?? 0;
+  const cx = frame.w / 2;
+  const cy = frame.h / 2;
+  const lx = p.x - frame.x - cx;
+  const ly = p.y - frame.y - cy;
+  if (!rot) return { x: lx + cx, y: ly + cy };
+  const v = rotateVec({ x: lx, y: ly }, -rot);
+  return { x: v.x + cx, y: v.y + cy };
 }
 
 /**
