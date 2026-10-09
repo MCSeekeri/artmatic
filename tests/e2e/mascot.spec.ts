@@ -12,8 +12,9 @@ import { NOISE_MODE_CLICKS, NOISE_MODE_STRESS } from '../../src/ui/mascot/squeak
  *     她的右边界是否跟着 `.stage` 的右边界走（`.stage` 的右边 == 抽屉的左边）。
  *  3. **不捏的时候不许动** —— 断「她身上没有任何动画」。常驻呼吸曾经干扰视线，
  *     任何形式的回潮都会让这条变红。
- *  4. **悬停时往右下方躲一下，且躲完不出界** —— 断位移方向 + 躲完仍完整落在
- *     `.stage` 内（底边留白取成大于位移就是为了这个）。
+ *  4. **悬停时往右下方躲一下** —— 只断位移方向。常态贴死右下角（0 留白），
+ *     躲完是**刻意出血**到 `.stage` 之外（被抽屉 / 底栏 / 视口裁掉才像缩头），
+ *     所以这里**不断**「不出界」。
  *
  * 另外两条是渲染层的事，各自有独立签名：
  *  · 挤压回弹（`anim.pause()` + `currentTime` seek 采样，与墙钟无关）；
@@ -102,6 +103,14 @@ test('默认不开；开着时落在 .stage 右下角、不挡添加轨道、也
   await expect(page.getByTestId('mascot')).toBeVisible();
   expect(await layoutProbe(page), '开关看板娘不能改动任何控件的几何').toEqual(before);
 
+  /*
+   * 量几何之前**先把鼠标移开**：关掉设置弹窗后指针可能正停在她身上（Apply
+   * 按钮在右侧），hover 的躲闪会把她的 rect 整体带偏 4/3px（实测曾让下面那条
+   * 「贴角」断言差 1px 而偶发变红）。下面的检查全部按常态几何来量。
+   */
+  await page.mouse.move(640, 300);
+  await page.waitForTimeout(250); // 170ms 的过渡跑完
+
   const box = await page.evaluate(() => {
     const el = document.querySelector('[data-testid=mascot]')!;
     const stage = document.querySelector('.stage')!;
@@ -117,10 +126,11 @@ test('默认不开；开着时落在 .stage 右下角、不挡添加轨道、也
   });
   // 宿主是 .stage（不是 .page）：她的右边就只能落在检查器的左边，中间不需要 calc
   expect(box.inStage, '看板娘的宿主应当是 div.stage').toBe(true);
-  expect(box.dRight, '与右下角留的余量（够躲一下）').toBeGreaterThanOrEqual(0);
-  expect(box.dRight).toBeLessThan(16);
-  expect(box.dBottom).toBeGreaterThanOrEqual(0);
-  expect(box.dBottom).toBeLessThan(16);
+  // 常态贴死右下角（right/bottom: 0）—— 出血留给 hover 那一下（见第 4 条用例）
+  expect(box.dRight, '常态右边界应当贴住 .stage 右边界').toBeGreaterThanOrEqual(0);
+  expect(box.dRight).toBeLessThan(2);
+  expect(box.dBottom, '常态下边界应当贴住 .stage 下边界').toBeGreaterThanOrEqual(0);
+  expect(box.dBottom).toBeLessThan(2);
   expect(box.w).toBeGreaterThan(40);
   expect(box.h).toBeGreaterThan(40);
 
@@ -182,10 +192,10 @@ test('位置跟着检查器的宽度让开：关掉抽屉她就跟着往右挪',
   expect(open.drawerLeft, '默认应当是抽屉展开的').not.toBeNull();
   // `.stage` 的右边就是抽屉的左边 —— 她就是靠这一条自动「按检查器宽度让开」的
   expect(Math.abs(open.stageRight - open.drawerLeft!), 'stage 右边应贴住抽屉左边').toBeLessThan(2);
-  // 与右下角的余量固定，不随抽屉宽度变
+  // 与右下角的余量固定（现在是 0 = 贴角），不随抽屉宽度变
   const gap = open.gap;
   expect(gap).toBeGreaterThanOrEqual(0);
-  expect(gap).toBeLessThan(16);
+  expect(gap).toBeLessThan(2);
 
   await page.evaluate(() =>
     (window as never as { __artmatic: MascotApi }).__artmatic.appState.setDrawerOpen(false),
@@ -195,10 +205,10 @@ test('位置跟着检查器的宽度让开：关掉抽屉她就跟着往右挪',
   expect(closed.stageRight - open.stageRight, '关掉抽屉后 stage 应当变宽至少一个抽屉').toBeGreaterThan(
     100,
   );
-  expect(closed.gap, '留白与右下角的余量不随抽屉变（所以她跟着挪了）').toBe(gap);
+  expect(closed.gap, '贴角余量不随抽屉变（所以她跟着挪了）').toBe(gap);
 });
 
-test('不捏的时候一动不动；悬停时往右下方躲一下且不出界', async ({ page }) => {
+test('不捏的时候一动不动；悬停时往右下方躲一下（躲出 stage 是刻意的）', async ({ page }) => {
   await boot(page);
   await page.evaluate(() =>
     (window as never as { __artmatic: MascotApi }).__artmatic.appState.setMascotEnabled(true),
@@ -241,16 +251,11 @@ test('不捏的时候一动不动；悬停时往右下方躲一下且不出界',
   expect(dodged.y - rest.y, '悬停应当往下躲').toBeGreaterThan(1);
 
   /*
-   * 躲完不能出界。底边/右边的留白故意取成大于位移量，就是为了两种抽屉状态都
-   * 成立（抽屉收起时 `.stage` 的右边就是窗口右边，没有留白会被直接裁掉）。
+   * 这里**刻意不断**「躲完仍在 stage 内」。常态贴角（0 留白）⇒ 躲闪必然把
+   * 右/下边缘推出去，被抽屉 / 底栏 / 视口裁掉一部分 —— 「缩头钻进角落」的
+   * 观感就是要它出血，全程留在屏幕内反而只剩平移。
+   * （曾经有一条 `inside.dRight >= 0` 的断言，它把留白锁死在 ≥ 位移量，已删。）
    */
-  const inside = await page.evaluate(() => {
-    const a = document.querySelector('[data-testid=mascot]')!.getBoundingClientRect();
-    const s = document.querySelector('.stage')!.getBoundingClientRect();
-    return { dRight: s.right - a.right, dBottom: s.bottom - a.bottom };
-  });
-  expect(inside.dRight, '躲完仍在 stage 内（右）').toBeGreaterThanOrEqual(0);
-  expect(inside.dBottom, '躲完仍在 stage 内（下）').toBeGreaterThanOrEqual(0);
 
   /*
    * hover 的底必须是透明的。`app.css` 的 `button:hover:not(:disabled)` 特异度
