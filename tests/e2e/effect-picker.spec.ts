@@ -114,6 +114,18 @@ test('选择器：网格与列表两种视图，缩略图尺寸真的不同', as
   expect(list).toBeLessThan(110);
   expect(list).toBeLessThan(grid);
 
+  // 宽屏下列表**并两列**：一排到底在一张 920px 的模态里只用掉左半幅。
+  // 判据取「前两张同一行、左右并排，第三张才落下一行」。
+  const boxes = await items(page).evaluateAll((els) =>
+    els.slice(0, 4).map((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.x), y: Math.round(r.y) };
+    }),
+  );
+  expect(boxes.length).toBe(4);
+  expect(boxes[1]!.y, '特效列表退回了一列到底').toBe(boxes[0]!.y);
+  expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
+
   // 分类/标签 chip 只在列表形态出现（网格里塞它们会把名称挤成两行）。
   // 注意用 `.fxp-cat`（分类，每条都有）而不是 `.fxp-tag`：`bleach` 只读
   // `u_amount`、不读时间也不带反馈，它的**结构标签是空的** —— 拿它验标签会永远失败。

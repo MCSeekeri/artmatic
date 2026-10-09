@@ -12,6 +12,7 @@ import { app } from '../../src/i18n/locales/zh-CN/app';
 import { project } from '../../src/i18n/locales/zh-CN/project';
 import { timeline } from '../../src/i18n/locales/zh-CN/timeline';
 import { inspector } from '../../src/i18n/locales/zh-CN/inspector';
+import { transitions } from '../../src/i18n/locales/zh-CN/transitions';
 import { typography } from '../../src/i18n/locales/zh-CN/typography';
 import { ribbon } from '../../src/i18n/locales/zh-CN/ribbon';
 import { shortcuts } from '../../src/i18n/locales/zh-CN/shortcuts';
@@ -87,6 +88,7 @@ describe('文案表结构', () => {
     project,
     timeline,
     inspector,
+    transitions,
     typography,
     ribbon,
     shortcuts,

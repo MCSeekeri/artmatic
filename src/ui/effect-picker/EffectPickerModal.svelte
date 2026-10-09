@@ -339,10 +339,20 @@
     gap: var(--sp-4);
     align-content: start;
   }
+  /*
+   * 列表形态：**宽度够就并两列**。
+   *
+   * 一排到底在一张 920px 宽的模态里只用掉左半幅、右边一片空白 —— 列表行本身
+   * 只有「96px 缩略图 + 一行名称 + 一行说明」，没必要占满整行。
+   * `auto-fill` + 最小 340px：模态宽度来自 `min(920px, 94vw)`，窄屏（窗口
+   * < 约 720px）自然退回一列；用 `auto-fill` 而不是 `auto-fit`，条目少时
+   * 不留一条被拉伸的空白列。
+   */
   .fxp-body.fxp-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: var(--sp-2) var(--sp-4);
+    align-content: start;
   }
   .fxp-slot {
     min-width: 0;

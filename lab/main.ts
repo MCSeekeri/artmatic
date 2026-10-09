@@ -21,8 +21,11 @@ import { installTheme } from '../src/ui/theme-apply';
 import { theme } from '../src/ui/theme.svelte';
 import { labState, LAB_SCALES, NO_EFFECT_ID } from './lab-state.svelte';
 import { AlgoThumbRenderer, thumbSize } from '../src/render/algo-thumb-renderer';
+import { TransitionThumbRenderer } from '../src/render/transition-thumb-renderer';
 import { previewRecipe } from '../src/algos/catalog';
 import { getGenerator, listGenerators } from '../src/algos/registry';
+import { listTransitions } from '../src/effects/transitions/registry';
+import { transitionCompileFailures } from '../src/effects/transitions/runner';
 import { defaultValues } from '../src/effects/types';
 
 installTheme(theme.spec);
@@ -31,6 +34,8 @@ mount(LabApp, { target: document.getElementById('lab')! });
 
 /** 缩略图渲染器：模块级单例，整个页面生命周期复用一个 WebGL 上下文。 */
 const algoThumbRenderer = new AlgoThumbRenderer();
+/** 转场缩略图渲染器：另一台离屏上下文（两张底图 + 一条转场）。 */
+const transitionThumbRenderer = new TransitionThumbRenderer();
 
 /**
  * E2E 钩子。约定与 `window.__artmatic` 一致：暴露**纯数据**与少量动作，
@@ -106,5 +111,32 @@ const algoThumbRenderer = new AlgoThumbRenderer();
     const size = thumbSize(height);
     // 默认值 + 配方覆盖：与运行期 `evalParams` 的 `?? defaultValue` 同一口径。
     return algoThumbRenderer.renderOnce(id, { ...defaultValues(def.params), ...recipe.params }, size, t);
+  },
+
+  /**
+   * **批量导出转场缩略图**的调用口（`scripts/gen-transition-thumbs.mjs` 用）。
+   *
+   * 与 `renderThumb` 同一套纪律（大像素不出 page，只回传一张 WebP data URL），
+   * 差别是这里**不需要重试**：转场是同步渲染，没有 bake 那种异步就绪。
+   *
+   * `progress` 是实际采样进度：正常是 0.5，这一条的中点退化成纯色时会挪一点
+   * （理由见 `render/transition-thumb-renderer.ts` 的 `PROGRESS_CANDIDATES`）。
+   * 脚本据此在日志里标出来，免得「为什么这条不是 50%」变成一个查不出来的谜。
+   *
+   * `failed: true` 表示这条转场的着色器编译失败、跑的是内置 dissolve 兜底 ——
+   * 那样的缩略图**不能代表这条转场**，脚本据此报错退出（与 `compileAllTransitions`
+   * 在 E2E 里守的是同一件事）。
+   */
+  transitionThumbJobs: () => listTransitions().map((e) => e.id),
+
+  renderTransitionThumb: (id: string, height: number) => {
+    const shot = transitionThumbRenderer.renderShot(id, thumbSize(height));
+    if (!shot) return null;
+    return {
+      dataUrl: shot.canvas.toDataURL('image/webp', 0.84),
+      // 采样进度：0.5 是主选；这一条的中点退化成纯色时会是候选里的另一个值。
+      progress: shot.progress,
+      failed: transitionCompileFailures().has(id),
+    };
   },
 };

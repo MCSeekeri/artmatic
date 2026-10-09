@@ -97,10 +97,10 @@ export const inspector = {
   'insp.changeSrcIn': '改 srcIn',
 
   /* ------------------------------------------------ 转场（出画） */
-  /* 转场的**名称与参数名不翻译**：它们逐字来自 gl-transitions 的第三方作者
-     （CrossZoom / pixelSize / blocksize…），没有可维护的中文对应物，
-     翻译只会让「去上游查这条转场」变难。所以界面上直接显示原文。
-     这里只放我们自己写的界面文案。 */
+  /* 转场的**参数名不翻译**：`pixelSize` / `blocksize` 那些逐字来自 gl-transitions
+     的第三方作者，是 GLSL uniform 的名字 —— 翻译之后就对着上游文档找不到那一行。
+     **中文名与说明在 `transitions.ts`（`tns.*`）**，不在这里：那是每一条转场一条
+     的成批数据，和本文件的「界面文案」不是一类东西。 */
   'insp.transition': '转场（出画）',
   'insp.transitionNone': '无',
   'insp.transitionDuration': '时长',
@@ -115,6 +115,23 @@ export const inspector = {
   'insp.transitionClamped': '时长超过两侧片段能容纳的上限，实际按 {max}s 生效。',
   'insp.transitionFadeTip': '这个片段同时设了淡变，窗口内会叠加成二次淡出，通常只需要其中一种。',
   'insp.transitionInactive': '当前未生效',
+  'insp.transitionChange': '更换转场',
+  'insp.transitionClear': '清除转场',
+
+  /* 转场选择器：转场数量过百之后，一个下拉既不能搜、也看不见每条转场把两张图切成了
+     什么样。缩略图是「两张底图 @ 50% 进度」的定格（`gen-transition-thumbs.mjs`）。 */
+  'insp.transitionPickerSearch': '搜索转场（名称或作者）……',
+  'insp.transitionPickerApply': '应用',
+  'insp.transitionPickerNone': '无转场',
+  'insp.transitionPickerNoneHint': '清除这个片段上的出画转场',
+  'insp.transitionPickerSelected': '当前选择：{name}',
+  'insp.transitionPickerHit': '{n} 条转场',
+  'insp.transitionPickerEmpty': '没有符合条件的转场。',
+  'insp.transitionPickerEmptyHint': '换个搜索词，或按作者查。',
+  'insp.transitionPickerSortName': '名称',
+  'insp.transitionPickerSortAuthor': '作者',
+  /* 按上游 id 排 —— 知道 gl-transitions 命名的人用它对齐文档。 */
+  'insp.transitionPickerSortId': '上游 id',
 
   /* ------------------------------------------------ 抽屉 */
   'insp.resizeWidth': '调整检查器宽度',

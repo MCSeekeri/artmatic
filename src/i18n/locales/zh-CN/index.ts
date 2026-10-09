@@ -16,6 +16,7 @@ import { app } from './app';
 import { project } from './project';
 import { timeline } from './timeline';
 import { inspector } from './inspector';
+import { transitions } from './transitions';
 import { typography } from './typography';
 import { ribbon } from './ribbon';
 import { shortcuts } from './shortcuts';
@@ -30,6 +31,7 @@ export const zhCN = {
   ...project,
   ...timeline,
   ...inspector,
+  ...transitions,
   ...typography,
   ...ribbon,
   ...shortcuts,

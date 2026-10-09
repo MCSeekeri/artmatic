@@ -245,13 +245,16 @@ test('检查器：带筛选地选转场、时间轴出现窗口涂层、选「�
 
   // 选中出画片段 → 检查器出现转场小节，时间轴出现窗口涂层
   await page.locator(`[data-clip-id="${stage.fromId}"]`).click();
-  await expect(page.getByTestId('transition-picker')).toBeVisible();
+  await expect(page.getByTestId('transition-section')).toBeVisible();
   await expect(page.getByTestId('transition-marker')).toHaveCount(demoMarkers + 1);
 
-  // 122 条转场：靠筛选框找目标，而不是滚动列表
-  await page.getByTestId('transition-picker').click();
-  await page.getByTestId('transition-picker-filter').fill('circle');
-  await page.getByTestId('transition-opt-circleopen').click();
+  // 122 条转场：靠选择器的搜索框找目标，而不是在一个下拉里滚
+  await page.getByTestId('open-transition-picker').click();
+  await expect(page.getByTestId('modal-transition-picker')).toBeVisible();
+  await page.getByTestId('transition-picker-search').fill('circle');
+  await page.locator('[data-testid=transition-picker-item][data-transition-id="circleopen"]').click();
+  await page.getByTestId('transition-picker-confirm').click();
+  await expect(page.getByTestId('modal-transition-picker')).toHaveCount(0);
 
   const afterPick = await page.evaluate((id) => {
     const A = (window as never as {
@@ -264,9 +267,10 @@ test('检查器：带筛选地选转场、时间轴出现窗口涂层、选「�
   expect(afterPick?.defId).toBe('circleopen');
   expect(afterPick?.duration).toBeCloseTo(1, 6);
 
-  // 选「无」= 删除，涂层随之消失（回到 demo 自带的那些）
-  await page.getByTestId('transition-picker').click();
-  await page.getByTestId('transition-opt-').click();
+  // 选「无转场」= 删除，涂层随之消失（回到 demo 自带的那些）
+  await page.getByTestId('open-transition-picker').click();
+  await page.getByTestId('transition-picker-none').click();
+  await page.getByTestId('transition-picker-confirm').click();
   await expect(page.getByTestId('transition-marker')).toHaveCount(demoMarkers);
 
   const afterClear = await page.evaluate((id) => {

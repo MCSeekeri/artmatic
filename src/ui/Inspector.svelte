@@ -22,11 +22,10 @@
   import { getGenerator } from '../algos/registry';
   import { defaultEffectValues, getEffect } from '../effects/registry';
   import EffectPickerModal from './effect-picker/EffectPickerModal.svelte';
-  import {
-    defaultTransitionValues,
-    getTransition,
-    listTransitions,
-  } from '../effects/transitions/registry';
+  import TransitionPickerModal from './transition-picker/TransitionPickerModal.svelte';
+  import { transitionThumbUrl } from './transition-picker/thumb-assets';
+  import { transitionCatalogInfo } from '../effects/transitions/catalog-info';
+  import { defaultTransitionValues, getTransition } from '../effects/transitions/registry';
   import { transitionCut } from '../core/transitions';
   import { visibleParams, type RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
@@ -38,20 +37,11 @@
     { value: 'stretch' as const, label: tr('insp.fitStretch') },
   ] satisfies { value: SourceClip['fit']; label: string }[];
 
-  /*
-   * 转场选项。**名称与作者原样显示，不翻译**：
-   * 它们逐字来自 gl-transitions 的第三方作者（`CrossZoom` / `pixelSize`…），
-   * 翻译只会让「去上游查这条转场」变难。空串是「无」。
-   */
-  const transitionOptions = [
-    { value: '', label: tr('insp.transitionNone') },
-    ...listTransitions().map((e) => ({ value: e.id, label: e.id })),
-  ];
-
   /** 新转场的默认时长。两拍以内、也不至于短到看不见。 */
   const DEFAULT_TRANSITION_SEC = 0.5;
 
   let pickerOpen = $state(false);
+  let transitionPickerOpen = $state(false);
 
   /**
    * 按**选择顺序**把若干特效追加到链尾。
@@ -462,82 +452,141 @@
         <p class="note">{tr('insp.imageAsset', { name: appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId })}</p>
       {/if}
 
-      <!-- 出画转场：挂在片段上，窗口以 end 为中心吃两侧各一半 -->
+      <!--
+        出画转场：挂在片段上，窗口以 end 为中心吃两侧各一半。
+
+        它和上面那些「片段自身的属性」（混合 / 适配 / 变换）**不是一回事**：转场发生在
+        **剪切点**上，要同轨两个紧邻片段才成立。所以用一个带分隔线的区块把它隔开 ——
+        直接跟在「旋转」后面会让人以为它是又一个片段属性。
+      -->
       {@const trRef = clip.transitionOut}
       {@const trEntry = trRef ? getTransition(trRef.defId) : null}
       {@const trMax = transitionInfo?.ok ? transitionInfo.max : 0}
-      <Field label={tr('insp.transition')} tipText={tr('insp.transitionPick')}>
-        <Select
-          value={trRef?.defId ?? ''}
-          options={transitionOptions}
-          filterable
-          filterPlaceholder={tr('insp.transitionPick')}
-          testid="transition-picker"
-          optionTestidPrefix="transition-opt"
-          onchange={(v) => setTransition(clip, v)}
-        />
-      </Field>
+      {@const trThumb = trRef ? transitionThumbUrl(trRef.defId) : null}
+      {@const trInfo = trRef ? transitionCatalogInfo(trRef.defId) : null}
+      <!-- 目录里没有（工程来自更新的版本）→ 退回显示 id，而不是留一行空白 -->
+      {@const trName = trRef ? (trInfo ? tr(trInfo.nameKey) : trRef.defId) : ''}
+      <div class="section" data-testid="transition-section">
+        <div class="section-head">
+          <span class="section-title">{tr('insp.transition')}</span>
+          {#if trRef}
+            <IconButton
+              icon="x"
+              label={tr('insp.transitionClear')}
+              size="sm"
+              variant="danger"
+              testid="transition-clear"
+              onclick={() => setTransition(clip, '')}
+            />
+          {/if}
+        </div>
 
-      {#if trRef && trEntry}
-        <!-- 署名：MIT / BSD 要求保留作者，顺带让人能回上游查这条转场 -->
-        <p class="note">{trEntry.author} · {trEntry.license}</p>
+        {#if trRef && trEntry}
+          <!-- 当前转场：50% 进度缩略图 + 署名（MIT / BSD 要求保留作者，也方便回上游查） -->
+          <div class="tr-current">
+            {#if trThumb}
+              <img
+                class="tr-thumb"
+                src={trThumb}
+                alt=""
+                draggable="false"
+                loading="lazy"
+                decoding="async"
+                data-testid="transition-preview"
+              />
+            {:else}
+              <span class="tr-thumb tr-thumb-none" aria-hidden="true"></span>
+            {/if}
+            <span class="tr-current-meta">
+              <span class="tr-name" data-testid="transition-current-name">{trName}</span>
+              <!-- 中文名之外**始终留着上游 id**：参数名不翻译，靠它回文档查这条转场 -->
+              <span class="tr-sub">
+                <span class="tr-id" data-testid="transition-current-id">{trRef.defId}</span>
+                <span class="tr-author">{trEntry.author} · {trEntry.license}</span>
+              </span>
+            </span>
+          </div>
+        {/if}
 
-        <Field label={tr('insp.transitionDuration')}>
-          <NumberInput
-            value={trRef.duration}
-            min={0.05}
-            max={trMax > 0 ? trMax : undefined}
-            step={0.05}
-            width={64}
-            suffix="s"
-            testid="transition-duration"
-            onchange={(v) => appState.store.setTransitionDuration(clip.id, v)}
+        <Field label={trRef ? tr('insp.transitionChange') : tr('insp.transitionPick')}>
+          <Button
+            label={trRef ? tr('insp.transitionChange') : tr('insp.transitionPick')}
+            icon="blend"
+            variant={trRef ? 'outline' : 'accent'}
+            testid="open-transition-picker"
+            onclick={() => (transitionPickerOpen = true)}
           />
         </Field>
 
-        {#each trEntry.params as p (p.key)}
-          {#if p.type === 'checkbox'}
-            <Field label={p.label}>
-              <Checkbox
-                checked={Number(trRef.values[p.key] ?? p.defaultValue) !== 0}
-                testid={`transition-param-${p.key}`}
-                onchange={(v) => setTransitionParam(clip, p.key, v ? 1 : 0)}
-              />
-            </Field>
-          {:else}
-            <Field label={p.label}>
-              <Slider
-                min={p.min ?? 0}
-                max={p.max ?? 1}
-                step={p.step ?? 0.01}
-                value={Number(trRef.values[p.key] ?? p.defaultValue)}
-                ariaLabel={p.label}
-                testid={`transition-param-${p.key}`}
-                oninput={(v) => setTransitionParam(clip, p.key, v)}
-              />
-              <NumberInput
-                value={Number(trRef.values[p.key] ?? p.defaultValue)}
-                min={p.min ?? 0}
-                max={p.max ?? 1}
-                step={p.step ?? 0.01}
-                width={64}
-                testid={`transition-param-num-${p.key}`}
-                onchange={(v) => setTransitionParam(clip, p.key, v)}
-              />
-            </Field>
-          {/if}
-        {/each}
+        {#if trRef && trEntry}
+          <Field label={tr('insp.transitionDuration')}>
+            <NumberInput
+              value={trRef.duration}
+              min={0.05}
+              max={trMax > 0 ? trMax : undefined}
+              step={0.05}
+              width={64}
+              suffix="s"
+              testid="transition-duration"
+              onchange={(v) => appState.store.setTransitionDuration(clip.id, v)}
+            />
+          </Field>
 
-        {#if transitionInfo && !transitionInfo.ok}
-          <p class="note insp-warn">{tr('insp.transitionInactive')}：{tr(REASON_KEYS[transitionInfo.reason])}</p>
-        {:else if trMax > 0 && trRef.duration > trMax + 1e-9}
-          <p class="note insp-warn">
-            {tr('insp.transitionClamped', { max: trMax.toFixed(2) })}
-          </p>
+          {#each trEntry.params as p (p.key)}
+            {#if p.type === 'checkbox'}
+              <Field label={p.label}>
+                <Checkbox
+                  checked={Number(trRef.values[p.key] ?? p.defaultValue) !== 0}
+                  testid={`transition-param-${p.key}`}
+                  onchange={(v) => setTransitionParam(clip, p.key, v ? 1 : 0)}
+                />
+              </Field>
+            {:else}
+              <Field label={p.label}>
+                <Slider
+                  min={p.min ?? 0}
+                  max={p.max ?? 1}
+                  step={p.step ?? 0.01}
+                  value={Number(trRef.values[p.key] ?? p.defaultValue)}
+                  ariaLabel={p.label}
+                  testid={`transition-param-${p.key}`}
+                  oninput={(v) => setTransitionParam(clip, p.key, v)}
+                />
+                <NumberInput
+                  value={Number(trRef.values[p.key] ?? p.defaultValue)}
+                  min={p.min ?? 0}
+                  max={p.max ?? 1}
+                  step={p.step ?? 0.01}
+                  width={64}
+                  testid={`transition-param-num-${p.key}`}
+                  onchange={(v) => setTransitionParam(clip, p.key, v)}
+                />
+              </Field>
+            {/if}
+          {/each}
+
+          {#if transitionInfo && !transitionInfo.ok}
+            <p class="note insp-warn">{tr('insp.transitionInactive')}：{tr(REASON_KEYS[transitionInfo.reason])}</p>
+          {:else if trMax > 0 && trRef.duration > trMax + 1e-9}
+            <p class="note insp-warn">
+              {tr('insp.transitionClamped', { max: trMax.toFixed(2) })}
+            </p>
+          {/if}
+          {#if clip.fadeSec > 0}
+            <p class="note insp-warn">{tr('insp.transitionFadeTip')}</p>
+          {/if}
         {/if}
-        {#if clip.fadeSec > 0}
-          <p class="note insp-warn">{tr('insp.transitionFadeTip')}</p>
-        {/if}
+      </div>
+
+      {#if transitionPickerOpen}
+        <TransitionPickerModal
+          current={trRef?.defId ?? null}
+          onclose={() => (transitionPickerOpen = false)}
+          onapply={(id) => {
+            setTransition(clip, id);
+            transitionPickerOpen = false;
+          }}
+        />
       {/if}
     {:else if clip.kind === 'effect'}
       <!-- 添加特效：七十多个特效用一个下拉选不现实（不能搜、不能筛、看不见效果），
@@ -754,6 +803,71 @@
      这些都不阻断操作，只是「照这样下去不会按你想的生效」。 */
   .note.insp-warn {
     color: var(--warning);
+  }
+  /* 区块分隔：转场与「片段自身属性」是两回事（见模板里的注释），靠一条上边线 +
+     一个小写字标题把它隔开，而不是靠一个更大的 margin —— margin 在滚动到底部时
+     读不出「这里换了一类东西」。 */
+  .section {
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border);
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-2);
+  }
+  .section-title {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* 当前转场：左侧 16:9 缩略图（50% 进度的那张），右侧 id + 署名 */
+  .tr-current {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-2);
+  }
+  .tr-thumb {
+    flex-shrink: 0;
+    width: 96px;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    object-fit: cover;
+    background: #000;
+  }
+  .tr-thumb-none {
+    background: var(--surface-active);
+  }
+  .tr-current-meta {
+    min-width: 0;
+  }
+  .tr-name {
+    display: block;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 第二行：上游 id + 署名。等宽、更小、更暗 —— 它是「能查到」的东西，不是要读的。 */
+  .tr-sub {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-family: 'Cascadia Code', Consolas, monospace;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .dim {
     color: var(--text-muted);

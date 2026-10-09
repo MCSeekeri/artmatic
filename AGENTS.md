@@ -695,6 +695,46 @@ interface Curve {
     `Math.max(16, Math.round(NaN))` 是 `NaN`，会造出一张 NaN 尺寸的 canvas、
     导出静默得到 0 字节文件。
 
+#### 转场缩略图资源（`src/assets/transition-thumbnails/`）
+
+- **两张底图在 `effects/transitions/thumbnails.ts`**，是 GLSL 而不是图片文件：
+  渲染侧要用**恰好等于渲染尺寸**的两张纹理，GLSL 同步且零资产。两条硬要求 ——
+  **冷暖两极的色相**（dissolve / 亮度类靠它读出来）、**强结构 + 一条亮边框**
+  （滑移 / 擦除类靠边框的位移读出来；纯色画面上只看得出「颜色变了」）。
+  接入方式与特效底图一致：`trthumb:` 伪 generator id，由
+  `render/transition-thumb-renderer.ts` 的 resolver 拦截，**不注册、不改 schema**。
+- **渲染是「造一张最小工程让真转场跑出来」**：`from` 源 → `to` 源相邻、
+  `transitionOut` 挂在 `from` 上，在**剪切点**渲一帧 ⇒ `progress` 恰好 0.5。
+  所以它走的是预览同一条 `buildStack → runTransition` 路径，**不是**另写一套混合。
+- **一条命令落盘**：`node scripts/gen-transition-thumbs.mjs`（build → preview →
+  `/lab/` 的 `__lab.renderTransitionThumb`）。**不用 lab 按钮** —— 特效那套打完 zip
+  还要人工解压，素材跟着代码走时那一步是多一次「导出了但忘了解压」的机会。
+- **有几条转场的中点本来就是退化状态**：`circle` / `CircleCrop` / `Rectangle` /
+  `RectangleCrop` 在 progress=0.5 时半径恰好为 0（整屏只剩底色），`SimpleFlip`
+  在 0.5 时只留中间一条缝，`StereoViewer` 在 0.48–0.52 之间是纯黑。
+  渲染器因此**先在 0.5 拍，只有拍出一张纯色才换邻近进度重拍**
+  （`PROGRESS_CANDIDATES`，亮度极差 < 24/765 判为纯色），脚本会把挪过的条目打进日志。
+  **不挪的表现是「7 张纯色缩略图」** —— 那种图等于白做。
+- **编译失败的转场不写盘并让脚本非零退出**：`runner.ts` 对上编译不过的着色器会
+  退化成内置 dissolve，那样导出的缩略图**不代表这条转场**。
+- 守卫：`tests/unit/transition-thumb-assets.test.ts`（资源与目录对齐、只放 WebP、
+  整套 < 4 MB）+ `tests/e2e/transition-picker.spec.ts`（每张卡片都有 `<img>`、
+  左右两半真的不是同一张图）。
+- **中文名与说明在 `effects/transitions/catalog-info.ts` + 语言表 `tns.*`**
+  （新域 `src/i18n/locales/zh-CN/transitions.ts`，`i18n.test.ts` 的 `DOMAINS` 要一起加）。
+  这是对「转场名不翻译」那条老约定的**破例**：转场过百 + 有缩略图之后，全是英文 id
+  的列表扫不动了。折中是**两个都给** —— 显示中文名，**上游 id 一并保留**
+  （列表视图 / 检查器里的等宽小字），「回上游查这条转场」的路没被堵上。
+  **参数名仍然不翻译**（`pixelSize` 是 GLSL uniform 的名字，翻了就对着文档找不到）。
+  `transition-catalog-info.test.ts` 守「每条转场都有条目 / 没有孤儿条目 /
+  名字与说明互不重复 / 语言表里没有孤儿键 / 规模恰好 = 转场数 × 2」。
+- **选择器在 `ui/transition-picker/`，与特效选择器同构但有三处不同**：**单选**
+  （一个片段只有一条出画转场）、**没有分类 / 标签筛选**（转场目录里没有这两项数据，
+  硬造就是假选项）、**带一个「无转场」磁贴**（对应旧下拉的第一项「无」）。
+- **两个选择器的列表形态都是 `repeat(auto-fill, minmax(340px, 1fr))`**：
+  模态宽 `min(920px, 94vw)`，一排到底只用掉左半幅。窄屏（窗口 < 约 720px）自然退回
+  一列 —— 所以 E2E 断的是「前两张同一行、左右并排」，**不是**某个固定列数。
+
 ### 5.6 算法生成器
 - 二值纹理（元胞自动机）走 **R8**，活性值用 `LIVE = 255` 常量。
   **移植时保留这个常量，不要写裸 `1`** —— 早年写成 `1` 的版本进 R8 后被归一化成 0.0039，
