@@ -14,6 +14,7 @@ import { appState } from '../app-state.svelte';
 import { editorState } from './editor-state.svelte';
 import { newId } from '../../core/schema';
 import {
+  DEFAULT_PAINT_A,
   applyPaintPatch,
   createImageElement,
   createShapeElement,
@@ -54,6 +55,7 @@ import {
   type GroupedFragment,
 } from '../../typography/groups';
 import { shapeGeometry, type ShapePreset } from '../../typography/shapes';
+import { ICON_STROKE_WIDTH, iconGridFrames, type IconInsert } from '../../typography/icon-shapes';
 import {
   insertNodeOnSegment,
   mapNodes,
@@ -203,6 +205,8 @@ export interface TypographyActions {
   addText(): void;
   addShape(preset: ShapePreset): void;
   addImage(): void;
+  /** 插入一批图标（来自图标选择器），按给定顺序从左到右排成网格。 */
+  addIcons(items: IconInsert[]): void;
 
   /* 通用元素属性 */
   setBlend(value: MixBlend): void;
@@ -473,6 +477,33 @@ export function createTypographyActions(): TypographyActions {
         });
         doc.elements = [...doc.elements, el];
         queueMicrotask(() => editorState.selectOnly(el.id));
+      });
+    },
+
+    /**
+     * 插入图标 = 插入一组「无填充 + 描边」的 `shape:'svg'` 图形。
+     *
+     * 为什么不是图片：图标语义正好落在 ShapeElement 的表达力里（见
+     * `icon-shapes.ts`），于是描边颜色 / 线宽 / 混合模式这些既有控件插入后
+     * 立刻可用，也不占素材表。元素名直接用图标名（`arrow-up` 这样）——
+     * 图层面板里一眼能认出是哪个图标，比一排「形状」有用得多。
+     */
+    addIcons(items) {
+      if (!items.length) return;
+      editorState.commit(tr('typo.undo.addIcons'), (doc) => {
+        const frames = iconGridFrames(doc.size, items.length);
+        const els = items.map((item, i) =>
+          createShapeElement(doc.size, 'svg', {
+            name: item.name,
+            frame: frames[i],
+            path: item.path,
+            fill: { kind: 'none' },
+            stroke: { color: DEFAULT_PAINT_A, width: ICON_STROKE_WIDTH, style: 'solid' },
+          }),
+        );
+        doc.elements = [...doc.elements, ...els];
+        // 一次事务 = 一次撤销；插入完直接选中，接着就能拖走或改颜色。
+        queueMicrotask(() => editorState.setSelection(els.map((e) => e.id)));
       });
     },
 

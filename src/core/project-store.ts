@@ -249,6 +249,26 @@ export class ProjectStore {
     });
   }
 
+  /**
+   * 一次删掉多个片段（框选之后的 Delete）：**一笔撤销**，不是 N 笔。
+   *
+   * 逐个调 `removeClip` 也能删对，但撤销栈里会多出 N 条记录 ——
+   * 用户按一次 Ctrl+Z 只回来一个，看起来就是「撤销坏了」。
+   */
+  removeClips(clipIds: readonly string[]): void {
+    if (!clipIds.length) return;
+    if (clipIds.length === 1) {
+      this.removeClip(clipIds[0]!);
+      return;
+    }
+    const set = new Set(clipIds);
+    this.commit(tr('tl.removeClips', { n: clipIds.length }), (p) => {
+      for (const t of p.tracks) {
+        t.clips = t.clips.filter((c) => !set.has(c.id)) as typeof t.clips;
+      }
+    });
+  }
+
   /* ------------------------------------------------ 手势：实时 vs 结算 */
 
   /**

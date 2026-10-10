@@ -32,7 +32,7 @@
       `getByTestId` 的严格模式会因两个匹配而报错。
     -->
     <IconButton
-      icon="sparkles"
+      icon="combine"
       label={tr('lab.compileAll')}
       tipText={tr('lab.compileAllTip')}
       testid="lab-rail-compile"

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { appState } from '../ui/app-state.svelte';
   import { xOfTime } from './view-model';
-  import { startClipDrag } from './drag';
+  import { startClipDrag, type DragPeer } from './drag';
   import type { AnyClip, Track } from '../core/schema';
   import { tr } from '../i18n/index.svelte';
 
@@ -23,21 +23,59 @@
       xOfTime(clip.end, appState.pxPerBeat, grid) - xOfTime(clip.start, appState.pxPerBeat, grid),
     );
   });
-  const selected = $derived(appState.selectedClipId === clip.id);
+  // 读的是**选中集**，不是主选中（selectedClipId 只是集合第一个元素的视图）。
+  // 框选与 Shift+单击都能让集合里不止一个。
+  const selected = $derived(appState.isClipSelected(clip.id));
   /** 拖拽中且当前落点会被拒收（reject 策略）：红框预告，避免「松手弹回去」的困惑。 */
   const illegal = $derived(selected && appState.dragIllegal);
 
   function down(e: PointerEvent, mode: 'move' | 'resize-l' | 'resize-r'): void {
     // 只有主键起手势：右键归自绘菜单（Timeline 的 contextmenu），中键归浏览器
     if (e.button !== 0) return;
-    appState.selectedClipId = clip.id;
+    /*
+     * Shift / Ctrl + 单击 = 加选 / 减选，**不起拖拽**。
+     * 这是框选之后的微调手段：框多了一个、漏了一个都能就地补，
+     * 没有它就只能整片重框。只在 move 上生效 —— 左右边缘是缩放热区，
+     * 在那里加选会让人没法微调一个已选片段的长度。
+     */
+    if (mode === 'move' && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      appState.toggleClipSelection(clip.id);
+      return;
+    }
+    /*
+     * 拖**已在选中集里**的片段 = 整组一起走；拖没选中的片段 = 先单选它再拖。
+     *
+     * 判据是「按下时它已经选中」而不是「选中集非空」—— 后者会让用户想单独挪一个
+     * 片段时发现整片选择跟着动，而他从没表达过这个意图。
+     * 组只在 move 上成立：缩放是「这条边的位置」，套到一组上没有唯一定义。
+     */
+    const selected = appState.selectedClipIds;
+    const group = mode === 'move' && selected.length > 1 && selected.includes(clip.id);
+    const peers: DragPeer[] = [];
+    if (group) {
+      for (const id of selected) {
+        if (id === clip.id) continue;
+        const found = appState.store.findClip(id);
+        if (found) peers.push({ clipId: id, trackId: found.track.id, start: found.clip.start });
+      }
+    } else {
+      appState.selectClip(clip.id);
+    }
     startClipDrag(e, appState.store, {
       track,
       clip,
       mode,
       pxPerBeat: appState.pxPerBeat,
       snapMode: appState.snap,
+      peers,
       onHint: (illegal) => (appState.dragIllegal = illegal),
+      /*
+       * 按下了但没拖动 = 一次单击（见 DragOptions.onClick）：整组拖动成立的前提是
+       * 按下时**保持**选中集，所以「只选它一个」这件事只能放到松手时做。
+       */
+      onClick: () => appState.selectClip(clip.id),
     });
   }
 

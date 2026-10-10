@@ -35,6 +35,7 @@ export const typography = {
   'typo.spanHint': '选中一段文字后，字体 / 字号 / 颜色只作用于那一段。',  'typo.undo.addText': '添加文本框',
   'typo.undo.addShape': '插入图形',
   'typo.undo.addImage': '插入图片',
+  'typo.undo.addIcons': '插入图标',
   'typo.undo.registerImageAsset': '登记图片素材',
   'typo.undo.blend': '修改混合模式',
   'typo.undo.opacity': '修改不透明度',
@@ -125,6 +126,16 @@ export const typography = {
   'typo.groupName': '组合',
   'typo.groupExpand': '展开组合',
   'typo.groupCollapse': '折叠组合',
+
+  /* ------------------------------------------------ 图标选择器（IconPickerModal） */
+  'typo.iconPickerSearch': '搜索图标…',
+  'typo.iconPickerNone': '没有匹配的图标',
+  /* 图标名只有英文 —— 搜中文必然为空，给一句指路而不是让用户以为坏了。 */
+  'typo.iconPickerNoneHint': '图标名是英文（如 arrow、user、play），试试更短的关键词。',
+  'typo.iconPickerHit': '共 {n} 个图标',
+  'typo.iconPickerSelCount': '已选 {n} 个',
+  'typo.iconPickerApply': '插入',
+  'typo.iconPickerApplyN': '插入 {n} 个',
 
   /* ------------------------------------------------ 自定义 CSS 弹窗（CustomCssModal） */
   'typo.customCssTitle': '自定义动画（CSS @keyframes）',

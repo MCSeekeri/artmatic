@@ -106,9 +106,10 @@
         const r = appState.store.shiftClipTrack(appState.selectedClipId, e.key === 'ArrowUp' ? -1 : 1);
         if (r === 'no-track') appState.flash(tr('app.noTrackFits'));
         else if (r === 'blocked') appState.flash(tr('app.targetOccupied'));
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && appState.selectedClipId) {
-        appState.store.removeClip(appState.selectedClipId);
-        appState.selectedClipId = null;
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && appState.selectedClipIds.length) {
+        // 框选之后一次删干净：走**一笔撤销**（逐个 removeClip 会让 Ctrl+Z
+        // 只回来一个，看起来像撤销坏了）
+        appState.removeSelectedClips();
       } else if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
         e.preventDefault();
         appState.store.undo();

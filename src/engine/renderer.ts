@@ -130,9 +130,26 @@ export class Renderer {
     this.compositor.render(project, t);
   }
 
-  /** seek / 跳帧后调用：清掉所有反馈历史（echo 类特效的暖帧差异是可接受瞬态）。 */
+  /**
+   * 注入「跳帧后必须跟着重新定位」的钩子。目前只有算法运行时
+   * （`AlgoRuntime.alignSims`，有状态模拟的记账对齐）。
+   *
+   * 为什么做成钩子而不是让调用方自己记得调：`onSeek()` 有五类调用点
+   * （跳播放头 / 切排版页 / 刷新预览 / 导出起止 / 缩略图），让每一处都各自
+   * 记得调一次 `alignSims()` 是漏一处就坏一处的维护方式，而症状
+   * （「某个入口进来之后同一 t 连渲两次画面不同」）不会报错、极难归因。
+   *
+   * Renderer 自己不认识 algos（层次是 `engine ← algos`），所以由装配层
+   * `render/render-core.ts` 注入 —— 与 `setResolver` / `setEffectRunner` 同一条路。
+   */
+  setSeekExtra(fn: (() => void) | null): void {
+    this.seekExtraFn = fn;
+  }
+
+  /** seek / 跳帧后调用：清掉所有反馈历史，并让有状态模拟重新定位。 */
   onSeek(): void {
     this.compositor.clearFeedback();
+    this.seekExtraFn?.();
   }
 
   /* ---------------------------------------------------------- 导出预热
@@ -150,6 +167,8 @@ export class Renderer {
   private prewarmFontsFn: ((p: Project) => Promise<void>) | null = null;
   private exportEnterFn: (() => void) | null = null;
   private exportExitFn: (() => void) | null = null;
+  /** `onSeek()` 的附加动作。见 `setSeekExtra`。 */
+  private seekExtraFn: (() => void) | null = null;
 
   setPrewarm(fn: ((p: Project, t: number) => Promise<void>) | null): void {
     this.prewarmFrameFn = fn;

@@ -248,23 +248,77 @@ export async function settle(page: Page, t: number, settleFrames = SETTLE_FRAMES
  * 两次测量之前先 `settle()` —— 否则会被那个一次性过渡打到（实测挂过）。
  */
 export async function renderTwiceDiff(page: Page, t: number, clearFeedback = true): Promise<number> {
+  return (await renderTwiceStats(page, t, clearFeedback)).bytes;
+}
+
+/** 同帧两渲的差异统计。见 `renderTwiceStats`。 */
+export interface TwiceStats {
+  /** 逐字节不同的计数。 */
+  bytes: number;
+  /** 参与比较的字节总数（**比例判据的分母**）。 */
+  total: number;
+  /** 逐通道最大差值（0–255）。**只用于诊断，不要拿它当判据** —— 理由见下。 */
+  maxDelta: number;
+}
+
+/**
+ * 同一 t 渲两次的差异统计。
+ *
+ * ## 判据用**差异比例**（`bytes / total < 1%`），不要用「逐字节相等」，也不要用 `maxDelta`
+ *
+ * 逐字节相等在 GPU 上做不到。已知的那只鬼见 AGENTS §1.3 与
+ * `compositor.ts::placeLayer`：源尺寸 → 帧尺寸**不是整数比**时（生命游戏 64×64 →
+ * 558×314、lab 的 853×480 → 640×360），同一 t 会间歇地给出两个稳定态 ——
+ * mandelbrot 在临界点上差一次逃逸、生命游戏在格子边界差一次量化。
+ *
+ * ⚠️ **`maxDelta` 派不上用场**：实测那条差异的单通道差可到 **158**（内容级），
+ * 与「真的有东西变了」幅度相同 —— 想靠幅度区分噪声与回归是行不通的（试过）。
+ * 有区分度的是**面积**：
+ *
+ * | 情形 | 字节占比（实测） |
+ * |---|---|
+ * | 上述两个稳定态之间的跳 | 0.04% ~ 0.06%（309 / 700848、531 / 921600） |
+ * | 真实回归（跨帧状态残留、模拟多推进一步） | % 级起步 |
+ *
+ * 所以阈值定在 1%：容得下已知的闪烁，抓得住真正的回归。
+ * 老的「=== 0」在 `algo-sim.spec.ts` 头注里被否过一次（当时定性为"固定的渲染层竞态"），
+ * 这里是同一个结论的收敛版。
+ */
+export async function renderTwiceStats(page: Page, t: number, clearFeedback = true): Promise<TwiceStats> {
   await settle(page, t);
   return page.evaluate(
     ({ t, clearFeedback }) => {
       const A = (window as never as { __artmatic: StageApi }).__artmatic;
-      const countDiff = (a: number[], b: number[]): number => {
-        let n = 0;
+      const stats = (a: number[], b: number[]): { bytes: number; total: number; maxDelta: number } => {
+        let bytes = 0;
+        let maxDelta = 0;
         const len = Math.min(a.length, b.length);
-        for (let i = 0; i < len; i++) if (a[i] !== b[i]) n++;
-        return n;
+        for (let i = 0; i < len; i++) {
+          const dd = Math.abs((a[i] ?? 0) - (b[i] ?? 0));
+          if (dd) bytes++;
+          if (dd > maxDelta) maxDelta = dd;
+        }
+        return { bytes, total: len, maxDelta };
       };
+      /*
+       * 预热，跨过**启动窗口**。
+       *
+       * 页面刚加载后的头几十次求值里 GPU 会给出两个稳定态（实测：差异 177~531 个
+       * 字节、单通道差可到 158 —— 是 mandelbrot 迭代在临界点上差一次逃逸，
+       * 不是"噪声"，所以调阈值救不了），而它与「有没有跨帧状态残留」**无关**，
+       * 后者才是这条断言要守的东西。多渲十几帧就跨过去了；真有残留的话，
+       * 预热之后照样有残留。细节见 AGENTS §1.3 与 `compositor.ts::placeLayer`。
+       */
+      if (clearFeedback) A.renderer.onSeek();
+      for (let k = 0; k < 16; k++) A.renderFrame(t);
+
       if (clearFeedback) A.renderer.onSeek();
       A.renderFrame(t);
       const a = A.readPixels().data;
       if (clearFeedback) A.renderer.onSeek();
       A.renderFrame(t);
       const b = A.readPixels().data;
-      return countDiff(a, b);
+      return stats(a, b);
     },
     { t, clearFeedback },
   );

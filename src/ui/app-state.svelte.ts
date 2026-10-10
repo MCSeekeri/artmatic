@@ -207,7 +207,14 @@ export interface OpenProject {
   issues: AssetIssue[];
   /** 播放头（秒）。**工程级**：切回来时停在离开的位置。 */
   playT: number;
-  selectedClipId: string | null;
+  /**
+   * 选中的片段 id 集合（顺序 = 加入顺序；单选时长度为 1）。
+   *
+   * 真相是**集合**而不是「一个 id」：时间轴上可以拖出矩形一次框住好几个片段。
+   * `selectedClipId` 只是它的第一个元素（主选中）的视图 —— 两份真相会让
+   * 「点一个片段」只清掉其中一个，另一个残留着，而且没有任何地方会报错。
+   */
+  selectedClipIds: string[];
 }
 
 /**
@@ -239,7 +246,7 @@ function createPlaceholder(): OpenProject {
     savedAt: 0,
     issues: [],
     playT: 0,
-    selectedClipId: null,
+    selectedClipIds: [],
   };
 }
 
@@ -435,11 +442,72 @@ class AppState {
     this.activeProject.playT = v;
   }
 
+  /**
+   * 选中集。写它必须是**新数组**（原地 push 不会让 $state 的深代理换引用，
+   * 但为了「同一个值不重复触发」的判重方便，统一走 setClipSelection / 赋值）。
+   */
+  get selectedClipIds(): string[] {
+    return this.activeProject.selectedClipIds;
+  }
+  set selectedClipIds(v: string[]) {
+    this.activeProject.selectedClipIds = [...v];
+  }
+
+  /**
+   * 主选中片段 —— 检查器、S 键切分、Alt+↑↓ 作用的对象。
+   *
+   * 它是 `selectedClipIds` 的**视图**（第一个元素），写它等价于单选。
+   * 取第一个而不是最后一个：框选出来的一整片没有「最近点的那个」可言，
+   * 第一个在拖动过程中是稳定的。
+   */
   get selectedClipId(): string | null {
-    return this.activeProject.selectedClipId;
+    return this.activeProject.selectedClipIds[0] ?? null;
   }
   set selectedClipId(v: string | null) {
-    this.activeProject.selectedClipId = v;
+    this.activeProject.selectedClipIds = v === null ? [] : [v];
+  }
+
+  isClipSelected(id: string): boolean {
+    return this.activeProject.selectedClipIds.includes(id);
+  }
+
+  /** 单选：清空其余（点一个片段的标准语义）。 */
+  selectClip(id: string): void {
+    this.activeProject.selectedClipIds = [id];
+  }
+
+  /** Shift / Ctrl + 单击：在集合里增删一个。减到空是合法的（= 取消选择）。 */
+  toggleClipSelection(id: string): void {
+    const ids = this.activeProject.selectedClipIds;
+    this.activeProject.selectedClipIds = ids.includes(id)
+      ? ids.filter((x) => x !== id)
+      : [...ids, id];
+  }
+
+  /**
+   * 整体替换选中集（框选的实时结果）。
+   *
+   * 判重是必要的：框选每帧都会算一次命中集，不判重的话每个 pointermove
+   * 都换一个新数组，整条时间轴的片段都跟着重渲染一次。
+   */
+  setClipSelection(ids: readonly string[]): void {
+    const cur = this.activeProject.selectedClipIds;
+    if (cur.length === ids.length && ids.every((id, i) => cur[i] === id)) return;
+    this.activeProject.selectedClipIds = [...ids];
+  }
+
+  /**
+   * 删除全部选中片段（Delete）。
+   *
+   * 走 `store.removeClips` 的**一笔撤销**：逐个 removeClip 会让「框选 5 个
+   * 按 Delete」在撤销栈里留下 5 条记录 —— 用户按一次 Ctrl+Z 只回来一个，
+   * 看起来就是「撤销坏了」。
+   */
+  removeSelectedClips(): void {
+    const ids = [...this.activeProject.selectedClipIds];
+    if (!ids.length) return;
+    this.store.removeClips(ids);
+    this.activeProject.selectedClipIds = [];
   }
 
   /* ---- 会话属性：原来是单例上的字段，现在转发到激活工程 ---- */
@@ -531,7 +599,7 @@ class AppState {
       savedAt: init.savedAt ?? 0,
       issues: init.issues ?? [],
       playT: 0,
-      selectedClipId: null,
+      selectedClipIds: [],
     };
     this.projects.push(p);
     if (init.activate !== false) this.activateProject(p.id);

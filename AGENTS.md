@@ -46,6 +46,28 @@
 每隔 N 帧写状态快照、seek 时从最近快照重放。`algos/game-of-life.ts` 是现有实现，
 注释里承诺 `seek(f) ≡ 从 0 顺序 step f 次`。
 
+**帧记账与句柄状态是两件事，跳帧后必须对齐。** `AlgoRuntime` 用 `entry.frame` 记
+「句柄在哪一帧」，并在 `show === entry.frame` 时**跳过 seek** 复用句柄状态 —— 这条
+优化的前提是两者一致，而 `Renderer.onSeek()`（跳帧 / 清反馈）之后它**不保证**成立；
+表现是「同一 t 连渲两次得到两张不同的画面」（不报错、只在回溯时才看得出）。
+所以 `onSeek()` 经 `Renderer.setSeekExtra` 钩子调 `alignSims()` 强制对齐一次
+（幂等，同帧时零代价）。**任何新增的 seek 路径都不许绕过 `Renderer.onSeek()`**。
+
+**「同一 t 两渲逐字节相同」在 GPU 上不是免费的**（2026-10-10 排查）。两只已知的鬼：
+
+1. **非整数倍缩放采样**：源尺寸 → 帧尺寸不是整数比时（生命游戏 64×64 → 558×314、
+   lab 的 853×480 → 640×360），同一帧会在**启动窗口内**出现两个稳定态；
+   而 2× 精确缩放稳定。差异极小（单通道差 ≤5、几百个像素）且预热几十帧后消失，
+   **视觉不可见**。实测已排除 sim 状态、uniform 派发、反馈残留（完整状态哈希逐字节
+   相同）、`NEAREST` 采样。细节见 `engine/compositor.ts::placeLayer` 的注释。
+2. **大参数 sin**：`fract(sin(x) * 43758.5453)` 家族（`HASH_GLSL` / `HASH_PLAIN_GLSL`）
+   在自变量上百之后低位不稳 —— `slices` 的位移图案会在帧间跳，**用户能看见闪烁**
+   （已改用无 sin 的 `HASH_FAST_GLSL`）。**新增 hash 优先用 `HASH_FAST_GLSL`**；
+   要用 `sin` 就先做相位归约（`scanlines` 那处的写法）。
+
+两只都会把「同帧两渲逐像素相等」的断言打成**偶发**失败（`lab.spec.ts` / `algo-pattern.spec.ts`
+各有一条）。**别为它们改渲染代码** —— 要断言确定性，就在测量前多渲一帧丢弃。
+
 ### 1.4 主线程只做 rAF 与 uniform 写入
 
 解码 → Worker；算法烘焙 → Worker；排版光栅化 → 异步；编码 → WebCodecs 编码器。
@@ -89,7 +111,7 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 | 导出编码 | **WebCodecs**（H.264 + AAC 封 MP4，mediabunny）+ PNG 序列逃生舱 + GIF（`gifenc` 软编） |
 | 音频分析 | 自研 TS 离线 FFT（对齐 `AnalyserNode` 的 dB 映射） |
 | 排版出图 | snapDOM + HarfBuzz WASM 字体子集化 |
-| 图标 | Lucide（`@lucide/svelte`，ISC，按组件导出可 tree-shaking） |
+| 图标 | Lucide（`@lucide/svelte`，ISC）。UI 图标走 `ui/icons.ts` 的按组件导出（可 tree-shaking）；排版编辑器的「插入图标」走全量清单 + 懒加载，见 §5.7 |
 | 样式 | Design Token 单一真源在 TS（`ui/tokens.ts`） |
 | 工程持久化 | File System Access API；E2E 跑在 OPFS 上 |
 | 文案 / i18n | 自研 `src/i18n/`，无第三方库 |
@@ -265,6 +287,14 @@ function buildStack(project: Project, t: number): Stack {
 - **跨轨**兼容判据只有一条 `ProjectStore.canHost(track, clip)`（音频片段只进音频轨），
   拖拽与 `Alt+↑↓` 共用，不许各写一套。拖拽期间实时搬家 ⇒ 指针监听挂在 `window`
   而不是 `setPointerCapture`（元素会在两个 `{#each}` 块之间重建，捕获随之失效）。
+- **框选出来的多个片段一起走**（`drag.ts` 的 `peers`，单片段是它长度为 0 的特例）。
+  三条不变量：位移 `dt` 由**指针**算、与成员无关（相对位置天然保持）；换轨是
+  **整组平移 d 格**（`legalDelta`），不是逐成员各找各的轨道；兼容判据仍然只有
+  `canHost`。于是「组里含音频就不许上下跨轨」是这条判据的**推论**（音频片段平移
+  后会落到视觉轨），**不要**再写一条「组里有没有音频」的独立规则。
+  缩放**不做组版本**（`peers` 传进去也被忽略）：一组片段的「那条边」没有唯一定义。
+  按下已选中的片段时**先保持整个选中集**，松手若没移动过（<4px）再收敛成单选 ——
+  否则整组拖动无从谈起。这条判断只能放在拖拽层（`DragOptions.onClick`）。
 
 ### 4.3 trim-in 与切分
 
@@ -1173,6 +1203,28 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
 - **两个测试钩子**：`FontRegistry.subsetting` 可关（退回整体内联），
   `typography-font.spec.ts` 用它断言**子集 vs 全量逐像素零差异** —— 这是唯一能证明
   「子集化没有改动字形或度量」的测试。光栅化另有 `typoRasterize`（不经过 GPU）。
+- **插入图标 = 插入 `ShapeElement(shape:'svg')`**（`typography/icon-shapes.ts` +
+  `ui/typography/icon-library.ts` + `IconPickerModal.svelte`）。Lucide 的语义
+  （无填充 + 圆头描边）正好落在 ShapeElement 的表达力里 ⇒ 描边色 / 线宽 / 混合
+  这些既有控件插入后立刻可用，也不占素材表。图标 authored 在 24×24 而
+  `shape:'svg'` 按 0..100 authored（见 `shapes.ts` 的 `scaleFrom100`），统一乘
+  `100/24`，线宽用 `ICON_STROKE_WIDTH`（= 100/12）。三个会再咬人的坑：
+  1. **多个图元的 `d` 不许拼成一条字符串再解析**：相对命令（`m` / `a` / `l`）的
+     当前点在各自的 `<path>` 里从 `(0,0)` 起算，拼接后会接着上一条子路径的终点 ——
+     图标整体错位几十个单位（`a-large-small` 这类以 `m` 开头的片段必中）。合并只能
+     发生在**子路径层**：逐个图元 `parsePathNodes` → 合并 → `serializePathNodes`。
+  2. **SVG `A` 命令的两个 flag 是单字符**，会与相邻数字粘连：`a7 7 0 011.412 7.872`
+     里的 `011.412` 是 `0`、`1`、`1.412`。通用数字正则读成 `11.412` ⇒ 这组少一个
+     参数 ⇒ **整条弧被丢掉且当前点不推进** ⇒ 后续相对命令全体错位。`path-ops.ts::tokenize`
+     现在对 `A`/`a` 走逐字符扫描（这一处修好连带修正了布尔运算与顶点编辑的同类输入）。
+  3. **图标数据必须分块，不要逐图标成 chunk**：1800+ 个 chunk 会让每次 `vite build`
+     的 `prepareOutDir` 删除量顶爆开发机的批量删除保护（`[safe-delete]` 阈值 500），
+     **第二次构建起必然失败**。`vite.config.ts` 的 `manualChunks` 按**首字母**分组。
+- 图标清单 / 内容是 `import.meta.glob` 对 `@lucide/svelte` **源文件**的 `?raw` 懒加载：
+  glob 的 key（= 图标名）在构建期静态解析，零打包成本；每个 `.svelte` 里有一行
+  `const iconData = {...}` 由该包的构建模板写死。**升级这个包之后先跑
+  `typography-icon-shapes.test.ts` 的全量守卫**（1800+ 个图标逐个转换、坐标必须落在
+  0..100）—— 模板变了的话表现是「选择器里那一格是空的」，没有任何报错。
 
 ### 5.8 导出
 

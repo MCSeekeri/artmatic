@@ -146,6 +146,7 @@ export const ribbon = {
   'rib.shape': '形状',
   'rib.pickShape': '选择形状…',
   'rib.addImage': '插入图片',
+  'rib.addIcon': '插入图标',
 
   /* ------------------------------------------------ 动画 → 预设 */
   'rib.pickAnim': '选择预设…',

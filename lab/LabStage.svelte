@@ -110,7 +110,7 @@
 
     <Button
       label={tr('lab.compileAll')}
-      icon="flask-conical"
+      icon="combine"
       variant="outline"
       tipPlacement="top"
       testid="lab-compile-all"

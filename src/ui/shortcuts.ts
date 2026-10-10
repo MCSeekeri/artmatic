@@ -39,6 +39,9 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { keysKey: 'sc.key.drag', labelKey: 'sc.moveClip' },
       { keysKey: 'sc.key.dragEdge', labelKey: 'sc.resizeClip' },
+      { keysKey: 'sc.key.dragEmpty', labelKey: 'sc.marqueeClips' },
+      { keysKey: 'sc.key.shiftClickClip', labelKey: 'sc.addRemoveClip' },
+      { keysKey: 'sc.key.dragSelection', labelKey: 'sc.moveClips' },
       { keysKey: 'sc.key.dblClick', labelKey: 'sc.openClipEditor' },
       { keysKey: 'sc.key.s', labelKey: 'sc.splitAtPlayhead' },
       { keysKey: 'sc.key.altArrows', labelKey: 'sc.shiftTrack' },

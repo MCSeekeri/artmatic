@@ -109,6 +109,12 @@ export function createRenderCore(
   renderer.setResolver(sources.resolve);
   renderer.setEffectRunner(createEffectRunner(renderer.kit, () => opts.getProject().seed));
   renderer.setTransitionRunner(createTransitionRunner(renderer.kit));
+  /*
+   * 跳帧后让有状态模拟重新对齐（见 AlgoRuntime.alignSims）。必须走
+   * `Renderer.onSeek()` 这条唯一的路 —— 主应用与 lab 的每一个 seek 入口都会经过它，
+   * 各自记得调一次是不可能的维护方式。
+   */
+  renderer.setSeekExtra(() => algos.alignSims());
 
   const spectrumTextures = new SpectrumTextures(renderer.kit);
   spectrumTextures.setSource(opts.spectrum ?? null);

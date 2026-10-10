@@ -67,6 +67,24 @@ export default defineConfig({
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         lab: fileURLToPath(new URL('./lab/index.html', import.meta.url)),
       },
+      output: {
+        /**
+         * 图标选择器的数据（`ui/typography/icon-library.ts` 对 lucide 图标源文件
+         * 的 `?raw` 懒加载）：**按首字母分组**，不要「一个图标一个 chunk」。
+         *
+         * 逐图标成 chunk 在功能上没问题（每个 1~2 KB，确实只加载用得上的那几个），
+         * 但每次 `vite build` 的 `prepareOutDir` 都要删掉两千个小文件 —— 实测会
+         * 顶爆开发机的**批量删除保护**（`[safe-delete]` 阈值 500），于是第二次
+         * 构建开始必然失败。dist 里两千个文件的复制/清理成本也不该被常态化。
+         *
+         * 分组之后：打开选择器 = 取列表头部那几个字母组（一个组一次请求），
+         * 滚动 / 搜索到别的字母再取对应组 —— 请求数比逐图标还少。
+         */
+        manualChunks(id) {
+          const m = /[/\\]@lucide[/\\]svelte[/\\]dist[/\\]icons[/\\]([a-z0-9])/.exec(id);
+          return m ? `lucide-icon-${m[1]}` : undefined;
+        },
+      },
     },
   },
   server: { port: 5173, strictPort: true },

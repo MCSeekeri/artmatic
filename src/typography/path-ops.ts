@@ -59,8 +59,47 @@ function samplesFor(len: number): number {
   return Math.max(MIN_SAMPLES, Math.min(MAX_SAMPLES, Math.ceil(len / SAMPLE_STEP)));
 }
 
+/** 一般命令的参数：数字之间可以省略分隔符（`1-2`、`.5.5`）。 */
+function numberArgs(s: string): number[] {
+  return (s.match(/-?\d*\.?\d+(?:[eE][-+]?\d+)?/g) ?? []).map(Number);
+}
+
 /**
- * 把数字串切成 token（含科学计数法与 `1-2` / `.5.5` 这类省略分隔符的写法）。
+ * `A` / `a` 的参数串扫描。
+ *
+ * 弧的两个 flag（large-arc / sweep）在 SVG 语法里是**单个字符**，可以与相邻
+ * 数字直接粘连：`a7 7 0 011.412 7.872` 是 rot=0、large=0、sweep=1、x=1.412。
+ * 通用数字正则会把 `011.412` 读成一个数（11.412），于是这一组少一个参数 ——
+ * **整条弧被丢掉、当前点不推进**，后续的相对命令全体错位。lucide 有大量图标
+ * 是 `0 0018.5` 这种写法，全部会偏移几十个单位。
+ *
+ * 所以这里按「数值 / 数值 / 数值 / flag / flag / 数值 / 数值」的节奏逐字符扫。
+ */
+function arcArgs(s: string): number[] {
+  const out: number[] = [];
+  let i = 0;
+  while (i < s.length) {
+    while (i < s.length && /[\s,]/.test(s[i]!)) i++;
+    if (i >= s.length) break;
+    const slot = out.length % 7;
+    if (slot === 3 || slot === 4) {
+      out.push(s[i] === '1' ? 1 : 0);
+      i++;
+      continue;
+    }
+    const m = /^[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/.exec(s.slice(i));
+    if (!m) {
+      i++;
+      continue;
+    }
+    out.push(Number(m[0]));
+    i += m[0].length;
+  }
+  return out;
+}
+
+/**
+ * 把路径切成 token（含科学计数法与 `1-2` / `.5.5` 这类省略分隔符的写法）。
  *
  * **导出给 `path-nodes.ts` 用**：那边需要同一套词法。抄第二份的话，
  * 「`1-2` 要切成两个数」这类规则迟早有一份会漏掉，表现是「有些路径一编辑就乱」。
@@ -70,8 +109,8 @@ export function tokenize(d: string): { cmd: string; args: number[] }[] {
   const re = /([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(d))) {
-    const nums = m[2]!.match(/-?\d*\.?\d+(?:[eE][-+]?\d+)?/g) ?? [];
-    out.push({ cmd: m[1]!, args: nums.map(Number) });
+    const upper = m[1]!.toUpperCase();
+    out.push({ cmd: m[1]!, args: upper === 'A' ? arcArgs(m[2]!) : numberArgs(m[2]!) });
   }
   return out;
 }

@@ -259,6 +259,15 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   'typography/runtime.ts': ['[typo] 光栅化失败', '[typo] 预热失败'],
   // 字体导入的逐项失败：其余字体照常导入，只 console.warn 这一条。
   'ui/typography/actions.ts': ['[typo] 字体 ${f.name} 导入失败'],
+  /*
+   * 图标选择器：`@lucide/svelte` 升级后图标模板变了时的诊断（解析不出 iconData）。
+   * 正常路径上不可能出现 —— 1800 个图标的解析由 typography-icon-shapes 的
+   * 「全量转换守卫」逐个钉着。真要说出口，用户的反馈是「那一格没有图标」
+   * （静默留空），控制台那行只给改代码的人看。
+   */
+  'ui/typography/icon-library.ts': [
+    '[artmatic] 图标数据解析失败：${name}（@lucide/svelte 的模板可能变了）',
+  ],
 };
 
 const CJK = /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/;

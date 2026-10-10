@@ -43,6 +43,7 @@ export const timeline = {
 
   /* ------------------------------------------------ 拖拽的撤销标签（drag.ts） */
   'tl.moveClip': '移动片段',
+  'tl.moveClips': '移动 {n} 个片段',
   'tl.resizeClip': '调整片段长度',
 
   /* ------------------------------------------------ 吸附档位名（core/time.ts 的 SNAP_MODES 表） */
@@ -59,6 +60,7 @@ export const timeline = {
   'tl.disableTrack': '禁用轨道',
   'tl.addClip': '新建片段',
   'tl.removeClip': '删除片段',
+  'tl.removeClips': '删除 {n} 个片段',
   'tl.moveTrackUp': '上移一轨',
   'tl.moveTrackDown': '下移一轨',
   'tl.setDuration': '修改时长',

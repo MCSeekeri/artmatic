@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { ALGO_HEAD, SCENE_GLSL, declaredUniforms } from '../../src/algos/shader-lib';
+import { zhCN } from '../../src/i18n/locales/zh-CN';
 
 /**
  * 试炼场（/lab/）的端到端验证。
@@ -97,12 +98,19 @@ test('渲染出画面，且旁路（看源）与加特效结果不同', async ({
   expect(result.diff).toBeGreaterThan(0);
 });
 
-test('非反馈特效同帧可复现（逐像素一致）', async ({ page }) => {
+test('非反馈特效同帧可复现（差异在噪声级内）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {
     const L = (window as unknown as LabWindow).__lab!;
     L.selectSource('mandelbrot');
     L.selectEffect('scanlines');
+
+    /*
+     * 预热，跨过**启动窗口**：那段里 GPU 会间歇给出两个稳定态，与「有没有跨帧
+     * 状态残留」无关（这条断言要守的是后者）。判据与实测数据见
+     * `_stage.ts::renderTwiceStats`。
+     */
+    for (let k = 0; k < 16; k++) L.renderAt(1.5, true);
 
     // 先清反馈历史再连渲两次同一 t。清一次、渲两次 —— 第二次不再清，
     // 于是"没有跨帧状态残留"这件事被真的验证到了。
@@ -111,11 +119,16 @@ test('非反馈特效同帧可复现（逐像素一致）', async ({ page }) => 
     L.renderAt(1.5, false);
     const b = L.readPixels().data;
 
-    let diff = 0;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++;
-    return { diff };
+    let bytes = 0;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) bytes++;
+    return { bytes, total: a.length };
   });
-  expect(result.diff).toBe(0);
+  /*
+   * 判据是**差异比例**（1%），不是逐字节相等。实测那两个稳定态之间的差异是
+   * 0.06%，而真实的跨帧残留是 % 级 —— 见 `_stage.ts::renderTwiceStats` 的表。
+   * （`maxDelta` 在这里派不上用场：那个差异的单通道差可到 158，与内容级变化同幅。）
+   */
+  expect(result.bytes / result.total).toBeLessThan(0.01);
 });
 
 test('全部编译：所有特效与实时算法都编得过', async ({ page }) => {
@@ -474,4 +487,30 @@ test('内置测试图接进了源链路，且彼此不同', async ({ page }) => 
   // 而不是都落到 SourceManager 的 `default: return null`（那样三张全黑、diff 为 0）。
   expect(result.barsGrid).toBeGreaterThan(0);
   expect(result.barsGrad).toBeGreaterThan(0);
+});
+
+test('悬停提示气泡真的浮出来（Tip 的渲染者在 lab 里也要挂上）', async ({ page }) => {
+  await boot(page);
+
+  /*
+   * `use:tip` 只是**写状态**：文字进 tooltip store，气泡本体是根级的 `<Tip />`。
+   * 试炼场是独立入口、不引主应用，主应用那份 `<Tip />`（App.svelte 根部）不会
+   * 跟着过来 —— 有一阵子 rail 上所有 `tipText` 悬停都没反应，页面也不报错，
+   * 因为「没有人渲染气泡」在 DOM 上什么痕迹都不留。
+   *
+   * 期望文字从**文案表**取，不写中文字面量：改一句文案不该让这条变红。
+   */
+  const compileTip = zhCN['lab.compileAllTip'];
+  const bubble = page.getByTestId('tip-bubble');
+
+  // 气泡有 350ms 延迟（TIP_DELAY_MS），用 expect 的轮询等它。
+  await page.getByTestId('lab-rail-compile').hover();
+  await expect(bubble).toBeVisible();
+  // 断的必须是 tipText 而不是 label —— 把两者弄混（退化成 aria-label）也是错的。
+  await expect(bubble).toHaveText(compileTip);
+  expect(compileTip).not.toBe(zhCN['lab.compileAll']);
+
+  // 指针移开就收起：气泡不残留。
+  await page.getByTestId('lab-canvas').hover();
+  await expect(bubble).toBeHidden();
 });

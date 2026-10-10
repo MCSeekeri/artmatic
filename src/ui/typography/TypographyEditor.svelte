@@ -49,6 +49,8 @@
   import { animationSpecs, seekAnimations } from '../../typography/bake-animation';
   import { keyframeBodyOf } from '../../typography/animation';
   import CustomCssModal from './CustomCssModal.svelte';
+  import IconPickerModal from './IconPickerModal.svelte';
+  import type { IconInsert } from '../../typography/icon-shapes';
   import { SNAP_PX, hitTest, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
   import { gridSpacing } from '../../typography/grid';
   import { groupById } from '../../typography/groups';
@@ -70,6 +72,7 @@
   let marquee = $state<Rect | null>(null);
   let activeRibbonTab = $state('home');
   let customCssOpen = $state(false);
+  let iconPickerOpen = $state(false);
   /** 中键拖拽平移中（只为光标形态）。 */
   let panning = $state(false);
   /** 右栏宽度拖曳中（与检查器一致：拖动中分隔条保持高亮）。 */
@@ -231,6 +234,7 @@
         activePreset,
         anim: selection.flatMap((e) => e.animations)[0] ?? null,
         onOpenCustomCss: () => (customCssOpen = true),
+        onOpenIconPicker: () => (iconPickerOpen = true),
         onFlatten: () => actions.flattenToImage(appState.playT - (editorState.clip?.start ?? 0)),
         grid: gridPrefs,
         onGrid: (patch) => appState.setTypoGrid(patch),
@@ -1215,6 +1219,16 @@
     initialOf={() => currentKeyframes}
     onclose={() => (customCssOpen = false)}
     onsave={(css: string) => actions.applyCustomCss(css)}
+  />
+{/if}
+
+{#if iconPickerOpen}
+  <IconPickerModal
+    onclose={() => (iconPickerOpen = false)}
+    onapply={(items: IconInsert[]) => {
+      iconPickerOpen = false;
+      actions.addIcons(items);
+    }}
   />
 {/if}
 

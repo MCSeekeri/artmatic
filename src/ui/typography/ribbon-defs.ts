@@ -62,6 +62,8 @@ export interface TypographyRibbonInput {
   anim: AnimTiming | null;
   /** 打开「自定义 CSS」弹窗（界面状态，所以由编辑器提供）。 */
   onOpenCustomCss: () => void;
+  /** 打开「插入图标」选择器（同上）。 */
+  onOpenIconPicker: () => void;
   /** 「转为图片」逃生舱。 */
   onFlatten: () => void;
   /** 网格 / 画幅线框的当前值。 */
@@ -707,6 +709,17 @@ export function buildTypographyTabs(
               icon: 'image-plus',
               testid: 'typo-add-image',
               onselect: () => a.addImage(),
+            },
+            {
+              // 图标是**矢量图形**，不是素材：选择器里挑完直接进文档（见
+              // icon-shapes.ts），所以按钮排在「插入」组而不是「图片」语义里，
+              // 但它和图片一样是「挑一个外面的东西进来」，就近放置。
+              kind: 'button',
+              id: 'add-icon',
+              label: tr('rib.addIcon'),
+              icon: 'shapes',
+              testid: 'typo-insert-icon',
+              onselect: () => input.onOpenIconPicker(),
             },
           ],
         },

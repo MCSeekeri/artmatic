@@ -6,6 +6,7 @@
   import { algoThumbUrl } from '../ui/algo-thumb-assets';
   import { ALGO_CATALOG } from '../algos/catalog';
   import ClipView from './ClipView.svelte';
+  import { startMarquee, type MarqueeBox } from './marquee';
   import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
   import { xOfTime, timeAtX, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
   import { browserPlatform } from '../platform/browser';
@@ -51,6 +52,15 @@
   let rulerCanvas: HTMLCanvasElement;
   let gridCanvas: HTMLCanvasElement;
   let scrollEl: HTMLDivElement;
+  let rowsEl: HTMLDivElement;
+
+  /**
+   * 框选进行中的矩形（**内容坐标**，相对 .rows 左上角）。null = 没在框选。
+   *
+   * 它只是那个框的几何：选中集本身在 appState 里（见 marquee.ts 的注释）。
+   * 选中态刻意不进渲染循环的依赖（见下面 `$effect` 的「选中态不在其中」）。
+   */
+  let marqueeBox = $state<MarqueeBox | null>(null);
 
   /**
    * 滚动视口的宽度。画布要至少铺这么宽——否则工程末尾右侧会露一条底色空档
@@ -506,9 +516,10 @@
 
   function removeTrack(track: Track): void {
     closeMenus();
-    if (appState.selectedClipId && track.clips.some((c) => c.id === appState.selectedClipId)) {
-      appState.selectedClipId = null;
-    }
+    // 这条轨上的片段若在选中集里，一并摘掉 —— 否则选中集里留着指向
+    // 不存在片段（甚至指向别的工程的对象）的 id。
+    const gone = new Set(track.clips.map((c) => c.id));
+    appState.setClipSelection(appState.selectedClipIds.filter((id) => !gone.has(id)));
     appState.store.removeTrack(track.id);
   }
 
@@ -683,10 +694,31 @@
     e.preventDefault();
   }
 
-  function deselect(e: PointerEvent): void {
-    if ((e.target as HTMLElement).hasAttribute('data-tl-row')) {
-      appState.selectedClipId = null;
-    }
+  /**
+   * 空白处按下 = 点一下取消选择 / 拖出矩形框选，由 marquee.ts 用 4px 阈值区分。
+   *
+   * 片段与转场标记在各自的 pointerdown 里 stopPropagation，所以能冒泡到
+   * 这里的本来就是真正的空白；判 `data-tl-row` 只是再确认一次。
+   */
+  function onRowsPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    if (!(e.target as HTMLElement).hasAttribute('data-tl-row')) return;
+    const rows = rowsEl;
+    if (!rows) return;
+    startMarquee(e, {
+      start: { x: e.clientX, y: e.clientY },
+      selection: [...appState.selectedClipIds],
+      /*
+       * 局部坐标 = client 减 .rows 的 rect。**不读 scrollLeft** ——
+       * 滚动已经反映在 rect 的位置里，再减一次会在滚动过的位置整体错位。
+       */
+      toLocal: (cx, cy) => {
+        const r = rows.getBoundingClientRect();
+        return { x: cx - r.left, y: cy - r.top };
+      },
+      onSelect: (ids) => appState.setClipSelection(ids),
+      onBox: (b) => (marqueeBox = b),
+    });
   }
 
   /** 鼠标 x → 工程时间（吸附）。右键菜单与拖拽落点共用同一套换算。 */
@@ -831,7 +863,12 @@
   <div class="scroll" data-testid="tl-scroll" bind:this={scrollEl} onwheel={wheel} onscroll={() => paint(false)}>
     <div class="canvas-wrap" data-testid="tl-canvas-wrap" style:width={`${drawWidth}px`}>
       <canvas class="ruler" bind:this={rulerCanvas} onpointerdown={scrub}></canvas>
-      <div class="rows" role="presentation" onpointerdown={deselect}>
+      <div
+        class="rows"
+        role="presentation"
+        bind:this={rowsEl}
+        onpointerdown={onRowsPointerDown}
+      >
         <canvas class="grid" bind:this={gridCanvas}></canvas>
         {#each tracks as track (track.id)}
           <div
@@ -868,6 +905,20 @@
             {/each}
           </div>
         {/each}
+        {#if marqueeBox}
+          <!--
+            框选框。半透明是必须的（框住的内容要看得见）；`pointer-events: none`
+            也是必须的 —— 否则框一出现就把指针下的片段盖住，拖框本身会卡住。
+          -->
+          <div
+            class="marquee"
+            data-testid="tl-marquee"
+            style:left={`${marqueeBox.x}px`}
+            style:top={`${marqueeBox.y}px`}
+            style:width={`${marqueeBox.w}px`}
+            style:height={`${marqueeBox.h}px`}
+          ></div>
+        {/if}
         <div class="playhead" style:left={`${playheadX}px`}></div>
       </div>
     </div>
@@ -1009,6 +1060,20 @@
   }
   .rows {
     position: relative;
+    /* 框选是在这块上拖出来的：不加的话拖动会顺手把行里的文字选中 */
+    user-select: none;
+  }
+  /*
+   * 框选框。与排版编辑器的同款：半透明填充 + 主题色描边 ——
+   * 用 color-mix 而不是 --accent-weak，后者是**不透明**的色阶值。
+   * z 与选中片段的描边同层：DOM 里排在片段之后，所以盖在它们上面。
+   */
+  .marquee {
+    position: absolute;
+    z-index: var(--z-clip-selected);
+    border: 1px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    pointer-events: none;
   }
   .grid {
     position: absolute;

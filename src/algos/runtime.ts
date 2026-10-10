@@ -75,10 +75,11 @@ interface SimEntry {
   /** 创建时定下，不可变 —— 换通道数意味着换纹理，走的是「hash 变了重建」那条路。 */
   channels: 1 | 2 | 4;
   /**
-   * 句柄**精确**所在的那一帧。
+   * 句柄**精确**所在的那一帧（本模块的记账）。
    *
-   * 只有本模块调 `seek`，所以这个数不可能与句柄不一致 —— 于是「没变就不调
-   * `seek`」是安全的，而「上一帧落后了多少」也不用去猜。
+   * ⚠️ **这不是"句柄的真实帧"，而是"我们相信句柄所在的帧"。** 平时两者一致，
+   * 但 `Renderer.onSeek()`（跳帧 / 清反馈）之后就不一定了 —— 于是有了
+   * `needsAlign`。别再把「没变就不调 seek」当成无条件安全的优化。
    */
   frame: number;
   /** 最近一次**请求**的帧（用来报滞后，`frame` 是实际渲染的帧）。 */
@@ -87,6 +88,13 @@ interface SimEntry {
   msPerStep: number;
   /** 令牌桶余额（ms）。见 `planSimStep`。 */
   tokens: number;
+  /**
+   * 下一次 `resolve` 先做一次**对齐**（`handle.seek(frame)`），再走常规路径。
+   *
+   * 由 `alignSims()`（= `Renderer.onSeek()` 的钩子）置位。见那个方法的注释：
+   * 没有它，「同一 t 连渲两次」在跳帧之后可能给出两张不同的画面。
+   */
+  needsAlign: boolean;
 }
 
 /**
@@ -228,6 +236,42 @@ export class AlgoRuntime {
   }
 
   /**
+   * 让每个模拟在**下一次求值前**与 `entry.frame` 对齐一次。
+   *
+   * ## 为什么必须有它
+   *
+   * `resolve` 里有一条优化：`show === entry.frame` 时不调 `seek`，直接复用句柄
+   * 当前状态（见 `SimEntry.frame` 的注释）。它成立的前提是**记账与句柄一致**，
+   * 而跳帧 / 清反馈之后这个前提会破 —— 表现是「同一 t 连渲两次得到两张不同的
+   * 画面」：
+   *
+   * ```text
+   * onSeek → renderFrame(0) → 画面 A
+   * onSeek → renderFrame(0) → 画面 B   ← 309 个像素差，此后一直稳定在 B
+   * ```
+   *
+   * 排查记录（2026-10-10，e2e 生命游戏用例）：期间 `entry.frame/target` 全程都是
+   * 0、`handle.seek` 一次都没被调用（打补丁记录），只有**手动把记账的 `frame`
+   * 置 -1 逼出一次 seek**，第一帧才会直接落到 B。即句柄实际所在的帧与记账脱节，
+   * 而「跳过 seek」把它藏住了。
+   *
+   * ## 为什么不是「把 frame 置 -1」
+   *
+   * 那会让 `planSimStep` 从一个不存在的帧起步（`target - frame` 被凭空 +1，
+   * `afford` 至少算出 1 步）。这里只**对齐**、不移动目标帧：预算路径（拖动 /
+   * 追赶）的语义一个字都没变。
+   *
+   * ## 代价
+   *
+   * 每个 sim 一次 `handle.seek(它自称所在的帧)`。同帧上各生成器的 seek 都是
+   * no-op（`target < frame` 不成立、`stepTo` 不推进），所以正常路径几乎免费；
+   * 真脱节时这一次 seek 会把状态拉回精确帧 —— 这正是要的。
+   */
+  alignSims(): void {
+    for (const e of this.sims.values()) e.needsAlign = true;
+  }
+
+  /**
    * 「上一帧渲染过」的 sim 源（`resolve` 里记，`takeSimLag` 里清）。
    * 见 `takeSimLag` 的注释：滞后的判据必须是**这一帧真的会渲的源**。
    */
@@ -356,9 +400,22 @@ export class AlgoRuntime {
           // 悲观起步会让前几帧每帧只走 1 步、把追赶拖长。
           msPerStep: 1,
           tokens: 0,
+          // `create()` 一律把状态造在第 0 帧，与 `frame: 0` 一致，不必对齐。
+          needsAlign: false,
         };
         this.sims.set(clip.id, entry);
       }
+      /*
+       * `onSeek()` 之后先对齐一次（见 `alignSims`）：把句柄拉回我们记账的那一帧。
+       * 幂等 —— 两边本来就一致时 `handle.seek` 什么都不做，所以正常路径零代价。
+       * 必须在读 `stepsPerSec` / 算 `simFrame` **之前**：对齐之后这条 entry 的
+       * `frame` 才是可信的，后面的预算判断全部建立在它上面。
+       */
+      if (entry.needsAlign) {
+        entry.needsAlign = false;
+        entry.handle.seek(entry.frame);
+      }
+
       // 速度每帧从**当前**参数读（不是 handle 上创建时那份快照）——
       // 这正是 `rate` 能被排除出构造哈希的前提。
       const stepsPerSec = liveRate(params, entry.handle.stepsPerSec);

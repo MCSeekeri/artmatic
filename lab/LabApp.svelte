@@ -13,6 +13,7 @@
   import LabList from './LabList.svelte';
   import LabStage from './LabStage.svelte';
   import LabParams from './LabParams.svelte';
+  import Tip from '../src/ui/Tip.svelte';
   import { labState } from './lab-state.svelte';
   import { isExempt } from '../src/ui/focus';
 
@@ -59,6 +60,16 @@
   <LabStage />
   <LabParams />
 </div>
+
+<!--
+  气泡的**渲染者**。`use:tip` 只把文字写进 tooltip store，气泡本体是 Tip.svelte
+  （固定在视口上的浮层，见 controls.css 的 .tip）；主应用在 App.svelte 根部挂一份，
+  试炼场是独立入口、不引主应用，所以这里必须自己挂 —— 漏了它的症状就是
+  「所有 tipText 悬停都没反应，且没有任何报错」。
+  挂在 .lab-shell **外面**：它是 grid 容器，虽然 fixed 元素不参与轨道计算，
+  但没必要让它成为 .lab-shell 的子项。
+-->
+<Tip />
 
 <style>
   .lab-shell {
