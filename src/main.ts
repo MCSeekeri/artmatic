@@ -21,6 +21,7 @@ import { splitRelPath } from './project/layout';
 import {
   attachProjectDirectory,
   openProjectDirectory,
+  openProjectPicker,
   refreshRecentProjects,
   registerDemoAssets,
   saveProjectNow,
@@ -29,6 +30,9 @@ import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
 import { mascotStats } from './ui/mascot/squeak';
+import { createControlPlane } from './agent/index';
+import type { ControlContext, OpenProjectView } from './agent/types';
+import type { Renderer } from './engine/renderer';
 
 /* 装配顺序：主题 → store → mount。
    主题必须最先注入：它是内联 style，写在 :root 上，任何时候注入都生效，
@@ -125,10 +129,70 @@ const projectDebug = {
   },
 };
 
+/** 打开的工程列表：`__artmatic.projects()` 与控制平面共用一份口径。 */
+function projectList(): OpenProjectView[] {
+  return appState.projects.map((p) => ({
+    name: p.store.project.name,
+    dirty: p.savedVersion !== p.store.version,
+    active: p.id === appState.activeProjectId,
+    view: p.view.kind,
+    saved: p.savedVersion >= 0,
+    dir: p.dir?.name ?? null,
+  }));
+}
+
+/**
+ * ★ Agent 控制平面（方案：`docs/agent-control-plane.md`）。
+ *
+ * **装配点放在这里**（而不是 `src/agent/` 内部）：`appState` 是 `ui/` 层的
+ * `$state` 类，让控制平面直接 import 它会把 `src/agent/` 反向绑在 `ui/` 上，
+ * 将来 `/lab/` 或独立入口想复用控制平面时会成环（方案 §2.2）。注入点只有
+ * 这一处，代价极小。
+ *
+ * 与 `__artmatic` 的关系是**同源演进，不是替换**：后者是控制平面的前身
+ * （E2E / 试炼场专用），方案 §2.3 明确「保留 `__artmatic` 及其全部现有键不动」
+ * —— `tests/e2e/_stage.ts` 与 `scripts/gen-*-thumbs.mjs` 依赖它们。
+ *
+ * > 关于「生产构建不注册」（方案 §6.4 第 3 条）：那条约束的对象是**页面内
+ * > WebSocket 服务**（它开了监听端口，是真正的新攻击面）。控制平面对象本身
+ * > 不比已有的 `__artmatic` 多给任何能力 —— 能执行 `window.__artmatic.control`
+ * > 的脚本本来就能执行 `window.__artmatic.appState.store.commit`。而路径 A
+ * > （headless 驱动）恰恰跑在 `vite preview` 的**生产产物**上，注册被门住
+ * > 就等于把唯一跑得通的自动化通道拆掉。所以这里与 `__artmatic` 一样无条件注册；
+ * > 页面内 WS（§6.2，方案标为可选）没有实现，那条边界因此没有失守。
+ * > 生产构建确实**没有** WebSocket / 任何监听端口（断言见 `tests/e2e/agent.spec.ts`）。
+ */
+const controlContext: ControlContext = {
+  // `store` / `assets` 是 getter，永远指向当前前台那份；**每次调用都重新取**
+  // （多工程下缓存它必然错，见 AGENTS §5.2 的纪律）。
+  getStore: () => (appState.hasProject ? appState.store : null),
+  getRenderer: () => (appState.renderer as Renderer | undefined) ?? null,
+  getAssets: () => (appState.hasProject ? appState.assets : null),
+  getPlayT: () => appState.playT,
+  setPlayT: (t) => {
+    appState.playT = t;
+  },
+  getAudioBuffer: (id) => appState.player?.buffer(id) ?? null,
+  listProjects: projectList,
+  saveProject: () => saveProjectNow(),
+  // 给 name 走 OPFS（headless 驱动可用）；不给就弹系统对话框（必须有用户手势）。
+  openProject: (name) => (name ? projectDebug.open(name) : openProjectPicker()),
+  cancelPendingGesture: () => appState.cancelGesture(),
+  refreshPreview: () => appState.refreshPreview(),
+};
+
+const control = createControlPlane(controlContext);
+
 (window as unknown as Record<string, unknown>).__artmatic = {
   renderer: appState.renderer,
   appState,
   theme,
+  /**
+   * ★ 协议化的控制平面（agent 的唯一操作面）。每个方法都返回
+   * `{ ok: true, data } | { ok: false, error: { code, message } }`，**不抛异常**
+   * —— 异常跨传输层会丢掉类型，agent 就拿不到可判别的 `code` 了。
+   */
+  control,
   /**
    * `store` 与 `assets` 是 **getter**，指向当前激活工程那一份。
    *
@@ -143,15 +207,7 @@ const projectDebug = {
   },
   project: projectDebug,
   /** 打开的工程列表，摊平成纯数据（page 里能直接断言，且可序列化）。 */
-  projects: () =>
-    appState.projects.map((p) => ({
-      name: p.store.project.name,
-      dirty: p.savedVersion !== p.store.version,
-      active: p.id === appState.activeProjectId,
-      view: p.view.kind,
-      saved: p.savedVersion >= 0,
-      dir: p.dir?.name ?? null,
-    })),
+  projects: (): OpenProjectView[] => projectList(),
   renderFrame: (t: number) => appState.renderer.renderFrame(appState.store.project, t),
   readPixels: () => {
     const { data, w, h } = appState.renderer.readPixels();

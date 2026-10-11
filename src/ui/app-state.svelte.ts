@@ -777,7 +777,7 @@ class AppState {
    * 隐藏期间显示区域尺寸是 0，不重算的话预览会糊或尺寸不对；
    * `onSeek()` 清反馈历史，免得 echo 的拖尾错乱（与 seek 同语义）。
    */
-  private refreshPreview(): void {
+  refreshPreview(): void {
     this.renderer?.onSeek();
     this.renderer?.syncSize(this.store.project.resolution);
     this.renderer?.renderFrame(this.store.project, this.playT);
@@ -786,6 +786,20 @@ class AppState {
   /** 编辑器注册「取消当前手势」的钩子（切工程 / 关排版页时调用）。 */
   registerGestureCancel(fn: (() => void) | null): void {
     this.pendingGestureCancel = fn;
+  }
+
+  /**
+   * 取消悬空的手势事务。
+   *
+   * 与切工程 / 关排版页里那两处是同一件事（`pendingGestureCancel?.()` 之后
+   * 立刻置 null）：**绝不能让 `beginTx` 悬空**，否则撤销栈整个错乱 ——
+   * 手势的 `cancelTx` 会把事务起点之后的一切改动（包括别人的）一起回滚。
+   * 这次多出来的调用方是 agent 控制平面：它的每一次写都必须先让用户的手势
+   * 落地，不然两笔改动会混成一条撤销记录。
+   */
+  cancelGesture(): void {
+    this.pendingGestureCancel?.();
+    this.pendingGestureCancel = null;
   }
 
   private pendingGestureCancel: (() => void) | null = null;

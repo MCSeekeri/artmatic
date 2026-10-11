@@ -22,6 +22,7 @@ import { ribbon } from './ribbon';
 import { shortcuts } from './shortcuts';
 import { errors } from './errors';
 import { lab } from './lab';
+import { agent } from './agent';
 
 export const zhCN = {
   ...common,
@@ -37,4 +38,5 @@ export const zhCN = {
   ...shortcuts,
   ...errors,
   ...lab,
+  ...agent,
 } as const;

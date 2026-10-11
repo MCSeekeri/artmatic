@@ -1,0 +1,174 @@
+/**
+ * clip-factory.ts — 片段工厂（方案 §3.3 末段）。
+ *
+ * **为什么必须由控制平面提供**：`store.addClip` 需要一个字段完整的 `AnyClip`
+ * （`id / start / end / label / fadeSec / curves / kind / source / blend /
+ * opacity / transform / fit`）。让 agent 逐个填是又啰嗦又易错 —— 少一个
+ * `fadeSec` 就会让 `validateProject` 在保存时报错，而报错点在离调用点很远的地方。
+ *
+ * **纯函数**：只依赖 `core/` 与 i18n。默认值取自 `core/schema.ts` 的
+ * `defaultTransform` / `newId`；生成器的参数默认值与特效的 `defaultValues`
+ * 由调用方（控制平面）先解析好传进来 —— 这一层不认识 `algos/` 与 `effects/`
+ * 的注册表。
+ */
+
+import { defaultTransform, newId } from '../core/schema';
+import type { BlendMode, EffectClip, EffectInstance, SourceClip } from '../core/schema';
+import type { Curve } from '../core/curve';
+import { tr } from '../i18n/index.svelte';
+import { ControlFailure } from './types';
+
+export interface SourceClipInput {
+  kind: SourceClip['source']['type'];
+  /** 秒。 */
+  start: number;
+  /** 秒。 */
+  end: number;
+  /**
+   * 显式 id。默认生成一个随机 UUID。
+   *
+   * **允许指定是刻意的**：agent 写的脚本要能复跑，固定 id 是重放的前提之一
+   * （方案 §3.3）。
+   */
+  id?: string;
+  label?: string;
+  /** `kind: 'algo'`。必须是注册表里存在的生成器 id（控制平面校验）。 */
+  generator?: string;
+  params?: Record<string, number | string>;
+  /** `kind: 'solid'`。 */
+  color?: string;
+  /** `kind: 'image' | 'video'`。 */
+  assetId?: string;
+  /** `kind: 'video'` 的源内偏移（秒）与倍速。 */
+  srcIn?: number;
+  speed?: number;
+  /** `kind: 'text'`。 */
+  doc?: unknown;
+  blend?: BlendMode;
+  opacity?: number;
+  transform?: Partial<SourceClip['transform']>;
+  fit?: SourceClip['fit'];
+  fadeSec?: number;
+  curves?: Record<string, Curve>;
+  transitionOut?: SourceClip['transitionOut'];
+}
+
+function checkSpan(start: number, end: number): void {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    throw new ControlFailure('invalid-argument', tr('agent.clip.badSpanFinite'));
+  }
+  if (!(start >= 0)) {
+    throw new ControlFailure('invalid-argument', tr('agent.clip.badSpanStart'), { start });
+  }
+  if (!(end > start)) {
+    throw new ControlFailure('invalid-argument', tr('agent.clip.badSpanOrder'), { start, end });
+  }
+}
+
+function sourceOf(input: SourceClipInput): SourceClip['source'] {
+  switch (input.kind) {
+    case 'algo': {
+      if (!input.generator) {
+        throw new ControlFailure('invalid-argument', tr('agent.clip.needGenerator'));
+      }
+      return { type: 'algo', generator: input.generator, params: { ...(input.params ?? {}) } };
+    }
+    case 'solid':
+      return { type: 'solid', color: input.color ?? '#000000' };
+    case 'image': {
+      if (!input.assetId) {
+        throw new ControlFailure('invalid-argument', tr('agent.clip.needAsset', { kind: 'image' }));
+      }
+      return { type: 'image', assetId: input.assetId };
+    }
+    case 'video': {
+      if (!input.assetId) {
+        throw new ControlFailure('invalid-argument', tr('agent.clip.needAsset', { kind: 'video' }));
+      }
+      return {
+        type: 'video',
+        assetId: input.assetId,
+        srcIn: Math.max(0, input.srcIn ?? 0),
+        speed: input.speed && input.speed > 0 ? input.speed : 1,
+      };
+    }
+    case 'text': {
+      if (!input.doc) {
+        throw new ControlFailure('invalid-argument', tr('agent.clip.needDoc'));
+      }
+      return { type: 'text', doc: input.doc as never };
+    }
+    default:
+      throw new ControlFailure(
+        'invalid-argument',
+        tr('agent.clip.unknownSource', { kind: String(input.kind) }),
+      );
+  }
+}
+
+/** 缺省标签：有意义的那个值（生成器 id / 颜色 / 素材 id），而不是空串。 */
+function defaultLabel(input: SourceClipInput): string {
+  switch (input.kind) {
+    case 'algo':
+      return input.generator ?? 'algo';
+    case 'solid':
+      return input.color ?? 'solid';
+    case 'image':
+    case 'video':
+      return input.assetId ?? input.kind;
+    default:
+      return 'text';
+  }
+}
+
+/** 造一个字段完整的 `SourceClip`：其余字段一律走默认值。 */
+export function makeSourceClip(input: SourceClipInput): SourceClip {
+  checkSpan(input.start, input.end);
+  return {
+    kind: 'source',
+    id: input.id ?? newId(),
+    start: input.start,
+    end: input.end,
+    label: input.label ?? defaultLabel(input),
+    fadeSec: Math.max(0, input.fadeSec ?? 0),
+    curves: { ...(input.curves ?? {}) },
+    source: sourceOf(input),
+    blend: input.blend ?? 'normal',
+    opacity: input.opacity ?? 1,
+    transform: { ...defaultTransform(), ...(input.transform ?? {}) },
+    fit: input.fit ?? 'contain',
+    ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
+  };
+}
+
+export interface EffectClipInput {
+  start: number;
+  end: number;
+  id?: string;
+  label?: string;
+  /** 特效链。`defId` 由控制平面校验；`values` 缺省时由调用方补默认值。 */
+  chain?: { defId: string; values?: Record<string, number | string>; instanceId?: string; enabled?: boolean }[];
+  fadeSec?: number;
+  curves?: Record<string, Curve>;
+}
+
+/** 造一个 `EffectClip`（adjustment layer 语义，只作用于 z 序在它之下的合成结果）。 */
+export function makeEffectClip(input: EffectClipInput): EffectClip {
+  checkSpan(input.start, input.end);
+  const chain: EffectInstance[] = (input.chain ?? []).map((c) => ({
+    instanceId: c.instanceId ?? newId(),
+    defId: c.defId,
+    enabled: c.enabled ?? true,
+    values: { ...(c.values ?? {}) },
+  }));
+  return {
+    kind: 'effect',
+    id: input.id ?? newId(),
+    start: input.start,
+    end: input.end,
+    label: input.label ?? 'effect',
+    fadeSec: Math.max(0, input.fadeSec ?? 0),
+    curves: { ...(input.curves ?? {}) },
+    chain,
+  };
+}

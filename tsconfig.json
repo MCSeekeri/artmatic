@@ -17,6 +17,7 @@
     "src/**/*.svelte",
     "lab/**/*.ts",
     "lab/**/*.svelte",
+    "cli/**/*.ts",
     "tests/**/*.ts",
     "vite.config.ts",
     "svelte.config.js"

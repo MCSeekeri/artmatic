@@ -18,6 +18,7 @@ import { ribbon } from '../../src/i18n/locales/zh-CN/ribbon';
 import { shortcuts } from '../../src/i18n/locales/zh-CN/shortcuts';
 import { errors } from '../../src/i18n/locales/zh-CN/errors';
 import { lab } from '../../src/i18n/locales/zh-CN/lab';
+import { agent } from '../../src/i18n/locales/zh-CN/agent';
 
 const SRC = fileURLToPath(new URL('../../src', import.meta.url));
 
@@ -94,6 +95,7 @@ describe('文案表结构', () => {
     shortcuts,
     errors,
     lab,
+    agent,
   } as const;
 
   it('合并结果等于各域之并（没有跨文件重名把别人覆盖掉）', () => {

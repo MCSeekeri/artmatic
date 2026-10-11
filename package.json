@@ -10,7 +10,9 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:mutate": "stryker run",
-    "test:e2e": "node scripts/e2e.mjs"
+    "test:e2e": "node scripts/e2e.mjs",
+    "mcp": "node mcp/index.mjs",
+    "cli": "node scripts/cli.mjs"
   },
   "dependencies": {
     "@lucide/svelte": "^1.49.0",
@@ -23,6 +25,7 @@
     "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@playwright/test": "^1.55.0",
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",

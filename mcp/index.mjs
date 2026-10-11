@@ -1,0 +1,375 @@
+#!/usr/bin/env node
+/**
+ * index.mjs — Artmatic 的 MCP 网关（薄壳）。
+ *
+ * 用法（MCP 客户端配置里的 command/args）：
+ *   node mcp/index.mjs
+ * 环境变量：
+ *   ARTMATIC_URL=http://localhost:5173   旁挂一个已经在跑的 dev / preview（有头；
+ *                                        **这是「agent 与用户操作同一个实例」的唯一方式**）
+ *   ARTMATIC_PORT=4173                   自己起服务时的端口（默认 4173；那儿已有服务就复用）
+ *   ARTMATIC_NO_BUILD=1                  不给自己跑 vite build（服务已在运行时省时间）
+ *   ARTMATIC_HEADLESS=0                  起有头浏览器（调试用）
+ *
+ * ## 它做什么、不做什么（方案 §2.1）
+ *
+ * 做：工具清单与入参校验（`tools.mjs`）、传输（`bridge.mjs`）、把控制平面的
+ * `{ ok, data }` 包成 MCP 的 content，把 `onProgress` 轮询成 progress notification。
+ * 不做：任何编辑 / 渲染 / 导出逻辑。那些全在页面内的 `src/agent/` 里，网关换了
+ * 传输（CDP → WS）也不会动一行。
+ *
+ * ## stdio 协议的一条硬规矩
+ *
+ * stdout 是协议通道：**任何 `console.log` 都会把 JSON-RPC 冲烂**。这个进程里
+ * 一切人类可读的输出都走 stderr。
+ *
+ * ## 单位
+ *
+ * `t` 是**秒**（控制平面吸附到帧栅格）；`frameRange` / `frameStep` 是**帧号**
+ * （AGENTS §5.8：秒 → 帧号只在 `gif-plan.ts` 换算一次）。
+ */
+
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { Bridge } from './bridge.mjs';
+import { TOOL_BY_NAME, checkFrameRange, checkIdInList, listToolDescriptors, validateArgs } from './tools.mjs';
+
+const APP_VERSION = '0.2.2';
+/** 网关自己的版本：与控制平面（`CONTROL_API_VERSION`）分开演进。 */
+const GATEWAY_VERSION = 1;
+
+/* ---------------------------------------------------------------- 输出形状 */
+
+const okResult = (data) => ({
+  content: [{ type: 'text', text: JSON.stringify({ ok: true, data }, null, 2) }],
+});
+
+/**
+ * 工具级失败走 `isError: true` 而不是**协议异常**：异常会让 MCP 客户端把它当成
+ * 「工具坏了」，而绝大多数失败（落点被拒、id 不存在）是**正常的业务结果**，
+ * agent 需要看到 `code` 才能决定下一步。这与控制平面「不抛异常」是同一条理由。
+ */
+const errResult = (error) => ({
+  content: [{ type: 'text', text: JSON.stringify({ ok: false, error }, null, 2) }],
+  isError: true,
+});
+
+const log = (msg) => process.stderr.write(`[artmatic-mcp] ${msg}\n`);
+
+/* ------------------------------------------------------------------ 网关 */
+
+const bridge = new Bridge();
+/** 能力清单在一次会话里不变（注册表在模块加载时建好）。 */
+let caps = null;
+
+async function capabilities() {
+  if (caps) return caps;
+  const r = await bridge.call('getCapabilities');
+  if (!r.ok) throw new Error(`拿不到能力清单：${r.error.message}`);
+  caps = r.data;
+  return caps;
+}
+
+/** 控制平面的返回值直接透传给 agent；只有失败要标 isError。 */
+function unwrap(r) {
+  return r && r.ok ? okResult(r.data) : errResult(r?.error ?? { code: 'internal', message: '空返回' });
+}
+
+/** 校验一个 id 在不在能力清单里；不在就直接返回错误结果。 */
+async function requireId(value, listName, what) {
+  const list = (await capabilities())[listName].map((x) => x.id);
+  const check = checkIdInList(value, list, what);
+  return check.ok ? null : errResult(check.error);
+}
+
+/* ------------------------------------------------------------- 工具分发 */
+
+async function dispatch(name, args, extra) {
+  switch (name) {
+    /* ------------------------------------------------------------- 读 */
+    case 'artmatic_describe':
+      return unwrap(await bridge.call('describe'));
+    case 'artmatic_get_scene':
+      return unwrap(await bridge.call('getScene', [{ t: args.t, detail: args.detail }]));
+    case 'artmatic_get_capabilities':
+      return unwrap(await bridge.call('getCapabilities'));
+    case 'artmatic_get_clip':
+      return unwrap(await bridge.call('getClip', [args.clipId]));
+    case 'artmatic_list_projects':
+      return unwrap(await bridge.call('listProjects'));
+    case 'artmatic_undo_state':
+      return unwrap(await bridge.call('undoState'));
+    case 'artmatic_compile_all':
+      return unwrap(await bridge.call('compileAll'));
+
+    /* ------------------------------------------------------------- 写 */
+    case 'artmatic_add_track':
+      return unwrap(await bridge.call('addTrack', [args.kind, args.name]));
+
+    case 'artmatic_remove_track':
+      return unwrap(await bridge.call('removeTrack', [args.trackId]));
+
+    case 'artmatic_move_track':
+      return unwrap(await bridge.call('moveTrack', [args.from, args.to]));
+
+    case 'artmatic_set_track':
+      return unwrap(
+        await bridge.call('setTrack', [args.trackId, { enabled: args.enabled, name: args.name }]),
+      );
+
+    case 'artmatic_add_clip': {
+      const base = {
+        start: args.start,
+        end: args.end,
+        id: args.id,
+        label: args.label,
+        blend: args.blend,
+        opacity: args.opacity,
+        transform: args.transform,
+        fit: args.fit,
+        fadeSec: args.fadeSec,
+      };
+      if (args.kind === 'effect') {
+        for (const c of args.chain ?? []) {
+          const bad = await requireId(c.defId, 'effects', '特效');
+          if (bad) return bad;
+        }
+        return unwrap(
+          await bridge.call('addEffectClip', [args.trackId, { ...base, chain: args.chain }]),
+        );
+      }
+      if (args.kind === 'algo') {
+        const bad = await requireId(args.generator, 'generators', '生成器');
+        if (bad) return bad;
+      }
+      if (args.blend !== undefined) {
+        const list = (await capabilities()).blendModes;
+        const check = checkIdInList(args.blend, list, '混合模式');
+        if (!check.ok) return errResult(check.error);
+      }
+      return unwrap(
+        await bridge.call('addClip', [
+          args.trackId,
+          {
+            ...base,
+            kind: args.kind,
+            generator: args.generator,
+            params: args.params,
+            color: args.color,
+            assetId: args.assetId,
+            srcIn: args.srcIn,
+            speed: args.speed,
+            doc: args.doc,
+          },
+        ]),
+      );
+    }
+
+    case 'artmatic_remove_clip':
+      return unwrap(await bridge.call('removeClip', [args.clipId]));
+
+    case 'artmatic_move_clip':
+      return unwrap(await bridge.call('moveClip', [args.clipId, args.targetTrackId, args.newStart]));
+
+    case 'artmatic_resize_clip':
+      return unwrap(await bridge.call('resizeClip', [args.clipId, args.edge, args.time]));
+
+    case 'artmatic_split_clip':
+      return unwrap(await bridge.call('splitClip', [args.clipId, args.at]));
+
+    case 'artmatic_set_clip_props':
+      return unwrap(await bridge.call('setClipProps', [args.clipId, args.patch]));
+
+    case 'artmatic_set_params': {
+      if (args.target === 'effect') {
+        if (!Number.isInteger(args.chainIndex)) {
+          return errResult({
+            code: 'invalid-argument',
+            message: "target:'effect' 时必须给 chainIndex",
+          });
+        }
+        return unwrap(
+          await bridge.call('setEffectParams', [args.clipId, args.chainIndex, args.params]),
+        );
+      }
+      return unwrap(await bridge.call('setClipSourceParams', [args.clipId, args.params]));
+    }
+
+    case 'artmatic_set_curve':
+      return unwrap(await bridge.call('setCurve', [args.clipId, args.param, args.curve ?? null]));
+
+    case 'artmatic_add_effect': {
+      const bad = await requireId(args.defId, 'effects', '特效');
+      if (bad) return bad;
+      return unwrap(await bridge.call('addEffect', [args.clipId, args.defId, args.values, args.index]));
+    }
+
+    case 'artmatic_remove_effect':
+      return unwrap(await bridge.call('removeEffect', [args.clipId, args.chainIndex]));
+
+    case 'artmatic_reorder_effect':
+      return unwrap(await bridge.call('reorderEffect', [args.clipId, args.from, args.to]));
+
+    case 'artmatic_set_transition': {
+      const bad = await requireId(args.defId, 'transitions', '转场');
+      if (bad) return bad;
+      return unwrap(
+        await bridge.call('setTransition', [args.clipId, args.defId, args.duration, args.values]),
+      );
+    }
+
+    case 'artmatic_clear_transition':
+      return unwrap(await bridge.call('clearTransition', [args.clipId]));
+
+    case 'artmatic_set_project':
+      return unwrap(await bridge.call('setProject', [args]));
+
+    case 'artmatic_load_scene':
+      return unwrap(await bridge.call('loadScene', [args.project]));
+
+    case 'artmatic_begin_transaction':
+      return unwrap(await bridge.call('beginTx'));
+
+    case 'artmatic_commit_transaction':
+      return unwrap(await bridge.call('endTx', [args.label ?? 'agent: transaction']));
+
+    case 'artmatic_undo':
+      return unwrap(await bridge.call('undo'));
+
+    case 'artmatic_redo':
+      return unwrap(await bridge.call('redo'));
+
+    /* ---------------------------------------------------------- 看 / 导 */
+    case 'artmatic_frame_signature':
+      return unwrap(await bridge.call('frameSignature', [{ t: args.t, size: args.size, grid: args.grid }]));
+
+    case 'artmatic_render_frame': {
+      const r = await bridge.snapshotPng({ t: args.t, size: args.size });
+      if (!r.ok) return errResult(r.error);
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify({ ok: true, data: { bytes: r.data.bytes } }) },
+          { type: 'image', data: r.data.base64, mimeType: 'image/png' },
+        ],
+      };
+    }
+
+    case 'artmatic_export':
+      return exportToDisk(args, extra);
+
+    /* -------------------------------------------------------- 工程级 */
+    case 'artmatic_open_project':
+      return unwrap(await bridge.call('openProject', [args.name]));
+
+    case 'artmatic_save_project':
+      return unwrap(await bridge.call('saveProject'));
+
+    default:
+      return errResult({ code: 'not-found', message: `没有工具 ${name}` });
+  }
+}
+
+/* ---------------------------------------------------------------- 导出 */
+
+/** 产物扩展名：PNG 序列在内存里是 zip（逃生舱的既定形态，见 `png-sequence.ts`）。 */
+const EXT = { mp4: 'mp4', png: 'zip', gif: 'gif' };
+
+/**
+ * 导出 + 进度通知 + 落盘。
+ *
+ * 为什么不直接 `await control.export(...)`：进度回调在页面里，过不了 CDP。
+ * 所以这里「起跑不等 → 轮询 `exportState()` → 转成 `notifications/progress`」，
+ * 顺带也就有了取消：客户端发 `notifications/cancelled` 时 `extra.signal` 会中止，
+ * 那时去按页面里的取消。
+ */
+async function exportToDisk(args, extra) {
+  const info = await bridge.call('describe');
+  if (!info.ok) return errResult(info.error);
+  const total = Math.max(1, Math.ceil(info.data.duration * info.data.fps));
+  const rangeCheck = checkFrameRange(args.frameRange, total);
+  if (!rangeCheck.ok) return errResult(rangeCheck.error);
+
+  const progressToken = extra?._meta?.progressToken;
+  const notify = async (progress, total_) => {
+    if (progressToken === undefined) return;
+    await extra
+      .sendNotification({ method: 'notifications/progress', params: { progressToken, progress, total: total_ } })
+      .catch(() => {});
+  };
+
+  await bridge.startExport({
+    format: args.format,
+    frameRange: args.frameRange,
+    size: args.size,
+    frameStep: args.frameStep,
+  });
+
+  let cancelled = false;
+  for (;;) {
+    const { done, state } = await bridge.pollExport();
+    if (state) await notify(state.frac, 1);
+    if (done) break;
+    if (extra?.signal?.aborted && !cancelled) {
+      cancelled = true;
+      await bridge.call('abortExport');
+    }
+    await delay(200);
+  }
+
+  const res = await bridge.takeExportResult();
+  if (!res) return errResult({ code: 'internal', message: '导出没有留下结果' });
+  if (!res.ok) return errResult(res.error);
+  if (cancelled) return errResult({ code: 'cancelled', message: '导出已被调用方取消' });
+
+  const outPath = args.outPath ?? join(tmpdir(), `artmatic-${Date.now()}.${EXT[args.format]}`);
+  await writeFile(outPath, Buffer.from(res.data.base64, 'base64'));
+  return okResult({ path: outPath, bytes: res.data.bytes, mimeType: res.data.mimeType });
+}
+
+/* --------------------------------------------------------------- 服务装配 */
+
+const server = new Server(
+  { name: 'artmatic', version: APP_VERSION },
+  {
+    capabilities: { tools: {} },
+    // 网关的版本在 initialize 的 serverInfo 里带上（与控制平面版本分开演进）。
+    instructions:
+      `Artmatic 控制平面网关 v${GATEWAY_VERSION}。渲染只在浏览器里发生：` +
+      '所有工具都是对**页面上那一台编辑器**的操作，没有第二套求值路径。' +
+      '先 get_capabilities 拿合法 id，再用 frame_signature（而不是截图）做自循环判断。',
+  },
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listToolDescriptors() }));
+
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  const name = request.params.name;
+  const tool = TOOL_BY_NAME.get(name);
+  if (!tool) {
+    return errResult({ code: 'not-found', message: `没有工具 ${name}`, detail: { validIds: [...TOOL_BY_NAME.keys()] } });
+  }
+  const check = validateArgs(tool, request.params.arguments);
+  if (!check.ok) return errResult(check.error);
+  try {
+    return await dispatch(name, check.value, extra);
+  } catch (e) {
+    // 走到这里说明是**网关自己**的 bug（bridge / 进程问题），不是控制平面的业务结果。
+    log(`工具 ${name} 异常：${e?.stack ?? e}`);
+    return errResult({ code: 'internal', message: String(e?.message ?? e) });
+  }
+});
+
+async function shutdown() {
+  await bridge.close();
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+await server.connect(new StdioServerTransport());
+log(`就绪（control-plane API v1，网关 v${GATEWAY_VERSION}）。日志走 stderr，stdout 只走协议。`);
