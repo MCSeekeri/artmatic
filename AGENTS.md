@@ -149,8 +149,9 @@ src/
 ├── timeline/      时间轴 UI（Canvas2D 绘制 + DOM 片段）
 ├── exporters/     export-runner（逐帧驱动）+ frame-sink（webcodecs / png-sequence / gif）
 │                  + mixdown（纯混流）+ gif-plan（GIF 的纯计算：尺寸 / 抽帧 / 延迟）
-├── project/       工程目录格式 · 素材台账 · 原子写 · 句柄持久化
-├── i18n/          文案表 + tr()
+├── project/       工程目录格式 · 素材台账 · 原子写 · 句柄持久化（含 plugins/ 读写）
+├── plugins/       插件子系统（清单校验 · blob 动态 import · 宿主与引用计数 · 缺失扫描），见 §5.10
+├── i18n/          文案表 + tr() + Label 契约
 ├── platform/      Platform 接口（浏览器实现）
 ├── types/         跨层共用类型
 └── ui/            Svelte 组件 + 控件库（controls/）+ 主题与偏好状态
@@ -161,6 +162,8 @@ lab/               试炼场：第二个 HTML 入口（/lab/），见 §3.1
 **依赖方向**：`core` 不依赖任何东西 → `engine` 只依赖 `core` →
 `{effects, algos}` 依赖 `engine` → **`render` 依赖 `{engine, effects, algos}`** →
 `ui` 与 `lab` 依赖全部。`platform` 被所有人依赖。
+`plugins/` 在 `render` **之上**：它往 `effects`/`algos` 的注册表里写，只被
+`ui` 装配（`render-core` 与 lab **不认识插件**，所以 lab 不需要插件也能跑）。
 
 > **`render/` 为什么必须单独一层**：它装配 Renderer + SourceManager + AlgoRuntime +
 > EffectRunner，因而要 import `algos/` 与 `effects/` —— 而这两者本就在 `engine/`
@@ -360,11 +363,13 @@ interface Curve {
 ├── assets.json         素材台账（引用路径 + 内容哈希 + 原始文件名）
 ├── assets/             素材字节（文件名 = <assetId>.<原始扩展名>）
 ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
+├── plugins/            这个工程挂的插件（一个插件 = 一个 .js），见 §5.10
 └── thumbs/             缩略图缓存（可丢弃）
 ```
 
 - `src/project/layout.ts` 是路径规则的唯一真源。路径一律按**段数组**处理，不拼字符串再拆
-  —— FSA 的 `name` 里不允许出现分隔符。
+  —— FSA 的 `name` 里不允许出现分隔符。`plugins/` 也走这一套
+  （`pluginPathSegments` / `safePluginId`），并已加入 `PROJECT_DIRS`。
 - **`project.json` 不写 `savedAt`**：写进去会让「内容没变 → 字节没变」失效。
 - **原子性由浏览器提供**：`createWritable()` 默认 siloed 模式（同目录写 `.crswap`，
   `close()` 时才 rename）。Web 上**没有 fsync**。我们能自己做的只有两件：
@@ -1291,19 +1296,100 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
   canvas 不设 CSS 尺寸时，显示尺寸等于缓冲像素数，只缩后备缓冲画面会跟着变小。
 - 帧率节流只在**播放中**生效：暂停时永远渲，那是「改一个参数立刻看到结果」的路径。
 
+### 5.10 插件（`plugins/`）
+
+一个插件 = **工程目录 `plugins/` 下的一个 ESM `.js` 文件**，导出一个清单对象
+（`format:'artmatic-plugin'` + `id` + `name` + `effects[]` / `generators[]`）。
+运行期 `import(blob:)` 挂载，所以插件能带任意函数（`setUniforms`、以及
+`bake`/`sim` 将来可能的工厂）—— 也所以**它跑在主 realm 里，没有沙箱**。
+
+- **注册表是双层**：内置层（effects 走 `import.meta.glob`，algos 走显式清单）
+  + 插件层。插件内的 def id 一律注册成 **`${pluginId}/${localId}`** ——
+  program 名（`fx-${id}` / `algo-${id}`）因此不可能与内置撞名，
+  而「缺插件」也能靠前缀判定。
+- **标签契约是 `Label`，不是 `MessageKey`**（`src/i18n/label.ts`）。
+  插件的名字/说明是运行期字符串，给不出编译期键。`ParamDef.labelKey` /
+  `EffectEntry.nameKey` / `GeneratorDef.nameKey` 都是 `Label`，
+  **必须过 `labelOf(label, tr)`**，不许直接 `tr(x.labelKey)`。
+  内置的一行都不用改（字符串天然满足 `MessageKey` 分支），而所有旧的
+  `tr(...)` 调用点会**编译报错** —— 那是刻意的，它保证不漏改。
+- **加载挂在 `ui/project-actions.ts::openAt`**：素材读进来之后、`adoptProject`
+  **之后**（引用计数的键是 `OpenProject.id`，而 id 是那一步才产生的）。
+  `adoptProject` 自己不挂插件。关闭工程走 `closeProject` → `host.release(id)`，
+  引用计数归零才真卸载。
+- **编译校验用与运行期同名的 program**（`compileEffect` / `compileAlgoShader`
+  走 `effectProgramName` / `algoProgramName`），命中的就是运行期那一份。
+  需要真 GL，所以 `PluginHost` 持有可选的 `Kit`：预览装配好时
+  `appState.attachPreview` 调 `host.attachKit(core.kit)` 补做校验。
+  **编不过的 def 不入注册表**（保持「缺失」语义，渲染层自动透传 / 返回 null），
+  只记一条 issue。
+  > `dropped-uniform` 在插件这一侧**只对参数名报**（`u_<param.key>`）。
+  > `compileAlgoShader` 原本把 head 的 `u_time`/`u_delta`/`u_seed`/
+  > `u_resolution`/`u_aspect` 也算「被丢掉」，那对内置生成器有意义，
+  > 但一个纯色插件生成器合法地什么都不读 —— 照搬会让它凭空得到 5 条
+  > 「参数不会有反应」并把状态打成「部分可用」。
+- **按 `LoadedPlugin.fileName` 寻址，不许按 `${id}.js` 拼**。磁盘上的文件名
+  可以与插件 id 不同（外部放进去的文件、用户改过名、我们自己写的是 `<清单 id>.js`
+  而用户选的文件叫什么都有可能）。`importBytes` 那条路走完写盘后必须调
+  `host.markPersisted(id, fileName)`。按 id 拼的表现是「点了停用/移除，
+  文件没动，重开工程它又回来了」，且**没有任何报错**。
+- **停用 = 把文件改名成 `<name>.js.disabled`**，不在 json 里另记一份清单
+  （两份真相立刻带来「不一致时听谁的」）。代价要写在面板上：重开后那一行
+  **只剩 id**，因为不导入它就读不到名字 —— 这是刻意的，停用不该再执行它的代码。
+- **缺失降级已经存在于渲染层**：未知特效原样透传（`effects/runner.ts`），
+  未知生成器返回 null（`algos/runtime.ts`）。缺的只是 UI 解释，
+  由 `PluginMissingBanner` 补上。`findMissingPlugins` 是**插件级**的：
+  装了插件但 def id 写错不会被报出来。
+- **导入 / 移除插件不改工程的脏标记**。文件在写进 `plugins/` 那一刻就落盘了，
+  标脏会逼用户去点保存、而保存写的是没变的 `project.json` —— 那是个骗人的动作。
+  真正要提示的是「工程还没保存，插件只能临时加载」，由 flash 直说。
+- **安全边界如实告知，且只有一个告知点**：`PluginImportDialog`
+  （面板与提示条共用）。文案在 `pl.risk.*` —— 别弱化它。
+  插件是第三方任意代码，项目**不对它做许可校验**（`CREDITS.md` 管的是
+  我们自己移植进来的代码，不覆盖插件）。
+- **插件 id 只是字符串，不进 `schema`**：`schemaVersion` 不抬，`project.json`
+  格式完全不变。
+- **测试分工**：单测管纯的部分（`plugin-manifest` / `plugin-missing` /
+  `plugin-panel-model` / `plugin-files`）；`import(blob:)`、真 GL 编译、
+  「特效真的画到屏幕上了」三件事**只能**在 E2E 测（`tests/e2e/plugins.spec.ts`，
+  真实浏览器 + OPFS）。
+- **新增一类可被插件扩展的东西**（比如将来的转场）要一次做齐三件：
+  注册表双层化 + 标签放宽成 `Label` + 校验分支。少任何一件的表现都是
+  「插件里写了、但界面上/画面上没有」。
+
 ---
 
 ## 6. 开发与测试
 
 ```bash
-npm run dev          # Vite dev server（纯浏览器，http://localhost:5173）
-npm run build        # 生产构建（产出 dist/，静态站点）
-npm run preview      # 预览构建产物（http://localhost:4173）
-npm run check        # svelte-check 类型检查
-npm run test         # vitest，只测纯逻辑（配置里限死 tests/unit，不收 e2e）
-npm run test:mutate  # Stryker 变异测试（见 §6.9）：逐处改错源码再跑测试，报出「假守卫」
-npm run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright（系统 Chrome）
+bun install          # 唯一的装依赖方式（真源是 bun.lock）
+bun run dev          # Vite dev server（纯浏览器，http://localhost:5173）
+bun run build        # 生产构建（产出 dist/，静态站点）
+bun run preview      # 预览构建产物（http://localhost:4173）
+bun run check        # svelte-check 类型检查
+bun run test         # vitest，只测纯逻辑（配置里限死 tests/unit，不收 e2e）
+bun run test:mutate  # Stryker 变异测试（见 §6.9）：逐处改错源码再跑测试，报出「假守卫」
+bun run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright（系统 Chrome）
+bunx vitest run tests/unit/xxx.test.ts    # 只想跑一个测试文件
 ```
+
+> **包管理器只有 bun。** `package.json` 的 `packageManager` 声明了版本，lockfile
+> 只有 `bun.lock` 一份（`package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` 已进
+> `.gitignore`）。**不要用 `npm` / `yarn` / `pnpm`** —— 它们会写出自己的 lockfile，
+> 与 `bun.lock` 分叉；两边版本一旦不一致，症状是「本机好好的、别人装出来不一样」，
+> 而且**不会有任何报错**。
+>
+> 这不是假想：`b32d191`（引入 MCP 那次）用 npm 装了 `@modelcontextprotocol/sdk`，
+> 只更新了 `package-lock.json`，`bun.lock` 从此落后一个提交 —— 直到 2026-10-11
+> 才补上（补齐时只多出 4 个包，说明缺的就是那一次）。**装了依赖就一定要更新
+> `bun.lock` 并一起提交。**
+>
+> **`bun test` ≠ `bun run test`**：前者是 Bun 自带的测试运行器，**不读 vitest 配置**，
+> 跑出来的结果没有意义。脚本一律写 `bun run <script>`。
+>
+> 本机（ServBay）bun 在 `C:\ServBay\bin\bun.cmd`，已在 PATH 上。
+> 若 `bun install` 长时间没有任何输出是正常的（它在干活）；在需要看进度的场合
+> 用 `bun install --verbose`。
 
 > `test:e2e` **不走** playwright 的 `webServer` 配置：它经 shell spawn 长驻进程，
 > 在部分沙箱里整个进程树会收到 SIGTERM（runner 零输出暴毙）。`scripts/e2e.mjs`
@@ -1341,7 +1427,7 @@ npm run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright
     `meanAt > 阈值` —— 否则两张黑图不同也会「通过」。
   - **`.spec` 后缀不能省**：`scripts/e2e.mjs` 的位置参数是按完整路径做正则匹配的，
     而本机路径里有 `\Projects\`（见 §6.1 的 ⚠️）。
-- **新守卫必须被验证过才算守卫**。**纯函数层用 `npm run test:mutate` 自动验（见 §6.9）；
+- **新守卫必须被验证过才算守卫**。**纯函数层用 `bun run test:mutate` 自动验（见 §6.9）；
   手工 A/B 只留给你够不到的那一层 —— E2E 的 GPU 读回标量。** 下面这些是手工跑过的样本：
   - 位表行序守卫：把 `bitRows` 的 `'eca'` 改成低位在前 → `bitmask.test.ts` 变红。
   - codec 越界守卫：拿掉尺寸上限那一行 → 「坏头部 → null」变红。
@@ -1615,13 +1701,13 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
 
 ### 6.9 变异测试（测试的测试）
 
-`npm run test:mutate` 走 **Stryker**：把源码逐处改错（一个 mutant = 一处改动）再跑测试。
+`bun run test:mutate` 走 **Stryker**：把源码逐处改错（一个 mutant = 一处改动）再跑测试。
 测试挂了 = **killed**（守卫有效）；测试照样绿 = **survivor**（守卫其实没挡住）。
 这就是「把 bug 改回去、看它红不红」那件事的自动化版本，也是 §6.1 那条纪律的执行者。
 
 ```bash
-npm run test:mutate -- --mutate src/core/bitmask.ts    # 单文件（秒级）
-STRYKER_MUTATE=src/core/curve.ts npm run test:mutate   # 或走环境变量
+bun run test:mutate -- --mutate src/core/bitmask.ts    # 单文件（秒级）
+STRYKER_MUTATE=src/core/curve.ts bun run test:mutate   # 或走环境变量
 bun scripts/mutate-triage.mjs --diff HEAD              # 只看本次改动命中的行
 ```
 

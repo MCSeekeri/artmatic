@@ -124,6 +124,7 @@ import Type from '@lucide/svelte/icons/type';
 import Underline from '@lucide/svelte/icons/underline';
 import Ungroup from '@lucide/svelte/icons/ungroup';
 import Upload from '@lucide/svelte/icons/upload';
+import Puzzle from '@lucide/svelte/icons/puzzle';
 import Video from '@lucide/svelte/icons/video';
 import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
 import Waypoints from '@lucide/svelte/icons/waypoints';
@@ -241,6 +242,7 @@ export const ICONS = {
   video: Video,
   'wand-sparkles': WandSparkles,
   waypoints: Waypoints,
+  puzzle: Puzzle,
   'layout-grid': LayoutGrid,
   list: ListIcon,
   x: X,

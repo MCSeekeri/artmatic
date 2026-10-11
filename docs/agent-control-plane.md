@@ -541,7 +541,7 @@ interface ControlContext {
 
 - **无头**：`scripts/gen-*-thumbs.mjs` 那样 `chromium.launch({ channel: 'chrome', headless: true })`
   拉起 `preview`，`page.evaluate` 直接调 `window.__artmatic.control`。
-- **有头**：`npm run dev` 打开页面，同一个 `window.__artmatic.control`，网关（或 IDE 的 MCP 客户端）
+- **有头**：`bun run dev` 打开页面，同一个 `window.__artmatic.control`，网关（或 IDE 的 MCP 客户端）
   连上去。
 
 > ⚠️ **`appState.store` 是 getter**（`AGENTS §5.2`）：多工程下它永远指向当前前台那份。
@@ -583,7 +583,7 @@ CLI **有位置，但不是「编辑器 CLI」**。定位：**工程文件工具
 
 | 里程碑 | 内容 | 验收 | 需补的守卫 |
 |---|---|---|---|
-| **M0 只读骨架** | `src/agent/control-plane.ts`（`describe` / `getScene` / `getCapabilities` / `canUndo`），挂到 `__artmatic.control` | 起 `npm run dev`，`page.evaluate` 拿到一份合法 `SceneSnapshot`；`z` 序与 `active` 与 `AGENTS §4.1` 一致 | `tests/unit/scene-snapshot.test.ts`：纯函数构造快照，断言 z 序、转场窗口内的 `active`、`detail:'ids'` 的裁剪 |
+| **M0 只读骨架** | `src/agent/control-plane.ts`（`describe` / `getScene` / `getCapabilities` / `canUndo`），挂到 `__artmatic.control` | 起 `bun run dev`，`page.evaluate` 拿到一份合法 `SceneSnapshot`；`z` 序与 `active` 与 `AGENTS §4.1` 一致 | `tests/unit/scene-snapshot.test.ts`：纯函数构造快照，断言 z 序、转场窗口内的 `active`、`detail:'ids'` 的裁剪 |
 | **M1 写操作 + 撤销** | 全部 write 方法（§3.3 映射表）+ 片段工厂 | agent 加片段 → 用户 Ctrl+Z 能撤掉；`live*`/`settle*` 未暴露 | `tests/unit/clip-factory.test.ts`（默认值完整、validate 通过）+ e2e：写一次 → `undo()` → `getScene` 回到原状 |
 | **M2 视觉反馈** | `renderFrame` / `readPixels` / `frameSignature` / `snapshotPng`，含翻行与 `onSeek` | 同一 t 取两次指纹**逐位相同**；PNG 方向正确（上半与下半可区分） | e2e 读回：指纹复用 `_stage.ts` 的 `gridStats` 口径对拍；`renderTwiceDiff === 0` |
 | **M3 MCP 薄壳** | `mcp/` 网关（Node + TS），路径 A 驱动，工具表按 §4 | 一个真实 MCP 客户端能 `get_scene` → `add_clip` → `frame_signature` | 网关的 schema 校验单测（非法 `defId` / 越界 `frameRange` 被拒） |

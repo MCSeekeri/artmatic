@@ -129,6 +129,25 @@ const projectDebug = {
   },
 };
 
+/**
+ * 插件子系统的 E2E 入口。
+ *
+ * 与 `projectDebug` 同一条理由：界面上的「插件挂上了没有」要经过
+ * 「打开面板 → 找那一行 → 读那一段字」三步，而**画面里那个特效真的生效了没有**
+ * 根本没法从界面读。这里把宿主的清单与缺失扫描摊平成纯数据，
+ * 让断言能精确到「哪一条 def 被剔除了、为什么」。
+ */
+const pluginDebug = {
+  /** 当前挂载的全部插件（含加载失败的与停用的）。 */
+  list: () => appState.plugins.list(),
+  /** 已安装的插件 id。缺失扫描的判据是它。 */
+  installed: () => [...appState.plugins.installedIds()],
+  /** 当前工程引用了、但没装的插件。 */
+  missing: () => appState.plugins.missing(appState.store.project),
+  /** 子系统的版本号（插件集合变化时增长）。 */
+  revision: () => appState.plugins.revision(),
+};
+
 /** 打开的工程列表：`__artmatic.projects()` 与控制平面共用一份口径。 */
 function projectList(): OpenProjectView[] {
   return appState.projects.map((p) => ({
@@ -206,6 +225,7 @@ const control = createControlPlane(controlContext);
     return appState.assets;
   },
   project: projectDebug,
+  plugins: pluginDebug,
   /** 打开的工程列表，摊平成纯数据（page 里能直接断言，且可序列化）。 */
   projects: (): OpenProjectView[] => projectList(),
   renderFrame: (t: number) => appState.renderer.renderFrame(appState.store.project, t),

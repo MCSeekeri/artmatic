@@ -7,14 +7,17 @@
  */
 
 import {
+  DEFAULT_EFFECT_CATEGORY,
   EFFECT_CATALOG,
   EFFECT_CATEGORIES,
   EFFECT_TAGS,
   effectTags,
+  pluginEffectTags,
   type EffectCategory,
   type EffectTag,
 } from '../../effects/catalog';
 import { getEffect, listEffects } from '../../effects/registry';
+import { resolveLabel } from '../../i18n/label';
 import type { MessageKey } from '../../i18n/locales';
 
 export type Translate = (key: MessageKey) => string;
@@ -23,7 +26,7 @@ export interface EffectItem {
   id: string;
   /** 已翻译的显示名。 */
   name: string;
-  /** 已翻译的一句话说明。 */
+  /** 已翻译的一句话说明。插件没写说明时是空串（卡片据此不画那一行）。 */
   desc: string;
   category: EffectCategory;
   tags: EffectTag[];
@@ -34,6 +37,8 @@ export interface EffectItem {
   tagLabels: string[];
   /** 搜索用的**预折叠**小写串：id + 名称 + 说明 + 分类名 + 标签名。 */
   haystack: string;
+  /** 提供者：`null` = 内置，否则是插件 id。卡片据此打「插件」标。 */
+  pluginId: string | null;
 }
 
 export type PickerView = 'grid' | 'list';
@@ -47,27 +52,40 @@ export const PICKER_SORTS: PickerSort[] = ['default', 'name', 'category'];
  * `haystack` 在这里**一次算好**而不是每次按键现拼：面板一打开会调好几遍
  * （筛选变化、排序变化），而 73 条 × 5 个字段的拼接没必要重复。
  * 折叠成小写也是为了 `includes` 能直接吃 —— 大小写不敏感是搜索的基本预期。
+ *
+ * ## 内置与插件走同一张清单，但元数据来源不同
+ *
+ * 内置条目的说明/分类/缩略图底图在 `EFFECT_CATALOG`；插件条目自带
+ * `entry.meta`（本来就是分开发布的，没法进构建期的目录表）。两者的**结构标签**
+ * 都从 shader def 推导，所以「有哪些吃音频」「哪些带反馈」这类筛选对插件同样有效。
  */
 export function buildItems(tr: Translate): EffectItem[] {
   const out: EffectItem[] = [];
-  for (const { id } of listEffects()) {
+  for (const { id, pluginId } of listEffects()) {
     const entry = getEffect(id);
-    const meta = EFFECT_CATALOG[id];
-    if (!entry || !meta) continue;
-    const tags = effectTags(entry.shader, meta);
-    const name = tr(entry.nameKey);
-    const desc = tr(meta.descKey);
-    const categoryLabel = tr(`fx.cat.${meta.category}` as MessageKey);
+    // 目录与注册表都是本模块的输入，理论上同源；但插件条目**没有**目录项，
+    // 所以这里只能对 entry 做存在性检查，不能再要求 meta 存在。
+    if (!entry) continue;
+    const meta = EFFECT_CATALOG[id] ?? null;
+    const category = meta?.category ?? entry.meta?.category ?? DEFAULT_EFFECT_CATEGORY;
+    const tags = meta
+      ? effectTags(entry.shader, meta)
+      : pluginEffectTags(entry.shader, entry.meta?.tags ?? []);
+    const descLabel = meta ? null : (entry.meta?.desc ?? null);
+    const name = resolveLabel(entry.nameKey, tr);
+    const desc = meta ? tr(meta.descKey) : descLabel ? resolveLabel(descLabel, tr) : '';
+    const categoryLabel = tr(`fx.cat.${category}` as MessageKey);
     const tagLabels = tags.map((t) => tr(`fx.tag.${t}` as MessageKey));
     out.push({
       id,
       name,
       desc,
-      category: meta.category,
+      category,
       tags,
       categoryLabel,
       tagLabels,
       haystack: [id, name, desc, categoryLabel, ...tagLabels].join(' ').toLowerCase(),
+      pluginId,
     });
   }
   return out;

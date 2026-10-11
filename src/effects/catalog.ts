@@ -181,3 +181,28 @@ export function effectTags(shader: EffectShaderDef, entry: EffectCatalogEntry): 
   if (entry.overlay) set.add('overlay');
   return EFFECT_TAGS.filter((t) => set.has(t));
 }
+
+/**
+ * 插件特效的标签 = 结构标签 + 插件自报的标签。
+ *
+ * 与 `effectTags` 的唯一区别是**没有目录条目**：插件的「叠加型」这类人工判断
+ * 由插件自己在清单里写（`tags: ['overlay']`）。结构标签照旧自动推导 ——
+ * 它读的是 shader def 本身，对插件同样成立，不需要插件作者声明。
+ */
+export function pluginEffectTags(
+  shader: EffectShaderDef,
+  declared: readonly EffectTag[],
+): EffectTag[] {
+  const set = new Set<EffectTag>(structuralTags(shader));
+  for (const t of declared) set.add(t);
+  return EFFECT_TAGS.filter((t) => set.has(t));
+}
+
+/**
+ * 插件特效没有声明分类时的回落分类。
+ *
+ * 必须有一个具体值而不是 `null`：选择器按分类分组/筛选，`null` 会让插件特效
+ * 在任何分类视图里都消失（看起来像「加载失败」）。选 `'style'` 是因为它本身
+ * 就是最宽的一类（风格化），落进去不算错。
+ */
+export const DEFAULT_EFFECT_CATEGORY: EffectCategory = 'style';

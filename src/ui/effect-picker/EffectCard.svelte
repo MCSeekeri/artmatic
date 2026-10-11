@@ -46,6 +46,15 @@
     {#if selected}
       <span class="fxp-badge" data-testid="effect-picker-badge">{tr('insp.pickerSelected')}</span>
     {/if}
+    {#if item.pluginId}
+      <!--
+        插件来源角标。放在左下角而不是右上角：右上角是「已选中」的位置，
+        两者会同时出现（选中一个插件特效），叠在一起谁也看不清。
+        插件特效没有预导出的缩略图（那是随应用一起发出去的静态资源），
+        上面显示的是占位条 —— 角标正好解释了「为什么这张图是空的」。
+      -->
+      <span class="fxp-plugin-badge" data-testid="effect-picker-plugin">{tr('fx.pluginBadge')}</span>
+    {/if}
   </span>
 
   <span class="fxp-meta">
@@ -125,6 +134,17 @@
     width: 100%;
     height: 100%;
     background: var(--surface-active);
+  }
+  .fxp-plugin-badge {
+    position: absolute;
+    bottom: 4px;
+    left: 4px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: var(--surface-active);
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
   }
   .fxp-badge {
     position: absolute;

@@ -36,6 +36,7 @@
   } from './picker-model';
   import type { EffectCategory, EffectTag } from '../../effects/catalog';
   import { tr } from '../../i18n/index.svelte';
+  import { registryRevision } from '../registry-revision.svelte';
 
   interface Props {
     /** 确认：按选择顺序给出特效 id。 */
@@ -53,7 +54,11 @@
   /** 已选，**按点击顺序**（不是列表顺序）—— 它就是要追加到链上的顺序。 */
   let selected = $state<string[]>([]);
 
-  const items = $derived(buildItems(tr));
+  // 依赖运行期注册表版本：插件在面板开着的时候挂载/卸载也要立刻反映出来。
+  const items = $derived.by(() => {
+    registryRevision();
+    return buildItems(tr);
+  });
   const filter = $derived<FilterState>({ query, categories, tags });
   const visible = $derived.by(() => sortItems(filterItems(items, filter), sort));
   const cards = $derived(visible.map((it) => ({ item: it, thumb: thumbUrl(it.id) })));

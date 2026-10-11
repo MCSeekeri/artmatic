@@ -8,6 +8,7 @@
    */
   import { labState, NO_EFFECT_ID } from './lab-state.svelte';
   import { tr } from '../src/i18n/index.svelte';
+  import { resolveLabel } from '../src/i18n/label';
 
   const effectRow = $derived(labState.effectRowId());
   const groups = $derived(labState.visibleGroups());
@@ -45,7 +46,7 @@
           aria-pressed={active}
           onclick={() => (g.id === 'source' ? labState.selectSource(it.id) : labState.selectEffect(it.id))}
         >
-          <span class="lab-item-name">{tr(it.nameKey)}</span>
+          <span class="lab-item-name">{resolveLabel(it.nameKey, tr)}</span>
           {#if it.badgeKey}<span class="lab-item-badge">{tr(it.badgeKey)}</span>{/if}
         </button>
       {/each}

@@ -8,6 +8,7 @@
   import StatusBar from './StatusBar.svelte';
   import Tip from './Tip.svelte';
   import EmptyState from './EmptyState.svelte';
+  import PluginMissingBanner from './PluginMissingBanner.svelte';
   import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
@@ -188,6 +189,12 @@
       >
         <div class="stage">
           <Preview />
+          <!--
+            缺失插件提示条：绝对定位浮在预览上方，**不参与网格** ——
+            stage 的三行（预览 / 工具条 / 轨道区）是精心排过的，
+            多一个流内子项会把轨道区顶出去。见组件自己的说明。
+          -->
+          <PluginMissingBanner />
           <div class="toolbar">
             <Transport />
             <span class="toolbar-tail">

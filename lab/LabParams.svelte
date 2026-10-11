@@ -20,6 +20,7 @@
   import IconButton from '../src/ui/controls/IconButton.svelte';
   import { labState, itemFor, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
   import { tr } from '../src/i18n/index.svelte';
+  import { resolveLabel } from '../src/i18n/label';
   import { visibleParams, type ParamDef } from '../src/effects/types';
 
   // 两处都要过 `visibleWhen`。**主应用的 Inspector 一直是这么做的，试炼场漏了** ——
@@ -77,13 +78,13 @@
         {#each sourceParams as p (p.key)}
           <div data-testid={`lab-source-param-${p.key}`}>
             {#if p.type === 'range'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Slider
                   value={Number(valueOf('source', p))}
                   min={p.min}
                   max={p.max}
                   step={p.step}
-                  ariaLabel={tr(p.labelKey)}
+                  ariaLabel={resolveLabel(p.labelKey, tr)}
                   testid={`lab-source-slider-${p.key}`}
                   oninput={(v) => labState.setParam('source', p.key, v)}
                 />
@@ -99,17 +100,17 @@
                 />
               </Field>
             {:else if p.type === 'select'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Select
                   value={String(valueOf('source', p))}
-                  options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
+                  options={p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))}
                   testid={`lab-source-select-${p.key}`}
                   optionTestidPrefix={`lab-source-select-${p.key}-opt`}
                   onchange={(v) => labState.setParam('source', p.key, v)}
                 />
               </Field>
             {:else if p.type === 'checkbox'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Checkbox
                   checked={Number(valueOf('source', p)) !== 0}
                   testid={`lab-source-check-${p.key}`}
@@ -117,7 +118,7 @@
                 />
               </Field>
             {:else if p.type === 'color'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <input
                   class="lab-color"
                   type="color"
@@ -127,23 +128,23 @@
                 />
               </Field>
             {:else if p.type === 'bitmask'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <BitmaskField
                   value={Number(valueOf('source', p))}
                   bits={p.bits}
                   slider={p.slider}
-                  groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
-                  presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                  groups={p.groups.map((g) => ({ label: resolveLabel(g.labelKey, tr), bits: g.bits, style: g.style }))}
+                  presets={p.presets?.map((o) => ({ label: resolveLabel(o.labelKey, tr), value: o.value }))}
                   testid={`lab-source-bitmask-${p.key}`}
                   oninput={(v) => labState.setParam('source', p.key, v)}
                   onchange={(v) => labState.setParam('source', p.key, v)}
                 />
               </Field>
             {:else if p.type === 'pattern'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <PatternField
                   value={String(valueOf('source', p))}
-                  label={tr(p.labelKey)}
+                  label={resolveLabel(p.labelKey, tr)}
                   mode={p.mode}
                   editorSize={p.editorSize}
                   colors={{
@@ -164,7 +165,7 @@
       <header class="lab-section-head">
         <h3 class="lab-section-title">
           {#if effectItem}
-            <span class="lab-title-name" data-testid="lab-effect-name">{tr(effectItem.nameKey)}</span>
+            <span class="lab-title-name" data-testid="lab-effect-name">{resolveLabel(effectItem.nameKey, tr)}</span>
             <code class="lab-id" data-testid="lab-effect-id">{effectItem.id}</code>
           {:else}
             <span class="lab-title-name">{tr('lab.paramsEffect')}</span>
@@ -197,13 +198,13 @@
         {#each effectParams as p (p.key)}
           <div data-testid={`lab-effect-param-${p.key}`}>
             {#if p.type === 'range'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Slider
                   value={Number(valueOf('effect', p))}
                   min={p.min}
                   max={p.max}
                   step={p.step}
-                  ariaLabel={tr(p.labelKey)}
+                  ariaLabel={resolveLabel(p.labelKey, tr)}
                   testid={`lab-effect-slider-${p.key}`}
                   oninput={(v) => labState.setParam('effect', p.key, v)}
                 />
@@ -219,17 +220,17 @@
                 />
               </Field>
             {:else if p.type === 'select'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Select
                   value={String(valueOf('effect', p))}
-                  options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
+                  options={p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))}
                   testid={`lab-effect-select-${p.key}`}
                   optionTestidPrefix={`lab-effect-select-${p.key}-opt`}
                   onchange={(v) => labState.setParam('effect', p.key, v)}
                 />
               </Field>
             {:else if p.type === 'checkbox'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Checkbox
                   checked={Number(valueOf('effect', p)) !== 0}
                   testid={`lab-effect-check-${p.key}`}
@@ -237,7 +238,7 @@
                 />
               </Field>
             {:else if p.type === 'color'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <input
                   class="lab-color"
                   type="color"
@@ -247,23 +248,23 @@
                 />
               </Field>
             {:else if p.type === 'bitmask'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <BitmaskField
                   value={Number(valueOf('effect', p))}
                   bits={p.bits}
                   slider={p.slider}
-                  groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
-                  presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                  groups={p.groups.map((g) => ({ label: resolveLabel(g.labelKey, tr), bits: g.bits, style: g.style }))}
+                  presets={p.presets?.map((o) => ({ label: resolveLabel(o.labelKey, tr), value: o.value }))}
                   testid={`lab-effect-bitmask-${p.key}`}
                   oninput={(v) => labState.setParam('effect', p.key, v)}
                   onchange={(v) => labState.setParam('effect', p.key, v)}
                 />
               </Field>
             {:else if p.type === 'pattern'}
-              <Field label={tr(p.labelKey)} labelWidth={78}>
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <PatternField
                   value={String(valueOf('effect', p))}
-                  label={tr(p.labelKey)}
+                  label={resolveLabel(p.labelKey, tr)}
                   mode={p.mode}
                   editorSize={p.editorSize}
                   colors={{

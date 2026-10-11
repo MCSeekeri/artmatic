@@ -14,7 +14,8 @@
 
 | 项 | 要求 |
 |---|---|
-| 运行时 | Node.js 20.19+ / 22.12+，或 [bun](https://bun.sh)（包管理器二选一） |
+| 运行时 | Node.js 20.19+ / 22.12+（跑构建与脚本） |
+| 包管理器 | [bun](https://bun.sh) —— **只有它**。lockfile 只有 `bun.lock` 一份，见下方说明 |
 | 浏览器 | **Chrome / Edge 最新版**。依赖 File System Access（工程读写）、WebCodecs（MP4 编码）、WebGL2（合成） |
 | 运行环境 | 必须处于 **secure context**（`localhost` 或 HTTPS）。`file://` 打开不行 —— 上述 API 在非安全上下文里不存在 |
 | 部署 | 无后端，`build` 产物是纯静态文件，可放任意静态托管 |
@@ -44,7 +45,8 @@ Firefox / Safari 目前不可用（缺 File System Access 与 WebCodecs 的 H.26
 ## 快速开始
 
 ```bash
-# 安装依赖（bun 或 npm 均可）
+# 安装依赖。**只用 bun**：npm / yarn / pnpm 会写出各自的 lockfile 与 bun.lock
+# 分叉，而两边版本不一致时不会有任何报错（详见 AGENTS.md §6）。
 bun install
 
 # 开发

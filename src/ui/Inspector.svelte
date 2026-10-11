@@ -29,6 +29,7 @@
   import { transitionCut } from '../core/transitions';
   import { visibleParams, type RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
+  import { resolveLabel } from '../i18n/label';
 
   const blendOptions = BLEND_MODES.map((m) => ({ value: m.id, label: tr(m.labelKey) }));
   const fitOptions = [
@@ -359,21 +360,21 @@
         </Field>
       {:else if clip.source.type === 'algo'}
         {@const def = getGenerator(clip.source.generator)}
-        <p class="note">{tr('insp.algoGenerator', { name: def ? tr(def.nameKey) : clip.source.generator })}</p>
+        <p class="note">{tr('insp.algoGenerator', { name: def ? resolveLabel(def.nameKey, tr) : clip.source.generator })}</p>
         {#if def}
           {#each visibleParams(def.params, clip.source.params) as p (p.key)}
             {#if p.type === 'range'}
               {#if keyframable(def.kind, p.key)}
-                <KeyableField label={tr(p.labelKey)} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
+                <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
               {:else}
                 <!-- 烘焙入参：改了要重烘，所以不能打关键帧（每帧重烘会卡死） -->
-                <Field label={tr(p.labelKey)} tipText={tr('insp.bakedParamTip', { label: tr(p.labelKey) })}>
+                <Field label={resolveLabel(p.labelKey, tr)} tipText={tr('insp.bakedParamTip', { label: resolveLabel(p.labelKey, tr) })}>
                   <Slider
                     min={p.min}
                     max={p.max}
                     step={p.step}
                     value={Number(clip.source.params[p.key] ?? p.defaultValue)}
-                    ariaLabel={tr(p.labelKey)}
+                    ariaLabel={resolveLabel(p.labelKey, tr)}
                     testid="bake-param-slider"
                     oninput={(v) => setAlgoParam(clip, p.key, v)}
                   />
@@ -390,17 +391,17 @@
                 </Field>
               {/if}
             {:else if p.type === 'select'}
-              <Field label={tr(p.labelKey)}>
+              <Field label={resolveLabel(p.labelKey, tr)}>
                 <Select
                   value={String(clip.source.params[p.key] ?? p.defaultValue)}
-                  options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
+                  options={p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))}
                   testid={`algo-param-${p.key}`}
                   optionTestidPrefix={`algo-param-${p.key}-opt`}
                   onchange={(v) => setAlgoParam(clip, p.key, v)}
                 />
               </Field>
             {:else if p.type === 'checkbox'}
-              <Field label={tr(p.labelKey)}>
+              <Field label={resolveLabel(p.labelKey, tr)}>
                 <Checkbox
                   checked={Number(clip.source.params[p.key] ?? p.defaultValue) !== 0}
                   testid={`algo-param-${p.key}`}
@@ -408,7 +409,7 @@
                 />
               </Field>
             {:else if p.type === 'color'}
-              <Field label={tr(p.labelKey)}>
+              <Field label={resolveLabel(p.labelKey, tr)}>
                 <input
                   class="color"
                   type="color"
@@ -418,23 +419,23 @@
               </Field>
             {:else if p.type === 'bitmask'}
               <!-- 规则号 / B/S 掩码：位表 + 数值框。同样是烘焙入参（不可打关键帧）。 -->
-              <Field label={tr(p.labelKey)} tipText={tr('insp.bakedParamTip', { label: tr(p.labelKey) })}>
+              <Field label={resolveLabel(p.labelKey, tr)} tipText={tr('insp.bakedParamTip', { label: resolveLabel(p.labelKey, tr) })}>
                 <BitmaskField
                   value={Number(clip.source.params[p.key] ?? p.defaultValue)}
                   bits={p.bits}
                   slider={p.slider}
-                  groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
-                  presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                  groups={p.groups.map((g) => ({ label: resolveLabel(g.labelKey, tr), bits: g.bits, style: g.style }))}
+                  presets={p.presets?.map((o) => ({ label: resolveLabel(o.labelKey, tr), value: o.value }))}
                   testid={`algo-param-${p.key}`}
                   oninput={(v) => setAlgoParam(clip, p.key, v)}
                   onchange={(v) => setAlgoParam(clip, p.key, v)}
                 />
               </Field>
             {:else if p.type === 'pattern'}
-              <Field label={tr(p.labelKey)} tipText={tr('insp.bakedParamTip', { label: tr(p.labelKey) })}>
+              <Field label={resolveLabel(p.labelKey, tr)} tipText={tr('insp.bakedParamTip', { label: resolveLabel(p.labelKey, tr) })}>
                 <PatternField
                   value={String(clip.source.params[p.key] ?? p.defaultValue)}
-                  label={tr(p.labelKey)}
+                  label={resolveLabel(p.labelKey, tr)}
                   mode={p.mode}
                   editorSize={p.editorSize}
                   colors={{
@@ -631,7 +632,7 @@
                   }
                 })}
             />
-            <span class="fx-name">{entry ? tr(entry.nameKey) : inst.defId}</span>
+            <span class="fx-name">{entry ? resolveLabel(entry.nameKey, tr) : inst.defId}</span>
             <IconButton
               icon="arrow-up"
               label={tr('common.up')}
@@ -660,19 +661,19 @@
           {#if entry}
             {#each visibleParams(entry.params, inst.values) as p (p.key)}
               {#if p.type === 'range'}
-                <KeyableField label={tr(p.labelKey)} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
+                <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
               {:else if p.type === 'select'}
-                <Field label={tr(p.labelKey)}>
+                <Field label={resolveLabel(p.labelKey, tr)}>
                   <Select
                     value={String(inst.values[p.key] ?? p.defaultValue)}
-                    options={p.options.map((o) => ({ value: o.value, label: tr(o.labelKey) }))}
+                    options={p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))}
                     testid={`effect-param-${p.key}`}
                     optionTestidPrefix={`effect-param-${p.key}-opt`}
                     onchange={(v) => setEffectParam(clip, inst, p.key, v)}
                   />
                 </Field>
               {:else if p.type === 'checkbox'}
-                <Field label={tr(p.labelKey)}>
+                <Field label={resolveLabel(p.labelKey, tr)}>
                   <Checkbox
                     checked={Number(inst.values[p.key] ?? p.defaultValue) !== 0}
                     testid={`effect-param-${p.key}`}
@@ -680,7 +681,7 @@
                   />
                 </Field>
               {:else if p.type === 'color'}
-                <Field label={tr(p.labelKey)}>
+                <Field label={resolveLabel(p.labelKey, tr)}>
                   <input
                     class="color"
                     type="color"
@@ -689,23 +690,23 @@
                   />
                 </Field>
               {:else if p.type === 'bitmask'}
-                <Field label={tr(p.labelKey)}>
+                <Field label={resolveLabel(p.labelKey, tr)}>
                   <BitmaskField
                     value={Number(inst.values[p.key] ?? p.defaultValue)}
                     bits={p.bits}
                     slider={p.slider}
-                    groups={p.groups.map((g) => ({ label: tr(g.labelKey), bits: g.bits, style: g.style }))}
-                    presets={p.presets?.map((o) => ({ label: tr(o.labelKey), value: o.value }))}
+                    groups={p.groups.map((g) => ({ label: resolveLabel(g.labelKey, tr), bits: g.bits, style: g.style }))}
+                    presets={p.presets?.map((o) => ({ label: resolveLabel(o.labelKey, tr), value: o.value }))}
                     testid={`effect-param-${p.key}`}
                     oninput={(v) => setEffectParam(clip, inst, p.key, v)}
                     onchange={(v) => setEffectParam(clip, inst, p.key, v)}
                   />
                 </Field>
               {:else if p.type === 'pattern'}
-                <Field label={tr(p.labelKey)}>
+                <Field label={resolveLabel(p.labelKey, tr)}>
                   <PatternField
                     value={String(inst.values[p.key] ?? p.defaultValue)}
-                    label={tr(p.labelKey)}
+                    label={resolveLabel(p.labelKey, tr)}
                     mode={p.mode}
                     editorSize={p.editorSize}
                     colors={{

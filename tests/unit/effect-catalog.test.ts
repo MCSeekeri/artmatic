@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EFFECT_CATALOG, EFFECT_CATEGORIES, EFFECT_TAGS, effectTags, structuralTags } from '../../src/effects/catalog';
-import { getEffect, listEffects } from '../../src/effects/registry';
+import { getEffect, listBuiltinEffects } from '../../src/effects/registry';
 import { THUMB_BASES, isThumbGeneratorId, thumbGeneratorId } from '../../src/effects/thumbnails/bases';
 import { LOCALES } from '../../src/i18n/locales';
 
@@ -13,9 +13,13 @@ import { LOCALES } from '../../src/i18n/locales';
  * 刻意**不写**的一条：断言 `descKey` 在文案表里存在。`descKey` 的类型是
  * `MessageKey`（= 全部合法键的联合），拼错在 `svelte-check` 就报了 ——
  * 再写一条永远绿的断言，只会让人以为这里有防线。
+ *
+ * 遍历用 `listBuiltinEffects()` 而**不是** `listEffects()`：目录表是构建期
+ * 随内置特效一起发出去的，插件特效自带元数据（`entry.meta`），本来就不该出现在
+ * 这张表里。用全量清单的话，运行期挂一个插件就会让这条守卫误报。
  */
 
-const EFFECTS = listEffects().map((e) => e.id);
+const EFFECTS = listBuiltinEffects().map((e) => e.id);
 
 describe('特效目录：覆盖完整', () => {
   it('注册表非空（守卫本身要有覆盖面）', () => {

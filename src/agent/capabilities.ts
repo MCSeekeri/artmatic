@@ -8,8 +8,8 @@
  */
 
 import { BLEND_MODES } from '../core/schema';
-import { listEffects } from '../effects/registry';
-import { listGenerators } from '../algos/registry';
+import { effectRegistryRevision, listEffects } from '../effects/registry';
+import { algoRegistryRevision, listGenerators } from '../algos/registry';
 import { listTransitions } from '../effects/transitions/registry';
 import type { Capabilities } from './types';
 
@@ -19,13 +19,20 @@ const CURVE_MODES: Capabilities['curveModes'] = ['keyframe', 'impulse', 'followe
 const SOURCE_TYPES: Capabilities['sourceTypes'] = ['video', 'image', 'algo', 'text', 'solid'];
 
 /**
- * 清单在一次会话里是不变的（注册表在模块加载时建好，glob 是 eager 的），
- * 所以算一次就够。**缓存的是纯数据**，不是「运行期实例」—— 后者绝不能缓存。
+ * 清单在**插件挂载之前**是常量（内置注册表在模块加载时建好，glob 是 eager 的），
+ * 所以算一次就够 —— 但要跟着两个注册表的 `revision` 失效：插件挂载后 agent
+ * 必须立刻能发现新的 id，否则它手里那份清单会把新特效/生成器当成非法 id 拒掉。
+ *
+ * 缓存的是**纯数据**，不是「运行期实例」—— 后者绝不能缓存。判断 `!==` 而不是
+ * `>`：两个注册表的计数是独立的，任一个变了都得重算。
  */
 let cached: Capabilities | null = null;
+let cachedRevision = -1;
 
 export function getCapabilities(): Capabilities {
-  if (!cached) {
+  const revision = effectRegistryRevision() + algoRegistryRevision();
+  if (!cached || cachedRevision !== revision) {
+    cachedRevision = revision;
     cached = {
       generators: listGenerators().map((g) => ({ id: g.id, kind: g.kind })),
       effects: listEffects().map((e) => ({ id: e.id })),

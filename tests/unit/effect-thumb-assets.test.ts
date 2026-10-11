@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { listEffects } from '../../src/effects/registry';
+import { listBuiltinEffects } from '../../src/effects/registry';
 
 /**
  * 预先导出的缩略图资源（`src/assets/effect-thumbnails/`）的守卫。
@@ -30,7 +30,8 @@ function isWebp(bytes: Uint8Array): boolean {
 
 const FILES = readdirSync(DIR).filter((f) => f.endsWith('.webp'));
 const IDS = FILES.map((f) => f.replace(/\.webp$/, '')).sort();
-const EFFECTS = listEffects()
+// 只比内置：缩略图是随应用一起发出去的静态资源，插件特效没有（也不可能有）。
+const EFFECTS = listBuiltinEffects()
   .map((e) => e.id)
   .sort();
 

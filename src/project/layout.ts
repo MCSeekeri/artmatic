@@ -33,12 +33,25 @@ export const ANALYSIS_DIR = 'analysis';
 export const AUDIO_ANALYSIS_DIR = 'audio';
 export const THUMBS_DIR = 'thumbs';
 
+/**
+ * 插件目录。
+ *
+ * 插件文件是**可执行的 JS**，放进工程目录意味着「工程可以带着自己的扩展走」——
+ * 拷贝整个工程目录到另一台机器，打开时插件照旧挂载（见 AGENTS 的工程级插件决策）。
+ *
+ * ⚠️ 它是**工程真相**的一部分，不是缓存：删掉它就等于卸载插件，
+ * 工程里引用了那些 id 的片段会退化成「缺失插件」。所以它**不在**可丢弃清单里
+ * （对比 `thumbs/` 与 `analysis/`）。
+ */
+export const PLUGINS_DIR = 'plugins';
+
 /** 打开/新建工程时要确保存在的目录（按层级顺序）。 */
 export const PROJECT_DIRS: readonly (readonly string[])[] = [
   [ASSETS_DIR],
   [ANALYSIS_DIR],
   [ANALYSIS_DIR, AUDIO_ANALYSIS_DIR],
   [THUMBS_DIR],
+  [PLUGINS_DIR],
 ];
 
 /* ------------------------------------------------------------ 名字清洗 */
@@ -98,6 +111,35 @@ export function assetPathSegments(assetId: string, originName: string): string[]
 /** 素材相对工程根的路径，用于台账记录与 UI 展示。POSIX 分隔符。 */
 export function assetRelPath(assetId: string, originName: string): string {
   return assetPathSegments(assetId, originName).join('/');
+}
+
+/** 插件文件扩展名。清单是 ESM，所以宿主按模块导入它。 */
+export const PLUGIN_EXT = '.js';
+
+/**
+ * 插件 id → 可安全用作文件名的形式。
+ *
+ * 直接复用 `safeAssetId` 的清洗规则（只留 `[A-Za-z0-9._-]`、截断到 96）——
+ * 两条路径最后都进同一层文件系统，规则分开写就会出现「素材能过、插件不能过」
+ * 这种不对称。插件 id 本身在清单校验时已被限制成 `[a-z0-9._-]`，这里是兜底。
+ */
+export function safePluginId(id: string, fallback = 'plugin'): string {
+  return safeAssetId(id, fallback);
+}
+
+/** 插件文件在 `plugins/` 下的段数组。 */
+export function pluginPathSegments(pluginId: string): string[] {
+  return [PLUGINS_DIR, safePluginId(pluginId) + PLUGIN_EXT];
+}
+
+/** 插件文件相对工程根的路径，用于展示与诊断。POSIX 分隔符。 */
+export function pluginRelPath(pluginId: string): string {
+  return pluginPathSegments(pluginId).join('/');
+}
+
+/** 插件 id 在 `plugins/` 里的文件名（含扩展名）。 */
+export function pluginFileName(pluginId: string): string {
+  return safePluginId(pluginId) + PLUGIN_EXT;
 }
 
 /** 音频分析缓存在 `analysis/audio/` 下的段数组。 */

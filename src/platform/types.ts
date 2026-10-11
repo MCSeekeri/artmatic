@@ -40,6 +40,16 @@ export interface Platform {
    * 在这里丢掉会让「为什么我选的字体没反应」变成一个哑谜。
    */
   pickFontFiles(): Promise<PickedFile[] | null>;
+  /**
+   * 选一个插件文件（`.js`）。
+   *
+   * 给**文件名**是必需的：导入失败时面板上总得有一行可看，那时还没读出
+   * 清单里的 id（见 `plugins/host.ts` 的 `PluginImportOutcome`）。
+   *
+   * `accept` 只是给文件对话框的提示，**不在这一层做格式过滤** —— 与
+   * `pickFontFiles` 同一条理由：在这里丢掉会让「我选的插件没反应」变成哑谜。
+   */
+  pickPluginFile(): Promise<PickedFile | null>;
   /** 触发一次浏览器下载（Electron 版会是写文件对话框）。 */
   download(blob: Blob, filename: string): Promise<void>;
   saveProject(json: string, suggestedName: string): Promise<void>;

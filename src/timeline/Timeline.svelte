@@ -28,9 +28,19 @@
   import { reorder } from '../ui/drag-reorder';
   import { theme } from '../ui/theme.svelte';
   import { appState } from '../ui/app-state.svelte';
+  import { registryRevision } from '../ui/registry-revision.svelte';
   import { tr } from '../i18n/index.svelte';
+  import { resolveLabel } from '../i18n/label';
 
-  const generators = listGenerators();
+  /*
+   * 生成器菜单的清单要跟着**运行期注册表**走：插件挂载后，右键菜单必须立刻
+   * 多出新的生成器。`registryRevision()` 只为了建立这个依赖 —— 没有它，
+   * 这是一次普通的模块级调用，算一次就冻住了（表现是「装了插件但菜单里没有」）。
+   */
+  const generators = $derived.by(() => {
+    registryRevision();
+    return listGenerators();
+  });
 
   /** 右键菜单：在鼠标位置（时间 + 轨道）新建片段。 */
   interface CtxMenu {
@@ -333,7 +343,7 @@
       id: newId(),
       start,
       end: start + longLen(),
-      label: tr(def.nameKey),
+      label: resolveLabel(def.nameKey, tr),
       fadeSec: 0,
       curves: {},
       source: { type: 'algo', generator: genId, params: defaultParams(genId) },
@@ -547,7 +557,7 @@
       const entry = ALGO_CATALOG[g.id];
       return {
         id: `${prefix}algo-${g.id}`,
-        label: tr(g.nameKey),
+        label: resolveLabel(g.nameKey, tr),
         testid: `${prefix}algo-${g.id}`,
         onselect: () => addAlgo(currentTrackId!, g.id, at),
         /*
@@ -559,7 +569,8 @@
          * 这是刻意的降级，没有缩略图不该让菜单少一项。
          */
         thumb: algoThumbUrl(g.id) ?? undefined,
-        desc: entry ? tr(entry.descKey) : tr(g.nameKey),
+        // 内置的说明在 ALGO_CATALOG；插件自带 desc；都没有就回落到名称。
+        desc: entry ? tr(entry.descKey) : g.desc ? resolveLabel(g.desc, tr) : resolveLabel(g.nameKey, tr),
       };
     });
   }

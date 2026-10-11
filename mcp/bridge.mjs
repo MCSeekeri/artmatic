@@ -18,7 +18,7 @@
  *   沙箱里整个进程树会收到 SIGTERM（`scripts/e2e.mjs:2-7` 记着这条）。
  * - 端口默认沿用 4173（e2e / algo thumbs 用的那个）：**如果那儿已经有一个
  *   preview 或 dev server 在跑，直接复用**（`e2e.mjs` 是同一个做法）。
- *   想旁挂用户自己开的 `npm run dev`，给 `ARTMATIC_URL` 即可。
+ *   想旁挂用户自己开的 `bun run dev`，给 `ARTMATIC_URL` 即可。
  *
  * ## 长驻
  *

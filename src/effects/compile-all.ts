@@ -61,71 +61,75 @@ function message(e: unknown): string {
 }
 
 /**
- * 编译一个特效的全部 program（主 pass + 每一环 pre-pass）。
+ * 编译**一个**特效的全部 program（主 pass + 每一环 pre-pass）。
  * 名字走 `effectProgramName`，与 effects/runner.ts 同源。
+ *
+ * 拆出单条版本是为了插件：挂载时只该编译**这个插件带来的那几个** def，
+ * 而不是把七十多个内置特效再编一遍（重编命中缓存、不重复花钱，但插件加载
+ * 会因此多出一次全量遍历的延迟，而它发生在「打开工程」这条路上）。
  */
-export function compileAllEffects(kit: Kit): CompileResult[] {
-  const out: CompileResult[] = [];
-  for (const { id } of listEffects()) {
-    const entry = getEffect(id);
-    if (!entry) {
-      out.push({ id, ok: false, error: `注册表里没有 ${id}` });
-      continue;
+export function compileEffect(kit: Kit, id: string): CompileResult {
+  const entry = getEffect(id);
+  if (!entry) return { id, ok: false, error: `注册表里没有 ${id}` };
+  try {
+    kit.quad(EFFECT_HEAD + entry.shader.fragment, effectProgramName(id));
+    const pre = entry.shader.prePasses ?? [];
+    for (let i = 0; i < pre.length; i++) {
+      kit.quad(EFFECT_HEAD + pre[i]!.fragment, effectProgramName(id, i));
     }
-    try {
-      kit.quad(EFFECT_HEAD + entry.shader.fragment, effectProgramName(id));
-      const pre = entry.shader.prePasses ?? [];
-      for (let i = 0; i < pre.length; i++) {
-        kit.quad(EFFECT_HEAD + pre[i]!.fragment, effectProgramName(id, i));
-      }
-      out.push({ id, ok: true });
-    } catch (e) {
-      out.push({ id, ok: false, error: message(e) });
-    }
+    return { id, ok: true };
+  } catch (e) {
+    return { id, ok: false, error: message(e) };
   }
-  return out;
+}
+
+/** 全部已注册特效（含插件）。试炼场的「全部编译」用它。 */
+export function compileAllEffects(kit: Kit): CompileResult[] {
+  return listEffects().map(({ id }) => compileEffect(kit, id));
 }
 
 /**
- * 编译全部算法的着色器：`realtime` 的主 fragment + `sim` 的自定义着色。
+ * 编译**一个**算法的着色器：`realtime` 的主 fragment / `sim` 的自定义着色。
  * 名字与 `algos/runtime.ts` 同源（同一个 `Kit.quad` 具名缓存）。
+ *
+ * `bake` 型直接返回成功 —— 它没有着色器（共用常量的 reveal program）。
  */
-export function compileAllAlgoShaders(kit: Kit): CompileResult[] {
-  const out: CompileResult[] = [];
-  for (const { id, kind } of listGenerators()) {
-    if (kind !== 'realtime' && kind !== 'sim') continue;
-    const def = getGenerator(id);
-    if (!def || (def.kind !== 'realtime' && def.kind !== 'sim')) {
-      out.push({ id, ok: false, error: `注册表里没有 ${id}` });
-      continue;
+export function compileAlgoShader(kit: Kit, id: string): CompileResult {
+  const def = getGenerator(id);
+  if (!def) return { id, ok: false, error: `注册表里没有 ${id}` };
+  if (def.kind === 'bake') return { id, ok: true };
+  try {
+    if (def.kind === 'realtime') {
+      const prog = kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
+      /*
+       * 「声明了但**链接器丢掉了**」= shader 从来没读过它。
+       *
+       * 这是**唯一**能自动抓到「参数拨了没反应」的口子：`Program.uniforms` 是
+       * 按 `ACTIVE_UNIFORMS` 建的，没被读的 uniform 会被优化掉、`getUniformLocation`
+       * 返回 null、`Program.u()` 静默跳过。伪 GL 的单测看不见（那边的 location
+       * 永远是有效的），而它**不报错、不崩、只是滑杆动画面不动** —— 重构
+       * `menger` 时 `u_twist` 就这么丢过一次。
+       */
+      const declared = declaredUniforms(ALGO_HEAD + def.fragment);
+      const dropped = [...declared.keys()].filter((n) => !(n in prog.uniforms));
+      return { id, ok: true, dropped };
     }
-    try {
-      if (def.kind === 'realtime') {
-        const prog = kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
-        /*
-         * 「声明了但**链接器丢掉了**」= shader 从来没读过它。
-         *
-         * 这是**唯一**能自动抓到「参数拨了没反应」的口子：`Program.uniforms` 是
-         * 按 `ACTIVE_UNIFORMS` 建的，没被读的 uniform 会被优化掉、`getUniformLocation`
-         * 返回 null、`Program.u()` 静默跳过。伪 GL 的单测看不见（那边的 location
-         * 永远是有效的），而它**不报错、不崩、只是滑杆动画面不动** —— 重构
-         * `menger` 时 `u_twist` 就这么丢过一次。
-         */
-        const declared = declaredUniforms(ALGO_HEAD + def.fragment);
-        const dropped = [...declared.keys()].filter((n) => !(n in prog.uniforms));
-        out.push({ id, ok: true, dropped });
-        continue;
-      } else if (def.tintFragment !== undefined) {
-        // ⚠️ 漏掉这一支的后果不是「少编一个 program」，而是**新写的 tint shader
-        // 完全没有语法守卫** —— 它在预览里被点到之前不会报任何错。
-        kit.quad(TINT_HEAD + def.tintFragment, algoTintProgramName(id));
-      }
-      out.push({ id, ok: true });
-    } catch (e) {
-      out.push({ id, ok: false, error: message(e) });
+    if (def.tintFragment !== undefined) {
+      // ⚠️ 漏掉这一支的后果不是「少编一个 program」，而是**新写的 tint shader
+      // 完全没有语法守卫** —— 它在预览里被点到之前不会报任何错。
+      kit.quad(TINT_HEAD + def.tintFragment, algoTintProgramName(id));
     }
+    return { id, ok: true };
+  } catch (e) {
+    return { id, ok: false, error: message(e) };
   }
-  return out;
+}
+
+/** 全部已注册算法（含插件）的着色器。 */
+export function compileAllAlgoShaders(kit: Kit): CompileResult[] {
+  return listGenerators()
+    .filter((g) => g.kind === 'realtime' || g.kind === 'sim')
+    .map((g) => compileAlgoShader(kit, g.id));
 }
 
 export interface CompileAllOutcome {

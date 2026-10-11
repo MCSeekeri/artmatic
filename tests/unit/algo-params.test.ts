@@ -4,6 +4,7 @@ import { getEffect, listEffects } from '../../src/effects/registry';
 import { visibleParams, type ParamDef } from '../../src/effects/types';
 import { decodePattern } from '../../src/algos/pattern-codec';
 import { LOCALES } from '../../src/i18n/locales';
+import type { Label } from '../../src/i18n/label';
 
 /**
  * 参数表的静态守卫 —— 补上算法/特效两侧一直缺的那一条。
@@ -22,6 +23,18 @@ import { LOCALES } from '../../src/i18n/locales';
 const zh = LOCALES['zh-CN'] as Record<string, string>;
 
 const KNOWN_TYPES = new Set(['range', 'select', 'checkbox', 'color', 'bitmask', 'pattern']);
+
+/**
+ * 把 `Label` 解析成展示文本：文案键查表、字面量原样。
+ *
+ * **解析不了时返回 `undefined`**（而不是回落到键名本身）—— 这正是下面那些
+ * 断言的判据。`tr()` 的「键不存在就返回键」是给**运行期**兜底的，在这里会把
+ * 一个拼错的键伪装成合法文本，守卫就失效了。
+ */
+function textOf(label: Label): string | undefined {
+  if (typeof label === 'string') return zh[label];
+  return label.text.length > 0 ? label.text : undefined;
+}
 
 /** 从 `visibleWhen` 的函数源码里抠出它引用的参数键（`v.xxx`）。 */
 function referencedKeys(fn: (v: Record<string, number | string>) => boolean): string[] {
@@ -44,8 +57,8 @@ function checkParams(where: string, params: ParamDef[]): void {
     // 1. 类型必须是某个 UI 认得的类型，否则这一项会静默消失
     expect(KNOWN_TYPES.has(p.type), `${id}: 未知参数类型 ${p.type}（UI 不会渲染它）`).toBe(true);
 
-    // 2. 文案键必须能解析
-    expect(typeof zh[p.labelKey], `${id}: labelKey 不在文案表里`).toBe('string');
+    // 2. 文案必须能解析（内置是文案键、插件是字面量，两者都要非空）
+    expect(typeof textOf(p.labelKey), `${id}: labelKey 解析不出文本`).toBe('string');
 
     // 3. 逐类型的结构不变量
     if (p.type === 'range') {
@@ -55,7 +68,9 @@ function checkParams(where: string, params: ParamDef[]): void {
     } else if (p.type === 'select') {
       expect(p.options.length, `${id}: 选项为空`).toBeGreaterThan(0);
       for (const o of p.options) {
-        expect(typeof zh[o.labelKey], `${id}: 选项文案键 ${o.labelKey} 不在文案表里`).toBe('string');
+        expect(typeof textOf(o.labelKey), `${id}: 选项文案 ${JSON.stringify(o.labelKey)} 解析不出文本`).toBe(
+          'string',
+        );
       }
       expect(
         p.options.some((o) => o.value === p.defaultValue),
@@ -69,10 +84,10 @@ function checkParams(where: string, params: ParamDef[]): void {
       expect(p.defaultValue, `${id}: 默认值越界（应 < 2^bits）`).toBeLessThan(2 ** p.bits);
       for (const g of p.groups) {
         expect(['eca', 'count'], `${id}: 分组画法非法`).toContain(g.style);
-        expect(typeof zh[g.labelKey], `${id}: 分组文案键 ${g.labelKey} 不在文案表里`).toBe('string');
+        expect(typeof textOf(g.labelKey), `${id}: 分组文案解析不出文本`).toBe('string');
       }
       for (const o of p.presets ?? []) {
-        expect(typeof zh[o.labelKey], `${id}: 预设文案键 ${o.labelKey} 不在文案表里`).toBe('string');
+        expect(typeof textOf(o.labelKey), `${id}: 预设文案解析不出文本`).toBe('string');
         expect(o.value, `${id}: 预设值越界`).toBeGreaterThanOrEqual(0);
         expect(o.value, `${id}: 预设值越界`).toBeLessThan(2 ** p.bits);
       }
@@ -98,7 +113,7 @@ describe('参数表守卫：所有生成器', () => {
     const list = listGenerators();
     expect(list.length, '生成器注册表为空，守卫没有覆盖面').toBeGreaterThan(5);
     for (const g of list) {
-      expect(typeof zh[g.nameKey], `${g.id}: nameKey ${g.nameKey} 不在文案表里`).toBe('string');
+      expect(typeof textOf(g.nameKey), `${g.id}: nameKey 解析不出文本`).toBe('string');
     }
   });
 
@@ -110,10 +125,10 @@ describe('参数表守卫：所有生成器', () => {
     }
   });
 
-  it('每个生成器至少有一个参数以外的稳定标识（id 与 nameKey 都非空）', () => {
+  it('每个生成器至少有一个参数以外的稳定标识（id 与展示名都非空）', () => {
     for (const g of listGenerators()) {
       expect(g.id.length, 'id 为空').toBeGreaterThan(0);
-      expect(g.nameKey.length, `${g.id}: nameKey 为空`).toBeGreaterThan(0);
+      expect((textOf(g.nameKey) ?? '').length, `${g.id}: 展示名为空`).toBeGreaterThan(0);
     }
   });
 });
@@ -125,7 +140,7 @@ describe('参数表守卫：所有特效', () => {
     for (const e of list) {
       const entry = getEffect(e.id);
       expect(entry, e.id).not.toBeNull();
-      expect(typeof zh[e.nameKey], `${e.id}: nameKey 不在文案表里`).toBe('string');
+      expect(typeof textOf(e.nameKey), `${e.id}: nameKey 解析不出文本`).toBe('string');
       checkParams(e.id, entry!.params);
     }
   });

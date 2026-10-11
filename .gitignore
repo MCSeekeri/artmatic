@@ -12,3 +12,9 @@ test-results/
 .stryker-incremental.json
 .e2e-all.txt
 .e2e-out.txt
+
+# 包管理器是 bun：真源是 bun.lock（见 AGENTS §6）。
+# 别的包管理器一旦被顺手用上，产物就是下面这些 —— 它们只会制造分叉。
+package-lock.json
+yarn.lock
+pnpm-lock.yaml

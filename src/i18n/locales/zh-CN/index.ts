@@ -23,6 +23,7 @@ import { shortcuts } from './shortcuts';
 import { errors } from './errors';
 import { lab } from './lab';
 import { agent } from './agent';
+import { plugins } from './plugins';
 
 export const zhCN = {
   ...common,
@@ -39,4 +40,5 @@ export const zhCN = {
   ...errors,
   ...lab,
   ...agent,
+  ...plugins,
 } as const;

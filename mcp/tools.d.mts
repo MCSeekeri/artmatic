@@ -7,7 +7,7 @@
  *
  * 代价是测试（`tests/unit/agent-mcp-tools.test.ts`）import 它时没有类型。
  * 这个文件就是那份类型：手写字面量与 `tools.mjs` 的导出**必须一一对应**，
- * 对不上的表现是 `svelte-check` 报错（跑 `npm run check` 就能发现）。
+ * 对不上的表现是 `svelte-check` 报错（跑 `bun run check` 就能发现）。
  */
 
 /** 字段类型（与 tools.mjs 的 KINDS 一一对应）。 */

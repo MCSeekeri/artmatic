@@ -64,6 +64,7 @@ export const browserPlatform: Platform = {
     return file ? { name: file.name, file, size: file.size } : null;
   },
   pickFontFiles: () => pickMany('.ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff2'),
+  pickPluginFile: () => pick('.js,text/javascript'),
 
   async download(blob: Blob, filename: string): Promise<void> {
     const url = URL.createObjectURL(blob);

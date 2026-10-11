@@ -445,12 +445,29 @@ export function memoryRoot(): MemoryRoot {
       fault = fn;
     },
     seed: (path, content) => {
+      /*
+       * 逐级建出父目录。**不能复用 `walk(…, true)`**：那个函数的最后一段是
+       * 按**文件**建的（它的用途是 walk 到一个路径），于是 `seed('a/b/c.js')`
+       * 会把 `a/b` 里的 `b` 建成文件，再 `asDir` 就拿到 null 并抛「seed 路径
+       * 不是目录」。只有父目录**恰好已经存在**时它才工作 —— 也就是说这个坑
+       * 只在「先 seed 一个深层文件」时才现形。
+       */
       const segs = path.split('/').filter(Boolean);
       const fname = segs.pop()!;
-      const parent = asDir(walk(segs.join('/'), true));
-      if (!parent) throw new Error(`seed 路径不是目录：${path}`);
+      let cur = root;
+      for (const seg of segs) {
+        const next = cur.children.get(seg);
+        if (next) {
+          if (next.kind !== 'directory') throw new Error(`seed 路径不是目录：${path}`);
+          cur = next;
+          continue;
+        }
+        const dir: MemDirNode = { kind: 'directory', children: new Map() };
+        cur.children.set(seg, dir);
+        cur = dir;
+      }
       const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content.slice();
-      parent.children.set(fname, { kind: 'file', bytes, mtime: clock++ });
+      cur.children.set(fname, { kind: 'file', bytes, mtime: clock++ });
     },
     inspect: (path) => {
       const node = walk(path, false);

@@ -19,6 +19,7 @@
   import RailShell from './RailShell.svelte';
   import SettingsModal from './SettingsModal.svelte';
   import ExportModal from './ExportModal.svelte';
+  import PluginManagerModal from './plugin-manager/PluginManagerModal.svelte';
   import { tip } from './tip';
   import Brand from './Brand.svelte';
   import Icon from './Icon.svelte';
@@ -34,7 +35,7 @@
     saveProjectNow,
   } from './project-actions';
 
-  type PanelId = 'about' | 'shortcuts' | 'export' | 'settings' | 'project';
+  type PanelId = 'about' | 'shortcuts' | 'export' | 'settings' | 'project' | 'plugins';
   let panel = $state<PanelId | null>(null);
 
   /**
@@ -98,6 +99,18 @@
       testid="rail-project"
       active={panel === 'project'}
       onclick={() => (panel = 'project')}
+    />
+    <!--
+      插件紧挨着「工程」：它们是**工程级**的扩展（每个工程一套，随工程目录走），
+      与「保存 / 导出」那种对当前工程的动作为邻，语义上才连得起来。
+    -->
+    <IconButton
+      icon="puzzle"
+      label={tr('pl.title')}
+      tipText={tr('pl.open')}
+      testid="rail-plugins"
+      active={panel === 'plugins'}
+      onclick={() => (panel = 'plugins')}
     />
     <IconButton
       icon="save"
@@ -168,6 +181,10 @@
       <span>{tr('app.compression')}</span><span class="mono">{tr('app.licenseFflate')}</span>
     </div>
   </Modal>
+{/if}
+
+{#if panel === 'plugins'}
+  <PluginManagerModal onclose={() => (panel = null)} />
 {/if}
 
 {#if panel === 'shortcuts'}

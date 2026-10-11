@@ -19,6 +19,7 @@ import { shortcuts } from '../../src/i18n/locales/zh-CN/shortcuts';
 import { errors } from '../../src/i18n/locales/zh-CN/errors';
 import { lab } from '../../src/i18n/locales/zh-CN/lab';
 import { agent } from '../../src/i18n/locales/zh-CN/agent';
+import { plugins } from '../../src/i18n/locales/zh-CN/plugins';
 
 const SRC = fileURLToPath(new URL('../../src', import.meta.url));
 
@@ -96,6 +97,7 @@ describe('文案表结构', () => {
     errors,
     lab,
     agent,
+    plugins,
   } as const;
 
   it('合并结果等于各域之并（没有跨文件重名把别人覆盖掉）', () => {
@@ -300,7 +302,17 @@ function* walk(dir: string): Generator<string> {
  */
 function stripCommentsAndImports(src: string): string {
   let s = src;
-  s = s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+  /*
+   * ⚠️ 块注释的 `/*` **必须前面是行首或空白**才算注释开头。
+   *
+   * 不这样要求的话，字符串里的 `/*` 会被当成注释开始 —— 实测踩过：
+   * `import.meta.glob('./defs/*.ts')` 里的 `/*` 会跟**几十行之后**某个文档
+   * 注释的结束符配成一对，把中间一大段代码抹掉。后果不是「漏报」而是
+   * **扫描错位**：引号配对被打乱，于是既漏掉真正的文案，又报出一个横跨
+   * 几十行的假字面量。而真实注释的 `/*` 前面一定是空白或行首（缩进），
+   * 这条约束把误判堵死，代价只是「起始符出现在一行中间」那种罕见写法不再被剥离。
+   */
+  s = s.replace(/(^|[ \t])\/\*[\s\S]*?\*\//gm, (m) => m.replace(/[^\n]/g, ' '));
   s = s.replace(/^(\s*)\/\/.*$/gm, (m) => m.replace(/[^\n]/g, ' '));
   s = s.replace(/[ \t]\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
   s = s.replace(/((?:from|import)\s*)(['"])[^'"]*\2/g, (m) => m.replace(/[^\n]/g, ' '));

@@ -24,6 +24,7 @@ import { ProjectAudio } from './project-audio';
 // 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
 import { createRenderCore } from '../render/render-core';
 import { FontRegistry } from '../typography/font-registry';
+import { PluginHost } from '../plugins/host';
 import { localFontSource, queryLocalFontFamilies } from '../typography/local-fonts';
 import { TypographyRuntime } from '../typography/runtime';
 import {
@@ -335,6 +336,26 @@ class AppState {
    * 不触发重算的话「导入成功了但下拉里没有」。
    */
   fontFamilies = $state<string[]>([]);
+
+  /* ---------------------------------------------------------------- 插件 */
+
+  /**
+   * 插件宿主。**进程级单例，但按工程记账** —— 哪份工程挂了哪些插件由
+   * `holder` 引用计数管（见 `plugins/host.ts` 的文件头）。
+   *
+   * 名字不叫 `host`：`attachPreview(canvas, host)` 的第二个参数是**显示容器**，
+   * 同名会让人以为两者有关系。
+   */
+  plugins = new PluginHost();
+
+  /**
+   * 插件集合的版本号（`PluginHost.revision()` 的响应式镜像）。
+   *
+   * 选择器 / 时间轴菜单读它建立依赖：没有这一层的话，插件挂载后那些
+   * 「模块级算一次」的清单不会重算，表现是「装了插件但菜单里没有」。
+   * 与 `fontFamilies` 同一个套路（那边是 `FontRegistry.revision`）。
+   */
+  pluginRevision = $state(0);
 
   /**
    * 从**本机**枚举来的字体族（只在这台机器上有）。
@@ -669,6 +690,15 @@ class AppState {
 
     this.projects.splice(i, 1);
 
+    /*
+     * 释放这份工程持有的插件。现在才做（而不是在 splice 之前）是为了让
+     * `refreshPreview` 里的渲染读到的仍是**关闭前**的工程 —— 顺序反了的话，
+     * 卸载插件会让当前画面短暂地「缺一半特效」再被下一次渲染修正。
+     *
+     * 只有**没有其它打开工程引用同一个 pluginId** 时才真的卸载（引用计数）。
+     */
+    this.plugins.release(p.id);
+
     if (this.projects.length === 0) {
       this.activeProjectId = '';
       // 回落值不是一个真的工程，没有版本可订阅；退订并把 version 归零，
@@ -938,6 +968,33 @@ class AppState {
    */
   init(store: ProjectStore): void {
     this.adoptProject({ store });
+    this.subscribePlugins();
+  }
+
+  /**
+   * 插件集合变化 → 界面重算 + 重画一帧。
+   *
+   * 订阅在 `init` 里建一次、永不解绑：宿主是进程级单例，活到页面结束。
+   * 与 `FontRegistry.onReady → store.touch()` 同一个套路，区别是这里直接
+   * `refreshPreview()`（它本来就是「重新同步尺寸 + 重画一帧」那个入口）。
+   */
+  private subscribePlugins(): void {
+    this.plugins.subscribe(() => {
+      this.pluginRevision = this.plugins.revision();
+      this.refreshPreview();
+    });
+  }
+
+  /**
+   * 把工程目录里的插件挂到这份工程上。
+   *
+   * 在「素材读进来之后、`adoptProject` 之后」调用（见 `project-actions.ts`）：
+   * 需要工程 id 当引用计数的键，而 id 是 `adoptProject` 才产生的。
+   * 没有目录（还没保存过）时什么都不做 —— 那是正常的空状态。
+   */
+  async mountPlugins(projectId: string, dir: FsDirHandle | null): Promise<void> {
+    if (!dir) return;
+    await this.plugins.mountFromDirectory(dir, projectId);
   }
 
   /**
@@ -967,6 +1024,14 @@ class AppState {
       this.algos = core.algos;
       this.sources = core.sources;
       this.video = core.video;
+
+      /*
+       * 插件着色器的编译校验需要真 GL，而 Kit 是这一刻才有的。
+       * 在此之前挂载的插件（打开工程时还没有预览的场景）在这里补做校验 ——
+       * 漏掉这一步的表现是「坏插件的着色器直到被点到才报错」，
+       * 那正是这条校验要消灭的东西（见 plugins/host.ts 的文件头）。
+       */
+      this.plugins.attachKit(core.kit);
 
       // 排版层与 algo 烘焙同构：异步光栅化 → 结果就绪时 touch() → 下一帧重绘。
       // 光栅化本身必须在主线程做（要走 DOM 与 document.fonts），

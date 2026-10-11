@@ -13,13 +13,20 @@
  *
  * 字段名带 `Key` 后缀是刻意的：它让「这里存的是键，用之前必须过 tr()」
  * 写在类型里。改名的另一个好处是所有使用点都会编译报错，漏不掉。
+ *
+ * ## 类型为什么是 `Label` 而不是 `MessageKey`
+ *
+ * 插件在**运行期**加载，拿不到编译期的文案键，只能带字面量文本。`Label`
+ * 把两种情况收进同一个类型（见 `i18n/label.ts`），字段名与内置定义一字不改。
+ * 代价是所有读取点必须走 `resolveLabel()` —— 而这正是我们要的：
+ * 它让「忘了翻译」变成编译错误。
  */
 
-import type { MessageKey } from '../i18n/locales';
+import type { Label } from '../i18n/label';
 
 interface ParamBase {
   key: string;
-  labelKey: MessageKey;
+  labelKey: Label;
   /**
    * 条件可见性：返回 false 时这一项在检查器里不出现（值仍保留在
    * `values` 里，不参与渲染的部分照样能写 uniforms）。
@@ -43,7 +50,7 @@ export interface RangeParam extends ParamBase {
 export interface SelectParam extends ParamBase {
   type: 'select';
   defaultValue: string;
-  options: { labelKey: MessageKey; value: string }[];
+  options: { labelKey: Label; value: string }[];
 }
 
 export interface CheckboxParam extends ParamBase {
@@ -64,7 +71,7 @@ export interface ColorParam extends ParamBase {
  * - `'count'` 每行是一个计数 n（生命类 CA 的 B/S：邻居数 0..8）。
  */
 export interface BitmaskGroup {
-  labelKey: MessageKey;
+  labelKey: Label;
   bits: number;
   style: 'eca' | 'count';
 }
@@ -89,7 +96,7 @@ export interface BitmaskParam extends ParamBase {
   /** 额外给一条 `0..2^bits-1` 的滑杆（一维 CA 要，B/S 不要）。 */
   slider?: boolean;
   /** 快捷预设（取代「规则号只能靠手输」）。 */
-  presets?: { labelKey: MessageKey; value: number }[];
+  presets?: { labelKey: Label; value: number }[];
 }
 
 /**

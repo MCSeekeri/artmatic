@@ -108,7 +108,7 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     const k = key ?? (await keyForHandle(raw, dir.name));
     if (raw) await putHandle(k, raw);
 
-    appState.adoptProject({
+    const proj = appState.adoptProject({
       store,
       assets: assetStore,
       dir,
@@ -118,6 +118,20 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
       issues: res.issues,
     });
     await hydrateRenderAssets(assetStore);
+
+    /*
+     * 插件在**素材之后、其余收尾之前**挂载。
+     *
+     * 两条理由：
+     *  - 要等 `adoptProject` 返回：引用计数的键是工程 id，而 id 是那一步才产生的；
+     *  - 要等素材：`mountFromDirectory` 里的着色器编译校验会在**有 Kit 时**跑，
+     *    而 Kit 存在与否取决于预览是否装配过。素材就绪后再挂，能让「打开工程」
+     *    这一步的画面尽量只是一次完整渲染，而不是先缺特效再补上。
+     *
+     * 挂载本身**不会抛**（单个坏插件只记在自己头上），所以它不需要参与
+     * 上面那个 try/catch 的语义。
+     */
+    await appState.mountPlugins(proj.id, dir);
 
     appState.recentProjects = rememberProject({
       key: k,

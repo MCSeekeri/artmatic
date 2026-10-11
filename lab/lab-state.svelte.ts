@@ -41,10 +41,12 @@ import { tr } from '../src/i18n/index.svelte';
 import type { ParamDef } from '../src/effects/types';
 import type { Project } from '../src/core/schema';
 import type { MessageKey } from '../src/i18n/locales';
+import { resolveLabel, type Label } from '../src/i18n/label';
 
 export interface LabItem {
   id: string;
-  nameKey: MessageKey;
+  /** 内置存文案键、插件存字面量 —— 与注册表同源，读取点走 `resolveLabel()`。 */
+  nameKey: Label;
   /** 种类徽标（烘焙 / 模拟 / 实时 / 内置）。特效没有徽标。 */
   badgeKey?: MessageKey;
   params: ParamDef[];
@@ -199,7 +201,7 @@ class LabState {
       .map((g) => ({
         ...g,
         items: g.items.filter(
-          (i) => tr(i.nameKey).toLowerCase().includes(q) || i.id.toLowerCase().includes(q),
+          (i) => resolveLabel(i.nameKey, tr).toLowerCase().includes(q) || i.id.toLowerCase().includes(q),
         ),
       }))
       .filter((g) => g.items.length > 0);

@@ -8,7 +8,7 @@
  */
 
 import type { ParamDef } from '../effects/types';
-import type { MessageKey } from '../i18n/locales';
+import type { Label } from '../i18n/label';
 import type { AlgoSetUniforms } from './shader-lib';
 
 export interface BakeResult {
@@ -96,8 +96,17 @@ export interface AlgoAuxRef {
 
 interface GeneratorBase {
   id: string;
-  /** 展示名。存的是**文案键**而不是字符串——理由见 effects/types.ts 的注释。 */
-  nameKey: MessageKey;
+  /**
+   * 展示名。内置存**文案键**、插件存字面量文本 —— 理由见 `i18n/label.ts`
+   * 与 `effects/types.ts` 的注释（读取点必须走 `resolveLabel()`）。
+   */
+  nameKey: Label;
+  /**
+   * 一句话说明。**内置一律不写**（它们在 `algos/catalog.ts` 的 `ALGO_CATALOG`
+   * 里，为了成批校对语气），插件则写在这里 —— 插件进不了构建期的目录表。
+   * 取用顺序：`ALGO_CATALOG[id]?.descKey` → 本字段 → 回落到名称。
+   */
+  desc?: Label;
   params: ParamDef[];
   /**
    * **不参与「算一次、缓存起来」那段计算**的参数键（配色、调色板、显示开关、

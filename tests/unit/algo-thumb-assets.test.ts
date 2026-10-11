@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { listGenerators, getGenerator } from '../../src/algos/registry';
+import { getGenerator, listBuiltinGenerators } from '../../src/algos/registry';
 import { ALGO_CATALOG, previewRecipe } from '../../src/algos/catalog';
 import { LOCALES } from '../../src/i18n/locales';
 
@@ -31,7 +31,9 @@ function isWebp(bytes: Uint8Array): boolean {
 
 const FILES = readdirSync(DIR).filter((f) => f.endsWith('.webp'));
 const IDS = FILES.map((f) => f.replace(/\.webp$/, '')).sort();
-const GENS = listGenerators()
+// 只比内置：缩略图与 `ALGO_CATALOG` 都是随应用一起发出去的静态资源，
+// 插件生成器两者都没有（它的说明写在 def 自己的 `desc` 上）。
+const GENS = listBuiltinGenerators()
   .map((g) => g.id)
   .sort();
 
