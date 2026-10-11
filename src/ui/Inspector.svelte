@@ -19,6 +19,7 @@
     type SourceClip,
   } from '../core/schema';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
+  import { affectedVisualIndices, visualTracks } from '../engine/stack';
   import { getGenerator } from '../algos/registry';
   import { defaultEffectValues, getEffect } from '../effects/registry';
   import EffectPickerModal from './effect-picker/EffectPickerModal.svelte';
@@ -234,6 +235,25 @@
     const index = (f.track.clips as AnyClip[]).findIndex((c) => c.id === id);
     if (index < 0) return null;
     return transitionCut(f.track, index);
+  });
+
+  /**
+   * 影响深度提示：这个特效片段实际覆盖了下方的哪几条轨。
+   *
+   * 判据是**与渲染侧同一份**的 `affectedVisualIndices`（`engine/stack.ts`）——
+   * 深度是纯几何量，两边共用一份实现才不会出现「提示说影响 V2、画面却动了 V3」。
+   * 这里只读不改：真正的边界（吸收 / 空作用域）在 `buildStack` 里算。
+   */
+  const scopeInfo = $derived.by(() => {
+    void appState.version;
+    const f = found;
+    if (!f || f.clip.kind !== 'effect') return null;
+    const depth = f.clip.affectDepth ?? 0;
+    if (depth <= 0) return { depth, names: [] as string[] };
+    const visuals = visualTracks(appState.project);
+    const vis = visuals.findIndex((t) => t.id === f.track.id);
+    const names = affectedVisualIndices(visuals, vis, depth).map((i) => visuals[i]!.name);
+    return { depth, names };
   });
 
   function setTransition(clip: AnyClip, defId: string): void {
@@ -590,6 +610,36 @@
         />
       {/if}
     {:else if clip.kind === 'effect'}
+      <!--
+        影响深度：这个片段作用于下方几条轨（0 = 下方全部）。
+
+        它是**片段级**属性而不是链级，所以放在链之前 —— 与「淡变」「混合」那些并列，
+        而不是塞进某个特效实例的卡片里（那样会看起来像某个特效的参数）。
+      -->
+      <Field label={tr('insp.affectDepth')} tipText={tr('insp.affectDepthTip')}>
+        <NumberInput
+          value={clip.affectDepth ?? 0}
+          min={0}
+          step={1}
+          width={64}
+          testid="effect-affect-depth"
+          onchange={(v) => appState.store.setEffectAffectDepth(clip.id, v)}
+        />
+      </Field>
+      {#if scopeInfo}
+        <!-- 到底影响了哪几条轨是**算出来的**而不是描述的（深度只数启用的轨），
+             所以把它显示出来 —— 否则用户只能靠数轨道列表去猜。 -->
+        {#if scopeInfo.depth === 0}
+          <p class="note" data-testid="effect-scope-all">{tr('insp.affectDepthAll')}</p>
+        {:else if scopeInfo.names.length > 0}
+          <p class="note" data-testid="effect-scope-tracks">
+            {tr('insp.affectDepthTracks', { names: scopeInfo.names.join(tr('common.listSep')) })}
+          </p>
+        {:else}
+          <p class="note insp-warn" data-testid="effect-scope-empty">{tr('insp.affectDepthEmpty')}</p>
+        {/if}
+      {/if}
+
       <!-- 添加特效：七十多个特效用一个下拉选不现实（不能搜、不能筛、看不见效果），
            改成唤起选择器。多选后一次追加到链尾，按选择顺序。 -->
       <Field label={tr('insp.addEffect')}>

@@ -150,11 +150,16 @@ export interface EffectClipInput {
   chain?: { defId: string; values?: Record<string, number | string>; instanceId?: string; enabled?: boolean }[];
   fadeSec?: number;
   curves?: Record<string, Curve>;
+  /** 影响深度：只作用于下方最近的 N 条启用视觉轨；0 / 缺省 = 下方全部。 */
+  affectDepth?: number;
 }
 
 /** 造一个 `EffectClip`（adjustment layer 语义，只作用于 z 序在它之下的合成结果）。 */
 export function makeEffectClip(input: EffectClipInput): EffectClip {
   checkSpan(input.start, input.end);
+  if (input.affectDepth !== undefined && (!Number.isInteger(input.affectDepth) || input.affectDepth < 0)) {
+    throw new ControlFailure('invalid-argument', tr('agent.args.affectDepth'));
+  }
   const chain: EffectInstance[] = (input.chain ?? []).map((c) => ({
     instanceId: c.instanceId ?? newId(),
     defId: c.defId,
@@ -170,5 +175,7 @@ export function makeEffectClip(input: EffectClipInput): EffectClip {
     fadeSec: Math.max(0, input.fadeSec ?? 0),
     curves: { ...(input.curves ?? {}) },
     chain,
+    // 0 等同于缺省（下方全部），不写进工程里
+    ...(input.affectDepth ? { affectDepth: input.affectDepth } : {}),
   };
 }

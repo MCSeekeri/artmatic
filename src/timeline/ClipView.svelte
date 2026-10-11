@@ -29,6 +29,19 @@
   /** 拖拽中且当前落点会被拒收（reject 策略）：红框预告，避免「松手弹回去」的困惑。 */
   const illegal = $derived(selected && appState.dragIllegal);
 
+  /**
+   * 影响深度（0 = 下方全部）。
+   *
+   * **必须走 version 订阅过的派生，不能在模板里直接读 `clip.affectDepth`**：
+   * clip 是原地改的对象，父级 `{#each}` 传下来的还是同一个引用 ⇒ 直接读不会重渲
+   * （症状：检查器里把深度从 0 改成 1，片段上的角标要等换一次选中才出现）。
+   * 这与 `left` / `width` 是同一条纪律（见 Timeline.svelte 的响应式说明）。
+   */
+  const affectDepth = $derived.by(() => {
+    void appState.version;
+    return clip.kind === 'effect' ? (clip.affectDepth ?? 0) : 0;
+  });
+
   function down(e: PointerEvent, mode: 'move' | 'resize-l' | 'resize-r'): void {
     // 只有主键起手势：右键归自绘菜单（Timeline 的 contextmenu），中键归浏览器
     if (e.button !== 0) return;
@@ -106,6 +119,10 @@
   ondblclick={dblclick}
 >
   <span class="label">{clip.label || clip.kind}</span>
+  {#if affectDepth > 0}
+    <!-- 影响深度角标：不写出来就没人知道这条特效被限过范围（画面差别还很隐蔽） -->
+    <span class="fx-depth" data-testid="clip-effect-depth" title={tr('insp.affectDepth')}>↓{affectDepth}</span>
+  {/if}
   {#if clip.fadeSec > 0}
     <!-- 淡入淡出标记：纯几何形状，不引图标（这里只有 10px 见方） -->
     <i class="fade" title={tr('tl.fade')}></i>
@@ -178,6 +195,16 @@
     border-left: 7px solid transparent;
     border-bottom: 7px solid currentColor;
     opacity: 0.5;
+  }
+  /* 影响深度角标：贴右下角（左上角是片段名，右上角是淡变标记），不抢片段名 */
+  .fx-depth {
+    position: absolute;
+    right: 4px;
+    bottom: 1px;
+    font-size: var(--fs-xs);
+    line-height: 10px;
+    opacity: 0.75;
+    pointer-events: none;
   }
   .edge {
     position: absolute;

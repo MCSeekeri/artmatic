@@ -12,6 +12,13 @@
  * 「z 序在它之下所有 source 的合成结果」——adjustment layer 语义是
  * 调度的天然产物。
  *
+ * ## 影响深度的特效：作用域先单独合成，再贴回
+ *
+ * 设了影响深度的特效（`EffectOp.scope`，见 `stack.ts` 文件头）不是「作用于 acc
+ * 目前的样子」，而是作用于**只留下那几条轨道时的那幅画面**：`runOps` 递归跑一遍
+ * 作用域、从透明起合成，特效链作用在它上面，最后以 normal 贴回 acc。嵌套的组各用
+ * 一对自己的目标（`groupTargets(depth)`）。没设深度时走的还是老路 —— 逐字节没变。
+ *
  * 反馈池：feedback 类特效（echo）需要跨帧历史，每个特效实例一对 Target，
  * seek 时由 Renderer 调 clearFeedback() 清空（预览 seek 后的暖帧差异是
  * 可接受瞬态；导出是顺序渲染，天然确定）。
@@ -28,7 +35,7 @@
 import { frameOf } from './clock';
 import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
-import { buildStack, type ResolvedSource, type TransitionOp } from './stack';
+import { buildStack, type RenderOp, type ResolvedSource, type TransitionOp } from './stack';
 import type { Kit, Program, Target } from './kit';
 import type { SpectrumTextures } from './spectrum-texture';
 import type { BeatGrid } from '../core/time';
@@ -60,6 +67,15 @@ export interface EffectCtx {
    * （静音），而不是未绑定的 sampler。
    */
   spectrum: SpectrumTextures | null;
+}
+
+/** 一帧求值的上下文（`runOps` 的递归参数包）：整帧不变，要原样穿过嵌套的作用域组。 */
+interface FrameCtx {
+  project: Project;
+  t: number;
+  frame: number;
+  w: number;
+  h: number;
 }
 
 /** 特效执行器：B8 由 effects/registry 装配；之前特效片段是 no-op。 */
@@ -114,6 +130,8 @@ export class Compositor {
   private readonly preFeedback = new Map<string, { a: Target; b: Target; flip: boolean }>();
   /** 逐实例的「上一帧链输入」（见 `delayedInputFor`）。 */
   private readonly delayedInput = new Map<string, Target>();
+  /** 影响深度（作用域组）的中间目标，按下标 = 嵌套深度（见 `groupTargets`）。 */
+  private readonly groups: { a: Target; b: Target }[] = [];
 
   /**
    * 转场执行器。默认实现只把入画层搬过去（不混合）——真正的实现在
@@ -168,50 +186,116 @@ export class Compositor {
     const frame = frameOf(t, project.fps);
     const ops = buildStack(project, t);
 
-    let acc = this.ping!;
-    let buf = this.pong!;
+    const acc = this.ping!;
     acc.bind();
     this.kit.clear();
+    const out = this.runOps(ops, acc, this.pong!, 0, { project, t, frame, w, h });
 
+    // 呈现到屏幕。ops 为空时 acc 是刚清过的透明黑。
+    this.passProg.use();
+    this.passProg.tex('u_texture', out.tex);
+    this.kit.pass(this.passProg, null);
+  }
+
+  /**
+   * 跑一段 op 把它合成进 `acc`，返回**结果所在的**那个 Target。
+   *
+   * 递归的唯一原因是有影响深度的特效（`op.scope`，见 `stack.ts` 文件头）：作用域要
+   * 从透明起独立合成，特效链作用在它上面，再以 normal 贴回下层。嵌套的组各用一对
+   * 自己的目标（`groupTargets(depth)`），外层的中间结果因此不会被内层覆盖。
+   * 没有 `scope` 时走的就是原来那条直路 —— 逐字节没变。
+   */
+  private runOps(
+    ops: readonly RenderOp[],
+    acc0: Target,
+    buf0: Target,
+    depth: number,
+    c: FrameCtx,
+  ): Target {
+    let acc = acc0;
+    let buf = buf0;
     for (const op of ops) {
       if (op.type === 'source') {
-        this.drawSource(op.source, acc, buf, w, h, t, frame);
+        this.drawSource(op.source, acc, buf, c.w, c.h, c.t, c.frame);
         // 每个 op 都把结果写进了 buf：交换，让 buf 成为新的 acc。
         const tmp = acc;
         acc = buf;
         buf = tmp;
-      } else if (op.type === 'transition') {
-        this.drawTransition(op, acc, buf, w, h, t, frame);
+        continue;
+      }
+      if (op.type === 'transition') {
+        this.drawTransition(op, acc, buf, c.w, c.h, c.t, c.frame);
         const tmp = acc;
         acc = buf;
         buf = tmp;
-      } else {
-        const ctx: EffectCtx = {
-          t,
-          frame,
-          w,
-          h,
-          fps: project.fps,
-          compositor: this,
-          clip: op.clip,
-          grid: project.beatGrid,
-          spectrum: this.spectrum,
-        };
-        for (const inst of op.clip.chain) {
-          if (!inst.enabled) continue;
-          this.runEffect(inst, acc, buf, ctx);
-          // 链内每个特效都要交换——下一个特效读的是上一个的输出。
-          const tmp = acc;
-          acc = buf;
-          buf = tmp;
-        }
+        continue;
       }
-    }
 
-    // 呈现到屏幕。ops 为空时 acc 是刚清过的透明黑。
-    this.passProg.use();
-    this.passProg.tex('u_texture', acc.tex);
-    this.kit.pass(this.passProg, null);
+      const ctx: EffectCtx = {
+        t: c.t,
+        frame: c.frame,
+        w: c.w,
+        h: c.h,
+        fps: c.project.fps,
+        compositor: this,
+        clip: op.clip,
+        grid: c.project.beatGrid,
+        spectrum: this.spectrum,
+      };
+      let src = acc;
+      let dst = buf;
+      if (op.scope) {
+        // 作用域：从透明起独立合成一整段，再把特效链作用在它上面。
+        const g = this.groupTargets(depth, c.w, c.h);
+        g.a.bind();
+        this.kit.clear();
+        src = this.runOps(op.scope, g.a, g.b, depth + 1, c);
+        dst = src === g.a ? g.b : g.a;
+      }
+      for (const inst of op.clip.chain) {
+        if (!inst.enabled) continue;
+        this.runEffect(inst, src, dst, ctx);
+        // 链内每个特效都要交换——下一个特效读的是上一个的输出。
+        const tmp = src;
+        src = dst;
+        dst = tmp;
+      }
+
+      if (!op.scope) {
+        // 无作用域：链的输入输出本来就是 acc/buf，交换回来接着走。
+        acc = src;
+        buf = dst;
+        continue;
+      }
+      // 有作用域：特效的输出是「只留下这些轨道」的一整层，以 normal 贴回下层。
+      this.blendProg.use();
+      this.blendProg
+        .tex('u_texture', acc.tex)
+        .tex('u_texture2', src.tex)
+        .u1i('u_blendMode', BLEND_MODE_INDEX.normal)
+        .u('u_opacity', 1);
+      this.kit.pass(this.blendProg, buf);
+      const tmp = acc;
+      acc = buf;
+      buf = tmp;
+    }
+    return acc;
+  }
+
+  /**
+   * 作用域组的中间目标，**按嵌套深度取**：外层的组还在攒内容时内层的组也要一对，
+   * 共用一对会让内层把外层的中间结果覆盖掉（表现是「嵌套一次，画面就少一层」）。
+   * 深度上界 = 实际发生的嵌套层数，所以这里按需生长、从不清扫。
+   */
+  private groupTargets(depth: number, w: number, h: number): { a: Target; b: Target } {
+    let g = this.groups[depth];
+    if (!g) {
+      g = { a: this.kit.target(w, h), b: this.kit.target(w, h) };
+      this.groups[depth] = g;
+    }
+    g.a.resize(w, h);
+    g.b.resize(w, h);
+    return g;
   }
 
   /**

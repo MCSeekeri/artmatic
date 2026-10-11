@@ -20,7 +20,7 @@ export const app = {
   /* ------------------------------------------------ 侧栏入口 */
   'app.shortcuts': '快捷键',
   'app.project': '工程',
-  'app.projectPanelTip': '新建 / 打开 / 最近工程',
+  'app.projectPanelTip': '管理工程…',
   'app.saveProject': '保存工程',
   'app.saveToCurrentDir': '保存到当前工程目录（Ctrl+S）',
   'app.savePickDir': '选择目录并保存（Ctrl+S）',

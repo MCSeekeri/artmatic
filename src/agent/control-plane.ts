@@ -701,7 +701,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         if (!isRecord(patch) || Object.keys(patch).length === 0) {
           throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'patch' }));
         }
-        const allowed = ['label', 'fadeSec', 'blend', 'opacity', 'transform', 'fit'];
+        const allowed = ['label', 'fadeSec', 'blend', 'opacity', 'transform', 'fit', 'affectDepth'];
         const bad = Object.keys(patch).filter((k) => !allowed.includes(k));
         if (bad.length > 0) {
           throw new ControlFailure('invalid-argument', tr('agent.args.notWritable', { keys: bad.join(', ') }), {
@@ -725,10 +725,20 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         if (patch.transform !== undefined && !isRecord(patch.transform)) {
           throw new ControlFailure('invalid-argument', tr('agent.args.transform'));
         }
+        if (
+          patch.affectDepth !== undefined &&
+          (!Number.isInteger(Number(patch.affectDepth)) || Number(patch.affectDepth) < 0)
+        ) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.affectDepth'));
+        }
         const before = store.version;
         store.updateClip(clipId, label('set_clip_props'), (c) => {
           if (patch.label !== undefined) c.label = String(patch.label);
           if (patch.fadeSec !== undefined) c.fadeSec = Math.max(0, Number(patch.fadeSec));
+          // 影响深度只对特效片段有意义（它是 EffectClip 的字段）。
+          if (c.kind === 'effect' && patch.affectDepth !== undefined) {
+            c.affectDepth = Number(patch.affectDepth);
+          }
           if (c.kind !== 'source') return;
           if (patch.blend !== undefined) c.blend = patch.blend as BlendMode;
           if (patch.opacity !== undefined) c.opacity = Number(patch.opacity);

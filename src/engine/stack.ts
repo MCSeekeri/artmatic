@@ -11,6 +11,31 @@
  * 曲线求值集中在这里做（每个 op 附求值好的值），GLSL 只收标量 uniform；
  * fadeSec 在这里折算进 opacity——GLSL 不需要知道 fade 的存在。
  *
+ * ## 影响深度：作用域组（2026-10-11）
+ *
+ * `EffectClip.affectDepth = N > 0` 时，那个 op 带上 `scope`（一段 op 列表）：
+ *
+ *   - 作用域 = z 序上一段**连续**的 op 段：从「下方第 N 条**启用**视觉轨的最深一条」
+ *     起，到它自己为止。同轨更早的片段也在里面 —— 它们在画面上本来就在它之下。
+ *   - 这些 op 会被**从顶层移走**折进 `scope`，所以顶层序列里不会重复出现它们。
+ *   - 渲染色器时作用域从**透明**起独立合成，特效链作用在它上面，再以 normal 贴回
+ *     下层（见 `compositor.ts::runOps`）。于是「作用域 = 只留下这几条轨道时的那幅
+ *     画面」，它看不到作用域之外的轨道 —— 这正是这个功能要的语义。
+ *   - `N = 0` / 缺省**不分组**（`scope === undefined`）：与 v4 逐字节相同。
+ *
+ * 两条边界规则，都是为「不出现静默失效」而设：
+ *
+ *   1. **吸收**：作用域内的其它特效片段（更低、自己也带影响深度）需要的轨道会并入
+ *      外层作用域 —— 它能把更深的内容带进来，于是外层看到的是「这些轨道组成的那幅
+ *      画面」，而内层特效是那幅画面的一部分。反过来做（截断内层的作用域）会让内层
+ *      特效变成一个静默的空操作，那是更坏的表现。
+ *   2. **下方没有启用的轨道**（或那些轨此刻没有片段）→ 作用域为空（`scope: []`），
+ *      特效作用在**空画面**上。多数特效因此看不出变化，检查器里有提示。
+ *
+ * 区间算在 **op 下标**上（不按轨号），于是「禁用轨不占深度」「同轨更早的片段在作用域
+ * 内」这两件事都是它的推论。区间族因此天然是**层叠的**（laminar：任意两个区间要么
+ * 不相交、要么一个包含另一个），`groupOps` 才能用一个栈一趟折成树。
+ *
  * ## 转场：一个 op 顶两个 op
  *
  * 窗口命中的时候（见 core/transitions.ts）**不产出两个 source op，只产出一个
@@ -62,10 +87,33 @@ export interface TransitionOp {
   blend: BlendMode;
 }
 
+/** 特效 op。`scope` 有值 = 这个片段设了影响深度（见文件头），那一段要从透明独立合成。 */
+export interface EffectOp {
+  type: 'effect';
+  z: number;
+  clip: EffectClip;
+  /** 影响深度 > 0 时的作用域内容；`undefined` = 不分组（作用于下方全部）。 */
+  scope?: RenderOp[];
+}
+
 export type RenderOp =
   | { type: 'source'; z: number; source: ResolvedSource }
-  | { type: 'effect'; z: number; clip: EffectClip }
+  | EffectOp
   | TransitionOp;
+
+/**
+ * 深度优先遍历 op（作用域组里的 op 也是 op）。
+ *
+ * 需要它的地方是「按 op 找片段」这类**旁路**消费方（`video-source.ts` 的预取）：
+ * 只看顶层会漏掉作用域里的源，而漏掉的表现是「有深度的特效下面那几条轨不预解码」——
+ * 不报错、只是卡顿与缺帧。
+ */
+export function walkOps(ops: readonly RenderOp[], fn: (op: RenderOp) => void): void {
+  for (const op of ops) {
+    fn(op);
+    if (op.type === 'effect' && op.scope) walkOps(op.scope, fn);
+  }
+}
 
 /** 片段参数：有曲线求曲线，无曲线取基值。clipStart/grid 双上下文都由这里喂。 */
 export function paramWithCurve(
@@ -123,16 +171,18 @@ export function buildStack(project: Project, t: number): RenderOp[] {
    * 改这里时必须同步把 demo 工程的 tracks 顺序一起倒过来，否则原本的叠加关系
    * 会被整个翻掉。
    */
-  let visualCount = 0;
+  const visuals = visualTracks(project);
   const visualIndex = new Map<string, number>();
-  for (const track of project.tracks) {
-    if (track.kind === 'visual') visualIndex.set(track.id, visualCount++);
-  }
-  const last = visualCount - 1;
+  visuals.forEach((track, i) => visualIndex.set(track.id, i));
+  const last = visuals.length - 1;
+
+  /** 扁平 op + 它来自哪条视觉轨（影响深度的边界按视觉轨算）。 */
+  const flat: FlatOp[] = [];
 
   project.tracks.forEach((track) => {
     if (!track.enabled || track.kind !== 'visual') return;
-    const z = last - visualIndex.get(track.id)!;
+    const vis = visualIndex.get(track.id)!;
+    const z = last - vis;
     // 带下标的 for：转场要跳过一个片段，forEach 做不到。
     const clips: VisualTrack['clips'] = track.clips;
     for (let i = 0; i < clips.length; i += 1) {
@@ -146,15 +196,18 @@ export function buildStack(project: Project, t: number): RenderOp[] {
         const win = transitionAt(track, i, t);
         const tr = clip.transitionOut;
         if (win && tr) {
-          ops.push({
-            type: 'transition',
-            z,
-            from: resolveSource(win.from, t, grid),
-            to: resolveSource(win.to, t, grid),
-            defId: tr.defId,
-            values: tr.values,
-            progress: win.progress,
-            blend: win.to.blend,
+          flat.push({
+            vis,
+            op: {
+              type: 'transition',
+              z,
+              from: resolveSource(win.from, t, grid),
+              to: resolveSource(win.to, t, grid),
+              defId: tr.defId,
+              values: tr.values,
+              progress: win.progress,
+              blend: win.to.blend,
+            },
           });
           // 入画片段这一帧由转场全权负责；不跳就会把它再单独画一遍。
           i += 1;
@@ -165,13 +218,145 @@ export function buildStack(project: Project, t: number): RenderOp[] {
       if (t < clip.start || t >= clip.end) continue;
 
       if (clip.kind === 'effect') {
-        if (clip.chain.some((i2) => i2.enabled)) ops.push({ type: 'effect', z, clip });
+        if (clip.chain.some((i2) => i2.enabled)) flat.push({ vis, op: { type: 'effect', z, clip } });
         continue;
       }
-      ops.push({ type: 'source', z, source: resolveSource(clip, t, grid) });
+      flat.push({ vis, op: { type: 'source', z, source: resolveSource(clip, t, grid) } });
     }
   });
-  // z 升序输出，compositor 顺序合成 → z 大者盖在上，与「列表顶部 = 前景」一致。
-  // 同轨不重叠，轨道内相对顺序无所谓，保持稳定即可。
-  return ops.sort((a, b) => a.z - b.z);
+
+  // z 升序，compositor 顺序合成 → z 大者盖在上，与「列表顶部 = 前景」一致。
+  // 同轨不重叠，轨道内相对顺序无所谓，保持稳定即可（sort 稳定：同 z 保留推入顺序）。
+  flat.sort((a, b) => a.op.z - b.op.z);
+
+  // 作用域只在有影响深度的特效上存在；其余情况原样返回（逐字节等于 v4 的行为）。
+  return groupOps(flat, scopeStarts(flat, visuals, last));
+}
+
+/* ------------------------------------------------- 影响深度：作用域分组 */
+
+/** 扁平 op + 它来自哪条视觉轨下标（区间按 op 下标算，轨号只用来定边界）。 */
+interface FlatOp {
+  op: RenderOp;
+  vis: number;
+}
+
+/** 视觉轨（按列表序，**含禁用**的）—— z 编号与影响深度的轨号口径都由它定义。 */
+export function visualTracks(project: Project): VisualTrack[] {
+  return project.tracks.filter((t): t is VisualTrack => t.kind === 'visual');
+}
+
+/**
+ * 影响深度覆盖的视觉轨下标：`vis` 下方最近的 N 条**启用**轨（不足 N 条 → 就这些）。
+ *
+ * 只数启用轨：禁用轨不参与合成，谈不上被影响，也不该占掉一格深度 —— 否则关掉一条轨
+ * 会让上方特效突然作用不到任何东西（看起来就是「特效没了」）。
+ *
+ * 展示侧（检查器的「影响：…」提示）与渲染侧（`scopeStarts` 定区间起点）**共用这一份**
+ * —— 各写一遍的话，「深度 2 影响了哪两条轨」迟早会对不上，而且不会报错。
+ */
+export function affectedVisualIndices(
+  visuals: readonly VisualTrack[],
+  vis: number,
+  depth: number,
+): number[] {
+  const out: number[] = [];
+  // vis < 0 = 轨道不在这个工程里（调用方拿了个陈旧的 id）。**必须挡住**：不挡的话
+  // 循环会从 0 起数，于是检查器给出一条「影响：V1、V2」—— 一条彻头彻尾的假提示。
+  if (depth <= 0 || vis < 0) return out;
+  for (let i = vis + 1; i < visuals.length && out.length < depth; i += 1) {
+    if (visuals[i]!.enabled) out.push(i);
+  }
+  return out;
+}
+
+/**
+ * 第一个 `z >= zMin` 的 op 下标（flat 已按 z 升序）。
+ *
+ * 特效自己那个 op 的 z 必定 ≥ zMin（zMin 来自它下方的轨道），所以扫描必定在它之前停住。
+ */
+function firstIndexAtOrBelowZ(flat: readonly FlatOp[], zMin: number): number {
+  let i = 0;
+  while (i < flat.length && flat[i]!.op.z < zMin) i += 1;
+  return i;
+}
+
+/**
+ * 每个设了影响深度的特效 op → 作用域起点（终点是它自己的下标）。见文件头的两条边界规则。
+ *
+ * **自下而上**算（op 下标升序）：内层特效先定下来，外层再把自己的起点往低处拉到包含它
+ * （吸收）。拉低之后可能与更多区间相交，所以那一步迭代到不动点。
+ */
+function scopeStarts(
+  flat: readonly FlatOp[],
+  visuals: readonly VisualTrack[],
+  last: number,
+): Map<number, number> {
+  const starts = new Map<number, number>();
+  for (let k = 0; k < flat.length; k += 1) {
+    const { op, vis } = flat[k]!;
+    if (op.type !== 'effect') continue;
+    const depth = op.clip.affectDepth ?? 0;
+    if (depth <= 0) continue;
+
+    const affected = affectedVisualIndices(visuals, vis, depth);
+    // 下方没有启用的轨道 → 空作用域（起点 = 终点 = 自己）
+    const zMin = affected.length === 0 ? null : last - affected[affected.length - 1]!;
+    let start = zMin === null ? k : firstIndexAtOrBelowZ(flat, zMin);
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const [end, s] of starts) {
+        // 已算好的区间都在更低的 z 上（end < k）。相交 ⇒ 起点拉到它的起点。
+        if (end > start && s < start) {
+          start = s;
+          changed = true;
+        }
+      }
+    }
+    starts.set(k, start);
+  }
+  return starts;
+}
+
+/**
+ * 把作用域区间折成嵌套的 op 列表。
+ *
+ * 区间族是**层叠的**（见文件头），所以一个栈就够：`end` 是那个特效自己的 op 下标，
+ * 到它时收帧、把攒下的内容挂到它身上。空作用域（start === end）开完立刻收。
+ */
+function groupOps(flat: readonly FlatOp[], starts: Map<number, number>): RenderOp[] {
+  const byStart = new Map<number, number[]>();
+  for (const [end, start] of starts) {
+    const list = byStart.get(start);
+    if (list) list.push(end);
+    else byStart.set(start, [end]);
+  }
+  // 同一个起点上先开外层（end 大）——后进先出，于是内层落在栈顶。
+  for (const list of byStart.values()) list.sort((a, b) => b - a);
+
+  const root: RenderOp[] = [];
+  const stack: { end: number; children: RenderOp[] }[] = [];
+  const append = (op: RenderOp) => {
+    const top = stack[stack.length - 1];
+    (top ? top.children : root).push(op);
+  };
+
+  for (let i = 0; i < flat.length; i += 1) {
+    // 1) 收帧：这个 op 就是那个特效自己，作用域内容已经攒好了
+    const closed = stack[stack.length - 1]?.end === i ? stack.pop()! : null;
+    // 2) 开帧：作用域从这个 op 起（空作用域的 start === end === i，开完立刻收）
+    for (const end of byStart.get(i) ?? []) stack.push({ end, children: [] });
+    const empty = !closed && stack[stack.length - 1]?.end === i ? stack.pop()! : null;
+
+    const frame = closed ?? empty;
+    const op = flat[i]!.op;
+    if (!frame) {
+      append(op);
+      continue;
+    }
+    // `starts` 只在 effect op 上建区间，所以这里必然对上；对不上就是这段逻辑坏了。
+    if (op.type !== 'effect') throw new Error('stack: 作用域区间没有对上特效 op');
+    append({ ...op, scope: frame.children });
+  }
+  return root;
 }

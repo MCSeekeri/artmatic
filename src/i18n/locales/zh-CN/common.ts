@@ -18,6 +18,9 @@ export const common = {
   'common.up': '上移',
   'common.down': '下移',
   'common.reset': '重置',
+  /* 并列名词之间的分隔符（如检查器里「影响：V2、V3」）。**单独成键**是为了让
+     换语言时能一起换掉 —— 在代码里拼 `join('、')` 就等于把中文标点写死了。 */
+  'common.listSep': '、',
 
   /* 相对时间（Rail 的「最近工程」列表）。 */
   'common.justNow': '刚刚',

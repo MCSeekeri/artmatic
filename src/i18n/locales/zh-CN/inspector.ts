@@ -51,6 +51,14 @@ export const inspector = {
   'insp.effectEnableTip': '启用 / 禁用这个特效实例',
   'insp.emptyChain': '空链：从上面添加特效。特效只作用于它下方的轨道。',
 
+  /* 影响深度（`EffectClip.affectDepth`）。语义见 engine/stack.ts 的文件头。 */
+  'insp.affectDepth': '影响深度',
+  'insp.affectDepthTip':
+    '只作用于下方最近的 N 条启用轨道；0 = 下方全部。作用域内的画面先独立合成、再由特效处理，所以它看不到作用域之外的轨道。',
+  'insp.affectDepthAll': '影响下方所有轨道。',
+  'insp.affectDepthTracks': '影响：{names}',
+  'insp.affectDepthEmpty': '下方没有启用的视觉轨，这个特效作用在空画面上。',
+
   /* ------------------------------------------------ 特效选择器 */
   'insp.pickerSearch': '搜索特效……',
   'insp.pickerViewGrid': '缩略图（大）',
@@ -95,6 +103,7 @@ export const inspector = {
   'insp.changeFit': '改适配',
   'insp.changeColor': '改颜色',
   'insp.changeSrcIn': '改 srcIn',
+  'insp.changeAffectDepth': '改影响深度',
 
   /* ------------------------------------------------ 转场（出画） */
   /* 转场的**参数名不翻译**：`pixelSize` / `blocksize` 那些逐字来自 gl-transitions

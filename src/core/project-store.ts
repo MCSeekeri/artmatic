@@ -556,6 +556,21 @@ export class ProjectStore {
     });
   }
 
+  /**
+   * 影响深度（特效片段）：只作用于其下方最近的 N 条启用视觉轨；0 = 下方全部。
+   *
+   * 语义与边界规则在 `engine/stack.ts`（渲染侧的唯一真源），这里只负责把它写成一个
+   * **非负整数** —— 小数与负数直接钳掉，别让它们穿透到 `validateProject` 那里变成
+   * 「保存时报错、却不知道是哪个控件写坏的」。
+   */
+  setEffectAffectDepth(clipId: string, depth: number): void {
+    const d = Math.max(0, Math.floor(Number(depth) || 0));
+    this.commit(tr('insp.changeAffectDepth'), () => {
+      const found = this.findClip(clipId);
+      if (found && found.clip.kind === 'effect') found.clip.affectDepth = d;
+    });
+  }
+
   setOverlapBehavior(b: OverlapBehavior): void {
     this.commit(tr('tl.setOverlapBehavior'), (p) => {
       p.overlapBehavior = b;

@@ -15,7 +15,7 @@
 export const pool = {
   /* ------------------------------------------------ 抽屉本身（Rail 与头部） */
   'pool.title': '媒体池',
-  'pool.openTip': '这个工程里已导入的视频 / 图片 / 音频',
+  'pool.openTip': '管理媒体池…',
   /* 头部那两个按钮：收起抽屉、拖宽热区（readonly 提示，给读屏用）。 */
   'pool.collapse': '收起媒体池',
   'pool.resizeWidth': '调整媒体池宽度',

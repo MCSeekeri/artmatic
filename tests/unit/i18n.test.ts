@@ -172,6 +172,9 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   // runtime.schedule() 里是 `this.backends.pick()`，**没有 catch** ——
   // 这条抛出来就是整个排版光栅化坏掉，属于「应用被构建坏了」。
   'typography/rasterizer.ts': ['没有可用的排版光栅化后端'],
+  // buildStack 的作用域分组（影响深度）：区间只建在特效 op 上，所以这条**不可达**。
+  // 它是「分组逻辑被改坏了」的诊断，没有任何出口通向用户界面。
+  'engine/stack.ts': ['stack: 作用域区间没有对上特效 op'],
   // 试炼场的「全部编译」用。`listEffects()` 与 `getEffect()` 读的是同一个
   // Map，所以这条分支实际不可达 —— 它是注册表被改坏时的诊断，
   // 只会出现在 lab 右栏的编译日志里，没有任何出口通向用户界面。

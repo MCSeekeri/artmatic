@@ -102,7 +102,14 @@ test('M0：控制平面挂上了，且读接口是紧凑、确定、无副作用
   await boot(page);
 
   const result = await page.evaluate(async () => {
-    const A = (window as never as { __artmatic: { control: ControlApi; store: { version: number } } }).__artmatic;
+    const A = (
+      window as never as {
+        __artmatic: {
+          control: ControlApi;
+          store: { version: number; project: { schemaVersion: number } };
+        };
+      }
+    ).__artmatic;
     const C = A.control;
 
     const describe = (await C.describe()) as Ok<{ apiVersion: number; schemaVersion: number }>;
@@ -127,6 +134,9 @@ test('M0：控制平面挂上了，且读接口是紧凑、确定、无副作用
     return {
       apiVersion: describe.data.apiVersion,
       schemaVersion: describe.data.schemaVersion,
+      // 不写死数字：这里是「握手报的版本 = 已迁移到当前版本的工程」这条不变量
+      // （写死的话每次抬 SCHEMA_VERSION 都要来改它，而不是它挡住了什么）
+      projectSchemaVersion: A.store.project.schemaVersion,
       idKeys,
       zs,
       visualCount: full.data.tracks.filter((tk) => tk.kind === 'visual').length,
@@ -139,7 +149,7 @@ test('M0：控制平面挂上了，且读接口是紧凑、确定、无副作用
   });
 
   expect(result.apiVersion).toBe(1);
-  expect(result.schemaVersion).toBe(4);
+  expect(result.schemaVersion).toBe(result.projectSchemaVersion);
   expect(result.idKeys).toEqual(['end', 'id', 'kind', 'label', 'start']);
   expect(result.zs.filter((z) => z !== null)).toEqual([...result.zs.filter((z) => z !== null)].sort((a, b) => b! - a!));
   expect(result.zs.filter((z) => z === null)).toHaveLength(result.zs.length - result.visualCount);

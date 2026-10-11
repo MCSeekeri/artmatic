@@ -40,7 +40,7 @@ import {
 } from 'mediabunny';
 import type { Kit } from './kit';
 import type { SourceTexture } from './compositor';
-import { buildStack } from './stack';
+import { buildStack, walkOps } from './stack';
 import { videoMediaFor, type VideoMedia } from './media-assets';
 import type { Project, SourceClip } from '../core/schema';
 
@@ -567,10 +567,12 @@ export function createVideoSourceManager(
 
     async prepareProject(project, t, renderW) {
       const clips: SourceClip[] = [];
-      for (const op of buildStack(project, t)) {
+      // 走 walkOps 而不是直接遍历：带影响深度的特效把它的作用域**折进**了 op 里
+      // （见 engine/stack.ts），只看顶层会漏掉那些轨道上的视频源。
+      walkOps(buildStack(project, t), (op) => {
         if (op.type === 'source') clips.push(op.source.clip);
         else if (op.type === 'transition') clips.push(op.from.clip, op.to.clip);
-      }
+      });
       await Promise.all(clips.map((c) => api.prepare(c, t, renderW)));
     },
 

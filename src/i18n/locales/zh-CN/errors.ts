@@ -42,6 +42,7 @@ export const errors = {
   'err.schema.audioTrackHasNonAudio': '音频轨里有非音频片段',
   'err.schema.visualTrackHasNonVisual': '视觉轨里有非视觉片段',
   'err.schema.effectClipMissingChain': '特效片段 {id} 缺少 chain',
+  'err.schema.effectBadAffectDepth': '特效片段 {id} 的影响深度必须是非负整数',
   'err.schema.typographyBadDoc': '排版片段 {id} 的 doc 非法',
   'err.schema.typographyBadSize': '排版片段 {id} 的文档尺寸非法',
   'err.schema.typographyBadTextRuns': '排版片段 {id} 里有文本元素缺少内容段（runs）',

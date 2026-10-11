@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { buildStack } from '../../src/engine/stack';
+import { buildStack, walkOps, type RenderOp } from '../../src/engine/stack';
 import { createDemoProject } from '../../src/core/demo-project';
-import { defaultProject, newId, type Project, type SourceClip, type VisualTrack } from '../../src/core/schema';
+import {
+  defaultProject,
+  newId,
+  type EffectClip,
+  type Project,
+  type SourceClip,
+  type Track,
+  type VisualTrack,
+} from '../../src/core/schema';
 
 /** 造一个「一轨一个纯色片段」的工程，用于只观察 z 映射。 */
 function projectWithTracks(names: string[]): Project {
@@ -266,5 +274,160 @@ describe('buildStack：转场 op', () => {
     to.end = 4.5;
     expect(buildStack(p, 1.6).map((o) => o.type)).toEqual(['source']);
     expect(buildStack(p, 2.2).map((o) => o.type)).toEqual([]); // 缝隙里什么都没有
+  });
+});
+
+/* ----------------------------------------------------------- 影响深度 */
+
+function srcClip(label: string): SourceClip {
+  return {
+    kind: 'source',
+    id: label,
+    start: 0,
+    end: 10,
+    label,
+    fadeSec: 0,
+    curves: {},
+    source: { type: 'solid', color: '#000000' },
+    blend: 'normal',
+    opacity: 1,
+    transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+    fit: 'stretch',
+  };
+}
+
+function fxClip(label: string, affectDepth?: number): EffectClip {
+  return {
+    kind: 'effect',
+    id: label,
+    start: 0,
+    end: 10,
+    label,
+    fadeSec: 0,
+    curves: {},
+    chain: [{ instanceId: `${label}-i`, defId: 'bleach', enabled: true, values: {} }],
+    ...(affectDepth === undefined ? {} : { affectDepth }),
+  };
+}
+
+/** 自顶向下造视觉轨（顺序就是 z 顺序：第一条是最前景）。 */
+function depthProject(spec: { name: string; clips: (SourceClip | EffectClip)[]; enabled?: boolean }[]): Project {
+  const p = defaultProject('深度');
+  p.duration = 10;
+  p.tracks = spec.map((s) => ({
+    kind: 'visual',
+    id: s.name,
+    name: s.name,
+    enabled: s.enabled ?? true,
+    clips: s.clips,
+  })) as Track[];
+  return p;
+}
+
+/** op 的身份：片段 label（特效加 `fx:` 前缀，便于和源区分）。 */
+function opLabel(op: RenderOp): string {
+  if (op.type === 'effect') return `fx:${op.clip.label}`;
+  if (op.type === 'transition') return `tr:${op.from.clip.label}`;
+  return op.source.clip.label;
+}
+
+/** 某个 op 的作用域内容（非特效 / 没设深度 → 抛错，别让断言悄悄拿到空数组）。 */
+function scopeOf(op: RenderOp | undefined): string[] {
+  if (!op || op.type !== 'effect' || !op.scope) throw new Error('这个 op 上没有作用域');
+  return op.scope.map(opLabel);
+}
+
+describe('buildStack：影响深度（作用域组）', () => {
+  const three = (depth?: number) =>
+    depthProject([
+      { name: 'V1', clips: [fxClip('fx', depth)] },
+      { name: 'V2', clips: [srcClip('b')] },
+      { name: 'V3', clips: [srcClip('c')] },
+    ]);
+
+  it('0 / 缺省都不分组：顶层就是全部 op，逐个 op 的 z 仍然升序', () => {
+    for (const p of [three(0), three(undefined)]) {
+      const ops = buildStack(p, 1);
+      expect(ops.map(opLabel)).toEqual(['c', 'b', 'fx:fx']);
+      expect(ops.map((o) => o.z)).toEqual([0, 1, 2]);
+      expect(ops.some((o) => o.type === 'effect' && o.scope !== undefined)).toBe(false);
+    }
+  });
+
+  it('深度 1：只有最近的下方轨道进作用域，更深的留在底层', () => {
+    const ops = buildStack(three(1), 1);
+    // 顶层按 z 升序：底层的 c 仍在原位，被折进作用域的 b 不再单独出现
+    expect(ops.map(opLabel)).toEqual(['c', 'fx:fx']);
+    expect(scopeOf(ops[1])).toEqual(['b']);
+    // 每个 op 恰好出现一次（作用域是「移走」而不是「复制」）
+    const seen: string[] = [];
+    walkOps(ops, (op) => seen.push(opLabel(op)));
+    expect(seen).toEqual(['c', 'fx:fx', 'b']);
+  });
+
+  it('深度 2 / 超过下方轨道数：下方全部进作用域，底层不再单独出现', () => {
+    for (const d of [2, 9]) {
+      const ops = buildStack(three(d), 1);
+      expect(ops.map(opLabel)).toEqual(['fx:fx']);
+      expect(scopeOf(ops[0])).toEqual(['c', 'b']);
+    }
+  });
+
+  it('只数启用的轨道：关掉中间那条，深度 1 落到再下面一条', () => {
+    const p = depthProject([
+      { name: 'V1', clips: [fxClip('fx', 1)] },
+      { name: 'V2', clips: [srcClip('b')], enabled: false },
+      { name: 'V3', clips: [srcClip('c')] },
+    ]);
+    const ops = buildStack(p, 1);
+    expect(ops.map(opLabel)).toEqual(['fx:fx']);
+    expect(scopeOf(ops[0])).toEqual(['c']);
+  });
+
+  it('同轨更早的片段也在作用域里（画面上它本来就在特效之下）', () => {
+    const p = depthProject([
+      { name: 'V1', clips: [srcClip('s'), fxClip('fx', 1)] },
+      { name: 'V2', clips: [srcClip('b')] },
+    ]);
+    const ops = buildStack(p, 1);
+    expect(ops.map(opLabel)).toEqual(['fx:fx']);
+    expect(scopeOf(ops[0])).toEqual(['b', 's']);
+  });
+
+  it('下方没有启用的轨道 → 空作用域（作用在空画面上）', () => {
+    const p = depthProject([
+      { name: 'V1', clips: [fxClip('fx', 1)] },
+      { name: 'V2', clips: [srcClip('b')], enabled: false },
+    ]);
+    const ops = buildStack(p, 1);
+    expect(ops.map(opLabel)).toEqual(['fx:fx']);
+    expect(scopeOf(ops[0])).toEqual([]);
+  });
+
+  it('吸收：内层特效需要的更深轨道会并进外层作用域（外层不会变成静默空操作）', () => {
+    const p = depthProject([
+      // 外层只声明 V2、V3；内层（在 V2 上）声明 V3、V4、V5 ⇒ 外层跟着扩到 V5
+      { name: 'V1', clips: [fxClip('fx1', 2)] },
+      { name: 'V2', clips: [fxClip('fx2', 3)] },
+      { name: 'V3', clips: [srcClip('c')] },
+      { name: 'V4', clips: [srcClip('d')] },
+      { name: 'V5', clips: [srcClip('e')] },
+    ]);
+    const ops = buildStack(p, 1);
+    expect(ops.map(opLabel)).toEqual(['fx:fx1']);
+    const fx1 = ops[0]!;
+    expect(scopeOf(fx1)).toEqual(['fx:fx2']);
+    if (fx1.type !== 'effect') throw new Error('应为 effect');
+    expect(scopeOf(fx1.scope![0])).toEqual(['e', 'd', 'c']);
+  });
+
+  it('作用域里的 op 保留自己的 z（组内也按 z 升序合成）', () => {
+    const ops = buildStack(three(2), 1);
+    const inner = ops[0]!;
+    if (inner.type !== 'effect') throw new Error('应为 effect');
+    expect(inner.scope!.map((o) => [opLabel(o), o.z])).toEqual([
+      ['c', 0],
+      ['b', 1],
+    ]);
   });
 });

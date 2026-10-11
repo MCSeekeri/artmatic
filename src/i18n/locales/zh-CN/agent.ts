@@ -68,6 +68,7 @@ export const agent = {
   'agent.args.fit': '未知 fit {value}',
   'agent.args.opacity': 'opacity 必须是数字',
   'agent.args.fade': 'fadeSec 不能为负',
+  'agent.args.affectDepth': 'affectDepth 必须是非负整数',
   'agent.args.transform': 'transform 必须是对象',
   'agent.args.edge': "edge 只能是 'start' / 'end'",
   'agent.args.resolution': 'resolution 必须是 { w, h }',

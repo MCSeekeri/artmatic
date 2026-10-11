@@ -148,6 +148,11 @@ export interface ClipView extends ClipIdView {
   fit?: 'contain' | 'cover' | 'stretch';
   transitionOut?: { defId: string; duration: number; values: Record<string, number> };
   chain?: EffectInstanceView[];
+  /**
+   * 影响深度（只有特效片段有）：只作用于下方最近的 N 条**启用**视觉轨；
+   * 0 / 缺省 = 下方全部。语义与边界规则见 `engine/stack.ts`。
+   */
+  affectDepth?: number;
   /** 只给**有键**的曲线，不铺开全部参数名。 */
   curves?: Record<string, Curve>;
   /** audio 片段独有的两个字段。 */

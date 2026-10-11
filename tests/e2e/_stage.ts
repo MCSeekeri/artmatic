@@ -38,6 +38,8 @@ interface StageApi {
       values: Record<string, number>,
     ) => void;
     clearTransitionOut: (clipId: string) => void;
+    setEffectAffectDepth: (clipId: string, depth: number) => void;
+    findClip: (clipId: string) => { clip: { affectDepth?: number } } | null;
     commit: (
       label: string,
       fn: (p: { tracks: { id: string; enabled: boolean; clips: unknown[] }[] }) => void,
@@ -382,6 +384,141 @@ export async function waitForSourceReady(
     await page.waitForTimeout(200);
   }
   return last;
+}
+
+/* ------------------------------------------------- 影响深度（作用域组） */
+
+export interface DepthTrackSpec {
+  id: string;
+  source: StageSource;
+  opacity?: number;
+  /** 只给想改的那几项（默认铺满整帧）。 */
+  transform?: Partial<{ x: number; y: number; sx: number; sy: number; rot: number }>;
+}
+
+export interface DepthStageSpec {
+  /** 顶部的特效片段：defId、参数、影响深度。 */
+  effect: { id: string; defId: string; values: Record<string, number | string>; depth: number };
+  /** 自顶向下第 2 条轨 —— 影响深度 1 时它在作用域里。 */
+  scope: DepthTrackSpec;
+  /** 再下面那条轨 —— 影响深度 1 时它**不该**被碰到。 */
+  below: DepthTrackSpec;
+}
+
+export interface DepthStage {
+  fxTrack: string;
+  scopeTrack: string;
+  belowTrack: string;
+  fxClipId: string;
+}
+
+/**
+ * 搭一条「特效（带影响深度）/ 作用域内源 / 更深一层源」的三轨舞台。
+ *
+ * 与 `buildStage` 同一套纪律（关掉 demo 全部轨道、只启用自己这三条），另外**显式
+ * 排轨**：`addTrack` 是 push（新轨 z 最低），三轨的顺序必须自己钉死，否则特效会
+ * 落到源下面 —— 那种错的画面「看起来也对」，只是什么都测不到（见文件头）。
+ */
+export async function buildDepthStage(page: Page, spec: DepthStageSpec): Promise<DepthStage> {
+  return page.evaluate(
+    ({ s }) => {
+      const A = (window as never as { __artmatic: StageApi }).__artmatic;
+      const base = { fadeSec: 0, curves: {}, transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'stretch' };
+      const sourceOf = (src: StageSource) =>
+        src.type === 'algo'
+          ? { type: 'algo' as const, generator: src.generator, params: src.params ?? A.algo.defaultParams(src.generator) }
+          : { type: 'solid' as const, color: src.color };
+
+      A.store.commit('e2e: 清空舞台', (p) => {
+        for (const t of p.tracks) t.enabled = false;
+      });
+
+      const fxTrack = A.store.addTrack('visual', 'FX');
+      const scopeTrack = A.store.addTrack('visual', 'SCOPE');
+      const belowTrack = A.store.addTrack('visual', 'BELOW');
+
+      for (const [track, src] of [
+        [scopeTrack, s.scope],
+        [belowTrack, s.below],
+      ] as const) {
+        A.store.addClip(track, {
+          ...base,
+          transform: { ...base.transform, ...(src.transform ?? {}) },
+          kind: 'source',
+          id: src.id,
+          start: 0,
+          end: 8,
+          label: src.id,
+          source: sourceOf(src.source),
+          blend: 'normal',
+          opacity: src.opacity ?? 1,
+        });
+      }
+
+      A.store.addClip(fxTrack, {
+        ...base,
+        kind: 'effect',
+        id: s.effect.id,
+        start: 0,
+        end: 8,
+        label: s.effect.id,
+        chain: [{ instanceId: `${s.effect.id}-i`, defId: s.effect.defId, enabled: true, values: s.effect.values }],
+        affectDepth: s.effect.depth,
+      });
+
+      // 轨道顺序 = 前景到背景：FX → SCOPE → BELOW
+      A.store.commit('e2e: 排轨', (p) => {
+        const pick = (id: string) => p.tracks.find((t) => t.id === id)!;
+        const rest = p.tracks.filter((t) => t.id !== fxTrack && t.id !== scopeTrack && t.id !== belowTrack);
+        p.tracks = [pick(fxTrack), pick(scopeTrack), pick(belowTrack), ...rest];
+      });
+      A.store.commit('e2e: 启用舞台', (p) => {
+        for (const t of p.tracks) t.enabled = t.id === fxTrack || t.id === scopeTrack || t.id === belowTrack;
+      });
+
+      return { fxTrack, scopeTrack, belowTrack, fxClipId: s.effect.id };
+    },
+    { s: spec },
+  );
+}
+
+/** 改影响深度（走 store 的正规入口，钳制与撤销都在那一处）。 */
+export async function setEffectDepth(page: Page, clipId: string, depth: number): Promise<void> {
+  await page.evaluate(
+    ({ clipId, depth }) => {
+      const A = (window as never as { __artmatic: StageApi }).__artmatic;
+      A.store.setEffectAffectDepth(clipId, depth);
+    },
+    { clipId, depth },
+  );
+}
+
+/**
+ * 取一个像素（**归一化坐标**，`0..1`，左上角为原点）。
+ *
+ * 用归一化坐标而不是像素下标：预览尺寸随窗口变，写死下标会在别的机器上量错位置。
+ * 返回 `[r, g, b, a]`（0–255）。
+ */
+export async function rgbaAt(
+  page: Page,
+  t: number,
+  fx: number,
+  fy: number,
+  clearFeedback = true,
+): Promise<[number, number, number, number]> {
+  return page.evaluate(
+    ({ t, fx, fy, clear }) => {
+      const A = (window as never as { __artmatic: StageApi }).__artmatic;
+      if (clear) A.renderer.onSeek();
+      A.renderFrame(t);
+      const { data, w, h } = A.readPixels();
+      const x = Math.min(w - 1, Math.max(0, Math.floor(fx * w)));
+      const y = Math.min(h - 1, Math.max(0, Math.floor(fy * h)));
+      const i = (y * w + x) * 4;
+      return [data[i]!, data[i + 1]!, data[i + 2]!, data[i + 3]!] as [number, number, number, number];
+    },
+    { t, fx, fy, clear: clearFeedback },
+  );
 }
 
 /* ------------------------------------------------------------------ 转场 */

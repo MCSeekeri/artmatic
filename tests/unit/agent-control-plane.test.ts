@@ -14,7 +14,7 @@ import { createControlPlane, type AgentControlPlane } from '../../src/agent/cont
 import type { ControlContext, ControlResult } from '../../src/agent/types';
 import { ProjectStore } from '../../src/core/project-store';
 import { createBlankProject } from '../../src/core/demo-project';
-import type { Project } from '../../src/core/schema';
+import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
 
 /* --------------------------------------------------------------- 测试台 */
 
@@ -68,7 +68,9 @@ describe('读接口', () => {
     const h = harness();
     const d = await ok(h.cp.describe());
     expect(d.apiVersion).toBe(1);
-    expect(d.schemaVersion).toBe(4);
+    // 不写死数字：这里守的是「握手报的是本构建支持的 schema 版本」，
+    // 写死的话每次抬版本都要来改这条守卫，而不是它挡住了什么。
+    expect(d.schemaVersion).toBe(SCHEMA_VERSION);
     expect(d.fps).toBe(h.store.project.fps);
     expect(d.resolution).toEqual(h.store.project.resolution);
   });

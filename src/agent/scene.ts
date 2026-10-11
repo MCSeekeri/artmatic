@@ -126,6 +126,8 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
         enabled: i.enabled,
         values: { ...i.values },
       })),
+      // 0 = 下方全部 = 缺省，不铺开（agent 读到的键越少越省上下文）
+      ...(clip.affectDepth ? { affectDepth: clip.affectDepth } : {}),
       ...(curves ? { curves: curves as ClipView['curves'] } : {}),
     };
   }

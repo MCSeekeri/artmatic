@@ -18,7 +18,7 @@ import type { TypographyDocument } from '../typography/document';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -161,6 +161,16 @@ export interface EffectInstance {
 export interface EffectClip extends ClipBase {
   kind: 'effect';
   chain: EffectInstance[];
+  /**
+   * **影响深度**：只作用于其下方最近的 N 条**启用**视觉轨（1 起数）；
+   * `0` / 缺省 = 下方全部（即 v4 的行为）。
+   *
+   * 语义与实现都在 `engine/stack.ts`（渲染侧的唯一真源）：
+   * `N > 0` 时这个片段的作用域变成一段**独立合成的组画面**（从透明起），
+   * 特效作用在它上面，再以 normal 贴回下层 —— 所以它看不到作用域之外的轨道。
+   * 边界情形（内层特效需要更深的轨道、下方没有启用轨）见那份文件头。
+   */
+  affectDepth?: number;
 }
 
 /** 声音事件，不参与视觉合成。 */
@@ -285,6 +295,15 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
     }
     return { ...p, schemaVersion: 4 };
   },
+
+  /**
+   * v4 → v5：`EffectClip` 新增可选的 `affectDepth`（影响深度）。
+   *
+   * **恒等迁移**：缺省 / 0 就是 v4 的行为（作用于下方全部），没有任何要改写的东西。
+   * 抬版本号的唯一目的仍然是让「新版存出的工程被旧版打开」走 `versionTooNew` 明确报错
+   * —— 旧版静默忽略 `affectDepth` 再保存，用户调好的作用域就没了。
+   */
+  4: (p) => ({ ...p, schemaVersion: 5 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -351,8 +370,16 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
     if (c.kind !== 'source' && c.kind !== 'effect') {
       throw new SchemaError(tr('err.schema.visualTrackHasNonVisual'));
     }
-    if (c.kind === 'effect' && !Array.isArray((c as EffectClip).chain)) {
-      throw new SchemaError(tr('err.schema.effectClipMissingChain', { id: c.id }));
+    if (c.kind === 'effect') {
+      const fx = c as EffectClip;
+      if (!Array.isArray(fx.chain)) {
+        throw new SchemaError(tr('err.schema.effectClipMissingChain', { id: c.id }));
+      }
+      // 影响深度是非负整数（0 = 下方全部）。手改 JSON 写出 2.5 / -1 时在打开时报错，
+      // 而不是让它一路穿透到 `buildStack` 里以「数到第 N 条轨」的语义变成别的东西。
+      if (fx.affectDepth !== undefined && (!Number.isInteger(fx.affectDepth) || fx.affectDepth < 0)) {
+        throw new SchemaError(tr('err.schema.effectBadAffectDepth', { id: c.id }));
+      }
     }
     // text 源的最小校验。validateProject 历史上不深校验 source 字段，
     // 手改 JSON 会一路静默穿透到光栅化，在那里炸得莫名其妙。

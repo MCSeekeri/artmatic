@@ -153,3 +153,39 @@ describe('排版片段的校验', () => {
     expect(() => validateProject(withClip(textClip(bad)))).toThrow(/尺寸非法/);
   });
 });
+
+describe('影响深度（EffectClip.affectDepth）', () => {
+  const withFx = (affectDepth: unknown) => {
+    const p = defaultProject('fx');
+    p.tracks.push({
+      kind: 'visual', id: newId(), name: 'V1', enabled: true,
+      clips: [{
+        kind: 'effect', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+        chain: [], ...(affectDepth === undefined ? {} : { affectDepth }),
+      }],
+    } as never);
+    return p;
+  };
+
+  it('0 / 正整数 / 缺省都通过', () => {
+    expect(() => validateProject(withFx(undefined))).not.toThrow();
+    expect(() => validateProject(withFx(0))).not.toThrow();
+    expect(() => validateProject(withFx(2))).not.toThrow();
+  });
+
+  it('负数 / 小数 / 非数字被拒（否则会以另一种语义穿透到 buildStack）', () => {
+    for (const bad of [-1, 2.5, NaN, 'two']) {
+      expect(() => validateProject(withFx(bad)), String(bad)).toThrow(/影响深度/);
+    }
+  });
+
+  it('v4 → v5 是恒等迁移：字段原样保留', () => {
+    const p = withFx(3);
+    p.schemaVersion = 4;
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'effect') throw new Error('unreachable');
+    expect(clip.affectDepth).toBe(3);
+  });
+});
