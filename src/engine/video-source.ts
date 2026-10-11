@@ -250,6 +250,62 @@ export async function probeVideo(media: VideoMedia): Promise<VideoProbe | null> 
   }
 }
 
+/** 缩略图宽度（媒体池那一行显示 40×26，160 够 HiDPI 了）。 */
+const THUMB_WIDTH = 160;
+
+/**
+ * 取一帧画面做成缩略图（媒体池的素材行用）。取不到返回 null。
+ *
+ * 与 `probeVideo` 同一个套路：**开一份一次性的 `Input` / `sink`，用完就 dispose**
+ * —— 与播放期那份解码器互不干扰（共用会把正在播的视频的解码器抢走，而用户
+ * 只是拉开抽屉看一眼列表）。
+ *
+ * 这里刻意用 `getSample(t)` 而不是常驻迭代器：**一次性取一帧**，重建管线的
+ * 代价只付一次（`sampleAt` 那条常驻迭代器是为逐帧渲染准备的，生命周期要额外管）。
+ *
+ * 为什么媒体池的图片素材不需要这一套：导入时 `registerImageBytes` 已经解出
+ * 一张 canvas。视频只有 `Blob`/`File` 句柄（AGENTS 的硬要求：不摊开字节、不解码），
+ * 所以「看得见的时候才解一帧」是唯一可行的做法。
+ */
+export async function videoThumbnail(
+  media: VideoMedia,
+  atSec: number,
+  width = THUMB_WIDTH,
+): Promise<Blob | null> {
+  // 视频解码路径本来就依赖 OffscreenCanvas（`ctxFor`），这里不另开一条降级路。
+  if (typeof OffscreenCanvas === 'undefined') return null;
+
+  let input: Input<Source> | null = null;
+  try {
+    const source = media instanceof Blob ? new BlobSource(media) : new BufferSource(media);
+    input = new Input({ formats: ALL_FORMATS, source });
+    if (!(await input.canRead())) return null;
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) return null;
+    const sample = await new VideoSampleSink(track).getSample(Math.max(0, atSec));
+    if (!sample) return null;
+    try {
+      const [dw, dh] = await Promise.all([track.getDisplayWidth(), track.getDisplayHeight()]);
+      const w = Math.max(2, Math.round(Math.min(width, dw || width)));
+      const h = Math.max(2, Math.round((w * (dh || w)) / (dw || w)));
+      const canvas = new OffscreenCanvas(w, h);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      // mediabunny 的 draw 会应用旋转与翻转元数据，与渲染路径同一套（不用自己算）
+      sample.draw(ctx, 0, 0, w, h);
+      return await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
+    } finally {
+      // 不 close 会占住解码器池（见文件头第 2 条）
+      sample.close();
+    }
+  } catch (e) {
+    console.warn('[video] 缩略图取帧失败：', e);
+    return null;
+  } finally {
+    input?.dispose();
+  }
+}
+
 export interface VideoSourceOpts {
   /**
    * 新帧解码落地时回调（→ `store.touch()` 让下一帧重绘）。

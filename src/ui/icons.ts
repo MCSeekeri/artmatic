@@ -59,6 +59,7 @@ import HardDrive from '@lucide/svelte/icons/hard-drive';
 import Hexagon from '@lucide/svelte/icons/hexagon';
 import ImageIcon from '@lucide/svelte/icons/image';
 import ImagePlus from '@lucide/svelte/icons/image-plus';
+import Images from '@lucide/svelte/icons/images';
 import ImportIcon from '@lucide/svelte/icons/import';
 import Info from '@lucide/svelte/icons/info';
 import Italic from '@lucide/svelte/icons/italic';
@@ -177,6 +178,7 @@ export const ICONS = {
   hexagon: Hexagon,
   image: ImageIcon,
   'image-plus': ImagePlus,
+  images: Images,
   import: ImportIcon,
   info: Info,
   italic: Italic,

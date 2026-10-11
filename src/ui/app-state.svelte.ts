@@ -57,6 +57,12 @@ const UI_KEY = 'artmatic.ui';
 interface UiPrefs {
   drawerOpen: boolean;
   drawerWidth: number;
+  /**
+   * 媒体池（左侧抽屉）。与检查器分开记：两者的开关意图互不相干，
+   * 一个值管两个抽屉会出现「关掉检查器顺手把媒体池也关了」。
+   */
+  mediaPoolOpen: boolean;
+  mediaPoolWidth: number;
   /** 预览帧率分母：1 = 全速、2 = 半速、3 = 三分之一。 */
   previewFpsDiv: number;
   /** 预览分辨率缩放：1 / 0.75 / 0.5 / 0.25。 */
@@ -122,6 +128,9 @@ function loadUiPrefs(): UiPrefs {
   const fallback: UiPrefs = {
     drawerOpen: true,
     drawerWidth: DENSITY.drawerW,
+    // 默认收起：它是「要用时才拉开看一眼」的辅助面板，不该开局就吃掉画面宽度。
+    mediaPoolOpen: false,
+    mediaPoolWidth: DENSITY.poolW,
     previewFpsDiv: 1,
     previewScale: 1,
     previewRestoreOnPause: true,
@@ -138,6 +147,9 @@ function loadUiPrefs(): UiPrefs {
     return {
       drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : fallback.drawerOpen,
       drawerWidth: clampDrawerWidth(Number(p.drawerWidth) || fallback.drawerWidth),
+      mediaPoolOpen:
+        typeof p.mediaPoolOpen === 'boolean' ? p.mediaPoolOpen : fallback.mediaPoolOpen,
+      mediaPoolWidth: clampPoolWidth(Number(p.mediaPoolWidth) || fallback.mediaPoolWidth),
       previewFpsDiv: normalizeDiv(p.previewFpsDiv),
       previewScale: normalizeScale(p.previewScale),
       previewRestoreOnPause:
@@ -162,6 +174,11 @@ function loadUiPrefs(): UiPrefs {
 function clampDrawerWidth(w: number): number {
   if (!Number.isFinite(w)) return DENSITY.drawerW;
   return Math.min(DENSITY.drawerMaxW, Math.max(DENSITY.drawerMinW, Math.round(w)));
+}
+
+function clampPoolWidth(w: number): number {
+  if (!Number.isFinite(w)) return DENSITY.poolW;
+  return Math.min(DENSITY.poolMaxW, Math.max(DENSITY.poolMinW, Math.round(w)));
 }
 
 function saveUiPrefs(p: UiPrefs): void {
@@ -306,6 +323,10 @@ class AppState {
   drawerOpen = $state(true);
   // 显式标注 number：DENSITY 是 as const，不标注会推成字面量类型 300。
   drawerWidth = $state<number>(DENSITY.drawerW);
+
+  /** 左侧媒体池抽屉。默认收起（要用时才拉开），宽度可拖，两者都持久化。 */
+  mediaPoolOpen = $state(false);
+  mediaPoolWidth = $state<number>(DENSITY.poolW);
 
   /* ---- 预览质量（只影响预览；导出永远全帧全质） ----
    *
@@ -838,6 +859,8 @@ class AppState {
     const prefs = loadUiPrefs();
     this.drawerOpen = prefs.drawerOpen;
     this.drawerWidth = prefs.drawerWidth;
+    this.mediaPoolOpen = prefs.mediaPoolOpen;
+    this.mediaPoolWidth = prefs.mediaPoolWidth;
     this.previewFpsDiv = prefs.previewFpsDiv;
     this.previewScale = prefs.previewScale;
     this.previewRestoreOnPause = prefs.previewRestoreOnPause;
@@ -917,10 +940,29 @@ class AppState {
     this.persistUi();
   }
 
+  setMediaPoolOpen(open: boolean): void {
+    if (this.mediaPoolOpen === open) return;
+    this.mediaPoolOpen = open;
+    this.persistUi();
+  }
+
+  toggleMediaPool(): void {
+    this.setMediaPoolOpen(!this.mediaPoolOpen);
+  }
+
+  setMediaPoolWidth(w: number): void {
+    const next = clampPoolWidth(w);
+    if (this.mediaPoolWidth === next) return;
+    this.mediaPoolWidth = next;
+    this.persistUi();
+  }
+
   private persistUi(): void {
     saveUiPrefs({
       drawerOpen: this.drawerOpen,
       drawerWidth: this.drawerWidth,
+      mediaPoolOpen: this.mediaPoolOpen,
+      mediaPoolWidth: this.mediaPoolWidth,
       previewFpsDiv: this.previewFpsDiv,
       previewScale: this.previewScale,
       previewRestoreOnPause: this.previewRestoreOnPause,

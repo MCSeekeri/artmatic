@@ -109,6 +109,13 @@ export const DENSITY = {
   drawerW: 300,
   drawerMinW: 240,
   drawerMaxW: 520,
+  /*
+   * 媒体池（左侧抽屉）。比检查器窄一档：那边是一列参数表单，这边是
+   * 「缩略图 + 名字 + 一行元信息」，再宽只会让名字后面多出一片空白。
+   */
+  poolW: 232,
+  poolMinW: 184,
+  poolMaxW: 420,
 
   /* 排版编辑器的 Ribbon。数值与 CSS 都从这里来（见 STATIC 的派生）。 */
   /** Tab 条高。 */

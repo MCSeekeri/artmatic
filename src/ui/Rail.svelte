@@ -112,6 +112,27 @@
       active={panel === 'plugins'}
       onclick={() => (panel = 'plugins')}
     />
+    <!--
+      媒体池：与「工程 / 插件」同组 —— 它回答的也是「这份工程里有什么」，
+      只是范围收窄到已导入的素材。点它开的是**左边**那条抽屉（检查器在右边，
+      两个开关互不相干）。
+    -->
+    <IconButton
+      icon="images"
+      label={tr('pool.title')}
+      tipText={tr(appState.editorOpen ? 'pool.timelineOnly' : 'pool.openTip')}
+      testid="rail-media"
+      active={appState.mediaPoolOpen}
+      onclick={() => {
+        // 排版编辑页是一整页（`.body` 被 display:none），那边抽屉不参与布局。
+        // 与其静默失灵，不如说清楚为什么 —— 与检查器同一条边界。
+        if (appState.editorOpen) {
+          appState.flash(tr('pool.timelineOnly'));
+          return;
+        }
+        appState.toggleMediaPool();
+      }}
+    />
     <IconButton
       icon="save"
       label={tr('app.saveProject')}

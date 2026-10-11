@@ -5,6 +5,7 @@
   import Transport from './Transport.svelte';
   import Preview from './Preview.svelte';
   import InspectorDrawer from './InspectorDrawer.svelte';
+  import MediaPoolDrawer from './MediaPoolDrawer.svelte';
   import StatusBar from './StatusBar.svelte';
   import Tip from './Tip.svelte';
   import EmptyState from './EmptyState.svelte';
@@ -185,8 +186,18 @@
       <div
         class="body"
         class:is-hidden={appState.editorOpen}
-        style={`--drawer-w: ${appState.drawerOpen ? `${appState.drawerWidth}px` : '0px'}`}
+        style={`--pool-w: ${appState.mediaPoolOpen
+          ? `${appState.mediaPoolWidth}px`
+          : '0px'}; --drawer-w: ${appState.drawerOpen ? `${appState.drawerWidth}px` : '0px'}`}
       >
+        <!--
+          媒体池（左）与检查器（右）是两个独立抽屉，各自条件渲染、各自记宽度。
+          它们与 `.stage` 的关系见下面 `.body` 的网格注释。
+        -->
+        {#if appState.mediaPoolOpen}
+          <MediaPoolDrawer />
+        {/if}
+
         <div class="stage">
           <Preview />
           <!--
@@ -274,16 +285,29 @@
     min-height: 0;
     min-width: 0;
   }
+  /* 三列：媒体池 | 舞台 | 检查器。两个抽屉的宽度都是实例值（用户可拖），
+     关掉时是 0 —— 列还在，只是没有宽度。 */
   .body {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--drawer-w);
+    grid-template-columns: var(--pool-w) minmax(0, 1fr) var(--drawer-w);
     min-height: 0;
     min-width: 0;
   }
   .body.is-hidden {
     display: none;
   }
+  /*
+   * 显式定位，**不能靠自动排布**：两个抽屉都是条件渲染的，缺一个的时候
+   * `.stage` 会被填进那一列（关掉媒体池时它落在 0px 宽的第一列上，整块画面消失）。
+   */
+  .body > :global(aside.media-drawer) {
+    grid-column: 1;
+  }
+  .body > :global(aside.drawer) {
+    grid-column: 3;
+  }
   .stage {
+    grid-column: 2;
     display: grid;
     /* 预览吃满剩余高度；工具条与轨道区按内容/固定高度排在下面 */
     grid-template-rows: minmax(0, 1fr) auto auto;

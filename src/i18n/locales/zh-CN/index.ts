@@ -11,6 +11,7 @@
  */
 import { common } from './common';
 import { media } from './media';
+import { pool } from './pool';
 import { effects } from './effects';
 import { app } from './app';
 import { project } from './project';
@@ -28,6 +29,7 @@ import { plugins } from './plugins';
 export const zhCN = {
   ...common,
   ...media,
+  ...pool,
   ...effects,
   ...app,
   ...project,

@@ -23,6 +23,9 @@ export const timeline = {
   'tl.addText': '排版片段',
   'tl.addEffect': '特效片段',
   'tl.addAlgo': '算法片段',
+  /* 图片与视频同族：都是把一个本地文件变成一条 source 片段。 */
+  'tl.importImageMenu': '导入图片…',
+  'tl.importImage': '导入图片',
   'tl.importVideoMenu': '导入视频…',
   'tl.importVideo': '导入视频',
   'tl.setFps': '改帧率',

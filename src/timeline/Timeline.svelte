@@ -10,7 +10,6 @@
   import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
   import { xOfTime, timeAtX, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
   import { browserPlatform } from '../platform/browser';
-  import { computeWaveform, decodeAudio } from '../audio/decode';
   import {
     newId,
     type AudioClip,
@@ -20,8 +19,8 @@
   } from '../core/schema';
   import { beatDur, snapTime } from '../core/time';
   import { resolveTransition } from '../core/transitions';
-  import { probeVideo } from '../engine/video-source';
-  import { registerVideoMedia } from '../engine/media-assets';
+  import { importAudioBlob, importFiles, importImageBlob, importVideoFile } from '../ui/media-import';
+  import { ASSET_DRAG_MIME, insertAssetClip, poolItemById } from '../ui/media-pool';
   import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
   import { createTextElement, createTypographyDocument } from '../typography/document';
   import { canvasPalette } from '../ui/tokens';
@@ -423,103 +422,34 @@
     appState.selectedClipId = clip.id;
   }
 
+  /**
+   * 导入音频。
+   *
+   * 三条导入（视频 / 图片 / 音频）都只是**选文件**这一步不同，剩下的
+   * （进仓 → 登记 → 建片段 → 选中）全在 `ui/media-import.ts` —— 拖拽走的是
+   * 同一个函数。这里各留一个短壳，是因为菜单里的选项本来就叫「导入音频…」。
+   */
   async function addAudio(trackId: string, at?: number): Promise<void> {
     closeMenus();
     const picked = await browserPlatform.pickAudioFile();
     if (!picked) return;
-    const buf = await decodeAudio(picked.data.slice(0));
-    const assetId = newId();
-    appState.player.register(assetId, buf);
-    appState.waveforms = { ...appState.waveforms, [assetId]: await computeWaveform(buf) };
-    // 素材字节进仓（**当前工程**的仓）。不存的话保存工程只留下一个 assetId
-    // —— 引用还在、文件没有，重开就是一段哑音。用独立拷贝：decode 那一支
-    // 已经吃掉了自己的 slice，剩下这份要留给保存，不能被任何下游 detach。
-    appState.assets.put(assetId, new Uint8Array(picked.data.slice(0)), {
-      kind: 'audio',
-      name: picked.name,
-      originName: picked.name,
-    });
-    appState.store.commit(tr('tl.importAudio'), (p) => {
-      p.assets[assetId] = { id: assetId, kind: 'audio', name: picked.name, durationSec: buf.duration };
-    });
-    const start = startFor(at);
-    const clip: AudioClip = {
-      kind: 'audio',
-      id: newId(),
-      start,
-      // 不再被工程时长截断：addClip 会把工程撑到放得下（音频长度只是默认值）
-      end: start + buf.duration,
-      label: picked.name,
-      fadeSec: 0,
-      curves: {},
-      assetId,
-      srcIn: 0,
-    };
-    appState.store.addClip(trackId, clip);
-    appState.selectedClipId = clip.id;
-    // 拍网格还是默认值（120/0）时顺手估一次 —— 用户没动过它，就是在等这个。
-    // 动过就绝不覆盖：手调过的卡点比自动估计更值钱。
-    await appState.autoEstimateIfDefault();
+    await importAudioBlob(picked.name, picked.data, { trackId, start: startFor(at) });
   }
 
-  /**
-   * 导入本地视频。
-   *
-   * 与 `addAudio` 的两处关键差别：
-   *  1. **先把 `File` 句柄交给渲染层**（`registerVideoMedia`），解码从磁盘流式读；
-   *     素材字节另存一份进仓只是为了保存工程 —— 视频编码器不需要它。
-   *  2. 片段默认 `fit: 'cover'`：空镜头是底图，铺满画幅才符合预期
-   *     （`contain` 会留黑边，那是素材与工程画幅不一致时的意外，不是意图）。
-   */
+  /** 导入视频。细节见 `ui/media-import.ts::importVideoFile`（含「先给句柄」的理由）。 */
   async function addVideo(trackId: string, at?: number): Promise<void> {
     closeMenus();
     const picked = await browserPlatform.pickVideoFile();
     if (!picked) return;
+    await importVideoFile(picked.file, { trackId, start: startFor(at) });
+  }
 
-    const meta = await probeVideo(picked.file);
-    if (!meta) {
-      appState.flash(tr('err.video.unreadable', { name: picked.name }), 'error');
-      return;
-    }
-
-    const assetId = newId();
-    // 渲染层先拿到**磁盘句柄**：解码全程走它，不需要素材字节在场。
-    registerVideoMedia(assetId, picked.file);
-
-    // 存一份字节进仓（保存工程用）。这一步是几 GB 素材唯一的内存峰值 ——
-    // 见 AGENTS 里「视频素材打开/保存的流式化」那条未决问题。
-    appState.assets.put(assetId, new Uint8Array(await picked.file.arrayBuffer()), {
-      kind: 'video',
-      name: picked.name,
-      originName: picked.name,
-    });
-    appState.store.commit(tr('tl.importVideo'), (p) => {
-      p.assets[assetId] = {
-        id: assetId,
-        kind: 'video',
-        name: picked.name,
-        durationSec: meta.duration,
-        size: { w: meta.width, h: meta.height },
-      };
-    });
-
-    const start = startFor(at);
-    const clip: SourceClip = {
-      kind: 'source',
-      id: newId(),
-      start,
-      end: start + Math.max(0.1, meta.duration),
-      label: picked.name,
-      fadeSec: 0,
-      curves: {},
-      source: { type: 'video', assetId, srcIn: 0, speed: 1 },
-      blend: 'normal',
-      opacity: 1,
-      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
-      fit: 'cover',
-    };
-    appState.store.addClip(trackId, clip);
-    appState.selectedClipId = clip.id;
+  /** 导入图片（`fit: 'contain'`、长度 4 拍 —— 理由见 `ui/media-pool.ts::clipForAsset`）。 */
+  async function addImage(trackId: string, at?: number): Promise<void> {
+    closeMenus();
+    const picked = await browserPlatform.pickImageFile();
+    if (!picked) return;
+    await importImageBlob(picked.name, picked.data, { trackId, start: startFor(at) });
   }
 
   /* ------------------------------------------------------------ 轨道操作 */
@@ -618,6 +548,13 @@
         icon: 'flask-conical',
         testid: `${prefix}effect`,
         onselect: () => addEffect(track.id, at),
+      },
+      {
+        id: `${prefix}image`,
+        label: tr('tl.importImageMenu'),
+        icon: 'image',
+        testid: prefix === 'ctx-' ? `${prefix}image` : 'import-image',
+        onselect: () => void addImage(track.id, at),
       },
       {
         id: `${prefix}video`,
@@ -759,6 +696,87 @@
     ctxMenu = null;
     rowMenu = { trackId: track.id, kind: track.kind, anchor: e.currentTarget as HTMLElement };
   }
+
+  /* ------------------------------------------------------------ 拖进来 */
+
+  /**
+   * 拖拽落点提示：**指针所在的行 + 吸附后的落点**（画一条竖线）。
+   * 只在拖进来的东西认得时才亮 —— 拖个网页链接过来不该在轨道上画线。
+   */
+  let dropHint = $state<{ trackId: string; x: number; top: number } | null>(null);
+
+  /** 拖的是不是我们认的东西：媒体池的素材（自定义类型）还是系统文件。 */
+  function droppedKind(dt: DataTransfer | null): 'asset' | 'files' | null {
+    if (!dt) return null;
+    if (dt.types.includes(ASSET_DRAG_MIME)) return 'asset';
+    if (dt.types.includes('Files')) return 'files';
+    return null;
+  }
+
+  /**
+   * clientY → 行下标。拖到行区下面的空白处算**最后一行**（那里没有时刻可言，
+   * 但「想放到最下面那条轨」的意图很清楚）。
+   */
+  function rowIndexAt(clientY: number): number {
+    if (!rowsEl) return 0;
+    const r = rowsEl.getBoundingClientRect();
+    const i = Math.floor((clientY - r.top) / ROW_HEIGHT);
+    return Math.min(Math.max(i, 0), Math.max(0, tracks.length - 1));
+  }
+
+  function onRowsDragOver(e: DragEvent): void {
+    if (!droppedKind(e.dataTransfer)) return;
+    /*
+     * preventDefault 是**必须的**：不阻止默认行为，浏览器根本不允许在这里落点
+     * （drop 事件不会发生，而 dragover 也不会被允许改 dropEffect）。
+     */
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    const i = rowIndexAt(e.clientY);
+    const track = tracks[i];
+    if (!track) return;
+    dropHint = {
+      trackId: track.id,
+      x: xOfTime(timeAtClientX(e.clientX), appState.pxPerBeat, grid),
+      top: i * ROW_HEIGHT,
+    };
+  }
+
+  function onRowsDragLeave(e: DragEvent): void {
+    // 只在**真的离开整块行区**时清：dragleave 会为每个子元素冒泡上来一次，
+    // 按它清会让竖线在行内移动时闪。
+    const to = e.relatedTarget as Node | null;
+    if (to && rowsEl?.contains(to)) return;
+    dropHint = null;
+  }
+
+  function onRowsDrop(e: DragEvent): void {
+    const kind = droppedKind(e.dataTransfer);
+    if (!kind) return;
+    e.preventDefault();
+    const track = tracks[rowIndexAt(e.clientY)];
+    dropHint = null;
+    if (!track) return;
+
+    const start = timeAtClientX(e.clientX);
+    if (kind === 'asset') {
+      // 媒体池里拖出来的一条素材：与点「+」走**同一个函数**（落点规则只有一处）
+      const id = e.dataTransfer?.getData(ASSET_DRAG_MIME) ?? '';
+      const item = id ? poolItemById(appState.store.project.assets, appState.assets, id) : null;
+      if (!item) return;
+      const clipId = insertAssetClip(appState.store, item, {
+        at: start,
+        grid,
+        preferredTrackId: track.id,
+      });
+      if (clipId) appState.selectedClipId = clipId;
+      return;
+    }
+
+    // 系统文件：与菜单里的「导入…」同一条路（probe / 进仓 / 建片段都在那边）
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length) void importFiles(files, { start, trackId: track.id });
+  }
 </script>
 
 <div class="tl">
@@ -879,13 +897,32 @@
         role="presentation"
         bind:this={rowsEl}
         onpointerdown={onRowsPointerDown}
+        ondragover={onRowsDragOver}
+        ondragleave={onRowsDragLeave}
+        ondrop={onRowsDrop}
       >
         <canvas class="grid" bind:this={gridCanvas}></canvas>
+        <!--
+          拖拽落点：目标行加一层底色 + 一条竖线。
+          竖线落在**吸附后**的时刻上 —— 看见的就是会落下的位置。
+          （整块行区不加描边：`.rows` 与工程一样宽，右边界在屏幕外，那种「回执」
+          用户根本看不到；逐行染色才落在眼睛够得着的地方。）
+        -->
+        {#if dropHint}
+          <div
+            class="drop-line"
+            data-testid="tl-drop-line"
+            style:left={`${dropHint.x}px`}
+            style:top={`${dropHint.top}px`}
+            style:height={`${ROW_HEIGHT}px`}
+          ></div>
+        {/if}
         {#each tracks as track (track.id)}
           <div
             class="row"
             class:audio={track.kind === 'audio'}
             class:disabled={!track.enabled}
+            class:drop-target={dropHint?.trackId === track.id}
             style:height={`${ROW_HEIGHT}px`}
             data-track-id={track.id}
             data-tl-row
@@ -1091,6 +1128,19 @@
     left: 0;
     top: 0;
     pointer-events: none;
+  }
+  /* 拖拽落点所在的行：底色（半透明主题色，与框选框同一套写法） */
+  .row.drop-target {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  .drop-line {
+    position: absolute;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--accent);
+    pointer-events: none;
+    /* 与选中片段的描边同层（时间轴内部 z 预算 ≤5，见 tokens） */
+    z-index: var(--z-clip-selected);
   }
   .row {
     position: relative;

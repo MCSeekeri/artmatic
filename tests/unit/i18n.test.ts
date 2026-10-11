@@ -7,6 +7,7 @@ import { tr } from '../../src/i18n/index.svelte';
 import { LOCALES, type MessageKey } from '../../src/i18n/locales';
 import { common } from '../../src/i18n/locales/zh-CN/common';
 import { media } from '../../src/i18n/locales/zh-CN/media';
+import { pool } from '../../src/i18n/locales/zh-CN/pool';
 import { effects } from '../../src/i18n/locales/zh-CN/effects';
 import { app } from '../../src/i18n/locales/zh-CN/app';
 import { project } from '../../src/i18n/locales/zh-CN/project';
@@ -85,6 +86,7 @@ describe('文案表结构', () => {
   const DOMAINS = {
     common,
     media,
+    pool,
     effects,
     app,
     project,
@@ -207,6 +209,9 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   'audio/fft.ts': ['FFT 长度必须是 2 的幂，收到 ${n}'],
   'engine/video-source.ts': [
     '[video] probe 失败：',
+    /* 缩略图取不到帧：界面上的反馈是**没有缩略图**（继续显示类型图标），
+       console 这行只是给调试的人看格式/编解码细节。 */
+    '[video] 缩略图取帧失败：',
     '无法识别的容器格式',
     '文件里没有视频轨',
     '[video ${assetId}] 打开失败：${entry.failure}',

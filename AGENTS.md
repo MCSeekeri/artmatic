@@ -450,8 +450,10 @@ interface Curve {
   拿它当翻译函数等于在每个渲染函数里制造命名冲突。
 - key 是**扁平点分命名**（`'tl.importAudio'`），`keyof typeof zhCN` 直接就是 `MessageKey`，
   编译期可检查，不需要类型体操。按域拆文件只是为了让 600+ 条找得到，合并后就是一张平表。
-  域清单见 `tests/unit/i18n.test.ts` 的 `DOMAINS`（common · media · app · project · timeline ·
-  inspector · typography · ribbon · shortcuts · errors · lab）。
+  域清单见 `tests/unit/i18n.test.ts` 的 `DOMAINS`（common · media · pool · effects · app ·
+  project · timeline · inspector · transitions · typography · ribbon · shortcuts · errors ·
+  lab · agent · plugins）。**加一个域 = 加一个文件 + 在 `zh-CN/index.ts` 与那份 `DOMAINS` 各登记一行**
+  （漏登记的表现是「文案写对了但跨文件重名检测覆盖不到它」）。
 - **`i18n/index.svelte.ts` 必须是 `.svelte.ts`**：locale 是 `$state`，而 `tr()` 每次调用都读它
   ⇒ 模板里任何一处 `tr()` 都自动建立依赖，切语言时整棵树重渲。用普通模块 + 订阅回调的做法
   有一个很明确的失败形态：加了新文案却忘了订阅那处 ⇒ 界面静默停在旧语言。
@@ -1662,7 +1664,33 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   **工程级动作**放在最左侧的窄图标栏。新增入口时先想清楚它属于哪一边。
 - **菜单不要无谓地加层级**：一级平铺能放下的就平铺，只有**会变长**的列表才收进子菜单。
 - **窄侧栏的入口用全屏 modal，不是 flyout**：flyout 只有两百多像素宽，快捷键清单或导出
-  信息塞进去就成了带滚动条的小盒子。
+  信息塞进去就成了带滚动条的小盒子。（**例外是媒体池**：它是一条贴着左侧栏的抽屉，
+  与检查器镜像 —— 内容是一列素材，不需要宽度。）
+- **两个抽屉分居两侧**：检查器在右（`.body` 最后一列，选中片段时自动展开），媒体池在左
+  （第一列，只用 Rail 上那个 `images` 图标开合，默认收起）。宽度是**实例值**
+  （`--pool-w` / `--drawer-w` 内联在 `.body` 上，不进 token），关掉时是 `0px`。
+  ⚠️ **`.body` 的每一列都必须显式写 `grid-column`**：两个抽屉都是条件渲染的，靠自动排布
+  会在缺一个的时候把 `.stage` 填进 0 宽那一列 —— 表现是整块画面凭空消失。
+  媒体池只在时间轴视图里参与布局（排版编辑页是一整页），点侧栏入口会得到一句说明。
+- **媒体池的列表是「合成」出来的**：`Project.assets`（kind / 名字 / 时长 / 尺寸）与
+  `AssetStore`（字节）各说一半，合成规则与「素材 → 片段」的默认值都在 `ui/media-pool.ts`
+  （纯函数，有单测）；面板只管把 `appState` 喂进去。想改「图片默认几拍 / 什么 fit」时
+  改那一处 —— 抄进组件就意味「导入」与「从池里插入」两条路会给出两个结果。
+- **素材进来有四个入口，一份实现**：时间轴菜单（文件选择器）、从系统拖文件到时间轴
+  （落成片段）、从系统拖到媒体池（只登记素材）、从池子里拖条目到时间轴。四个都走
+  `ui/media-import.ts`（素材那一半）+ `ui/media-pool.ts::insertAssetClip`（片段那一半）。
+  **不许在组件里另写一份 probe / 进仓 / 建片段** —— 那样「拖进来的视频」与「菜单导入的」
+  迟早会在默认 `fit`、默认长度、落点上分叉，而这种偏差没人会去查。
+- **拖动期间只读得到 `dataTransfer.types`，读不到 `getData`**：所以「认不认得这个拖拽」
+  必须靠类型判定 —— 媒体池的条目用自定义 MIME `application/x-artmatic-asset`，
+  系统文件用浏览器的 `Files`。落点提示（行底色 + 竖线）只在两者之一时才亮。
+- **落点判定挂在 `.rows` 上，不是每一行**：行下标由 `clientY` 算（拖到行区下方的空白
+  处算最后一行），时刻由 `timeAtClientX` 算 —— 与右键菜单同一套换算，竖线画在**吸附后**
+  的位置上，看见的就是会落下的位置。
+- **视频的缩略图是惰性的**（`ui/media-thumbs.svelte.ts`）：列到某一条视频时才解一帧
+  （`engine/video-source.ts::videoThumbnail`，一次性 Input、用完 dispose），**串行**、
+  失败不重试。导入时不预热 —— 十个视频就是十次解码，而用户可能根本不打开媒体池。
+  图片不需要这一套：导入时 `registerImageBytes` 已经解出一张 canvas 了。
 - **工具条的 tooltip 朝上**（`tipPlacement="top"`）：工具条紧贴轨道区，下方没空间。
   `tip.ts` 在 `pointerdown` 时会收起气泡 —— 否则点开的下拉会被悬停气泡挡住第一项。
 - **UI 文本一律 `user-select: none`**（`app.css` 在 `html,body` 上设，输入类元素单独放行）。
