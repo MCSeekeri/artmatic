@@ -25,9 +25,11 @@ import {
   CanvasSource,
   Mp4OutputFormat,
   Output,
+  StreamTarget,
 } from 'mediabunny';
 import type { FrameSink, FrameSinkConfigureOptions } from './frame-sink';
 import type { MixedAudio } from './mixdown';
+import type { SaveStream } from '../platform/types';
 import { EXPORT_SAMPLE_RATE, toAudioBuffer } from './mixdown';
 import { tr } from '../i18n/index.svelte';
 
@@ -60,6 +62,15 @@ export interface Mp4SinkOptions {
   bitrate?: number;
   /** 音频码率。默认 192 kbps，AAC-LC 的甜点。 */
   audioBitrate?: number;
+  /**
+   * 流式落盘出口；null/缺省 = 整份 MP4 驻留内存（`BufferTarget`）再交给调用方。
+   *
+   * 走流式时用 mediabunny 的 `StreamTarget`（官方点名兼容 FSA 的
+   * `FileSystemWritableFileStream`）：它把 moov 放在内存里，其余边产边写，
+   * 所以 `fastStart: 'in-memory'` 的语义不变而**内存占用与时长无关**。
+   * 触发条件见 `ui/export.ts` 的 `pickOutput` —— 按 `limits.exportMemoryMB` 判。
+   */
+  stream?: SaveStream | null;
 }
 
 /** 码率默认表。按像素数分档：低分辨率下别浪费码率，高分辨率下别被压糊。 */
@@ -80,11 +91,15 @@ export class Mp4Sink implements FrameSink {
   private bitrate: number | undefined;
   private audioBitrate: number | undefined;
   private started = false;
+  private readonly stream: SaveStream | null;
+  /** 流式模式下已写出的字节数（`byteLength()` 的读数；`BufferTarget` 那条读 buffer）。 */
+  private written = 0;
 
   constructor(opts: Mp4SinkOptions = {}) {
     this.audio = opts.audio ?? null;
     this.bitrate = opts.bitrate;
     this.audioBitrate = opts.audioBitrate;
+    this.stream = opts.stream ?? null;
   }
 
   async configure(
@@ -102,11 +117,23 @@ export class Mp4Sink implements FrameSink {
       throw new Error(tr('err.export.sinkNoCanvas'));
     }
     this.fps = fps;
-    this.target = new BufferTarget();
-    this.output = new Output({
-      format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
-      target: this.target,
-    });
+    if (this.stream) {
+      // 边编边写：`StreamTarget` 负责顺序与回填（moov 仍在内存里，语义同 fastStart）。
+      const target = new StreamTarget(this.stream.writable as unknown as ConstructorParameters<typeof StreamTarget>[0]);
+      target.on('write', ({ end }) => {
+        if (end > this.written) this.written = end;
+      });
+      this.output = new Output({
+        format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+        target,
+      });
+    } else {
+      this.target = new BufferTarget();
+      this.output = new Output({
+        format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+        target: this.target,
+      });
+    }
 
     const canvas = opts.canvas;
     // 交叉校验：传进来的 canvas 尺寸必须与声明的 size 一致。
@@ -175,12 +202,17 @@ export class Mp4Sink implements FrameSink {
     await this.video.add(frameIndex / this.fps, 1 / this.fps);
   }
 
-  async finalize(): Promise<Blob> {
-    if (!this.output || !this.target) throw new Error(tr('err.export.notConfigured'));
+  async finalize(): Promise<Blob | string> {
+    if (!this.output) throw new Error(tr('err.export.notConfigured'));
     // 零帧的工程（duration 极短）不会走到 submit，start 得在这里补上。
     await this.startIfNeeded();
     await this.output.finalize();
-    const buffer = this.target.buffer;
+    if (this.stream) {
+      await this.stream.close();
+      // 流式路没有 Blob 可交：返回文件名（`FrameSink.finalize` 的 `string` 分支）。
+      return this.stream.name;
+    }
+    const buffer = this.target?.buffer;
     if (!buffer) throw new Error(tr('err.export.noBuffer'));
     return new Blob([buffer], { type: 'video/mp4' });
   }
@@ -193,6 +225,9 @@ export class Mp4Sink implements FrameSink {
    * 判 `started` 是因为 `cancel()` 在 start 之前调会抛。
    */
   async cancel(): Promise<void> {
+    // 流式路还要把目标丢掉：不 abort 的话 FSA 的 siloed 写入会一直占着临时文件
+    // （而 abort 之后**目标文件保持原样**，这正是取消该有的语义）。
+    await this.stream?.abort().catch(() => {});
     if (!this.output || !this.started) return;
     try {
       await this.output.cancel();
@@ -201,8 +236,8 @@ export class Mp4Sink implements FrameSink {
     }
   }
 
-  /** 产物字节数。UI 用来提示「这次导出占多大」。 */
+  /** 产物字节数。UI 用来提示「这次导出占多大」（流式路按已写出的范围计）。 */
   byteLength(): number {
-    return this.target?.buffer?.byteLength ?? 0;
+    return this.stream ? this.written : (this.target?.buffer?.byteLength ?? 0);
   }
 }

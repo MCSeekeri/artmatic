@@ -33,6 +33,8 @@ import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
 import { planGif, type GifPlan } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
 import { browserPlatform } from '../platform/browser';
+import { getLimits, mbToBytes } from '../core/capacity';
+import type { SaveStream } from '../platform/types';
 import { tr } from '../i18n/index.svelte';
 
 export type ExportFormat = 'mp4' | 'png' | 'gif';
@@ -82,6 +84,75 @@ export function fmtSize(bytes: number): string {
 
 function baseName(): string {
   return appState.store.project.name || 'artmatic';
+}
+
+/* --------------------------------------------------------- 落盘方式的选择 */
+
+/**
+ * 这次导出该走「内存里产完再下载」还是「边编边写盘」。
+ *
+ * ## 判据只有一条：预估体积 vs `limits.exportMemoryMB`
+ *
+ * 内存那条路的收场是**崩**（标签页 OOM，没保存的编辑一起没），所以它是唯一
+ * 必须按容量裁的导出路径。判据用**预估**而不是实际：等发现超了，字节已经在内存里了。
+ * 预估取保守值（宁可多算），最坏后果只是多弹一次保存对话框。
+ *
+ * ## 为什么先弹保存对话框
+ *
+ * `showSaveFilePicker` 要求**瞬时激活**（用户手势），而导出循环一跑就是几十秒 ——
+ * 只能在开始之前要。所以顺序是「点导出 → 保存位置 → 逐帧渲染」，
+ * 而不是「渲染完 → 再问存哪」。缺点是流式路必须由用户选位置；
+ * 好处是**中途取消时目标文件保持原样**（FSA 的 siloed 写入只在 close 时落盘）。
+ *
+ * 拿不到流式出口（Firefox/Safari）时**明确告诉用户风险并继续**，而不是拒绝导出：
+ * 短片段在那些浏览器上一直是好的，一刀切禁用反而更糟。
+ */
+async function pickOutput(
+  format: 'mp4' | 'png',
+  name: string,
+  estimateBytes: number,
+): Promise<SaveStream | null> {
+  const budgetBytes = mbToBytes(getLimits().exportMemoryMB);
+  if (estimateBytes <= budgetBytes) return null;
+
+  const stream = await browserPlatform.saveStream({
+    suggestedName: format === 'mp4' ? `${name}.mp4` : `${name}-png.zip`,
+    description: format === 'mp4' ? tr('err.export.fileTypeMp4') : tr('err.export.fileTypeZip'),
+    mime: format === 'mp4' ? 'video/mp4' : 'application/zip',
+    ext: format === 'mp4' ? '.mp4' : '.zip',
+  });
+  if (stream) {
+    appState.flash(
+      tr('err.export.streamingSave', {
+        size: fmtSize(estimateBytes),
+        budget: fmtSize(budgetBytes),
+      }),
+      'info',
+    );
+    return stream;
+  }
+  appState.flash(
+    tr('err.export.overBudget', {
+      size: fmtSize(estimateBytes),
+      budget: fmtSize(budgetBytes),
+    }),
+    'info',
+  );
+  return null;
+}
+
+/**
+ * PNG 序列的体积预估（字节）。
+ *
+ * 优先**实测一帧**（`samplePngFrameBytes`，与面板上的磁盘提示同源）；量不到就退回
+ * 「每帧 0.5 字节/像素」—— PNG 对平坦画面能压到百分之几，对噪声则可能到 3 B/px，
+ * 0.5 是按「偏小」取的保守值（宁多弹一次保存对话框，也不要撞 OOM）。
+ */
+async function estimatePngBytes(totalFrames_: number, onlyTrackId?: string): Promise<number> {
+  const p = appState.store.project;
+  const sampled = await samplePngFrameBytes(appState.playT, onlyTrackId);
+  const perFrame = sampled ?? Math.round(p.resolution.w * p.resolution.h * 0.5);
+  return perFrame * totalFrames_;
 }
 
 /**
@@ -173,9 +244,12 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
   appState.exportProgress = 0;
 
   try {
-    const sink = new Mp4Sink({ audio });
+    // 落盘方式在开跑之前定：估算体积超内存预算就先要一个写入位置（见 pickOutput）。
+    const stream = await pickOutput('mp4', safeBase(name), estimateMp4Bytes());
+    if (ctrl.signal.aborted) return;
+    const sink = new Mp4Sink({ audio, stream });
     // 只导某视觉轨时音轨照常混入（音频不属视觉轨，见 onlyTrackId 语义）。
-    const blob = (await runExport(appState.renderer, project, {
+    const result = await runExport(appState.renderer, project, {
       sink,
       codec: MP4_CODEC,
       onlyTrackId,
@@ -183,10 +257,18 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
         appState.exportProgress = f;
       },
       signal: ctrl.signal,
-    })) as Blob;
-    const size = fmtSize(blob.size);
-    appState.flash(tr('err.export.mp4Done', { size }), 'success');
-    await browserPlatform.download(blob, `${safeBase(name)}.mp4`);
+    });
+    if (typeof result === 'string') {
+      // 流式：字节已经在用户选的那个文件里了，报尺寸与文件名即可。
+      appState.flash(
+        tr('err.export.streamDone', { name: result, size: fmtSize(sink.byteLength()) }),
+        'success',
+      );
+    } else {
+      const size = fmtSize(result.size);
+      appState.flash(tr('err.export.mp4Done', { size }), 'success');
+      await browserPlatform.download(result, `${safeBase(name)}.mp4`);
+    }
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
       appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');
@@ -206,18 +288,21 @@ export async function exportPngSequence(name?: string, onlyTrackId?: string): Pr
   appState.exportProgress = 0;
 
   try {
-    const blob = await runExport(appState.renderer, appState.store.project, {
-      sink: new PngSequenceSink(),
+    const stream = await pickOutput('png', safeBase(name), await estimatePngBytes(totalFrames(), onlyTrackId));
+    if (ctrl.signal.aborted) return;
+    const result = await runExport(appState.renderer, appState.store.project, {
+      sink: new PngSequenceSink({ stream }),
       onlyTrackId,
       onProgress: (f) => {
         appState.exportProgress = f;
       },
       signal: ctrl.signal,
     });
-    await browserPlatform.download(
-      blob as Blob,
-      `${safeBase(name)}-png.zip`,
-    );
+    if (typeof result === 'string') {
+      appState.flash(tr('err.export.streamDone', { name: result, size: '' }), 'success');
+    } else {
+      await browserPlatform.download(result, `${safeBase(name)}-png.zip`);
+    }
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
       appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');

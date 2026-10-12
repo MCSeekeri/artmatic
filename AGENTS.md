@@ -130,9 +130,11 @@ src/
 ├── core/          纯 TS，无 DOM / WebGL，必须可单测
 │                  schema · 曲线求值 · 命令栈 · 片段几何（clips）· 转场钳制 · prng
 │                  · 颜色（color.ts）· 位掩码（bitmask.ts：位序映射 + B/S 打包）
+│                  · 容量预算（capacity.ts，**唯一策略处**，见 §5.11）
 ├── engine/        WebGL2：Program / Target / Pass 调度 · 纹理池 · 预览尺寸 · 确定性时钟
 │   ├── media-assets.ts   运行期素材登记（图片 = 已解码 canvas；视频 = Blob / File 引用）
-│   └── video-source.ts   视频取帧：mediabunny + WebCodecs + 有界纹理缓存
+│   ├── video-source.ts   视频取帧：mediabunny + WebCodecs + 有界纹理缓存
+│   └── video-budget.ts   视频缓存的淘汰决策（纯函数 + 单测，见 §5.11）
 ├── effects/       声明式特效定义 + GLSL
 │   ├── defs/ · glsl/     「一个特效 = 两个文件」，glob 配对，缺一半启动报错
 │   ├── shader-def.ts     着色器协议：EFFECT_HEAD · 共享 GLSL 头 · floats/colorVec3 · program 命名
@@ -1344,6 +1346,11 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
 - **磁盘纪律**（这个项目的导出是会产生真实大文件的）：E2E 一律 320×180 / 0.5s（15 帧），
   产物落 `os.tmpdir()`，`afterEach` **无条件**删目录（断言失败时也删），并有体积上限断言
   （`< 1 MB`）。**不要为了「看得更清楚」把 E2E 时长调大** —— 长时导出稳定性是手工验一次的事。
+- **落盘方式由体积决定**（见 §5.11）：预估超过 `exportMemoryMB` 就先要一个保存位置、
+  边编边写（`Platform.saveStream`）；否则在内存里产完再 `download()`。
+  内存那条路的收场是**崩**（标签页 OOM 会把没保存的编辑一起带走），所以它是唯一
+  按容量裁的导出路径。预估取保守值（宁可多弹一次保存对话框），并且在**开跑之前**
+  问 —— `showSaveFilePicker` 要求瞬时激活，逐帧循环里再问就晚了。
 
 ### 5.9 预览
 
@@ -1413,6 +1420,69 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
 - **新增一类可被插件扩展的东西**（比如将来的转场）要一次做齐三件：
   注册表双层化 + 标签放宽成 `Label` + 校验分支。少任何一件的表现都是
   「插件里写了、但界面上/画面上没有」。
+
+### 5.11 容量预算（内存 / 显存）
+
+**唯一策略处是 `core/capacity.ts`。任何地方都不要再写容量常数。**
+
+这条是补出来的：内存 / 显存类上限曾经散落成字面量（`DEFAULT_BUDGET_BYTES = 192MB`、
+`MAX_RASTER_BYTES = 48MB`、`EXPORT_ENTRIES = 2` …），而它们本质是
+**「这台机器有多宽裕」的函数**，于是 16 GB 台式机与 8 GB 轻薄本共用同一组数字。
+更要命的是容量不足的表现**通常静默**：画面缺层、变糊、context lost，**不报错**。
+
+#### 数字从哪来（浏览器测不准，所以由 Node 测）
+
+```
+scripts/capacity.mjs  （Node：os.freemem + nvidia-smi / 注册表）
+      ↓ /__capacity.json（vite.config.ts 的中间件注入）
+ui/capacity-profile.ts（启动期取一次，**起了不等**）
+      ↓ applyMachine()
+core/capacity.ts      （deriveLimits：share × 份额 → 夹进 [floor, cap]）
+      ↓ getLimits()     ← 所有消费方都在**用到时**读，不抄进字段
+```
+
+- 页面侧拿不到可信数字：`navigator.deviceMemory` 粗到 GB 且只有 Chromium 有，
+  `performance.memory` **只统计 JS 堆**，WebGL 连显存大小都不肯说
+  （`MAX_TEXTURE_SIZE` 是格式上限，不是容量）。**别在页面里猜。**
+- 探测不到（纯静态部署 / 探测失败）就退回 `DEFAULT_LIMITS` —— 那组值刻意等于
+  「改造之前的行为」，所以**不会因为探测失败而回归**，只是拿不到更好的利用。
+- 要更大的值：写 `artmatic.capacity.json`（路径见 `scripts/capacity.mjs`，
+  可用 `ARTMATIC_CAPACITY` 覆盖），或在宿主里 `setLimits()`。
+  **不要回来改 `deriveLimits` 的比例** —— 那是所有机器共享的策略。
+- 新预算 = 加到 `CapacityLimits` + `deriveLimits`（写明 share / floor / cap 的
+  理由）+ `RANGE` + `DEFAULT_LIMITS`（等于旧行为），再让消费方读 `getLimits()`。
+
+#### 两条不变量（谁违反谁出「静默故障」）
+
+1. **上限必须罩得住「当前实际要画的东西」。** 与预算冲突时**保画面 + 报超支**，
+   不许让上限赢：
+   - 排版：`protectedKeys()` = 当前帧 ∪ 上一帧在屏的键，永不淘汰；
+     超出预算就置 `overBudget`（`stats()` 里可见）。
+   - 视频：`planEviction()` 两级裁决，**每条缓存至少留一帧**（那是正在显示的画面），
+     连这都放不下就停手并置 `overBudget`。
+   - 特效池：反馈历史与 `delayedInput` 是**状态**不是中间结果，在用的那份淘汰
+     就是画错，同样停手 + `poolOverBudget`。
+2. **作用域要写对：全局 vs 每项。** `new FrameCache(192MB)` 建在**每条素材**的
+   条目里 = N × 192 MB（实测一次 4 秒导出就吃掉 398 MB 显存）。声明是全局就必须
+   只有一份，裁决只能有一处（`rebalance()` / `evict()` / `trimPools()`）。
+
+#### 生命周期：有 `forget`/`dispose` 就必须有调用方
+
+注册处的接口齐全但**零调用方** = 完全等于没写。素材级资源（视频解码器 + 帧缓存、
+图片 canvas + 纹理、AudioBuffer、频谱分析、波形）在 `closeProject` 时经
+`releaseProjectAssets()` 释放；片段级的模拟状态纹理走 `AlgoRuntime.forget()`。
+模拟状态**不能**靠预算淘汰 —— 它装的是状态，删了就得从第 0 帧重推（违反 §1.3）。
+
+#### 消费与验证
+
+- 淘汰是**延迟结算**的（upload / 模式切换 / 帧末 / 每次解码），所以改完预算要
+  触一次才会看到；`overBudget` 类读数就是给这件事留的证据。
+- E2E 里**把预算钉死**（`__artmatic.capacity.set({...})`），否则用例行为会跟着
+  跑测试的机器变。注意 `RANGE` 有下限：写 `1` 会被夹回 floor，用例会变成假绿。
+- 导出体积超 `exportMemoryMB` 时改走**流式落盘**（`Platform.saveStream` +
+  mediabunny 的 `StreamTarget` / fflate 增量 zip）。这条路要用户先选保存位置
+  （`showSaveFilePicker` 要求瞬时激活），拿不到时明确提示风险并继续 ——
+  理由见 `ui/export.ts::pickOutput`。
 
 ---
 
@@ -1878,6 +1948,17 @@ bun scripts/mutate-triage.mjs --diff HEAD              # 只看本次改动命�
 10. **不可子集化的字体（woff2）+ 动画文档的逐帧成本**未测。woff2 通常只有 TTF 的 30–50%，
     所以不是「上百毫秒」那个量级。真要遇上，对策是引导用户换 TTF/OTF，或用「转为图片」
     把它冻成静态资源。
+11. **大工程的保存校验会静默降级**：`project/fs.ts` 里 `> 4 MB` 只比长度、
+    `> 64 MB` 干脆不读回（`verified: 'none'`），而 `verified` **不进 UI** ——
+    保存提示只看 `warnings`，于是「磁盘写坏」与「保存成功」在界面上长得一样。
+    修法：把 `verified !== 'hash'` 并进保存提示。触发条件是大工程（几十 MB 的
+    `project.json`），现在没踩到，但它是**数据安全**那一类。
+12. **超上限的静默夹小没有提示**：`maxUploadWidth` / `rasterEdge` 现在由容量派生
+    （§5.11），但「8K 素材被缩到 4096」「文本层被夹到 4096 边长」仍然只是变糊，
+    没有一处 UI 说出来。修法：在素材面板/排版面板上给一条一次性提示。
+13. **撤销栈按步数裁，不按字节裁**：`undoSteps` 已按可用内存派生（§5.11），
+    但每条记录是**整份工程 JSON 快照**，所以「能存几步」其实是工程大小的函数。
+    修法：字段级/增量快照，或直接按字节预算裁（`pushUndo` 里已经有钩子）。
 11. **两处近义提示没有统一**：`app.beatAnchorTip` 与 `insp.anchorTip` 只差斜杠两边的空格。
     抽取时按「逐字保留」原则没动它，但同一个功能的 tooltip 有两份文案本身就是维护负担。
     合并需要一次独立的、显式的文案改动。

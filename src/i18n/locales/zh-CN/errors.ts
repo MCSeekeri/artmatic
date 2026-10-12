@@ -87,6 +87,13 @@ export const errors = {
   'err.export.noWebCodecs': '本机浏览器不支持 WebCodecs，请改用 PNG 序列导出',
   'err.export.silentAudio': '音轨混流结果是静音，本次只导出画面',
   'err.export.mp4Done': '已导出 MP4 ，共 {size}',
+  /* 导出落盘方式：预估体积超过内存预算时改成「先选保存位置，再边编边写」
+     （见 ui/export.ts::pickOutput）。 */
+  'err.export.streamingSave': '本次预计 {size}，超过内存预算 {budget}，改为直接写入你选择的文件',
+  'err.export.streamDone': '已保存到 {name}{size}',
+  'err.export.overBudget': '本次预计 {size}，超过内存预算 {budget}；本浏览器不支持选择保存位置，仍会先在内存里产完',
+  'err.export.fileTypeMp4': 'MP4 视频',
+  'err.export.fileTypeZip': 'PNG 序列压缩包',
   'err.export.failed': '导出失败：{detail}',
   'err.export.sinkCodec': 'Mp4Sink 只支持 {want}，收到 {got}',
   'err.export.sinkNoCanvas': 'Mp4Sink.configure 需要真实 canvas（见 frame-sink 的 FrameSinkConfigureOptions）',
