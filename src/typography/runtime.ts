@@ -14,6 +14,7 @@
  */
 
 import { drawSizeFor } from '../engine/placement.frag';
+import { buildStack, walkOps } from '../engine/stack';
 import type { SourceTexture } from '../engine/compositor';
 import type { Kit } from '../engine/kit';
 import type { TextResolver } from '../engine/sources';
@@ -28,7 +29,15 @@ export const MAX_RASTER_EDGE = 4096;
 /** 预览常驻位图的内存上限（按 w*h*4 计费）。 */
 export const MAX_RASTER_BYTES = 48 * 1024 * 1024;
 export const MAX_RASTER_ENTRIES = 32;
-/** 导出期只保留当前帧 ±1：导出是顺序的，留着历史纯属浪费显存。 */
+/**
+ * 导出期条目数的**下限**（真正的上限是 `exportKeep`，见 `prewarmFrame`）。
+ *
+ * 原意是「导出是顺序的，留着历史纯属浪费显存」，所以压到 2。但**上限必须罩得住
+ * 这一帧真的会被画到的排版层个数**：一帧有 3 层排版（本项目就是「字幕 + 上下黑边 +
+ * 标题卡」，黑边与字幕是静态文档、标题卡是动画文档）时，写死 2 会让三层每帧互相
+ * 淘汰 —— 每帧必有一层被淘汰，而导出态**没有**「缺帧用最近一帧顶上」那条回退
+ * （见 `resolve`），于是那一层这帧真的没有。表现是逐帧闪烁，且哪一层缺是竞态决定的。
+ */
 export const EXPORT_ENTRIES = 2;
 
 export type { TextResolver };
@@ -66,6 +75,11 @@ export class TypographyRuntime {
   private readonly latest = new Map<string, string>();
   private clock = 0;
   private exportMode = false;
+  /**
+   * 导出期允许常驻的条目数。由 `prewarmFrame` 按「这一帧会被画到的排版层」抬高
+   * （见 EXPORT_ENTRIES 的注释）：写死数字会在层数多于一帧的上限时每帧互相淘汰。
+   */
+  private exportKeep = EXPORT_ENTRIES;
 
   constructor(
     private readonly kit: Kit,
@@ -172,22 +186,42 @@ export class TypographyRuntime {
    * 这是本模块对既有结构唯一的侵入（导出循环里多一次 await）。
    * 它与 `await sink.submit` 同类：是渲染前准备 + 协作式背压，
    * 不是第二个时钟 —— 硬约束 1.1 禁止的是「用 rAF 驱动导出」。
+   *
+   * 走 `buildStack` 而不是自己遍历 tracks，与 `video-source.ts::prepareProject`
+   * 是同一条纪律：**要烘的是这一帧真的会被画到的那些层**，而转场会在片段自己的
+   * span 之外求值（窗口前半段的入画片段 `localSec < 0`）—— 自己按
+   * `t ∈ [clip.start, clip.end)` 筛会漏掉它，而导出态没有「缺帧顶上」那条回退，
+   * 漏掉就是那一侧真的没有（动画文档每帧都是新键，等异步光栅化回来时这一帧早过去了）。
    */
   async prewarmFrame(project: Project, t: number): Promise<void> {
     const jobs: Promise<void>[] = [];
-    for (const track of project.tracks) {
-      if (track.kind !== 'visual' || !track.enabled) continue;
-      for (const clip of track.clips) {
-        if (clip.kind !== 'source' || clip.source.type !== 'text') continue;
-        if (t < clip.start || t >= clip.end) continue;
-        const doc = clip.source.doc;
-        const size = this.rasterSizeFor(clip, doc.size.w, doc.size.h, this.kit.w, this.kit.h);
-        const localSec = t - clip.start;
-        const key = this.keyFor(doc, localSec, size.w, size.h);
-        if (this.entries.has(key)) continue;
-        jobs.push(this.bakeNow(key, doc, size.w, size.h, localSec));
+    const keys = new Set<string>();
+    const bake = (clip: SourceClip): void => {
+      if (clip.source.type !== 'text') return;
+      const doc = clip.source.doc;
+      const size = this.rasterSizeFor(clip, doc.size.w, doc.size.h, this.kit.w, this.kit.h);
+      const localSec = t - clip.start;
+      const key = this.keyFor(doc, localSec, size.w, size.h);
+      if (keys.has(key)) return;
+      keys.add(key);
+      const hit = this.entries.get(key);
+      if (hit) {
+        // 命中也要**刷新使用时刻**：否则「静态文档这一帧要用」不会体现在 LRU 顺序里，
+        // 它会被下一次 upload 当成最旧的一条淘汰掉（正是逐帧闪烁的另一半）。
+        hit.used = ++this.clock;
+        return;
       }
-    }
+      jobs.push(this.bakeNow(key, doc, size.w, size.h, localSec));
+    };
+    walkOps(buildStack(project, t), (op) => {
+      if (op.type === 'source') bake(op.source.clip);
+      else if (op.type === 'transition') {
+        bake(op.from.clip);
+        bake(op.to.clip);
+      }
+    });
+    // 上限必须罩得住这一帧的全部排版层（见 EXPORT_ENTRIES 的注释）。
+    this.exportKeep = Math.max(EXPORT_ENTRIES, keys.size);
     await Promise.all(jobs);
   }
 
@@ -238,6 +272,9 @@ export class TypographyRuntime {
 
   enterExportMode(): void {
     this.exportMode = true;
+    // 从这里到第一帧 `prewarmFrame` 之间没有「本帧要画的层」这个概念，
+    // 先用下限清一遍历史；真正的上限由 prewarmFrame 按帧抬高。
+    this.exportKeep = EXPORT_ENTRIES;
     this.evict(EXPORT_ENTRIES, 0);
   }
 
@@ -291,7 +328,7 @@ export class TypographyRuntime {
     this.latest.set(key.slice(0, key.lastIndexOf('|')), key);
 
     this.evict(
-      this.exportMode ? EXPORT_ENTRIES : MAX_RASTER_ENTRIES,
+      this.exportMode ? this.exportKeep : MAX_RASTER_ENTRIES,
       this.exportMode ? 0 : MAX_RASTER_BYTES,
     );
   }

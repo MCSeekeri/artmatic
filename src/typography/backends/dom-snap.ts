@@ -26,6 +26,27 @@ import type { RasterRequest, TextRasterizer } from '../rasterizer';
 export class DomSnapRasterizer implements TextRasterizer {
   readonly id = 'dom-snap' as const;
 
+  /**
+   * 光栅化**串行链**。
+   *
+   * 后端在逻辑上是无状态的（不持有缓存），但它有一份**共享可变状态：`host`**——
+   * 每次 `rasterize` 都把新文档 `replaceChildren` 进去，截完再清空。而
+   * `snapdom()` + `toCanvas()` 是异步的，于是**两次并发调用会互相把对方的
+   * root 从文档里摘掉**：脱离文档的元素既拿不到 CSSAnimation（`bakeAnimations`
+   * 失效），`getComputedStyle` 也回落到空值 —— 截出来是一张**全透明或全不透明黑**
+   * 的废图，而且**不报错**。
+   *
+   * 后果不是「这一帧糊一下」：`TypographyRuntime` 会把废图**按正确的键**缓存下来，
+   * 静态文档的键不含帧号 ⇒ 这条坏图会一直生效到被淘汰，表现成「某一层排版把
+   * 下面整幅画面涂黑 / 凭空消失」，重启预览服务器只是重跑一次同样的竞态。
+   *
+   * 谁会并发：`rasterize` 的调用方有三处 —— rAF 预览的 `schedule`、
+   * 导出的 `prewarmFrame`（`Promise.all`，天然并发）、编辑器的 `rasterizeOnce`。
+   * 它们互相之间没有任何串行化，所以这条链必须放在**拥有 host 的这一层**：
+   * 谁持有共享状态，谁负责保证「同一时刻只有一次截图」。
+   */
+  private chain: Promise<unknown> = Promise.resolve();
+
   constructor(
     private readonly host: HTMLElement,
     private readonly fonts: FontProvider,
@@ -35,7 +56,17 @@ export class DomSnapRasterizer implements TextRasterizer {
     return true;
   }
 
-  async rasterize(req: RasterRequest): Promise<HTMLCanvasElement> {
+  rasterize(req: RasterRequest): Promise<HTMLCanvasElement> {
+    const run = this.chain.then(() => this.rasterizeOne(req));
+    // 链上只关心「上一单结束了」：一单失败不能把后续全部拖死。
+    this.chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async rasterizeOne(req: RasterRequest): Promise<HTMLCanvasElement> {
     // ADR-003 规则 ③：字体没就绪就截图，首帧会用回落字体量度。
     await this.fonts.ensure(req.doc);
 

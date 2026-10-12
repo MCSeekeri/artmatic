@@ -41,6 +41,53 @@ function bandDoc() {
   };
 }
 
+/** `bandDoc` 的变体工厂：起点不同 ⇒ 文档哈希不同 ⇒ 缓存键不同（并发用例要三份不同的文档）。 */
+function bandDocAt(y: number, h = 48, color = '#ffffff') {
+  const doc = bandDoc();
+  doc.elements[0]!.frame = { x: 0, y, w: DOC_W, h, rot: 0 };
+  doc.elements[0]!.fill = { kind: 'solid', color };
+  return doc;
+}
+
+const midBandDoc = () => bandDocAt(120);
+const lowerBandDoc = () => bandDocAt(240);
+
+/** 三条视觉轨、各一条排版片段、都在同一时刻可见（导出预热的并发/淘汰用例）。 */
+function threeBandProject() {
+  const duration = 0.2;
+  const track = (id: string, doc: unknown, start: number) => ({
+    kind: 'visual' as const,
+    id,
+    name: id,
+    enabled: true,
+    clips: [
+      {
+        kind: 'source' as const,
+        id: `${id}-clip`,
+        start,
+        end: duration,
+        label: '排版',
+        fadeSec: 0,
+        curves: {},
+        source: { type: 'text' as const, doc },
+        blend: 'normal' as const,
+        opacity: 1,
+        transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+        fit: 'contain' as const,
+      },
+    ],
+  });
+  return {
+    ...projectWith(bandDocAt(0, 60), duration),
+    // 各占 1/6 高（60 / 360），三条合起来正好半幅墨迹。
+    tracks: [
+      track('v1', bandDocAt(0, 60), 0),
+      track('v2', bandDocAt(120, 60), 0),
+      track('v3', bandDocAt(240, 60), 0),
+    ],
+  };
+}
+
 /** 带淡入动画的矩形，用来验证「动画真的被 seek 到 t 上了」。 */
 function animatedDoc() {
   const doc = bandDoc();
@@ -246,6 +293,96 @@ test('光栅化本身确定：同参数同结果，动画真的被 seek 到 t �
   expect(result.a3.hash).not.toBe(result.s1.hash);
 });
 
+/**
+ * 并发光栅化必须与顺序光栅化**逐字段相同**。
+ *
+ * 后端（`dom-snap`）每次截图都把文档 `replaceChildren` 进**同一个 host**，而
+ * `snapdom()` / `toCanvas()` 是异步的：两次并发调用会互相把对方的 root 从文档里
+ * 摘掉 —— 脱离文档的元素拿不到 CSSAnimation、`getComputedStyle` 回落成空值，
+ * 截出来是一张**全透明或全不透明黑**的废图，而且不报错。runtime 又按**正确的键**
+ * 把它缓存下来（静态文档的键不含帧号）⇒ 坏图会一直生效到被淘汰，表现成
+ * 「某一层排版把下面整幅画面涂黑 / 凭空消失」。
+ *
+ * 三条并发路径都是既有的：rAF 预览的 `schedule`、导出的 `prewarmFrame`
+ * （`Promise.all`，天然并发）、编辑器的 `rasterizeOnce`。所以这条断言守的是
+ * `TextRasterizer` 契约里那句「**必须确定**：同参数同结果」。
+ */
+test('并发光栅化与顺序光栅化产物一致', async ({ page }) => {
+  await BOOT(page);
+
+  const result = await page.evaluate(
+    async ({ docs }) => {
+      const A = (window as never as { __artmatic: TypoHooks }).__artmatic;
+      const seq: TypoShot[] = [];
+      for (const d of docs) seq.push(await A.typoRasterize(d, 640, 360, 0));
+      // 与 `prewarmFrame` 同样的并发形状：三个文档同时起跑。
+      const con = await Promise.all(docs.map((d) => A.typoRasterize(d, 640, 360, 0)));
+      // 同一份文档并发两次：逐像素也必须一致。
+      const twice = await Promise.all([
+        A.typoRasterize(docs[0], 640, 360, 0),
+        A.typoRasterize(docs[0], 640, 360, 0),
+      ]);
+      return { seq, con, twice };
+    },
+    { docs: [bandDoc(), midBandDoc(), lowerBandDoc()] },
+  );
+
+  // 先确认「顺序」这一路本身是好图：否则下面的相等断言可能是「都坏得很一致」。
+  for (const s of result.seq) expect(s.ink).toBeGreaterThan(0);
+
+  expect(result.con.map((s) => ({ ...s }))).toEqual(result.seq.map((s) => ({ ...s })));
+  expect(result.twice[0]).toEqual(result.twice[1]);
+});
+
+/**
+ * 导出预热：一帧有多层排版时，条目上限必须罩得住它们。
+ *
+ * `EXPORT_ENTRIES` 原本写死 2（「导出是顺序的，留着历史纯属浪费显存」）。但上限若
+ * 小于「这一帧会被画到的排版层个数」，它们会每帧互相淘汰，而导出态**没有**
+ * 「缺帧用最近一帧顶上」那条回退（见 `TypographyRuntime.resolve`）⇒ 那一层这帧
+ * 真的没有，表现是逐帧闪烁。三条轨各一块白带：缺一层，墨迹占比就掉三分之一。
+ */
+test('导出预热：同帧三层排版都留下（不互相淘汰）', async ({ page }) => {
+  await BOOT(page);
+
+  const result = await page.evaluate(
+    async ({ project }) => {
+      const A = (window as never as { __artmatic: TypoHooks }).__artmatic;
+      A.appState.exportProgress = 0;
+      try {
+        A.store.loadFrom(project);
+        const project_ = A.store.project;
+        A.renderer.setExportSize(640, 360);
+        A.renderer.onSeek();
+        A.renderer.enterExportMode();
+        try {
+          // 与导出循环同一形状：先预热这一帧，再渲染。
+          await A.renderer.prepareFrame(project_, 0.05);
+          A.renderFrame(0.05);
+          return { stats: A.typoStats(), ink: inkOf(A.renderer.readPixels()) };
+        } finally {
+          A.renderer.exitExportMode();
+        }
+      } finally {
+        A.appState.exportProgress = null;
+      }
+
+      function inkOf(px: { data: Uint8Array; w: number; h: number }): number {
+        let ink = 0;
+        for (let i = 0; i < px.data.length; i += 4) if (px.data[i]! > 128) ink += 1;
+        return ink / (px.w * px.h);
+      }
+    },
+    { project: threeBandProject() },
+  );
+
+  // 三层各占 1/6 高：全在 = 0.5，缺一层 = 0.333 或 0.167。
+  expect(result.ink).toBeGreaterThan(0.45);
+  expect(result.ink).toBeLessThan(0.55);
+  // 缓存里也必须是三条（上限罩得住），而不是被压到 2。
+  expect(result.stats.entries).toBeGreaterThanOrEqual(3);
+});
+
 test('同一文档重复光栅化不泄漏缓存条目', async ({ page }) => {
   await BOOT(page);
 
@@ -268,21 +405,27 @@ test('同一文档重复光栅化不泄漏缓存条目', async ({ page }) => {
   expect(result.after.entries).toBe(result.before.entries);
 });
 
+interface TypoShot {
+  w: number;
+  h: number;
+  ink: number;
+  sum: number;
+  hash: string;
+}
+
 interface TypoHooks {
-  store: { loadFrom: (p: unknown) => void };
+  store: { loadFrom: (p: unknown) => void; project: unknown };
   appState: { exportProgress: number | null };
   renderer: {
     setExportSize: (w: number, h: number) => void;
     readPixels: () => { data: Uint8Array; w: number; h: number };
     onSeek: () => void;
+    prepareFrame: (project: unknown, t: number) => Promise<void>;
+    enterExportMode: () => void;
+    exitExportMode: () => void;
   };
   renderFrame: (t: number) => void;
   exportFrames: () => Promise<Record<string, number[]>>;
-  typoRasterize: (
-    doc: unknown,
-    w: number,
-    h: number,
-    localSec: number,
-  ) => Promise<{ w: number; h: number; ink: number; sum: number; hash: string }>;
+  typoRasterize: (doc: unknown, w: number, h: number, localSec: number) => Promise<TypoShot>;
   typoStats: () => { entries: number; bytes: number };
 }
