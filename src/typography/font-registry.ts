@@ -76,6 +76,20 @@ export function dataUrlFor(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${bytesToBase64(bytes)}`;
 }
 
+/**
+ * 一个 URL 包成 CSS 的 `src` 值：`/fonts/x.woff2` → `url("/fonts/x.woff2")`。
+ *
+ * `FontFace(family, source)` 的字符串形式走的是 **CSS src 值列表**的解析器，
+ * 裸 URL 会被判成语法错误（`The source provided ('/fonts/…') could not be
+ * parsed as a value list`）—— 而浏览器分不清「语法错」与「文件坏了」，
+ * 于是内置字体的**预加载**那条路（此时只有 URL、字节要等 ensure 才 fetch）
+ * 每次启动都报一次失败，`missing()` 还会据此闪一条「字体未就绪」。
+ * 反斜杠先逃，否则会把后面那次转义再吃一层。
+ */
+export function cssUrl(url: string): string {
+  return `url("${url.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`;
+}
+
 /** 是否可以被 HarfBuzz 子集化。**只有 SFNT（TTF/OTF）可以**，woff/woff2 不行。 */
 export function isSubsettable(mime: string): boolean {
   return mime === 'font/ttf' || mime === 'font/otf';
@@ -427,11 +441,13 @@ export class FontRegistry implements FontProvider {
   private async loadFace(face: FontFaceSource): Promise<void> {
     if (face.loaded) return;
     if (typeof FontFace === 'undefined' || typeof document === 'undefined') return;
-    const src: ArrayBuffer | string | null = face.bytes ?? face.url;
+    // 字节优先（ArrayBuffer 直接吃）；只有 URL 时必须包成 CSS 的 src 值 ——
+    // 裸 URL 会被 FontFace 判成语法错误（见 `cssUrl`）。
+    const src: ArrayBuffer | string | null = face.bytes ?? (face.url ? cssUrl(face.url) : null);
     if (!src) return;
     try {
       const descriptors: FontFaceDescriptors = { weight: String(face.weight), style: face.style };
-      const ff = new FontFace(face.family, src as ArrayBuffer, descriptors);
+      const ff = new FontFace(face.family, src, descriptors);
       await ff.load();
       document.fonts.add(ff);
       face.loaded = true;

@@ -285,3 +285,25 @@ test('未注册的字体出现「字体未就绪」横幅', async ({ page }) => 
   await expect(page.getByTestId('typo-font-missing')).toBeVisible();
   await expect(page.getByTestId('typo-font-missing')).toContainText('某个没导入的字体');
 });
+
+/**
+ * 内置字体的**预加载**不许失败。
+ *
+ * 预加载走的是「只有 URL、字节要等 `ensure()` 才 fetch」那条路，而
+ * `FontFace(family, source)` 的字符串形式是按 **CSS src 值列表**解析的 ——
+ * 裸 URL（`/fonts/inter-latin-400.woff2`）会被判成语法错误，浏览器分不清
+ * 「语法错」与「文件坏了」，于是每次启动都报一次失败、把 `failed` 置为 true，
+ * `missing()` 还会因此闪一条「字体未就绪」。
+ *
+ * 判据取**控制台**而不是内部状态：这条路径的全部可见症状就是那条警告。
+ */
+test('内置字体预加载成功（启动不发 [typo] 加载失败警告）', async ({ page }) => {
+  const noise: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'warning' || m.type() === 'error') noise.push(m.text());
+  });
+  await boot(page);
+  // 预加载是「起了不等」的 promise，等它落地再收网。
+  await page.waitForTimeout(600);
+  expect(noise.filter((t) => t.includes('[typo]'))).toEqual([]);
+});
