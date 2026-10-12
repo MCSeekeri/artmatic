@@ -141,8 +141,16 @@ async function pickOutput(
   return null;
 }
 
+/** PNG 序列的峰值倍数：帧 + zip + Blob 拷贝（见 `estimatePngBytes`）。 */
+const PNG_PEAK_FACTOR = 3;
+
 /**
- * PNG 序列的体积预估（字节）。
+ * PNG 序列的**峰值内存**预估（字节）—— 注意不是成品体积。
+ *
+ * 判「会不会 OOM」要看峰值，而内存那条路的峰值是成品的好几倍：
+ * `this.files` 里全部帧（1×）+ `zipSync` 产出的整包（1×）+ 为 `Blob` 复制的那一份（1×）。
+ * 按成品算会**放过本该走流式的导出**：400 MB 的包在 833 MB 预算内放行，实际峰值 1.2 GB。
+ * 所以这里乘 3（`PNG_PEAK_FACTOR`），这是本文件唯一一处「故意悲观」的系数。
  *
  * 优先**实测一帧**（`samplePngFrameBytes`，与面板上的磁盘提示同源）；量不到就退回
  * 「每帧 0.5 字节/像素」—— PNG 对平坦画面能压到百分之几，对噪声则可能到 3 B/px，
@@ -152,7 +160,17 @@ async function estimatePngBytes(totalFrames_: number, onlyTrackId?: string): Pro
   const p = appState.store.project;
   const sampled = await samplePngFrameBytes(appState.playT, onlyTrackId);
   const perFrame = sampled ?? Math.round(p.resolution.w * p.resolution.h * 0.5);
-  return perFrame * totalFrames_;
+  return perFrame * totalFrames_ * PNG_PEAK_FACTOR;
+}
+
+/**
+ * MP4 的峰值内存预估（字节）。
+ *
+ * 比 PNG 那条简单：`BufferTarget` 里就是整份文件，多出来的只是编码器的在位缓冲，
+ * 取 1.2 倍。不乘更多是因为 MP4 是压缩流式写入的，没有「再复制一份」那一步。
+ */
+function estimateMp4PeakBytes(): number {
+  return Math.round(estimateMp4Bytes() * 1.2);
 }
 
 /**
@@ -245,7 +263,7 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
 
   try {
     // 落盘方式在开跑之前定：估算体积超内存预算就先要一个写入位置（见 pickOutput）。
-    const stream = await pickOutput('mp4', safeBase(name), estimateMp4Bytes());
+    const stream = await pickOutput('mp4', safeBase(name), estimateMp4PeakBytes());
     if (ctrl.signal.aborted) return;
     const sink = new Mp4Sink({ audio, stream });
     // 只导某视觉轨时音轨照常混入（音频不属视觉轨，见 onlyTrackId 语义）。
