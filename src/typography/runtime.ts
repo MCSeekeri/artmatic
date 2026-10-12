@@ -11,10 +11,22 @@
  *
  * 缓存键 = (docHash, 输出尺寸, 本地帧号)。静态文档的帧号是 null ——
  * 一张标题卡整个片段生命期只光栅化一次。
+ *
+ * ## 淘汰的两条不变量（2026-10-12）
+ *
+ * 1. **预算按机器派生**（`limits.textRasterMB`，见 `core/capacity.ts`），
+ *    不再是写死的 48 MB。
+ * 2. **不许淘汰「这一帧在屏的层」**（`protectedKeys`）。上限与「这一帧要画什么」
+ *    冲突时保画面，并把超支报进 `stats().overBudget`。
+ *
+ * 第 2 条是踩出来的：导出期条目上限写死 2，而一帧有 3 层排版时每帧必有一层被
+ * 淘汰，导出态又没有「缺帧顶上」的回退 ⇒ 那一层这帧真的没有，表现是逐帧闪烁。
+ * **上限必须罩得住当前实际要画的东西** —— 换成字节预算也一样，所以两条都要在。
  */
 
 import { drawSizeFor } from '../engine/placement.frag';
 import { buildStack, walkOps } from '../engine/stack';
+import { getLimits, mbToBytes } from '../core/capacity';
 import type { SourceTexture } from '../engine/compositor';
 import type { Kit } from '../engine/kit';
 import type { TextResolver } from '../engine/sources';
@@ -24,10 +36,10 @@ import type { TypographyDocument } from './document';
 import type { FontProvider } from './font-provider';
 import type { TextBackendRegistry } from './rasterizer';
 
-/** 4K 文本层 + 放大动画的保护上限。 */
-export const MAX_RASTER_EDGE = 4096;
-/** 预览常驻位图的内存上限（按 w*h*4 计费）。 */
-export const MAX_RASTER_BYTES = 48 * 1024 * 1024;
+/**
+ * 条目数的**次级**上限：只防「一帧一个新键」那种抖动，容量主要由字节预算管
+ * （`limits.textRasterMB`，按机器派生）与「不许淘汰在屏层」那条不变量管。
+ */
 export const MAX_RASTER_ENTRIES = 32;
 /**
  * 导出期条目数的**下限**（真正的上限是 `exportKeep`，见 `prewarmFrame`）。
@@ -81,6 +93,40 @@ export class TypographyRuntime {
    */
   private exportKeep = EXPORT_ENTRIES;
 
+  /*
+   * 「这一帧在屏的层」—— 淘汰时**必须保住**的那些键。
+   *
+   * 这是本模块的第二条不变量（第一条是「预算按机器派生」）：**上限必须罩得住
+   * 当前实际要画的东西**。只要它俩冲突，正确的做法是保住画面对不对，而不是
+   * 让上限赢 —— 上限赢的表现是「某一层隔帧消失」，用户看到的是闪烁，
+   * 而我们是**静默**地少画了一层。
+   *
+   * 判据是「当前帧 ∪ 上一帧」：`resolve` 是在渲染中被逐个调用的，淘汰却可能发生在
+   * 两帧之间（异步光栅化落地时 upload → evict）。此刻屏幕上还是上一帧的画面，
+   * 所以上一帧的集合同样不许动 —— 这正是老注释里「保留当前帧 ±1」想表达的意思。
+   */
+  private live = new Set<string>();
+  private livePrev = new Set<string>();
+  private liveT = Number.NaN;
+  /** 预算罩不住在屏层时置位（保画面优先）；读数在 `stats()` 里，别静默。 */
+  private overBudget = false;
+
+  private markLive(key: string, t: number): void {
+    if (t !== this.liveT) {
+      this.liveT = t;
+      this.livePrev = this.live;
+      this.live = new Set();
+    }
+    this.live.add(key);
+  }
+
+  /** 不许被淘汰的键集合（当前帧 ∪ 上一帧）。 */
+  private protectedKeys(): Set<string> {
+    if (this.livePrev.size === 0) return this.live;
+    if (this.live.size === 0) return this.livePrev;
+    return new Set([...this.live, ...this.livePrev]);
+  }
+
   constructor(
     private readonly kit: Kit,
     private readonly backends: TextBackendRegistry,
@@ -96,6 +142,9 @@ export class TypographyRuntime {
     const localSec = t - clip.start;
     const size = this.rasterSizeFor(clip, doc.size.w, doc.size.h, renderW, renderH);
     const key = this.keyFor(doc, localSec, size.w, size.h);
+    // 先记「这一帧要它」再判命中：**没命中也是要**（下一帧就会命中），
+    // 而淘汰正好可能落在这两帧之间。
+    this.markLive(key, t);
 
     const hit = this.entries.get(key);
     if (hit) {
@@ -150,9 +199,12 @@ export class TypographyRuntime {
     const kW = dW / docW;
     const kH = dH / docH;
     const s = this.previewScale;
+    // 边长上限来自机器能力（`limits.rasterEdge`）：8K 工程在大显存机器上放宽，
+    // 小机器上维持 4096 别把一张位图做成几百 MB。
+    const edge = getLimits().rasterEdge;
     return {
-      w: clampInt(docW * kW * s, MAX_RASTER_EDGE),
-      h: clampInt(docH * kH * s, MAX_RASTER_EDGE),
+      w: clampInt(docW * kW * s, edge),
+      h: clampInt(docH * kH * s, edge),
     };
   }
 
@@ -280,7 +332,7 @@ export class TypographyRuntime {
 
   exitExportMode(): void {
     this.exportMode = false;
-    this.evict(MAX_RASTER_ENTRIES, MAX_RASTER_BYTES);
+    this.evict(MAX_RASTER_ENTRIES, mbToBytes(getLimits().textRasterMB));
   }
 
   dispose(): void {
@@ -288,14 +340,22 @@ export class TypographyRuntime {
     this.entries.clear();
     this.latest.clear();
     this.inflight.clear();
+    this.live.clear();
+    this.livePrev.clear();
     this.backends.dispose();
   }
 
-  /** 测试钩子。 */
-  stats(): { entries: number; bytes: number } {
+  /** 测试钩子（`overBudget` / `live` 让「预算不够」这件事可见，而不是静默缺层）。 */
+  stats(): { entries: number; bytes: number; budgetMB: number; live: number; overBudget: boolean } {
     let bytes = 0;
     for (const e of this.entries.values()) bytes += e.bytes;
-    return { entries: this.entries.size, bytes };
+    return {
+      entries: this.entries.size,
+      bytes,
+      budgetMB: this.exportMode ? 0 : getLimits().textRasterMB,
+      live: this.protectedKeys().size,
+      overBudget: this.overBudget,
+    };
   }
 
   /* ------------------------------------------------------------ 纹理上传 */
@@ -327,27 +387,42 @@ export class TypographyRuntime {
     // 记成该「文档+尺寸」的最近一帧，供 resolve 在缺帧时回退（见 latest 的说明）。
     this.latest.set(key.slice(0, key.lastIndexOf('|')), key);
 
+    // 预算：导出期只限条目数（历史对顺序导出没用），预览期按机器的 `textRasterMB`。
+    // 两边的条目上限都由「这一帧要画的层数」兜底 —— 见 `exportKeep` 与 `protectedKeys`。
     this.evict(
       this.exportMode ? this.exportKeep : MAX_RASTER_ENTRIES,
-      this.exportMode ? 0 : MAX_RASTER_BYTES,
+      this.exportMode ? 0 : mbToBytes(getLimits().textRasterMB),
     );
   }
 
-  /** 淘汰超出预算的条目（按最近使用时间）。maxBytes 为 0 表示只限条目数。 */
+  /**
+   * 淘汰超出预算的条目（按最近使用时间）。`maxBytes` 为 0 表示只限条目数。
+   *
+   * **在屏的层不参与淘汰**（见 `protectedKeys`）：预算与「这一帧要画什么」冲突时
+   * 保画面。若因此仍然超额，就把 `overBudget` 置位并**停手** —— 让它在 `stats()`
+   * 里可见，而不是继续删到画面缺层。走到这一步表示机器能力与工程规模不匹配，
+   * 该调 `textRasterMB` 或降排版层数，不该由淘汰逻辑替用户决定「哪一层可以消失」。
+   */
   private evict(maxEntries: number, maxBytes: number): void {
+    const keep = this.protectedKeys();
+    this.overBudget = false;
     while (this.entries.size > maxEntries || (maxBytes > 0 && this.totalBytes() > maxBytes)) {
-      let oldestKey: string | null = null;
+      let victimKey: string | null = null;
       let oldest = Infinity;
       for (const [k, e] of this.entries) {
+        if (keep.has(k)) continue;
         if (e.used < oldest) {
           oldest = e.used;
-          oldestKey = k;
+          victimKey = k;
         }
       }
-      if (!oldestKey) return;
-      const victim = this.entries.get(oldestKey)!;
+      if (!victimKey) {
+        this.overBudget = true;
+        return;
+      }
+      const victim = this.entries.get(victimKey)!;
       this.kit.gl.deleteTexture(victim.tex);
-      this.entries.delete(oldestKey);
+      this.entries.delete(victimKey);
     }
   }
 

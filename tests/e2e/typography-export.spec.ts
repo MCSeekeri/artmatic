@@ -383,6 +383,78 @@ test('导出预热：同帧三层排版都留下（不互相淘汰）', async ({
   expect(result.stats.entries).toBeGreaterThanOrEqual(3);
 });
 
+/**
+ * 预算不够时**保画面**，并把超支报出来。
+ *
+ * 这是 `EXPORT_ENTRIES = 2` 那次的推广形态：上限（无论是条目数还是字节）与
+ * 「这一帧要画什么」冲突时，正确的行为是**保住画面 + 显式告知**，而不是让上限赢
+ * —— 上限赢的表现是「某一层隔帧消失」，而我们是静默地少画了一层。
+ *
+ * 这里把预算压到荒谬的 1 MB，三层排版仍然必须全部留下（`overBudget` 为真）。
+ */
+test('排版预算不够时保住画面，并把超支报出来', async ({ page }) => {
+  await BOOT(page);
+
+  const result = await page.evaluate(
+    async ({ project }) => {
+      const A = (window as never as { __artmatic: TypoHooks }).__artmatic;
+      A.appState.exportProgress = 0;
+      const before = A.capacity.get().limits.textRasterMB;
+      try {
+        A.store.loadFrom(project);
+        const p = A.store.project;
+        // 渲染尺寸取 **1920×1080**（不是 640×360）：三层光栅就是 24.9 MB，
+        // 这样才能压过预算的下限（`RANGE.textRasterMB` 的 floor 是 8 MB ——
+        // 1 MB 那种写法会被 `sanitize` 夹回去，用例会变成假绿）。
+        A.renderer.setExportSize(1920, 1080);
+        A.renderer.onSeek();
+        A.renderer.enterExportMode();
+        try {
+          await A.renderer.prepareFrame(p, 0.05);
+          A.renderFrame(0.05);
+          // 导出态先出一版完整画面（进缓存）
+          const full = inkOf(A.renderer.readPixels());
+          A.renderer.exitExportMode();
+
+          // 预算压到下限，再走一次「进入/退出导出态」逼出一次淘汰结算 ——
+          // 淘汰是**延迟**的（只在 upload / 模式切换时才结算），所以这里显式触发。
+          A.capacity.set({ textRasterMB: 8 });
+          await A.renderer.prepareFrame(p, 0.05);
+          A.renderer.enterExportMode();
+          A.renderer.exitExportMode();
+          A.renderFrame(0.05);
+          const squeezed = inkOf(A.renderer.readPixels());
+          const afterEvict = A.typoStats();
+          // 前提：在屏的三层确实撑破了预算（否则这条用例什么都没测到）。
+          const liveMB = (afterEvict.entries * 1920 * 1080 * 4) / (1024 * 1024);
+          return { full, squeezed, afterEvict, liveMB, budgetMB: A.capacity.get().limits.textRasterMB };
+        } finally {
+          A.renderer.exitExportMode();
+        }
+      } finally {
+        A.appState.exportProgress = null;
+        A.capacity.set({ textRasterMB: before });
+      }
+
+      function inkOf(px: { data: Uint8Array; w: number; h: number }): number {
+        let ink = 0;
+        for (let i = 0; i < px.data.length; i += 4) if (px.data[i]! > 128) ink += 1;
+        return ink / (px.w * px.h);
+      }
+    },
+    { project: threeBandProject() },
+  );
+
+  // 前提：在屏的三层确实撑破了预算（这条不成立的话，下面的断言就什么都没证明）。
+  expect(result.liveMB).toBeGreaterThan(result.budgetMB);
+  // 压缩预算前后画面**一样**：三层都还在（没有为了让预算达标而少画一层）。
+  expect(result.squeezed).toBeCloseTo(result.full, 5);
+  expect(result.squeezed).toBeGreaterThan(0.45);
+  // 而且这件事是**可见的**，不是静默的。
+  expect(result.afterEvict.overBudget).toBe(true);
+  expect(result.afterEvict.entries).toBeGreaterThanOrEqual(3);
+});
+
 test('同一文档重复光栅化不泄漏缓存条目', async ({ page }) => {
   await BOOT(page);
 
@@ -424,8 +496,13 @@ interface TypoHooks {
     enterExportMode: () => void;
     exitExportMode: () => void;
   };
+  /** 容量预算的读写（E2E 用它把预算钉死，否则行为跟着跑测试的机器变）。 */
+  capacity: {
+    get: () => { limits: { textRasterMB: number } };
+    set: (patch: Record<string, number>) => unknown;
+  };
   renderFrame: (t: number) => void;
   exportFrames: () => Promise<Record<string, number[]>>;
   typoRasterize: (doc: unknown, w: number, h: number, localSec: number) => Promise<TypoShot>;
-  typoStats: () => { entries: number; bytes: number };
+  typoStats: () => { entries: number; bytes: number; live: number; overBudget: boolean };
 }
