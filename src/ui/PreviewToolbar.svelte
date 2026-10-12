@@ -9,9 +9,11 @@
    * 为什么悬浮而不是放侧栏：这三项是「看着画面调」的时候顺手改的东西，
    * 视线不该离开画面。半透明 + 只在 hover 时提高到不透明，避免挡住构图。
    *
-   * 它还可以**收成一个悬浮球**：这三项调好之后基本不再动，而一条横贯画面
-   * 顶部的条子会实实在在挡住构图（预览区越小越明显）。收起状态与位置都
-   * 跟着 UI 偏好走（localStorage），不进工程。
+   * **贴在画面的右下角**（不是顶部居中）：之前那条横贯画面顶部的居中条
+   * 被用户反馈挡住构图 —— 连收起后的悬浮球浮在正中「即使缩成球也遮挡画面」。
+   * 挪到角落之后，悬浮球与展开条都落在画面构图的死角上（画幅居中、四角
+   * 通常是留白/信箱边），遮挡面积最小。收起状态与位置都跟着 UI 偏好走
+   * （localStorage），不进工程。
    *
    * ⚠️ 用 `Select` 而不是原生 `<select>`：全局快捷键（Space = 播放）
    * 只对 `INPUT/SELECT/TEXTAREA` 放行，而自研控件靠 `data-exempt` 被识别
@@ -110,16 +112,21 @@
    * 一旦被劫持，坐标就变成相对本元素，弹层会整体偏到右边去（实测踩过：
    * 选中「全速」时下拉出现在工具栏右侧、和触发器错开一整个工具栏的宽度）。
    *
-   * 居中改用 `left/right: 0 + margin-inline: auto + width: fit-content`，
-   * 不含 transform 的等价写法。
+   * 定位用 `right/bottom` 贴画面右下角（**不是**顶部居中）—— 居中那条
+   * 会横贯画面顶部挡构图，悬浮球浮在正中同样挡。角落的遮挡面积最小。
+   *
+   * ⚠️ **这里也不能有 `z-index`。** 带非 auto 的 z-index 会自建层叠上下文，
+   * 而 `Select` 的弹层是 `position: fixed` + `z-index: var(--z-menu)` —— 弹层
+   * 会被困在这个上下文里，按工具栏的层级参与比较。工具栏原本在顶部居中时
+   * 弹层朝下只盖到预览区，看不出来；一挪到右下角，弹层就伸进时间轴、被
+   * `z-ruler`(5) 的标尺盖住（点不到）。去掉 z-index 后弹层回到根上下文、
+   * 用 `--z-menu`(100) 正常压过标尺。工具栏自身靠「定位元素后绘制」就已
+   * 在画布 `#gl` 之上，不需要 z-index。
    */
   .pv-bar {
     position: absolute;
-    top: var(--sp-3);
-    left: 0;
-    right: 0;
-    width: fit-content;
-    margin-inline: auto;
+    right: var(--sp-3);
+    bottom: var(--sp-3);
     display: flex;
     align-items: center;
     gap: var(--sp-4);
@@ -128,7 +135,6 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     transition: opacity 120ms ease;
-    z-index: 3;
   }
   .pv-bar:hover,
   .pv-bar:focus-within {
@@ -161,13 +167,11 @@
   .pv-collapse:hover {
     color: var(--text-primary);
   }
-  /* 收起后的悬浮球。同样不能带 transform（见 .pv-bar 的注释）。 */
+  /* 收起后的悬浮球。同样贴右下角、同样不能带 transform（见 .pv-bar 的注释）。 */
   .pv-ball {
     position: absolute;
-    top: var(--sp-3);
-    left: 0;
-    right: 0;
-    margin-inline: auto;
+    right: var(--sp-3);
+    bottom: var(--sp-3);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -179,7 +183,6 @@
     border-radius: 50%;
     color: var(--text-secondary);
     cursor: pointer;
-    z-index: 3;
   }
   .pv-ball:hover,
   .pv-ball:focus-visible {

@@ -2,19 +2,29 @@
   /**
    * CustomCssModal — 手写 CSS 动画的唯一入口。
    *
-   * 只收 **@keyframes 的体**（`from{opacity:0} to{opacity:1}`），不收整段 CSS。
-   * 理由不是偷懒：允许顶层选择器的话，用户就能影响同页的其它元素（预览页里
-   * 还有时间轴和面板）；`@import` 会外发请求破坏离线与确定性；`position:fixed`
-   * 能让元素逃出快照区域，光栅化结果不可预测。限制成 keyframes 体之后，
-   * 它只能影响被绑定的那个元素，而且注入点唯一。
+   * 支持两种写法（都由 `parseCustomCss` 校验）：
    *
-   * 校验在写入前做（sanitizeKeyframeBody 会剥掉 @import / 标签，并校验花括号
-   * 配平）—— 非法代码绝不能进文档，否则用户会以为「保存成功了」。
+   *  ① **单条**：只填一个 `@keyframes` 的**体**（`from{opacity:0} to{opacity:1}`）。
+   *     旧工程就是这种，渲染结果不变。
+   *  ② **多条**：写一个或多个 `@keyframes 名字{…}` 块，再写一行
+   *     `animation: 名字 时长 缓动 延迟 …;`，多条用逗号分隔 —— 于是同一元素上
+   *     可以同时或先后跑多条动画。名字可引用上面的块，也可用预设名（如 fade-in）。
+   *
+   * 只收这些，不收整段 CSS。理由不是偷懒：允许顶层选择器的话，用户就能影响
+   * 同页的其它元素（预览页里还有时间轴和面板）；`@import` 会外发请求破坏离线与
+   * 确定性；`position:fixed` 能让元素逃出快照区域。允许 `@keyframes` 块之后，
+   * 选择器仍恒为 `[data-anim-id]`，注入点唯一 —— 它只影响被绑定的那个元素，
+   * 而且每个名字都被命名空间化（`artmatic-a-<id>-…`），两个元素各写一个
+   * `@keyframes pulse` 不会互相覆盖。
+   *
+   * 校验在写入前做（`parseCustomCss` 会剥掉 @import / 标签 / 注释，并校验
+   * 花括号配平与名字引用）—— 非法代码绝不能进文档，否则用户会以为「保存成功了」。
    */
   import Modal from '../controls/Modal.svelte';
   import Button from '../controls/Button.svelte';
-  import { isValidKeyframeBody, sanitizeKeyframeBody } from '../../typography/animation';
+  import { parseCustomCss, type CustomCssError, type CustomCssParse } from '../../typography/animation';
   import { tr } from '../../i18n/index.svelte';
+  import type { MessageKey } from '../../i18n/locales';
 
   interface Props {
     /**
@@ -33,14 +43,43 @@
   let text = $state(initialOf());
   let error = $state<string | null>(null);
 
-  const body = $derived(sanitizeKeyframeBody(text));
+  const REASON_KEY: Record<CustomCssError, MessageKey> = {
+    unbalanced: 'typo.customCssUnbalanced',
+    badAtRule: 'typo.customCssErrAtRule',
+    badSelector: 'typo.customCssErrSelector',
+    badKeyframeName: 'typo.customCssErrBadName',
+    missingAnimation: 'typo.customCssErrMissingAnimation',
+    badAnimation: 'typo.customCssErrBadAnimation',
+    unknownName: 'typo.customCssErrUnknownName',
+  };
+
+  const parsed = $derived(parseCustomCss(text));
+  const isEmpty = $derived(text.trim() === '');
+  const liveError = $derived(errorOf(parsed));
+  const preview = $derived(previewOf(parsed));
+
+  function errorOf(p: CustomCssParse): string {
+    return p.ok ? '' : tr(REASON_KEY[p.reason]);
+  }
+
+  /** 归一化后的结果预览：旧单 body 包一层 @keyframes，多动画显示块 + 简写。 */
+  function previewOf(p: CustomCssParse): string {
+    if (!p.ok) return '';
+    if (p.animation) return `${p.css ? `${p.css}\n` : ''}animation: ${p.animation};`;
+    return `@keyframes …{${p.css}}`;
+  }
 
   function save(): void {
-    if (!isValidKeyframeBody(text)) {
-      error = tr('typo.customCssUnbalanced');
+    const p = parseCustomCss(text);
+    if (isEmpty) {
+      error = tr('typo.customCssEmpty');
       return;
     }
-    if (!onsave(body)) {
+    if (!p.ok) {
+      error = tr(REASON_KEY[p.reason]);
+      return;
+    }
+    if (!onsave(text)) {
       error = tr('typo.customCssUnwritable');
       return;
     }
@@ -49,7 +88,9 @@
 </script>
 
 <Modal title={tr('typo.customCssTitle')} onclose={onclose} testid="typo-css-modal" width="wide">
-  <p class="hint">{tr('typo.customCssHintA')}<code>@keyframes</code>{tr('typo.customCssHintB')}<strong>{tr('typo.customCssHintC')}</strong>{tr('typo.customCssHintD')}<code>from&#123;opacity:0&#125;to&#123;opacity:1&#125;</code>{tr('typo.customCssHintE')}{tr('typo.customCssHintF')}<code>@import</code>{tr('typo.customCssHintG')}<code>position:fixed</code>{tr('typo.customCssHintH')}</p>
+  <p class="hint">{tr('typo.customCssHintA')}<code>@keyframes</code>{tr('typo.customCssHintB')}<strong>{tr('typo.customCssHintC')}</strong>{tr('typo.customCssHintD')}<code>from&#123;opacity:0&#125;to&#123;opacity:1&#125;</code>{tr('typo.customCssHintE')}</p>
+  <p class="hint">{tr('typo.customCssMultiA')}<code>@keyframes {tr('typo.customCssWordName')}&#123;…&#125;</code>{tr('typo.customCssMultiB')}<code>animation: {tr('typo.customCssWordName')} {tr('typo.customCssWordDuration')} {tr('typo.customCssWordEasing')} {tr('typo.customCssWordDelay')} …;</code>{tr('typo.customCssMultiC')}<code>fade-in</code>{tr('typo.customCssMultiD')}</p>
+  <p class="hint">{tr('typo.customCssHintF')}<code>@import</code>{tr('typo.customCssHintG')}<code>position:fixed</code>{tr('typo.customCssHintH')}</p>
 
   <textarea
     class="code"
@@ -61,10 +102,12 @@
 
   {#if error}
     <p class="err" data-testid="typo-css-error">{error}</p>
-  {:else if !body}
-    <p class="err">{tr('typo.customCssEmpty')}</p>
+  {:else if isEmpty}
+    <p class="note">{tr('typo.customCssEmpty')}</p>
+  {:else if !parsed.ok}
+    <p class="err" data-testid="typo-css-error">{liveError}</p>
   {:else}
-    <p class="ok">{tr('typo.customCssResult')}<code>@keyframes …&#123;{body}&#125;</code></p>
+    <p class="ok">{tr('typo.customCssResult')}<code class="preview">{preview}</code></p>
   {/if}
 
   <div class="acts">
@@ -75,7 +118,7 @@
 
 <style>
   .hint {
-    margin: 0 0 var(--sp-4);
+    margin: 0 0 var(--sp-2);
     font-size: var(--fs-sm);
     color: var(--text-secondary);
     line-height: 1.6;
@@ -88,6 +131,7 @@
   .code {
     width: 100%;
     min-height: 140px;
+    margin-top: var(--sp-3);
     padding: var(--sp-3);
     background: var(--input-bg);
     border: 1px solid var(--input-border);
@@ -108,12 +152,23 @@
     color: var(--danger);
     line-height: 1.5;
   }
+  .note {
+    margin: var(--sp-3) 0 0;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
   .ok {
     margin: var(--sp-3) 0 0;
     font-size: var(--fs-sm);
     color: var(--text-muted);
     line-height: 1.5;
     word-break: break-all;
+  }
+  .preview {
+    display: block;
+    margin-top: var(--sp-1);
+    white-space: pre-wrap;
   }
   .acts {
     display: flex;

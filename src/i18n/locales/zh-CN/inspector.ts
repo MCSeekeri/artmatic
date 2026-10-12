@@ -82,6 +82,22 @@ export const inspector = {
   'insp.pickerNoneHint': '少勾几个条件，或换个搜索词。',
   'insp.pickerHitCount': '{n} 个特效',
 
+  /* ------------------------------------------------ 算法生成器选择器 */
+  /* 换生成器 = 换一种算法，参数表完全不同，所以旧参数不保留 —— 这一点在面板里明说。 */
+  'insp.changeAlgo': '更换算法艺术',
+  'insp.algoPickerSearch': '搜索生成器……',
+  'insp.algoPickerWarn':
+    '更换算法会整份替换这个片段的源：旧参数与旧的关键帧都不会保留，新生成器会写入它的默认参数（整笔操作可用撤销恢复）。',
+  'insp.algoPickerApply': '更换',
+  'insp.algoPickerApplyTip': '整体替换源，并写入新生成器的默认参数',
+  'insp.algoPickerSelected': '当前选择：{name}',
+  'insp.algoPickerUnchanged': '已是当前生成器',
+  'insp.algoPickerCurrent': '当前',
+  'insp.algoPickerHit': '{n} 个生成器',
+  'insp.algoPickerEmpty': '没有符合条件的生成器。',
+  'insp.algoPickerEmptyHint': '换个搜索词试试。',
+  'insp.algoPickerSortDefault': '默认顺序',
+
   /* ------------------------------------------------ 片段动作 */
   'insp.editTypography': '编辑排版',
   'insp.splitAtPlayhead': '在播放头分割',
@@ -94,6 +110,9 @@ export const inspector = {
   'insp.editParam': '修改参数',
   'insp.anchorBeat': '锚到拍',
   'insp.anchorTip': '锚到拍：改 BPM/offset 时卡点自动跟随',
+
+  /* 跨剪切点两帧预览（播放头卡在切点时并排显示前/后帧的浮层 aria-label）。 */
+  'insp.cutPreview': '剪切点预览：左侧为切点前一帧，右侧为切点后一帧',
 
   /* ------------------------------------------------ 撤销栈动作词（「重命名」用 common.rename） */
   'insp.changeStart': '改起点',

@@ -25,6 +25,7 @@ const SCANNED_DIRS = [
   'src/ui/typography',
   'src/ui/ribbon',
   'src/ui/effect-picker',
+  'src/ui/algo-picker',
   'src/ui/mascot',
   'src/ui/pattern',
   'lab',

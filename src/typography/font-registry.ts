@@ -46,6 +46,15 @@ export interface FontFaceSource {
   /** ensure() 阶段备好的 data URL（P7 的子集化产物也放这里）。 */
   dataUrl: string | null;
   loaded: boolean;
+  /**
+   * 随软件分发的内置字体。它们**保证**在包内（打包产物里的资源），所以
+   * `missing()` 不对「尚未 loaded」的内置字体报警 —— 否则每次新建文本框都会
+   * 在首次 fetch 完成前闪一条「字体「Inter」还没准备好，暂时用回落字体渲染」，
+   * 而 Inter 明明就在包里。真正加载失败（`failed`）才报。
+   */
+  bundled?: boolean;
+  /** 加载抛错（URL 404 / 字节损坏）。`missing()` 用它区分「在途」与「真的没有」。 */
+  failed?: boolean;
 }
 
 /** 随软件分发的内置字体（OFL，见 public/fonts/OFL.txt）。 */
@@ -177,14 +186,23 @@ export class FontRegistry implements FontProvider {
 
   /** 内置字体：只登记 URL，第一次 ensure 时才 fetch。 */
   registerBuiltin(family: string, url: string, weight = 400, style: 'normal' | 'italic' = 'normal', mime = 'font/woff2'): void {
-    this.put({ family, url, weight, style, mime, bytes: null });
+    const face = this.put({ family, url, weight, style, mime, bytes: null });
+    face.bundled = true;
   }
 
-  /** 把随软件分发的内置字体全部登记一遍（幂等）。 */
+  /** 把随软件分发的内置字体全部登记一遍（幂等），并**主动预加载**。 */
   registerBundled(): void {
     const base = import.meta.env?.BASE_URL ?? '/';
     for (const f of BUILTIN_FONTS) {
       this.registerBuiltin(f.family, `${base}fonts/${f.file}`, f.weight, f.style);
+    }
+    // 预加载：内置字体是本地资源，随用随 fetch 会让首帧用回落字体量度，
+    // 也可能在 `document.fonts.ready` 之前被光栅化。失败只置 `failed`，
+    // 不打断启动（`missing()` 会据此提示，但不会因为「在途」而误报）。
+    if (typeof document === 'undefined' || typeof FontFace === 'undefined') return;
+    for (const f of BUILTIN_FONTS) {
+      const face = this.faces.get(`${f.family}/${f.weight}/${f.style}`);
+      if (face) void this.loadFace(face);
     }
   }
 
@@ -277,7 +295,16 @@ export class FontRegistry implements FontProvider {
   missing(doc: TypographyDocument): string[] {
     return usedFontFamilies(doc).filter((f) => {
       const ids = this.byFamily.get(f);
-      if (ids?.length) return ids.some((id) => !this.faces.get(id)?.loaded);
+      if (ids?.length) {
+        return ids.some((id) => {
+          const face = this.faces.get(id);
+          if (!face) return false;
+          // 内置字体随包分发 ⇒「尚未 loaded」只表示还在 fetch，不是缺失
+          // （判据见 FontFaceSource.bundled）；真的加载失败才报。
+          if (face.bundled) return face.failed === true && !face.loaded;
+          return !face.loaded;
+        });
+      }
       return !familyRenders(f);
     });
   }
@@ -399,6 +426,7 @@ export class FontRegistry implements FontProvider {
 
   private async loadFace(face: FontFaceSource): Promise<void> {
     if (face.loaded) return;
+    if (typeof FontFace === 'undefined' || typeof document === 'undefined') return;
     const src: ArrayBuffer | string | null = face.bytes ?? face.url;
     if (!src) return;
     try {
@@ -407,7 +435,9 @@ export class FontRegistry implements FontProvider {
       await ff.load();
       document.fonts.add(ff);
       face.loaded = true;
+      face.failed = false;
     } catch (err) {
+      face.failed = true;
       console.warn(`[typo] 字体 ${face.id} 的 FontFace 加载失败`, err);
     }
   }

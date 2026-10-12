@@ -32,7 +32,12 @@ interface Hooks {
 
 interface DocShape {
   size: { w: number; h: number };
-  elements: { id: string; frame: { x: number; y: number; w: number; h: number; rot: number } }[];
+  elements: {
+    id: string;
+    kind?: string;
+    name?: string;
+    frame: { x: number; y: number; w: number; h: number; rot: number };
+  }[];
 }
 
 /**
@@ -231,4 +236,192 @@ test('时间轴快捷键在编辑页失效（S 不切分、Alt+↑↓ 不移轨�
   // 片段总数不变（S 没切分）、位置不变（Alt+↑↓ 没换轨）、时间区间不变。
   expect(after.total).toBe(before.total);
   expect(after.self).toEqual(before.self);
+});
+
+/* ------------------------------------------------------------ 选择手势辅助 */
+
+/**
+ * 从插入选项卡插一个形状（与 typography-ribbon.spec.ts 同一路径）。
+ * 连续插两个形状会落在**同一个默认框**上（`defaultShapeFrame` 与预设无关），
+ * 正好用来造出完美重叠的两个元素。
+ */
+async function insertShape(page: Page, key: string): Promise<void> {
+  await page.getByTestId('ribbon-tab-insert').click();
+  await page.getByTestId('typo-shape').click();
+  await page.getByTestId(`typo-shape-card-${key}`).click();
+}
+
+/** 当前编辑文档里的元素（id / kind / name / frame）与 paper-wrap 的屏幕换算。 */
+async function readElements(page: Page) {
+  return page.evaluate(() => {
+    const A = (window as never as { __artmatic: Hooks & { appState: { activeTypoClipId: string | null } } })
+      .__artmatic;
+    const id = A.appState.activeTypoClipId;
+    let doc: DocShape | null = null;
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) {
+        if (c.id === id && c.source?.type === 'text' && c.source.doc) doc = c.source.doc;
+      }
+    }
+    if (!doc) throw new Error(`找不到当前编辑的排版文档（activeTypoClipId=${id}）`);
+    const wrap = document.querySelector('.paper-wrap')!.getBoundingClientRect();
+    return {
+      zoom: wrap.width / doc.size.w,
+      left: wrap.left,
+      top: wrap.top,
+      elements: doc.elements.map((e) => ({ id: e.id, kind: e.kind, name: e.name, frame: { ...e.frame } })),
+    };
+  });
+}
+
+/**
+ * 图层面板里**选中**的元素 id（读 DOM，不读 store）。
+ *
+ * 选中行带 `selected` 类。这里刻意读界面而不是 store：这一整类 bug 正是
+ * 「store 对了、界面没跟上」，只有读界面才抓得到（见文件头与 AGENTS §6.3）。
+ * 返回的是**列表顺序**（从上到下 = 从前景到后景），断言里一般先排序再比。
+ */
+async function selectedRowIds(page: Page): Promise<string[]> {
+  return page.$$eval('[data-testid=typo-layer-row].selected', (els) =>
+    els.map((e) => e.getAttribute('data-el-id') ?? ''),
+  );
+}
+
+/** 某元素框中心的屏幕坐标（用于鼠标手势）。 */
+function centerOf(geo: Awaited<ReturnType<typeof readElements>>, index: number) {
+  const f = geo.elements[index]!.frame;
+  return {
+    x: geo.left + (f.x + f.w / 2) * geo.zoom,
+    y: geo.top + (f.y + f.h / 2) * geo.zoom,
+  };
+}
+
+test('Shift 单击：多选下点已选项移出选区、点未选项加入', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  // 新片段自带一个文本框；再插一个图形 ⇒ 两个元素。
+  await insertShape(page, 'rect');
+
+  const geo = await readElements(page);
+  expect(geo.elements.length).toBe(2);
+  const ids = geo.elements.map((e) => e.id);
+  const sortedIds = [...ids].sort();
+
+  // Control+A 全选（走真实键盘手势，不是直接调 store）。
+  await page.keyboard.press('Control+a');
+  await expect.poll(async () => (await selectedRowIds(page)).sort()).toEqual(sortedIds);
+
+  // Shift 单击其中一个已选元素 ⇒ 它被移出，其余保留。
+  const target = geo.elements[1]!; // 数组末位 = 最前景（后插入的图形）
+  const p = centerOf(geo, 1);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(p.x, p.y);
+  await page.keyboard.up('Shift');
+
+  const afterRemove = (await selectedRowIds(page)).sort();
+  expect(afterRemove, 'Shift 单击已选项没有把它移出选区').not.toContain(target.id);
+  expect(afterRemove, '其余已选项不该被清掉').toEqual([ids[0]!]);
+
+  // 再 Shift 单击同一个（现在未选）元素 ⇒ 重新加入。
+  await page.keyboard.down('Shift');
+  await page.mouse.click(p.x, p.y);
+  await page.keyboard.up('Shift');
+  await expect.poll(async () => (await selectedRowIds(page)).sort()).toEqual(sortedIds);
+});
+
+test('Alt 单击：在同一位置轮询重叠元素', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  // 两个形状落在同一个默认框上 ⇒ 完全重叠（最前景 = 后插入的椭圆）。
+  await insertShape(page, 'rect');
+  await insertShape(page, 'ellipse');
+
+  const geo = await readElements(page);
+  const shapes = geo.elements.filter((e) => e.kind === 'shape');
+  expect(shapes.length).toBe(2);
+  const top = geo.elements[geo.elements.length - 1]!;
+  const p = centerOf(geo, geo.elements.length - 1);
+
+  // 先清空选择：否则「已选集合里含命中元素 → 选下一个」会跳过最上层。
+  await page.keyboard.press('Escape');
+  await expect.poll(() => selectedRowIds(page)).toEqual([]);
+
+  const altClick = async (): Promise<void> => {
+    await page.keyboard.down('Alt');
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.keyboard.up('Alt');
+  };
+
+  await altClick();
+  expect((await selectedRowIds(page))[0], '第一次 Alt 单击应选中重叠里最上层').toBe(top.id);
+
+  // 连续 Alt 单击必须能轮到另一个形状 —— 否则就还是「只选最上层」的老行为。
+  const visited = new Set<string>();
+  for (let i = 0; i < 4; i++) {
+    await altClick();
+    const cur = (await selectedRowIds(page))[0];
+    if (cur) visited.add(cur);
+  }
+  for (const s of shapes) expect(visited, `轮询没有覆盖到 ${s.id}`).toContain(s.id);
+});
+
+test('双击图层名称改名：行内输入、Enter 提交、可撤销', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await insertShape(page, 'rect'); // 第一行 = 最前景 = 这个图形
+
+  const nameLoc = page.locator('[data-testid=typo-layer-row]').first().locator('.name');
+  const original = (await nameLoc.textContent())!.trim();
+
+  await nameLoc.dblclick();
+  const input = page.getByTestId('layer-rename-input');
+  await expect(input).toBeVisible();
+  await input.fill('我的元素');
+  await input.press('Enter');
+
+  await expect(input).toHaveCount(0);
+  await expect(nameLoc, '改名没有反映到图层行').toHaveText('我的元素');
+
+  // 一笔撤销能把名字还原。
+  await page.keyboard.press('Control+z');
+  await expect(nameLoc).toHaveText(original);
+
+  // 清空再回车 = 不改名（也不落一笔空记录）。
+  await nameLoc.dblclick();
+  await expect(input).toBeVisible();
+  await input.fill('');
+  await input.press('Enter');
+  await expect(nameLoc).toHaveText(original);
+});
+
+test('双击组行的非名称区域仍展开/折叠；双击名称区是改名', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await insertShape(page, 'rect');
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+g');
+
+  const group = page.getByTestId('typo-layer-group');
+  await expect(group).toHaveCount(1);
+  // 组合默认折叠：成员不单独出行。
+  expect(await page.getByTestId('typo-layer-row').count()).toBe(0);
+
+  // 双击组行**名称区以外**（成员计数）→ 展开。
+  await group.locator('.count').dblclick();
+  await expect.poll(() => page.getByTestId('typo-layer-row').count()).toBe(2);
+
+  // 双击**名称区** → 出现改名输入框，而不是把组折叠掉。
+  await group.locator('.name').dblclick();
+  await expect(page.getByTestId('layer-rename-input')).toBeVisible();
+  expect(await page.getByTestId('typo-layer-row').count(), '改名不该顺带折叠组').toBe(2);
+
+  await page.getByTestId('layer-rename-input').fill('我的组');
+  await page.getByTestId('layer-rename-input').press('Enter');
+  await expect(group.locator('.name')).toHaveText('我的组');
 });

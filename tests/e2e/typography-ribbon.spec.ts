@@ -44,6 +44,8 @@ interface DocShape {
     shape?: string;
     path?: string;
     groupId?: string;
+    /** 填充（图形与文本共用）。`opacity` 是可选的整体不透明度（0..1）。 */
+    fill?: { kind: string; color?: string; bg?: string; opacity?: number; stops?: { color: string }[] };
   }[];
   /** 组合表。老工程没有这一项。 */
   groups?: { id: string; name: string; padding: number; radius: number }[];
@@ -276,6 +278,79 @@ test('插入图形：圆角对非矩形图形也生效（不是矩形专属）',
     .first()
     .getAttribute('d');
   expect(d).toContain('A');
+});
+
+test('填充整体不透明度：落进文档，且即时反映到 <path> 的 fill-opacity', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  await page.getByTestId('ribbon-tab-insert').click();
+  await page.getByTestId('typo-shape').click();
+  await page.getByTestId('typo-shape-card-rect').click();
+
+  // 填充不透明度住在「元素属性」面板里：Ribbon 的填充组已收成稳定控件集
+  // （类型 + 主色），不再随填充方式条件展开 —— 见 ribbon-defs 的注释。
+  await page.getByTestId('typo-tab-props').click();
+  const op = page.getByTestId('prop-fill-opacity');
+  await expect(op).toBeVisible();
+  await op.fill('50');
+  await op.press('Enter');
+
+  // 断言 DOM：fill-opacity 必须落在同一条 <path> 上（一处覆盖纯色/渐变/纹理三种填充）。
+  const attr = await page
+    .locator('[data-el-id] svg[viewBox] g path')
+    .first()
+    .getAttribute('fill-opacity');
+  expect(attr).toBe('0.5');
+
+  // 文档同步（补充，不替代上面的 DOM 断言）。
+  expect((await readDoc(page)).elements[1]!.fill?.opacity).toBe(0.5);
+});
+
+test('文字填充：渐变裁到字形上（background-clip: text），切回「跟随文字色」会复位', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  // 选中文本后 home 里才出现「文字填充」组。
+  const kind = page.getByTestId('ribbon-text-fill-kind');
+  await expect(kind).toBeVisible();
+  await kind.click();
+  await page.getByTestId('ribbon-text-fill-kind-option-linear').click();
+
+  const box = page.locator('.paper .typo-text').first();
+  // 只断言标准属性 `background-clip` —— 单位测试已锁 `-webkit-background-clip`
+  // 的声明，但 CSSOM 对它（前缀别名）的读回行为在各版本不稳定，E2E 不押它。
+  const styled = await box.evaluate((el) => {
+    const s = (el as HTMLElement).style;
+    return {
+      clip: s.getPropertyValue('background-clip'),
+      image: s.backgroundImage,
+      color: s.color,
+    };
+  });
+  expect(styled.clip).toBe('text');
+  expect(styled.image).toContain('linear-gradient');
+  // 裁切填充时字形本身必须透明，否则会盖住背景。
+  expect(styled.color).toBe('transparent');
+
+  // 文档同步。
+  expect((await readDoc(page)).elements[0]!.fill?.kind).toBe('linear');
+
+  // 切回「跟随文字色」→ 必须复位（就地同步不重建节点，残留的裁切会让纯色再也显不出来）。
+  await page.getByTestId('ribbon-text-fill-kind').click();
+  await page.getByTestId('ribbon-text-fill-kind-option-none').click();
+  const after = await box.evaluate((el) => {
+    const s = (el as HTMLElement).style;
+    return { clip: s.getPropertyValue('background-clip'), image: s.backgroundImage };
+  });
+  expect(after.clip).toBe('border-box');
+  expect(after.image).toBe('none');
+  expect((await readDoc(page)).elements[0]!.fill).toBeUndefined();
 });
 
 /* ------------------------------------------------------------ DOM 实时性
@@ -1736,6 +1811,25 @@ test('下拉弹层里的滚轮不会带着 Ribbon 一起横滚', async ({ page, 
   await page.getByTestId('ribbon-font-family').click();
   const pop = page.getByTestId('ribbon-font-family-pop');
   await expect(pop).toBeVisible();
+
+  /*
+   * 本机字体是**异步**加载的：列表就绪前后会重建一次下拉，滚动位置随之归零。
+   * 直接滚会在全量并跑（机器忙、异步回来得晚）时踩到「刚滚完就被重建」，
+   * 断言读到 scrollTop = 0 —— 这条用例单独跑必过、并跑偶发红，就是这个原因。
+   * 先等列表高度稳定（连续两次采样一致）再滚。
+   */
+  let prevH = await pop.evaluate((n) => n.scrollHeight);
+  await expect
+    .poll(
+      async () => {
+        const now = await pop.evaluate((n) => n.scrollHeight);
+        const same = now === prevH;
+        prevH = now;
+        return same;
+      },
+      { timeout: 5000, intervals: [100, 200, 300] },
+    )
+    .toBe(true);
 
   // 兜底：环境里真的一个系统字体都没有时，这条没有可测的东西。
   const scrollable = await pop.evaluate((n) => n.scrollHeight > n.clientHeight);

@@ -28,6 +28,30 @@
   let expanded = $state<Set<string>>(new Set());
 
   /**
+   * 正在行内改名的目标（元素或组合）。null = 没有在改名。
+   *
+   * 只记 id 与种类，不记「旧名字」——旧名字在开始改名时算一次放进
+   * `renameDraft` / `renameOriginal`，之后只跟这两个字符串打交道。
+   */
+  let renaming = $state<{ kind: 'element' | 'group'; id: string } | null>(null);
+
+  /** 输入框里的当前文本（`bind:value`）。 */
+  let renameDraft = $state('');
+
+  /**
+   * 开始改名那一刻的原始文本。提交时用它判断「用户有没有真的改」——
+   * 只是点一下再点走（失焦提交）不该落一笔空的撤销记录。
+   */
+  let renameOriginal = $state('');
+
+  /**
+   * 行内输入框的 DOM 引用。用**单元素数组**而不是 `let`：`bind:this` 挂可变
+   * 绑定会被 svelte-check 报 `non_reactive_update`（与 controls/Menu.svelte
+   * 的 `panels` 同一手法）。同一时刻只可能有一个输入框。
+   */
+  const renameInputs: HTMLInputElement[] = [];
+
+  /**
    * 行模型。元素/组都是**原地改的对象**，所以这里返回浅拷贝而不是直接给引用 ——
    * Svelte 5 的 `$derived` 与 `{#each}` 都靠 `===` 判断要不要往下传播，
    * 给同一批引用会让派生重跑了但值没变、模板静默断更（AGENTS §7 的老朋友）。
@@ -48,8 +72,14 @@
     const doc = editorState.doc;
     const out = new Map<string, string>();
     if (!doc) return out;
+    // 「组合」是新建组写进文档的默认名。组一旦改过名，行里就显示它自己的名字；
+    // 没改过则沿用「拼接成员名」的预览（既有行为，便于一眼认出组里是什么）。
+    // 两者共用一个字段（`group.name`）时只能这样区分，好在默认名就是唯一的判据。
+    const defaultName = tr('typo.groupName');
     for (const r of layerRows(doc, expanded)) {
-      if (r.kind === 'group') out.set(r.id, groupLabel(doc, r.group));
+      if (r.kind !== 'group') continue;
+      const renamed = r.group.name && r.group.name !== defaultName;
+      out.set(r.id, renamed ? r.group.name : groupLabel(doc, r.group));
     }
     return out;
   });
@@ -64,12 +94,63 @@
   function rowClick(e: MouseEvent, row: LayerRow): void {
     if (row.kind === 'group') {
       editorState.selectGroup(row.id);
-      // 组行双击 = 展开/折叠（单靠那个小三角不好点）。
-      if (e.detail >= 2) toggleExpand(row.id);
+      // 组行双击 = 展开/折叠（单靠那个小三角不好点）。但**名称区**的双击是改名，
+      // 必须排除掉 —— 双击的第二下 detail===2 会先于 dblclick 触发，不排除的话
+      // 改名时会把组一起折叠了。
+      const target = e.target;
+      const onName = target instanceof Element && target.closest('.name') !== null;
+      if (e.detail >= 2 && !onName) toggleExpand(row.id);
       return;
     }
     if (e.shiftKey || e.ctrlKey) editorState.toggle(row.id);
     else editorState.selectOnly(row.id);
+  }
+
+  /** 双击名称区开始改名（元素 / 组合都走它）。 */
+  function startRename(row: LayerRow, e: MouseEvent): void {
+    // 名称区的双击不要再冒泡给行 —— 否则组行会顺手把组折叠掉。
+    e.preventDefault();
+    e.stopPropagation();
+    if (renaming?.id === row.id) return;
+    renameOriginal =
+      row.kind === 'group'
+        ? groupNameById.get(row.id) ?? row.group.name
+        : row.el.name || row.el.kind;
+    renameDraft = renameOriginal;
+    renaming = { kind: row.kind, id: row.id };
+  }
+
+  function cancelRename(): void {
+    renaming = null;
+  }
+
+  /** 提交改名。Enter / 失焦都走它；空串或与原文相同则不发撤销记录。 */
+  function commitRename(): void {
+    const target = renaming;
+    // target 为空就**什么都不写**：Enter 提交后输入框被移除，浏览器可能再补一个
+    // blur；那次进来 target 已是 null，提前 return 避免在 Svelte 的 flush 里
+    // 又写一次 rune（同类风险见 AGENTS §6.5）。
+    if (!target) return;
+    renaming = null;
+    const value = renameDraft.trim();
+    if (!value || value === renameOriginal.trim()) return;
+    if (target.kind === 'group') editorState.renameGroup(target.id, value);
+    else editorState.renameElement(target.id, value);
+  }
+
+  function onRenameKey(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
+
+  /** 输入框内的指针 / 点击不许冒泡：否则行的 onclick 会选元素、列表的拖曳排序会抢指针。 */
+  function stop(e: Event): void {
+    e.stopPropagation();
   }
 
   function rowSelected(row: LayerRow): boolean {
@@ -130,9 +211,39 @@
   }
 
   const elementRowCount = $derived(rows.filter((r) => r.kind === 'element').length);
+
+  /**
+   * 改名输入框出现后自动聚焦并全选 —— 双击改名的心智就是「打字替换」。
+   * 放在 `$effect` 而不是 `bind:this` 里：effect 跑在 DOM 更新之后，
+   * `renameInputs[0]` 这时才是新挂上的那个输入框。
+   */
+  $effect(() => {
+    if (!renaming) return;
+    const input = renameInputs[0];
+    if (!input) return;
+    input.focus();
+    input.select();
+  });
 </script>
 
 <aside class="layers" data-testid="typo-layers">
+  <!--
+    行内改名输入框。元素行与组行共用一个 snippet —— 两处各写一份的话，
+    「Enter 提交 / Esc 取消 / 失焦提交」这类细节迟早只会改到一处。
+  -->
+  {#snippet renameInput()}
+    <input
+      class="name-input"
+      data-testid="layer-rename-input"
+      bind:this={renameInputs[0]}
+      bind:value={renameDraft}
+      aria-label={tr('typo.layerRename')}
+      onkeydown={onRenameKey}
+      onblur={commitRename}
+      onclick={stop}
+      onpointerdown={stop}
+    />
+  {/snippet}
   <div
     class="list"
     use:reorder={{
@@ -173,7 +284,11 @@
             <Icon name={row.expanded ? 'chevron-down' : 'chevron-right'} size={11} />
           </button>
           <Icon name="group" size={12} />
-          <span class="name">{groupNameById.get(row.id) ?? row.group.name}</span>
+          {#if renaming?.id === row.id}
+            {@render renameInput()}
+          {:else}
+            <span class="name" role="presentation" ondblclick={(e) => startRename(row, e)}>{groupNameById.get(row.id) ?? row.group.name}</span>
+          {/if}
           <span class="count">{row.memberIds.length}</span>
           <span class="acts">
             <button
@@ -235,7 +350,11 @@
           onclick={(e) => rowClick(e, row)}
         >
           <Icon name={KIND_ICON[row.el.kind]} size={12} />
-          <span class="name">{row.el.name || row.el.kind}</span>
+          {#if renaming?.id === row.id}
+            {@render renameInput()}
+          {:else}
+            <span class="name" role="presentation" ondblclick={(e) => startRename(row, e)}>{row.el.name || row.el.kind}</span>
+          {/if}
           <span class="acts">
             <button
               type="button"
@@ -360,6 +479,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* 行内改名框：占住名称那一格，外观尽量贴近原来的文字，避免行高跳动。 */
+  .name-input {
+    flex: 1;
+    min-width: 0;
+    height: 18px;
+    padding: 0 var(--sp-2);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--fs-sm);
+    outline: none;
   }
   .acts {
     display: flex;

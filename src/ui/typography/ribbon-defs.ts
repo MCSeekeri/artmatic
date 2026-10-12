@@ -12,16 +12,14 @@
 import type { RibbonTabDef } from '../ribbon/ribbon-model';
 import {
   DEFAULT_PAINT_A,
-  DEFAULT_PAINT_B,
   MIX_BLENDS,
-  TEXTURE_PATTERNS,
+  normalizeStops,
   type ImageElement,
   type MixBlend,
   type Paint,
   type ShapeElement,
   type TextElement,
   type TextStyle,
-  type TexturePattern,
   type TypographyDocument,
   type TypographyElement,
   type TypographyGroup,
@@ -37,6 +35,7 @@ import {
 import type { GalleryCard } from '../ribbon/ribbon-model';
 import { uniformSpanValue, type SpanStyleKey } from '../../typography/rich-text';
 import type { TypographyActions } from './actions';
+import { loadRecentFonts, orderByRecent, rememberFont } from './recent-fonts';
 import { tr } from '../../i18n/index.svelte';
 
 /** 「动作型」下拉的占位值：选完不改变显示值，所以可以连点。 */
@@ -91,6 +90,25 @@ export interface TypographyRibbonInput {
 
 const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
 const FONT_SIZES = [12, 16, 20, 24, 32, 40, 48, 64, 72, 96, 128, 160, 200];
+
+/**
+ * 字号阶梯上的相邻档（字号 ∓/+ 按钮用）。
+ *
+ * 当前值不在阶梯上时取相邻那一档：`-1` 取 ≤ 当前的最大档、`+1` 取 ≥ 当前的最小档；
+ * 已在端点返回 null（按钮据此置灰）。与 select 共用同一张 `FONT_SIZES`，
+ * 避免「按钮跳到的档位不在下拉里」。
+ */
+function fontSizeStep(current: number, dir: -1 | 1): number | null {
+  if (dir < 0) {
+    for (let i = FONT_SIZES.length - 1; i >= 0; i--) {
+      const s = FONT_SIZES[i]!;
+      if (s < current) return s;
+    }
+    return null;
+  }
+  for (const s of FONT_SIZES) if (s > current) return s;
+  return null;
+}
 const LINE_STYLES = ['solid', 'dashed', 'dotted'] as const;
 
 function firstText(sel: TypographyElement[]): TextElement | null {
@@ -133,13 +151,14 @@ function shapeCards(): GalleryCard[] {
   });
 }
 
-/** 字体下拉的选项：已注册的族 + 文档里正在用的族（后者可能尚未注册）。 */function fontOptions(input: TypographyRibbonInput, current: string): { value: string; label: string }[] {
+/** 字体下拉的选项：已注册的族 + 文档里正在用的族（后者可能尚未注册），最近用过的置顶。 */
+function fontOptions(input: TypographyRibbonInput, current: string): { value: string; label: string }[] {
   const names = new Set([...input.fontFamilies, ...input.localFontFamilies]);
   for (const el of input.doc.elements) {
     if (el.kind === 'text') names.add(el.style.fontFamily);
   }
   if (current) names.add(current);
-  return [...names].map((f) => ({ value: f, label: f }));
+  return orderByRecent([...names], loadRecentFonts()).map((f) => ({ value: f, label: f }));
 }
 
 export function buildTypographyTabs(
@@ -159,21 +178,30 @@ export function buildTypographyTabs(
   /** 当前（第一个）图形支持哪些形状参数。没选中图形时全 false，整组为空。 */
   const support = shapeParamSupport(shape?.shape ?? 'rect');
 
-  /* 填充：控件按类型展开。取值一律从 `shape` 上读，没有图形时给默认值
-     （此时控件是禁用态，值只是占位）。 */
+  /* 填充：Ribbon 上只留「方式 + 主色」两个控件（细节参数在右侧「元素属性」
+     面板里，见 shape-format 里填充组的注释）。取值一律从 `shape` 上读，
+     没有图形时给默认值（此时控件是禁用态，值只是占位）。 */
   const fillKind: Paint['kind'] = shape?.fill.kind ?? 'solid';
+  /** 主色 = 渐变的**开始色**（offset 最小的色标），与「渐变开始」这个标签一致。 */
   const fillColorA =
     shape?.fill.kind === 'solid' || shape?.fill.kind === 'texture'
       ? shape.fill.color
       : shape?.fill.kind === 'linear' || shape?.fill.kind === 'radial'
-        ? (shape.fill.stops[0]?.color ?? DEFAULT_PAINT_A)
+        ? (normalizeStops(shape.fill.stops)[0]?.color ?? DEFAULT_PAINT_A)
         : DEFAULT_PAINT_A;
-  const fillColorB =
-    shape?.fill.kind === 'texture'
-      ? shape.fill.bg
-      : shape?.fill.kind === 'linear' || shape?.fill.kind === 'radial'
-        ? (shape.fill.stops[1]?.color ?? DEFAULT_PAINT_B)
-        : DEFAULT_PAINT_B;
+
+  /*
+   * 文字填充：只有 `linear` / `radial` / `texture` 才有意义 —— `solid` / `none`
+   * 对字形来说就是「跟随文字色」（纯色字形仍走 `style.color`，见 document.ts）。
+   */
+  const textFillKind: 'none' | 'linear' | 'radial' | 'texture' =
+    text?.fill && text.fill.kind !== 'none' && text.fill.kind !== 'solid' ? text.fill.kind : 'none';
+  const textFillColorA =
+    text?.fill?.kind === 'linear' || text?.fill?.kind === 'radial'
+      ? (normalizeStops(text.fill.stops)[0]?.color ?? DEFAULT_PAINT_A)
+      : text?.fill?.kind === 'texture'
+        ? text.fill.color
+        : DEFAULT_PAINT_A;
 
   /* 组合：只在**选区恰好是一个完整的组**时才出现「组合格式」选项卡。 */
   /*
@@ -229,17 +257,39 @@ export function buildTypographyTabs(
               // 整条 Ribbon 的布局会在换字体时跳一下（用户反馈的「tab 跳变」）。
               width: 148,
               optionTestidPrefix: 'ribbon-font-option',
+              // 本机字体加载后选项有几百条，扫不动：开筛选框（Select 自带，
+              // 输入即模糊过滤），最近用过的族已由 fontOptions 置顶。
+              filterable: true,
+              filterPlaceholder: tr('rib.fontSearch'),
               value: tv('fontFamily') ?? '',
               disabled: !hasText,
               options: fontOptions(input, tv('fontFamily') ?? ''),
-              onchange: (v) => a.setTextStyle('fontFamily', v),
+              onchange: (v) => {
+                // 记一次「最近使用」——必须在 commit 之前写，因为下面那次
+                // setTextStyle 会触发 Ribbon 重建，重建时才读得到新顺序。
+                rememberFont(v);
+                a.setTextStyle('fontFamily', v);
+              },
+            },
+            {
+              kind: 'button',
+              id: 'font-size-dec',
+              label: tr('rib.fontSizeDown'),
+              icon: 'minus',
+              size: 'small',
+              testid: 'ribbon-font-size-dec',
+              disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, -1) === null,
+              onselect: () => {
+                const n = fontSizeStep(tv('fontSize') ?? 0, -1);
+                if (n !== null) a.setTextStyle('fontSize', n);
+              },
             },
             {
               kind: 'select',
               id: 'font-size',
               label: tr('rib.fontSize'),
               testid: 'ribbon-font-size',
-              width: 92,
+              width: 84,
               // 可编辑 + numeric：能直接输 37（预设里没有），也能点箭头挑预设。
               editable: true,
               numeric: true,
@@ -247,6 +297,19 @@ export function buildTypographyTabs(
               disabled: !hasText,
               options: FONT_SIZES.map((s) => ({ value: String(s), label: String(s) })),
               onchange: (v) => a.setTextStyle('fontSize', Number(v)),
+            },
+            {
+              kind: 'button',
+              id: 'font-size-inc',
+              label: tr('rib.fontSizeUp'),
+              icon: 'plus',
+              size: 'small',
+              testid: 'ribbon-font-size-inc',
+              disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, 1) === null,
+              onselect: () => {
+                const n = fontSizeStep(tv('fontSize') ?? 0, 1);
+                if (n !== null) a.setTextStyle('fontSize', n);
+              },
             },
             {
               kind: 'toggle',
@@ -287,6 +350,18 @@ export function buildTypographyTabs(
               disabled: !hasText,
               active: tv('textDecoration') === 'line-through',
               onchange: () => a.toggleTextFlag('strike'),
+            },
+            {
+              // 文本颜色：与粗体/斜体同属「字符级格式」，所以并进 font 组、
+              // 紧挨着它们 —— 原来它是独立的一组，中间隔着段落/对齐三个组，
+              // 改个颜色要横跨半条 Ribbon。
+              kind: 'color',
+              id: 'text-color',
+              label: tr('rib.color'),
+              testid: 'ribbon-text-color',
+              value: tv('color') ?? '#ffffff',
+              disabled: !hasText,
+              onchange: (v) => a.setTextStyle('color', v),
             },
             {
               kind: 'button',
@@ -453,21 +528,6 @@ export function buildTypographyTabs(
               disabled: !hasText,
               active: style?.vAlign === 'bottom',
               onchange: () => a.setVAlign('bottom'),
-            },
-          ],
-        },
-        {
-          id: 'text-color',
-          label: tr('rib.group.textColor'),
-          items: [
-            {
-              kind: 'color',
-              id: 'text-color',
-              label: tr('rib.color'),
-              testid: 'ribbon-text-color',
-              value: tv('color') ?? '#ffffff',
-              disabled: !hasText,
-              onchange: (v) => a.setTextStyle('color', v),
             },
           ],
         },
@@ -661,6 +721,55 @@ export function buildTypographyTabs(
             },
           ],
         },
+        /*
+         * 文字填充。文本属性住在「开始」里（见 contextualTabIds 的约定），
+         * 所以它是一组条件出现在 home 里的组 —— 只有选中文本时才占用空间。
+         * 组里只有渐变 / 径向 / 纹理：纯色字形仍由「字体」组里的「文字颜色」
+         * （`style.color`）负责。
+         */
+        ...(hasText
+          ? [
+              {
+                id: 'text-fill',
+                label: tr('rib.group.textFill'),
+                items: [
+                  {
+                    kind: 'select' as const,
+                    id: 'text-fill-kind',
+                    label: tr('rib.fillKind'),
+                    testid: 'ribbon-text-fill-kind',
+                    width: 108,
+                    value: textFillKind,
+                    optionTestidPrefix: 'ribbon-text-fill-kind-option',
+                    options: [
+                      { value: 'none', label: tr('rib.textFillFollow') },
+                      { value: 'linear', label: tr('rib.fillLinear') },
+                      { value: 'radial', label: tr('rib.fillRadial') },
+                      { value: 'texture', label: tr('rib.fillTexture') },
+                    ],
+                    onchange: (v: string) =>
+                      v === 'none' ? a.clearTextFill() : a.setTextFill({ kind: v as Paint['kind'] }),
+                  },
+                  /*
+                   * 与「图形格式」的填充组同一条纪律：只留类型 + 主色，两个控件
+                   * 不随类型增删 —— 组宽稳定，切换填充方式时后面的组不会整体位移。
+                   * 细节参数（第二色 / 角度 / 图案 / 周期 / 线宽 / 不透明度）
+                   * 在右侧「元素属性」面板的「字形填充」区里。
+                   */
+                  {
+                    kind: 'color' as const,
+                    id: 'text-fill',
+                    label: textFillKind === 'texture' ? tr('rib.textureInk') : tr('rib.gradientFrom'),
+                    icon: 'paint-bucket' as const,
+                    testid: 'ribbon-text-fill',
+                    value: textFillColorA,
+                    disabled: textFillKind === 'none',
+                    onchange: (v: string) => a.setTextFill({ color: v }),
+                  },
+                ],
+              },
+            ]
+          : []),
       ],
     },
 
@@ -691,8 +800,10 @@ export function buildTypographyTabs(
           ],
         },
         {
-          id: 'media',
-          label: tr('rib.group.media'),
+          // 「文本框」原先是塞在名为「图片」的组里的 —— 组名与内容对不上。
+          // 拆出一个「文本」组；图片与图标各自成组，四个组名都与内容相符。
+          id: 'text',
+          label: tr('rib.group.text'),
           items: [
             {
               kind: 'button',
@@ -702,6 +813,12 @@ export function buildTypographyTabs(
               testid: 'typo-insert-text',
               onselect: () => a.addText(),
             },
+          ],
+        },
+        {
+          id: 'media',
+          label: tr('rib.group.media'),
+          items: [
             {
               kind: 'button',
               id: 'add-image',
@@ -710,10 +827,15 @@ export function buildTypographyTabs(
               testid: 'typo-add-image',
               onselect: () => a.addImage(),
             },
+          ],
+        },
+        {
+          id: 'icons',
+          label: tr('rib.group.icons'),
+          items: [
             {
               // 图标是**矢量图形**，不是素材：选择器里挑完直接进文档（见
-              // icon-shapes.ts），所以按钮排在「插入」组而不是「图片」语义里，
-              // 但它和图片一样是「挑一个外面的东西进来」，就近放置。
+              // icon-shapes.ts）。此前它和图片挤在同一个组里，组名只说「图片」。
               kind: 'button',
               id: 'add-icon',
               label: tr('rib.addIcon'),
@@ -1019,92 +1141,26 @@ export function buildTypographyTabs(
               ],
               onchange: (v) => a.setShapePaint({ kind: v as Paint['kind'] }),
             },
-            // 控件按**填充类型**展开：不做无意义的置灰 —— 一个渐变里冒出
-            // 「纹理周期」这种参数，比少一个控件更让人困惑。
-            ...(fillKind !== 'none'
-              ? [
-                  {
-                    kind: 'color' as const,
-                    id: 'shape-fill',
-                    label: fillKind === 'texture' ? tr('rib.textureInk') : fillKind === 'solid' ? tr('rib.shapeFill') : tr('rib.gradientFrom'),
-                    icon: 'paint-bucket' as const,
-                    testid: 'ribbon-shape-fill',
-                    value: fillColorA,
-                    disabled: !shape,
-                    onchange: (v: string) => a.setShapePaint({ color: v }),
-                  },
-                ]
-              : []),
-            ...(fillKind === 'linear' || fillKind === 'radial' || fillKind === 'texture'
-              ? [
-                  {
-                    kind: 'color' as const,
-                    id: 'shape-fill-2',
-                    label: fillKind === 'texture' ? tr('rib.textureBg') : tr('rib.gradientTo'),
-                    icon: 'droplet' as const,
-                    testid: 'ribbon-shape-fill-2',
-                    value: fillColorB,
-                    disabled: !shape,
-                    onchange: (v: string) => a.setShapePaint({ color2: v }),
-                  },
-                ]
-              : []),
-            ...(fillKind === 'linear'
-              ? [
-                  {
-                    kind: 'number' as const,
-                    id: 'fill-angle',
-                    label: tr('rib.gradientAngle'),
-                    testid: 'ribbon-fill-angle',
-                    value: shape?.fill.kind === 'linear' ? shape.fill.angle : 0,
-                    step: 15,
-                    suffix: '°',
-                    disabled: !shape,
-                    onchange: (v: number) => a.setShapePaint({ angle: v }),
-                  },
-                ]
-              : []),
-            ...(fillKind === 'texture'
-              ? [
-                  {
-                    kind: 'select' as const,
-                    id: 'fill-pattern',
-                    label: tr('rib.texturePattern'),
-                    testid: 'ribbon-fill-pattern',
-                    width: 100,
-                    value: shape?.fill.kind === 'texture' ? shape.fill.pattern : 'dots',
-                    disabled: !shape,
-                    optionTestidPrefix: 'ribbon-fill-pattern-option',
-                    options: TEXTURE_PATTERNS.map((t) => ({ value: t.id, label: tr(t.labelKey) })),
-                    onchange: (v: string) => a.setShapePaint({ pattern: v as TexturePattern }),
-                  },
-                  {
-                    kind: 'number' as const,
-                    id: 'fill-scale',
-                    label: tr('rib.textureScale'),
-                    testid: 'ribbon-fill-scale',
-                    value: shape?.fill.kind === 'texture' ? shape.fill.scale : 28,
-                    min: 2,
-                    step: 2,
-                    suffix: 'px',
-                    disabled: !shape,
-                    onchange: (v: number) => a.setShapePaint({ scale: Math.max(2, v) }),
-                  },
-                  {
-                    kind: 'number' as const,
-                    id: 'fill-thickness',
-                    label: tr('rib.textureThickness'),
-                    testid: 'ribbon-fill-thickness',
-                    value: shape?.fill.kind === 'texture' ? shape.fill.thickness : 3,
-                    min: 0.5,
-                    step: 0.5,
-                    precision: 1,
-                    suffix: 'px',
-                    disabled: !shape,
-                    onchange: (v: number) => a.setShapePaint({ thickness: Math.max(0.5, v) }),
-                  },
-                ]
-              : []),
+            /*
+             * 只留「填充方式 + 主色」，两个控件**不随类型增删**。
+             *
+             * 这里原先按 fillKind 条件展开（不透明度 / 第二色 / 角度 / 图案 /
+             * 周期 / 线宽），每切换一次填充方式，这一组的宽度就变一次 ——
+             * 右侧所有组随之整体位移，用户瞄准的按钮会在点下去之前跑掉
+             * （用户反馈的「改填充方式影响 Ribbon 排版」）。细节参数现在住在
+             * 右侧的「元素属性」面板里，那里的版式固定、不随值变化。
+             */
+            {
+              kind: 'color',
+              id: 'shape-fill',
+              label: fillKind === 'texture' ? tr('rib.textureInk') : fillKind === 'solid' ? tr('rib.shapeFill') : tr('rib.gradientFrom'),
+              icon: 'paint-bucket',
+              testid: 'ribbon-shape-fill',
+              value: fillColorA,
+              // 「无填充」时置灰但**保留占位** —— 组宽不随类型变化是这里的硬要求。
+              disabled: !shape || fillKind === 'none',
+              onchange: (v: string) => a.setShapePaint({ color: v }),
+            },
           ],
         },
         {

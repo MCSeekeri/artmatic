@@ -12,15 +12,17 @@
    */
   import LayersPanel from './LayersPanel.svelte';
   import AnimationPanel from './AnimationPanel.svelte';
+  import PropertiesPanel from './PropertiesPanel.svelte';
   import { tr } from '../../i18n/index.svelte';
 
-  type TabId = 'layers' | 'anim';
+  type TabId = 'layers' | 'anim' | 'props';
 
   let tab = $state<TabId>('layers');
 
   const TABS: { id: TabId; label: string; testid: string }[] = [
     { id: 'layers', label: tr('typo.layers'), testid: 'typo-tab-layers' },
     { id: 'anim', label: tr('typo.animPane'), testid: 'typo-tab-anim' },
+    { id: 'props', label: tr('typo.props'), testid: 'typo-tab-props' },
   ];
 </script>
 
@@ -44,8 +46,10 @@
   <div class="body">
     {#if tab === 'layers'}
       <LayersPanel />
-    {:else}
+    {:else if tab === 'anim'}
       <AnimationPanel />
+    {:else}
+      <PropertiesPanel />
     {/if}
   </div>
 </aside>

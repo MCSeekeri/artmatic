@@ -61,8 +61,15 @@ export const app = {
   'app.exportMp4Hint': 'H.264 + AAC · 约 {size}',
   'app.exportMp4Unsupported': '本机浏览器不支持 WebCodecs，只能导出 PNG 序列。',
   'app.exportPng': 'PNG 序列',
-  /* 「未压缩」是**上界**，不是预计值：PNG 的压缩率完全取决于画面内容。 */
-  'app.exportPngHint': '未压缩约 {size}',
+  /* 真实采样估算：导出面板打开时渲当前帧、量真实 PNG 字节再乘帧数（见 samplePngFrameBytes）。
+     会随画面内容波动，所以是「约」而不是承诺。 */
+  'app.exportPngHint': '按当前帧约 {size}',
+  /* 采样失败时的回退口径：未压缩 RGBA 上界（确定的、可复核的，但不是预计值）。 */
+  'app.exportPngHintRaw': '未压缩约 {size}（采样失败）',
+  'app.exportPngHintSampling': '估算中…',
+  'app.exportTrack': '轨道',
+  /* 三个格式通用的轨道筛选项；只列视觉轨（音频单独处理，不进这个下拉）。 */
+  'app.exportTrackAll': '全部轨道',
   'app.exportGif': 'GIF',
   /* GIF 独有的参数，只在导出面板出现；标签与「工程帧率」不是一回事。 */
   'app.gifFps': '帧率',
@@ -183,6 +190,10 @@ export const app = {
   /* ------------------------------------------------ 空界面（一份工程都没开） */
   /* 只有一句「从哪开始」。空界面上不该有第二句解释 —— 能做的事就三件。 */
   'app.emptyLead': '新建一份工程，或打开磁盘上已有的工程目录。',
+  'app.restoreTabsHint': '要恢复上次打开的工程吗？',
+  'app.restoreTabsDo': '恢复',
+  'app.restoreTabsDismiss': '忽略',
+  'app.restoreTabsFailed': '恢复失败，请从下方「最近的工程」里手动打开。',
   'app.emptyImport': '导入工程',
   'app.emptyRecentEmpty': '还没有打开过工程。',
 

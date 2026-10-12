@@ -11,14 +11,17 @@
  */
 
 import type { TextSpanStyle } from './rich-text';
-import type {
-  ImageElement,
-  Paint,
-  ShapeElement,
-  TextStyle,
-  TypographyDocument,
-  TypographyElement,
-  TypographyGroup,
+import {
+  normalizeStops,
+  type ImageElement,
+  type Paint,
+  type ShapeElement,
+  type TextElement,
+  type TexturePattern,
+  type TextStyle,
+  type TypographyDocument,
+  type TypographyElement,
+  type TypographyGroup,
 } from './document';
 
 export type CssDecls = Record<string, string>;
@@ -46,6 +49,25 @@ export function fillAttr(p: Paint, elId: string): string {
   if (p.kind === 'solid') return p.color;
   if (p.kind === 'none') return 'transparent';
   return `url(#${paintDefId(elId)})`;
+}
+
+/** 填充的整体不透明度（0..1）。缺省 = 1。`none` 没有这个概念，一律视为 1。 */
+export function paintOpacity(p: Paint): number {
+  if (p.kind === 'none' || p.opacity === undefined) return 1;
+  return Math.max(0, Math.min(1, p.opacity));
+}
+
+/**
+ * 把一个颜色按整体不透明度混成半透明。
+ *
+ * 用 `color-mix(in srgb, …)` 而不是自己解析 hex 再拼 `rgba(…)`：
+ * 颜色值可能是任意 CSS 颜色（`#rgb` / `rgb()` / 命名色），自己解析必然漏。
+ * `>= 1` 时原样返回 —— 不透明时不留 `color-mix` 噪声（快照里更好比对）。
+ */
+function fade(color: string, opacity: number): string {
+  if (opacity >= 1) return color;
+  const pct = Math.max(0, Math.min(100, opacity * 100));
+  return `color-mix(in srgb, ${color} ${Math.round(pct * 1000) / 1000}%, transparent)`;
 }
 
 function px(v: number): string {
@@ -156,6 +178,48 @@ export function textStyle(style: TextStyle): CssDecls {
   };
 }
 
+/**
+ * 文本框的**背景与边框** → 写在元素外壳（`.typo-el`）上的 CSS 声明。
+ *
+ * 与 `textFillStyle`（字形着色，走内层 `.typo-text` 的
+ * `background-clip: text`）分属两个节点，所以互不干扰：这一层在文字**之下**，
+ * 是「文本框底色 / 边框」；那一层裁到字形上，是「字的颜色」。
+ *
+ * 三件与字形路径对齐的事：
+ *  - 渐变色标与 `paintToBackground` 一样过 `cssStops` 归一化（排序 + 高精度
+ *    百分比），否则同一个文档在「组合壳」与「文本框」上会排成不同的渐变；
+ *  - 纹理复用 `textFillBackgroundImage`（内联 SVG 平铺），不是回落到纯底色
+ *    —— 图形与字形都能平铺，文本框没理由比它们少；
+ *  - **总是返回完整声明**：就地同步（syncDocDom）不重建节点，切回「无填充」
+ *    时必须能把上一份 background 复位。
+ */
+export function textBoxStyle(el: TextElement): CssDecls {
+  const fill = el.boxFill;
+  const out: CssDecls = {};
+  if (fill && fill.kind === 'solid') {
+    out['background-color'] = fade(fill.color, paintOpacity(fill));
+    out['background-image'] = 'none';
+    out['background-size'] = 'auto';
+  } else if (fill && fill.kind !== 'none') {
+    const cell = fill.kind === 'texture' ? Math.max(2, fill.scale) : null;
+    out['background-color'] = 'transparent';
+    out['background-image'] = textFillBackgroundImage(fill);
+    // 纹理按周期平铺（与 textFillStyle 同一口径），渐变铺满整个文本框。
+    out['background-size'] = cell === null ? 'auto' : `${cell}px ${cell}px`;
+  } else {
+    out['background-color'] = 'transparent';
+    out['background-image'] = 'none';
+    out['background-size'] = 'auto';
+  }
+  out['background-repeat'] = 'repeat';
+
+  const s = el.boxStroke;
+  // 无边框写 `0 solid transparent` 而不是 `none`：声明表逐键同构，
+  // 「有 → 无」在就地同步下才能逐键复位（没有删除语义）。
+  out.border = s ? `${px(Math.max(0, s.width))} ${s.style ?? 'solid'} ${s.color}` : '0 solid transparent';
+  return out;
+}
+
 /* ------------------------------------------------------------ 图形 */
 
 /**
@@ -177,6 +241,10 @@ export function shapePaintAttrs(el: ShapeElement, evenOdd = false): CssDecls {
     'stroke-linejoin': 'round',
     'stroke-linecap': 'round',
   };
+  // 填充的整体不透明度：**一处 fill-opacity 就覆盖纯色 / url(#渐变) / url(#pattern)**，
+  // 不必分别处理三种填充。不透明时不写这个属性，保持老工程渲染结果逐字节不变。
+  const fillOpacity = paintOpacity(el.fill);
+  if (fillOpacity < 1) attrs['fill-opacity'] = String(fillOpacity);
   if (!el.stroke) return attrs;
 
   attrs.stroke = el.stroke.color;
@@ -269,20 +337,39 @@ export function groupStyle(
   return decls;
 }
 
+/**
+ * 色标位置 → CSS 百分比。
+ *
+ * 三位小数（`33.33%`）而不是取整到一起：`Math.round(offset * 100)` 会把
+ * 0.3333 与 0.3349 压成同一个 33% —— 面板上拖色标时手一停位置就跳，
+ * 而且与 SVG 那条路（用原始 float）对不上。
+ */
+function stopPct(offset: number): string {
+  return `${Math.round(offset * 100000) / 1000}%`;
+}
+
+/** 渐变色标的 CSS 片段（`色 33.33%`），排序归一化与 SVG 那条路共用。 */
+function cssStops(p: Paint, op: number): string {
+  return normalizeStops(p.kind === 'linear' || p.kind === 'radial' ? p.stops : [])
+    .map((s) => `${fade(s.color, op)} ${stopPct(s.offset)}`)
+    .join(', ');
+}
+
 export function paintToBackground(p: Paint): string {
+  // 整体不透明度按**色标**乘进去（CSS 背景没有「层不透明度」这种属性）。
+  const op = paintOpacity(p);
   switch (p.kind) {
     case 'solid':
-      return p.color;
+      return fade(p.color, op);
     case 'linear': {
-      const stops = p.stops.map((s) => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ');
-      return `linear-gradient(${Math.round(p.angle + 90)}deg, ${stops})`;
+      return `linear-gradient(${Math.round(p.angle + 90)}deg, ${cssStops(p, op)})`;
     }
     case 'radial': {
-      const stops = p.stops.map((s) => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ');
-      return `radial-gradient(circle at 50% 50%, ${stops})`;
+      return `radial-gradient(circle at 50% 50%, ${cssStops(p, op)})`;
     }
     case 'texture':
-      return p.bg;
+      // 组合壳的纹理回落到**底色**（见 groupStyle 的说明），所以这里只乘底色。
+      return fade(p.bg, op);
     default:
       return 'transparent';
   }
@@ -301,6 +388,150 @@ export function paintToBackground(p: Paint): string {
  */
 export function runsWrapperStyle(): CssDecls {
   return { display: 'block', width: '100%', 'min-width': '0' };
+}
+
+/* ------------------------------------------------------------ 纹理几何（纯数据） */
+
+/**
+ * 一个 SVG 图元的**纯数据**描述（标签 + 属性）。
+ *
+ * 纹理图案只有一套几何，却有两个消费方：图形走真实的 SVG `<pattern>`（render-dom），
+ * 文本字形填充走内联的 `data:image/svg+xml`（本文件）。把它抽成纯数据是为了
+ * **不让两套图案代码分家** —— 加一种纹理只改这里的 switch，两个渲染路径同时生效。
+ */
+export interface SvgPrimitive {
+  tag: string;
+  attrs: Record<string, string>;
+}
+
+/** 图案的原始形状（cell = 一个周期；thick = 线宽；color = 线/点色）。 */
+export function textureMotifSpec(
+  pattern: TexturePattern,
+  cell: number,
+  thick: number,
+  color: string,
+): SvgPrimitive[] {
+  const line = (x1: number, y1: number, x2: number, y2: number): SvgPrimitive => ({
+    tag: 'line',
+    attrs: {
+      x1: String(x1),
+      y1: String(y1),
+      x2: String(x2),
+      y2: String(y2),
+      stroke: color,
+      'stroke-width': String(thick),
+    },
+  });
+  const half = cell / 2;
+  switch (pattern) {
+    case 'dots':
+      return [
+        { tag: 'circle', attrs: { cx: String(half), cy: String(half), r: String(thick), fill: color } },
+      ];
+    case 'grid':
+      // 画在上/左两条边上，平铺之后就是一整张网格。
+      return [line(0, 0, cell, 0), line(0, 0, 0, cell)];
+    case 'diagonal':
+      return [line(0, cell, cell, 0)];
+    case 'cross':
+      return [line(0, 0, cell, cell), line(0, cell, cell, 0)];
+    case 'checker':
+      return [
+        { tag: 'rect', attrs: { x: '0', y: '0', width: String(half), height: String(half), fill: color } },
+        {
+          tag: 'rect',
+          attrs: { x: String(half), y: String(half), width: String(half), height: String(half), fill: color },
+        },
+      ];
+    case 'wave': {
+      // 一个周期的正弦（两个二次贝塞尔拼）。控制点取 4/3·(√2−1) 的近似，
+      // 0.55 是肉眼看着最像正弦的那个系数。
+      const d = `M0,${half} Q${cell * 0.25},${half - cell * 0.55} ${half},${half} Q${cell * 0.75},${half + cell * 0.55} ${cell},${half}`;
+      return [{ tag: 'path', attrs: { d, fill: 'none', stroke: color, 'stroke-width': String(thick) } }];
+    }
+    default:
+      return [];
+  }
+}
+
+/* ------------------------------------------------------------ 文本字形填充 */
+
+/**
+ * 文本元素 → 字形填充的 CSS 声明。
+ *
+ * 实现是 CSS 的 `background-clip: text`（渐变 / 径向 / 纹理裁到字形上），
+ * **总是返回一份完整声明**：不仅要设上，也要在「切回纯色」时把上一帧残留的
+ * 裁切复位 —— 就地同步（syncDocDom）不会重建节点，残留的 `background-clip`
+ * 会让 `style.color` 再也显不出来。
+ *
+ * 只有 `linear` / `radial` / `texture` 才覆盖字形着色；`solid` / `none` /
+ * `undefined` 一律复位，交回 `style.color` 那条老路（见 TextElement.fill 的语义）。
+ */
+export function textFillStyle(fill: Paint | undefined): CssDecls {
+  const usable =
+    fill && fill.kind !== 'none' && fill.kind !== 'solid' ? fill : null;
+  if (!usable) {
+    return {
+      'background-image': 'none',
+      'background-size': 'auto',
+      'background-repeat': 'repeat',
+      'background-clip': 'border-box',
+      '-webkit-background-clip': 'border-box',
+    };
+  }
+  // 纹理要按周期平铺（background-size = 一个周期），渐变则铺满整个文本框（auto）。
+  const cell = usable.kind === 'texture' ? Math.max(2, usable.scale) : null;
+  return {
+    'background-image': textFillBackgroundImage(usable),
+    'background-clip': 'text',
+    '-webkit-background-clip': 'text',
+    'background-repeat': 'repeat',
+    'background-size': cell === null ? 'auto' : `${cell}px ${cell}px`,
+    color: 'transparent',
+  };
+}
+
+/** 文本字形填充的 `background-image`：渐变 / 径向直接映射成 CSS，纹理转成内联 SVG。 */
+export function textFillBackgroundImage(p: Paint): string {
+  const op = paintOpacity(p);
+  switch (p.kind) {
+    case 'linear':
+      return `linear-gradient(${Math.round(p.angle + 90)}deg, ${cssStops(p, op)})`;
+    case 'radial':
+      return `radial-gradient(circle at 50% 50%, ${cssStops(p, op)})`;
+    case 'texture':
+      return textureDataUri(p, op);
+    default:
+      return 'none';
+  }
+}
+
+/**
+ * 纹理 → `url("data:image/svg+xml,…")`。
+ *
+ * 与图形共用 `textureMotifSpec` 的几何；整体不透明度用一层 `<g opacity>` 表达
+ * —— 在 SVG 属性里用 `color-mix()` 的兼容性不稳，而组透明度哪都认。
+ * 色标里的 `#` 交给 `encodeURIComponent` 转义成 `%23`，data-URI 才不会断。
+ */
+function textureDataUri(paint: Extract<Paint, { kind: 'texture' }>, opacity: number): string {
+  const cell = Math.max(2, paint.scale);
+  const thick = Math.max(0.2, paint.thickness);
+  const body: string[] = [
+    `<rect x="0" y="0" width="${cell}" height="${cell}" fill="${paint.bg}"/>`,
+  ];
+  for (const prim of textureMotifSpec(paint.pattern, cell, thick, paint.color)) {
+    const attrs = Object.entries(prim.attrs)
+      .map(([k, v]) => `${k}="${v}"`)
+      .join(' ');
+    body.push(`<${prim.tag} ${attrs}/>`);
+  }
+  const op = opacity < 1 ? ` opacity="${Math.round(opacity * 1000) / 1000}"` : '';
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${cell}" height="${cell}">` +
+    `<defs><pattern id="p" patternUnits="userSpaceOnUse" width="${cell}" height="${cell}">` +
+    `<g${op}>${body.join('')}</g>` +
+    `</pattern></defs><rect width="100%" height="100%" fill="url(#p)"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
 /* ------------------------------------------------------------ 行内富文本 */

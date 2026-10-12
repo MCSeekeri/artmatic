@@ -57,6 +57,14 @@ export interface ExportOptions {
    */
   frameRange?: { from: number; to: number };
   /**
+   * 只渲染这条视觉轨（其它视觉轨视为禁用）。省略 = 全部视觉轨。
+   *
+   * 透传到 `renderFrame` → `buildStack`（见 `BuildStackOptions`）。语义是「只渲染
+   * 该轨道本身」，不是「只静音其它轨」—— 该轨的滤镜 / 混合 / 特效照常生效。
+   * **音频不属视觉轨**：指定它时 MP4 的音轨照常混入。
+   */
+  onlyTrackId?: string;
+  /**
    * 每渲多少帧让渡一次给 UI（`setTimeout(0)`），默认 10。
    *
    * 默认值是按「每帧几毫秒」的 GPU 路径定的 —— 让渡本身有 1–4ms 的 clamp，
@@ -88,6 +96,8 @@ export async function runExport(
   const to = Math.min(Math.max(from + 1, Math.ceil(opts.frameRange?.to ?? total)), total);
   const step = Math.max(1, Math.floor(opts.frameStep ?? 1));
   const yieldEvery = Math.max(1, Math.floor(opts.yieldEvery ?? 10));
+  // 「只导某轨」的渲染参数。循环外建一次，别每帧现造对象。
+  const renderOpts = opts.onlyTrackId !== undefined ? { onlyTrackId: opts.onlyTrackId } : undefined;
   // 真正会渲的帧数。进度分母必须用它 —— 用 total 的话 step > 1 时进度条
   // 永远到不了 100%（抽帧导出会"卡在 25%"然后突然结束）。
   const passes = Math.max(1, Math.ceil((to - from) / step));
@@ -114,7 +124,7 @@ export async function runExport(
       // 未命中才真的光栅化 —— 静态文档整个片段只会在这里付一次代价。
       const frameStart = opts.onFrame ? performance.now() : 0;
       await renderer.prepareFrame(project, t);
-      renderer.renderFrame(project, t);
+      renderer.renderFrame(project, t, renderOpts);
       await opts.sink.submit(i, renderer.kit.canvas);
       if (opts.onFrame) opts.onFrame(performance.now() - frameStart, i);
       opts.onProgress?.((pass + 1) / passes);

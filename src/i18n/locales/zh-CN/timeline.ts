@@ -128,4 +128,9 @@ export const timeline = {
   'tp.overlapTrim': '吃掉重叠',
   'tp.zoom': '时间轴缩放',
   'tp.zoomTip': '时间轴缩放（也可 Ctrl+滚轮，以鼠标为锚）',
+  /* 当前帧截图：逐帧操作，所以放轨道工具条（§6.7）。文件名是「工程名-frame-帧号.png」。 */
+  'tp.snapshot': '导出当前帧',
+  'tp.snapshotTip': '把当前预览帧按工程分辨率导出为 PNG（文件名带帧号）',
+  'tp.snapshotSaved': '已导出第 {frame} 帧',
+  'tp.snapshotFailed': '导出当前帧失败',
 } as const;

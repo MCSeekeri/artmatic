@@ -102,6 +102,23 @@ export type RenderOp =
   | TransitionOp;
 
 /**
+ * `buildStack` 的可选参数。
+ *
+ * `onlyTrackId` 指定后**只保留那条视觉轨产出的 op**：其它视觉轨视为禁用
+ * （`track.enabled = false` 的等价），不参与合成。语义是「只渲染该轨道本身」，
+ * **不是**「只静音其它轨」—— 该轨自己的滤镜 / 混合 / 特效照常生效，只是画面里
+ * 看不到别的轨。
+ *
+ * 两条边界（都不改既有行为）：
+ *  - **z 编号仍按完整 `visualTracks(project)` 计算**。z 只用于排序，被跳过的轨
+ *    留下空洞无害，也保证「同一轨同一帧的 z」与全量渲染逐字节一致。
+ *  - 音频轨不属视觉轨，**不受此参数影响**（导出 MP4 时音频照常混入）。
+ */
+export interface BuildStackOptions {
+  onlyTrackId?: string;
+}
+
+/**
  * 深度优先遍历 op（作用域组里的 op 也是 op）。
  *
  * 需要它的地方是「按 op 找片段」这类**旁路**消费方（`video-source.ts` 的预取）：
@@ -151,7 +168,7 @@ function resolveSource(clip: SourceClip, t: number, grid: BeatGrid): ResolvedSou
   };
 }
 
-export function buildStack(project: Project, t: number): RenderOp[] {
+export function buildStack(project: Project, t: number, opts?: BuildStackOptions): RenderOp[] {
   const ops: RenderOp[] = [];
   const grid = project.beatGrid;
 
@@ -179,8 +196,12 @@ export function buildStack(project: Project, t: number): RenderOp[] {
   /** 扁平 op + 它来自哪条视觉轨（影响深度的边界按视觉轨算）。 */
   const flat: FlatOp[] = [];
 
+  // 只导某轨时其余视觉轨一律跳过（z 编号不受影响，见 BuildStackOptions）。
+  const onlyTrackId = opts?.onlyTrackId;
+
   project.tracks.forEach((track) => {
     if (!track.enabled || track.kind !== 'visual') return;
+    if (onlyTrackId !== undefined && track.id !== onlyTrackId) return;
     const vis = visualIndex.get(track.id)!;
     const z = last - vis;
     // 带下标的 for：转场要跳过一个片段，forEach 做不到。

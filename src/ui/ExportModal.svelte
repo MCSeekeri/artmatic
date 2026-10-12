@@ -16,6 +16,7 @@
   import Select from './controls/Select.svelte';
   import NumberInput from './controls/NumberInput.svelte';
   import type { SelectOption } from './controls/select-model';
+  import { untrack } from 'svelte';
   import { appState } from './app-state.svelte';
   import {
     GIF_DEFAULT_FPS,
@@ -30,6 +31,7 @@
     fmtSize,
     gifPlan,
     mp4Supported,
+    samplePngFrameBytes,
     totalFrames,
   } from './export';
   import { tr } from '../i18n/index.svelte';
@@ -68,6 +70,15 @@
   let gifStart = $state(0);
   let gifEnd = $state(Number(appState.store.project.duration.toFixed(2)));
 
+  /**
+   * 轨道筛选（三种格式通用）。`''` = 全部视觉轨；其余是某条视觉轨的 id。
+   *
+   * 只列**视觉轨**：音频单独处理，选了某条视觉轨导 MP4 时音轨照常混入
+   * （音频不属视觉轨）。禁用轨列出来但不可选 —— `buildStack` 会跳过禁用轨，
+   * 选它只会得到一张空画面，那是纯粹的困惑来源。
+   */
+  let trackSel = $state('');
+
   /** 区间输入框的步长：0.1 秒。GIF 不需要帧级精度，但拖动得跟手。 */
   const GIF_RANGE_STEP = 0.1;
 
@@ -101,11 +112,10 @@
     return fmtSize(estimateMp4Bytes());
   });
   /**
-   * PNG 序列体积的**上界**：每帧 RGBA 原始大小 × 帧数。
+   * PNG 序列体积的**回退上界**：每帧 RGBA 原始大小 × 帧数。
    *
-   * 刻意不装成「预计体积」——PNG 的压缩率完全取决于画面内容（纯色能压到百分之几，
-   * 噪点几乎压不动），给一个"预计值"就是在编数字。而"未压缩上界"是确定的、
-   * 可复核的，正好用来判断磁盘够不够。
+   * 只在真实采样失败时用（见 `pngFrameBytes`）。它是确定的、可复核的，但不代表
+   * 预计体积 —— PNG 的压缩率完全取决于画面内容（纯色能压到百分之几，噪点几乎压不动）。
    */
   const pngRawSize = $derived.by(() => {
     void appState.version;
@@ -122,6 +132,52 @@
       width: gifWidth,
       range: { start: gifStart, end: gifEnd },
     });
+  });
+
+  /** 轨道下拉的选项：首项「全部轨道」，其余为各视觉轨（禁用轨不可选）。 */
+  const trackOptions = $derived.by<SelectOption<string>[]>(() => {
+    void appState.version;
+    const opts: SelectOption<string>[] = [{ value: '', label: tr('app.exportTrackAll') }];
+    for (const tk of appState.project.tracks) {
+      if (tk.kind !== 'visual') continue;
+      opts.push({ value: tk.id, label: tk.name, disabled: !tk.enabled });
+    }
+    return opts;
+  });
+
+  /**
+   * PNG 体积估算的采样结果（单帧真实 PNG 字节数）。`null` = 还没采到 / 采样失败。
+   *
+   * 旧口径「未压缩 RGBA 上界」常比真实产物大 1~2 个数量级（PNG 对平坦画面能压到
+   * 百分之几）。这里改成**按当前帧采样**：面板打开时渲一帧、量真实 PNG 字节，
+   * 再乘帧数。会随画面内容波动，所以文案是「约」。
+   */
+  let pngFrameBytes = $state<number | null>(null);
+  /** 采样进行中（提示显示「估算中…」）。 */
+  let pngSampling = $state(false);
+
+  /*
+   * 打开面板（组件挂载）时采一次；切换轨道时重采。
+   *
+   * **只把 `trackSel` 当依赖**：`playT` 与 `version` 全部 `untrack`。
+   * 跟踪 `playT` 会在播放中每帧重采（采样风暴）；跟踪 `version` 会在视频解码
+   * 出帧（store.touch）时同样重采。`samplePngFrameBytes` 内部读的 appState 一并
+   * 被 untrack 包住。
+   */
+  $effect(() => {
+    const onlyTrackId = trackSel || undefined;
+    let cancelled = false;
+    pngSampling = true;
+    pngFrameBytes = null;
+    const t = untrack(() => appState.playT);
+    void untrack(() => samplePngFrameBytes(t, onlyTrackId)).then((bytes) => {
+      if (cancelled) return;
+      pngFrameBytes = bytes;
+      pngSampling = false;
+    });
+    return () => {
+      cancelled = true;
+    };
   });
 </script>
 
@@ -152,6 +208,26 @@
       <Button label={tr('common.cancel')} variant="outline" testid="export-cancel" onclick={cancelExport} />
     </div>
   {:else}
+    <!--
+      Track filter applies to all three formats, so it sits above the GIF-only
+      params. Audio tracks are deliberately absent: audio is handled separately,
+      and selecting a visual track still mixes the audio track into MP4.
+      Kept ASCII: the i18n guard does not strip markup comments.
+    -->
+    <div class="exp-track-row">
+      <span class="exp-lbl">{tr('app.exportTrack')}</span>
+      <div class="exp-track-sel">
+        <Select
+          value={trackSel}
+          options={trackOptions}
+          ariaLabel={tr('app.exportTrack')}
+          testid="export-track-select"
+          optionTestidPrefix="export-track-opt"
+          onchange={(v) => (trackSel = v)}
+        />
+      </div>
+    </div>
+
     <!--
       GIF params get their own row: they only apply to GIF, and folding them into
       the read-only facts table above would blur facts and choices together.
@@ -240,10 +316,16 @@
           variant="outline"
           size="lg"
           testid="export-png"
-          onclick={() => void exportPngSequence(name)}
+          onclick={() => void exportPngSequence(name, trackSel || undefined)}
         />
         <p class="exp-hint" data-testid="export-png-hint">
-          {tr('app.exportPngHint', { size: pngRawSize })}
+          {#if pngFrameBytes !== null}
+            {tr('app.exportPngHint', { size: fmtSize(pngFrameBytes * frames) })}
+          {:else if pngSampling}
+            {tr('app.exportPngHintSampling')}
+          {:else}
+            {tr('app.exportPngHintRaw', { size: pngRawSize })}
+          {/if}
         </p>
       </div>
 
@@ -255,11 +337,15 @@
           size="lg"
           testid="export-gif"
           onclick={() =>
-            void exportGif(name, {
-              fps: gifFps,
-              width: gifWidth,
-              range: { start: gifStart, end: gifEnd },
-            })}
+            void exportGif(
+              name,
+              {
+                fps: gifFps,
+                width: gifWidth,
+                range: { start: gifStart, end: gifEnd },
+              },
+              trackSel || undefined,
+            )}
         />
         <p class="exp-hint" data-testid="export-gif-hint">
           {tr('app.exportGifHint', { size: fmtSize(gifInfo.rawBytes) })}
@@ -274,7 +360,7 @@
           size="lg"
           testid="export-mp4"
           disabled={!canMp4}
-          onclick={() => void exportMp4(name)}
+          onclick={() => void exportMp4(name, trackSel || undefined)}
         />
         <p class="exp-hint" data-testid="export-mp4-hint">
           {#if canMp4}
@@ -305,6 +391,26 @@
     /* 不要占满整行：文件名不长，一个横贯面板的输入框反而显得空。 */
     max-width: 260px;
     height: var(--control-h);
+  }
+  /*
+   * 轨道筛选行：三种格式通用，所以单独一行、排在 GIF 参数之上。
+   * 标签列定宽 84px = 上面那张事实表的标签列宽，左边缘才对得齐。
+   */
+  .exp-track-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
+  }
+  .exp-track-row .exp-lbl {
+    width: 84px;
+    flex-shrink: 0;
+  }
+  .exp-track-sel {
+    width: 200px;
+  }
+  .exp-track-sel :global(.sel) {
+    width: 100%;
   }
   /*
    * GIF 参数行。与下面三个导出按钮之间划一条线：上面是「选参数」，

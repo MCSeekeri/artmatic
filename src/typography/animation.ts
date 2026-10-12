@@ -8,6 +8,10 @@
  *  - 本文件只负责「localSec → WAAPI currentTime（ms）」这一层纯换算；
  *  - 真正把动画 seek 到那个时刻的是 bake-animation.ts（有 DOM）。
  * 这样预览与导出走的是同一条求值路径，差别只在有没有把结果固化进内联样式。
+ *
+ * 一个元素可以挂**多个动画条目**：渲染时每个条目嵌一层 `<div class="typo-anim">`
+ * （render-dom.ts）。自定义条目还可以在**同一层里**再写多条逗号分隔的动画
+ * （同时 / 先后跑），见 CustomAnimation。
  */
 
 import type { TypographyDocument } from './document';
@@ -68,17 +72,32 @@ export interface CustomAnimation extends AnimTiming {
   id: string;
   kind: 'custom';
   /**
-   * **只允许 @keyframes 的体**，例如 `from{opacity:0} to{opacity:1}`。
+   * 关键帧定义。两种形态，向后兼容：
+   *
+   *  - **单条（旧）**：只写一个 keyframes 的**体**，例如
+   *    `from{opacity:0}to{opacity:1}`。它被自动命名成 `artmatic-a-<id>`，
+   *    动画简写由 timing 字段生成 —— 旧工程渲染结果逐字不变。
+   *  - **多条（新）**：一个或多个 `@keyframes <名字>{…}` 块。名字由用户起，
+   *    输出时会加**元素级命名空间**（`artmatic-a-<id>-<名字>`），
+   *    所以两个元素各写一个 `@keyframes pulse` 不会互相覆盖。
    *
    * 为什么不让用户写整段 CSS（他确实要「允许手写代码」，这是能力与安全的
    * 最小妥协）：滚动任意 CSS 字符串会带来三个真问题 ——
    *   ① `@import url(http://…)` 会外发网络请求，破坏「离线 + 确定性」；
    *   ② `position:fixed` 能让元素逃出快照区域，光栅化结果不可预测；
    *   ③ 顶层选择器会污染同页的其它元素（预览页里还有时间轴和面板）。
-   * 限制成 keyframes 体之后，它只能影响被绑定的那个元素，而且注入点唯一
-   * （一份 <style>，随快照进入隔离文档）。
+   * 允许 `@keyframes` 块之后，它仍然只能影响被绑定的那个元素（选择器恒为
+   * `[data-anim-id]`），注入点唯一（一份 <style>，随快照进入隔离文档）。
    */
   css: string;
+  /**
+   * 多条形态下的一条**逗号分隔** `animation` 简写，每条引用本条目里定义的
+   * keyframes 名字（或既有预设名，如 `fade-in`）。名字同样会被命名空间化。
+   *
+   * 缺省 → 退回由 timing 字段生成的**单条**简写（引用 `artmatic-a-<id>`），
+   * 与旧单 body 形态渲染结果逐字一致。
+   */
+  animation?: string;
 }
 
 export type ElementAnimation = PresetAnimation | CustomAnimation;
@@ -113,6 +132,13 @@ export const ANIM_PRESETS: AnimPresetDef[] = [
   { id: 'blur-in', labelKey: 'anim.blurIn', duration: 0.7, easing: 'ease-out', params: { blur: 12 } },
 ];
 
+const PRESET_IDS = new Set<string>(ANIM_PRESETS.map((d) => d.id));
+
+/** 某个名字是不是内置预设（多动画简写里可以直接引用预设名）。 */
+export function isPresetId(name: string): name is AnimPreset {
+  return PRESET_IDS.has(name);
+}
+
 /**
  * 预设的展示名。找不到就回落到 id 本身 —— 与 `tr()` 的处理同构：
  * 宁可显示一个看得懂的标识符，也不要显示空白。
@@ -142,10 +168,12 @@ export function animationName(anim: ElementAnimation): string {
 /**
  * 本地时间 → WAAPI 的 currentTime（ms）。
  *
+ * 只依赖 `delay`（多动画简写里每条各有自己的延迟，见 customSubAnimations）。
+ *
  * 延迟之前钳到 0：`fill: backwards` 时显示首帧、`fill: none` 时显示基础样式，
  * 两种都是确定的，且与真实播放的首帧一致。
  */
-export function animationCurrentTimeMs(anim: ElementAnimation, localSec: number): number {
+export function animationCurrentTimeMs(anim: { delay: number }, localSec: number): number {
   return Math.max(0, (localSec - anim.delay) * 1000);
 }
 
@@ -196,16 +224,22 @@ export function presetKeyframes(preset: AnimPreset, params: Record<string, numbe
   }
 }
 
+/* ------------------------------------------------------------ 手写 CSS 的解析 */
+
 /**
- * 清洗用户手写的 keyframes 体。
+ * 清洗用户手写的自定义 CSS（单 body 或多 @keyframes 块均可）。
  *
- * body 里**合法地**包含成对的 `{}`（`from{...}to{...}`），所以不能简单地把
- * 花括号剥掉；要校验配平：任何时刻 depth 不得为负，结束时必须归零。
- * 否则一个 `}` 就能提前闭合我们的 `@keyframes` 块，往后写任意顶层 CSS。
- * 清洗后为空字符串 = 这行代码非法，调用方应当拒绝写入。
+ * 剥掉标签 / `@import` / `@charset` / `@namespace` / 注释，并校验花括号配平：
+ * 任何时刻 depth 不得为负，结束时必须归零。否则一个 `}` 就能提前闭合我们的
+ * `@keyframes` 块，往后写任意顶层 CSS。
+ *
+ * 注意 keyframes 体里**合法地**包含成对的 `{}`（`from{...}to{...}`），所以
+ * 不能简单地把花括号剥掉。清洗后为空字符串 = 非法，调用方应当拒绝写入。
  */
-export function sanitizeKeyframeBody(css: string): string {
+export function sanitizeCustomCss(css: string): string {
   let s = css.replace(/<\/?[a-z][^>]*>/gi, '');
+  // 注释先剥：否则 `/* } */` 会干扰花括号配平（也会让 @import 藏在注释里蒙混）。
+  s = s.replace(/\/\*[\s\S]*?\*\//g, ' ');
   s = s.replace(/@import\b[^;]*;?/gi, '');
   s = s.replace(/@charset\b[^;]*;?/gi, '');
   s = s.replace(/@namespace\b[^;]*;?/gi, '');
@@ -222,15 +256,309 @@ export function sanitizeKeyframeBody(css: string): string {
   return s.trim();
 }
 
-export function isValidKeyframeBody(css: string): boolean {
-  return sanitizeKeyframeBody(css) !== '';
+export function isValidCustomCss(css: string): boolean {
+  return sanitizeCustomCss(css) !== '';
 }
 
-/** 取某个动画的 keyframes 体；custom 会先过清洗。返回 '' 表示应当跳过。 */
+/** 交给编辑器预填的**可编辑文本**：单 body 原样，多动画 = 块 + 简写。 */
 export function keyframeBodyOf(anim: ElementAnimation): string {
   if (anim.kind === 'preset') return presetKeyframes(anim.preset, anim.params);
-  return sanitizeKeyframeBody(anim.css);
+  if (anim.animation) return `${anim.css}\nanimation: ${anim.animation};`.trim();
+  return sanitizeCustomCss(anim.css);
 }
+
+/**
+ * 自定义 CSS 被拒绝的原因。**只给编码** —— 组件负责翻成可读文案
+ * （面向用户文案一律走 `tr()`，见 AGENTS §5.3）。
+ */
+export type CustomCssError =
+  | 'unbalanced' // 花括号未配平 / 空
+  | 'badAtRule' // 出现 @keyframes 之外的顶层 @ 规则
+  | 'badSelector' // 顶层出现了选择器（不允许）
+  | 'badKeyframeName' // @keyframes 名字不合法
+  | 'missingAnimation' // 有 @keyframes 块却没有 animation 简写
+  | 'badAnimation' // animation 简写解析失败
+  | 'unknownName'; // 简写引用了未定义的动画名
+
+export type CustomCssParse =
+  | { ok: true; css: string; animation?: string }
+  | { ok: false; reason: CustomCssError };
+
+const KEYFRAME_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/** 顶层（括号 / 花括号内不算）是否出现 `@` 规则或 `animation:` 声明。 */
+function looksStructured(s: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+    else if (ch === '{') depth++;
+    else if (ch === '}') depth = Math.max(0, depth - 1);
+    else if (depth === 0) {
+      if (ch === '@') return true;
+      if ((ch === 'a' || ch === 'A') && /^animation\s*:/i.test(s.slice(i))) return true;
+    }
+  }
+  return false;
+}
+
+interface CssScan {
+  keyframes: { name: string; body: string }[];
+  others: string[];
+  error?: CustomCssError;
+}
+
+/**
+ * 扫一遍（已清洗的）CSS：抽出所有 `@keyframes <名字>{<体>}` 块，其余顶层语段
+ * 原样收进 `others`。非 keyframes 的顶层花括号 = 结构非法。
+ */
+function scanCssBlocks(s: string): CssScan {
+  const keyframes: { name: string; body: string }[] = [];
+  const others: string[] = [];
+  const n = s.length;
+  let i = 0;
+
+  const fail = (error: CustomCssError): CssScan => ({ keyframes, others, error });
+
+  while (i < n) {
+    while (i < n && /\s/.test(s[i]!)) i++;
+    if (i >= n) break;
+
+    if (s[i] === '@') {
+      const kw = /^@keyframes\b/i.exec(s.slice(i));
+      if (!kw) return fail('badAtRule');
+      i += kw[0].length;
+      while (i < n && /\s/.test(s[i]!)) i++;
+      const nameStart = i;
+      while (i < n && /[A-Za-z0-9_-]/.test(s[i]!)) i++;
+      const name = s.slice(nameStart, i);
+      if (!KEYFRAME_NAME_RE.test(name)) return fail('badKeyframeName');
+      while (i < n && /\s/.test(s[i]!)) i++;
+      if (s[i] !== '{') return fail('unbalanced');
+      const bodyStart = i + 1;
+      let depth = 1;
+      i += 1;
+      while (i < n && depth > 0) {
+        if (s[i] === '{') depth += 1;
+        else if (s[i] === '}') depth -= 1;
+        i += 1;
+      }
+      if (depth !== 0) return fail('unbalanced');
+      keyframes.push({ name, body: s.slice(bodyStart, i - 1).trim() });
+    } else {
+      const start = i;
+      let depth = 0;
+      while (i < n) {
+        const ch = s[i]!;
+        if (ch === '(' || ch === '[') depth++;
+        else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+        else if (ch === '{') return fail('badSelector');
+        else if (ch === '}') return fail('unbalanced');
+        else if (ch === ';' && depth === 0) break;
+        i += 1;
+      }
+      const stmt = s.slice(start, i).trim();
+      if (stmt) others.push(stmt);
+      i += 1;
+    }
+  }
+  return { keyframes, others };
+}
+
+function parseMultiCss(s: string): CustomCssParse {
+  const scan = scanCssBlocks(s);
+  if (scan.error) return { ok: false, reason: scan.error };
+
+  let animation: string | undefined;
+  for (const stmt of scan.others) {
+    const m = /^animation\s*:\s*([\s\S]+)$/i.exec(stmt);
+    if (!m || animation !== undefined) return { ok: false, reason: 'badAnimation' };
+    animation = m[1]!.trim();
+  }
+
+  if (animation === undefined) {
+    // 只有块没有简写 = 不知道该怎么用；什么都没有 = 空。
+    return {
+      ok: false,
+      reason: scan.keyframes.length > 0 ? 'missingAnimation' : 'unbalanced',
+    };
+  }
+
+  const parsed = parseAnimationShorthand(animation);
+  if (!parsed.ok) return { ok: false, reason: 'badAnimation' };
+
+  const defined = new Set(scan.keyframes.map((b) => b.name));
+  for (const p of parsed.parts) {
+    if (!defined.has(p.name) && !isPresetId(p.name)) return { ok: false, reason: 'unknownName' };
+  }
+
+  return {
+    ok: true,
+    css: scan.keyframes.map((b) => `@keyframes ${b.name}{${b.body}}`).join(''),
+    animation,
+  };
+}
+
+/**
+ * 解析编辑器里的一段自定义 CSS。纯函数。
+ *
+ * 判别：顶层不含 `@` 规则、也没有 `animation:` 声明 → **旧单 body 形态**
+ * （整个文本就是一个 keyframes 体）；否则走多动画形态（N 个 `@keyframes` 块 +
+ * 一条 `animation` 简写）。旧工程因此继续原样可用。
+ */
+export function parseCustomCss(raw: string): CustomCssParse {
+  const s = sanitizeCustomCss(raw);
+  if (!s) return { ok: false, reason: 'unbalanced' };
+  if (!looksStructured(s)) return { ok: true, css: s };
+  return parseMultiCss(s);
+}
+
+/* ------------------------------------------------------ animation 简写的解析 */
+
+export interface ParsedAnimPart {
+  /** 引用的动画名（本条目定义的 keyframes 名，或预设 id）。 */
+  name: string;
+  /** 秒。 */
+  duration: number;
+  /** 秒。 */
+  delay: number;
+  /** Infinity → infinite。 */
+  iterations: number;
+}
+
+export type ShorthandParse = { ok: true; parts: ParsedAnimPart[] } | { ok: false };
+
+const EASING_KEYWORDS = new Set([
+  'linear',
+  'ease',
+  'ease-in',
+  'ease-out',
+  'ease-in-out',
+  'step-start',
+  'step-end',
+]);
+const DIRECTION_KEYWORDS = new Set(['normal', 'reverse', 'alternate', 'alternate-reverse']);
+const FILL_KEYWORDS = new Set(['none', 'forwards', 'backwards', 'both']);
+const TIME_RE = /^[+-]?(\d+\.?\d*|\.\d+)(ms|s)$/i;
+const NUMBER_RE = /^[+-]?(\d+\.?\d*|\.\d+)$/;
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+const EASING_FN_RE = /^(cubic-bezier|steps|linear)\(/i;
+
+/** 顶层按分隔符切（括号 / 花括号内不切）。 */
+function splitTopLevel(s: string, sep: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1);
+    else if (ch === sep && depth === 0) {
+      out.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(s.slice(start));
+  return out;
+}
+
+/** 顶层按空白切（`cubic-bezier(0.2, 0, 0.2, 1)` 里的空格不切）。 */
+function splitWhitespace(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of s) {
+    if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) {
+        out.push(cur);
+        cur = '';
+      }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function toSeconds(tk: string): number {
+  const n = Number.parseFloat(tk);
+  return /ms$/i.test(tk) ? n / 1000 : n;
+}
+
+/** 一条动画（逗号分隔中的一段）→ 名字 + 时序。无法识别返回 null。 */
+function parsePart(part: string): ParsedAnimPart | null {
+  const tokens = splitWhitespace(part);
+  let name = '';
+  let duration = 0;
+  let delay = 0;
+  let iterations = 1;
+  let timeSeen = 0;
+
+  for (const tk of tokens) {
+    if (TIME_RE.test(tk)) {
+      if (timeSeen === 0) duration = toSeconds(tk);
+      else if (timeSeen === 1) delay = toSeconds(tk);
+      else return null; // 超过两个时间 —— 非法
+      timeSeen++;
+    } else if (tk.toLowerCase() === 'infinite') {
+      iterations = Infinity;
+    } else if (NUMBER_RE.test(tk)) {
+      iterations = Number(tk);
+    } else if (EASING_KEYWORDS.has(tk.toLowerCase()) || EASING_FN_RE.test(tk)) {
+      // 缓动，忽略
+    } else if (DIRECTION_KEYWORDS.has(tk.toLowerCase()) || FILL_KEYWORDS.has(tk.toLowerCase())) {
+      // 方向 / 填充，忽略
+    } else if (IDENT_RE.test(tk)) {
+      if (name) return null; // 两个候选名 —— 非法
+      name = tk;
+    } else {
+      return null;
+    }
+  }
+  if (!name) return null;
+  return { name, duration, delay, iterations };
+}
+
+/** 解析一条**逗号分隔**的 `animation` 简写值。纯函数。 */
+export function parseAnimationShorthand(s: string): ShorthandParse {
+  const raw = splitTopLevel(s, ',')
+    .map((p) => p.trim())
+    .filter((p) => p !== '');
+  if (raw.length === 0) return { ok: false };
+  const parts: ParsedAnimPart[] = [];
+  for (const p of raw) {
+    const parsed = parsePart(p);
+    if (!parsed) return { ok: false };
+    parts.push(parsed);
+  }
+  return { ok: true, parts };
+}
+
+/**
+ * 某条目在时间轴上实际会跑的**子动画**列表。
+ *
+ *  - 预设 / 旧单 body 自定义 → 一条，延迟取 timing 字段（与旧行为逐字一致）。
+ *  - 多动画自定义 → 逐条取自简写，各有自己的时长与延迟。
+ *
+ * 烘焙 seek 与动画窗格都读它，保证「预览看到几条」与「时间轴画几条」一致。
+ */
+export function customSubAnimations(anim: ElementAnimation): ParsedAnimPart[] {
+  const fallback: ParsedAnimPart = {
+    name: animationName(anim),
+    delay: anim.delay,
+    duration: anim.duration,
+    iterations: anim.iterations,
+  };
+  if (anim.kind !== 'custom' || !anim.animation) return [fallback];
+  const parsed = parseAnimationShorthand(anim.animation);
+  return parsed.ok ? parsed.parts : [fallback];
+}
+
+/* ------------------------------------------------------------ 样式表生成 */
 
 function easingCss(e: Easing): string {
   if (typeof e === 'string') return e;
@@ -246,7 +574,7 @@ function round(n: number, digits: number): number {
   return Math.round(n * k) / k;
 }
 
-/** 动画 → CSS `animation` 简写值。 */
+/** 动画 → CSS `animation` 简写值（单条；多动画走 CustomAnimation.animation）。 */
 export function animationShorthand(anim: ElementAnimation): string {
   return [
     animationName(anim),
@@ -257,6 +585,67 @@ export function animationShorthand(anim: ElementAnimation): string {
     anim.direction,
     anim.fill,
   ].join(' ');
+}
+
+interface EmittedCustom {
+  keyframes: { name: string; body: string }[];
+  animation: string;
+}
+
+/**
+ * 把自定义条目展开成「要发出的 @keyframes 块 + 最终简写」。
+ *
+ * **命名空间化**：每条 keyframes 名都前缀 `artmatic-a-<id>-`，引用预设则用
+ * `artmatic-a-<id>-p-<预设>`。id 全局唯一，所以两个元素各写一个 `@keyframes pulse`
+ * 不会互相覆盖。简写里的名字同步重写成这些命名空间名。
+ *
+ * 旧形态（`animation` 缺省）沿用 `artmatic-a-<id>` 单名 + timing 生成的简写，
+ * 与扩展前逐字一致。
+ */
+function emitCustom(c: CustomAnimation): EmittedCustom | null {
+  if (!c.animation) {
+    const body = sanitizeCustomCss(c.css);
+    if (!body) return null;
+    return { keyframes: [{ name: animationName(c), body }], animation: animationShorthand(c) };
+  }
+
+  const scan = scanCssBlocks(c.css);
+  if (scan.error) return null;
+  const parsed = parseAnimationShorthand(c.animation);
+  if (!parsed.ok) return null;
+
+  const names = new Map<string, string>();
+  const keyframes: { name: string; body: string }[] = [];
+  for (const b of scan.keyframes) {
+    const ns = `${ANIM_NAME_PREFIX}${c.id}-${b.name}`;
+    names.set(b.name, ns);
+    keyframes.push({ name: ns, body: b.body });
+  }
+  for (const p of parsed.parts) {
+    if (names.has(p.name)) continue;
+    if (!isPresetId(p.name)) return null; // 引用了本条目未定义的名字
+    const ns = `${ANIM_NAME_PREFIX}${c.id}-p-${p.name}`;
+    names.set(p.name, ns);
+    keyframes.push({ name: ns, body: presetKeyframes(p.name) });
+  }
+
+  return { keyframes, animation: rewriteNames(c.animation, names) };
+}
+
+/** 把简写里每段的动画名替换成命名空间名（其余 token 原样保留）。 */
+function rewriteNames(shorthand: string, names: Map<string, string>): string {
+  return splitTopLevel(shorthand, ',')
+    .map((raw) => {
+      const part = parsePart(raw);
+      const tokens = splitWhitespace(raw);
+      if (!part) return tokens.join(' ');
+      const idx = tokens.indexOf(part.name);
+      const ns = names.get(part.name);
+      if (ns && idx >= 0) tokens[idx] = ns;
+      return tokens.join(' ');
+    })
+    .filter((s) => s !== '')
+    .join(', ');
 }
 
 /**
@@ -273,16 +662,25 @@ export function animationStyleSheet(doc: TypographyDocument): string {
   const rules: string[] = [];
   const seen = new Set<string>();
 
+  const pushFrame = (name: string, body: string): void => {
+    if (!body || seen.has(name)) return;
+    seen.add(name);
+    frames.push(`@keyframes ${name}{${body}}`);
+  };
+
   for (const el of doc.elements) {
     for (const anim of el.animations) {
-      const name = animationName(anim);
-      if (!seen.has(name)) {
-        const body = keyframeBodyOf(anim);
+      if (anim.kind === 'custom') {
+        const emitted = emitCustom(anim);
+        if (!emitted) continue;
+        for (const k of emitted.keyframes) pushFrame(k.name, k.body);
+        rules.push(`[${ANIM_ID_ATTR}="${cssAttrEscape(anim.id)}"]{animation:${emitted.animation}}`);
+      } else {
+        const body = presetKeyframes(anim.preset, anim.params);
         if (!body) continue;
-        seen.add(name);
-        frames.push(`@keyframes ${name}{${body}}`);
+        pushFrame(animationName(anim), body);
+        rules.push(`[${ANIM_ID_ATTR}="${cssAttrEscape(anim.id)}"]{animation:${animationShorthand(anim)}}`);
       }
-      rules.push(`[${ANIM_ID_ATTR}="${cssAttrEscape(anim.id)}"]{animation:${animationShorthand(anim)}}`);
     }
   }
   return frames.concat(rules).join('\n');
@@ -321,7 +719,10 @@ export function createPresetAnimation(
 export function createCustomAnimation(
   id: string,
   css: string,
-  over: Partial<AnimTiming> = {},
+  over: Partial<AnimTiming> & { animation?: string } = {},
 ): CustomAnimation {
-  return { ...defaultTiming(), ...over, id, kind: 'custom', css };
+  const { animation, ...timing } = over;
+  const anim: CustomAnimation = { ...defaultTiming(), ...timing, id, kind: 'custom', css };
+  if (animation) anim.animation = animation;
+  return anim;
 }

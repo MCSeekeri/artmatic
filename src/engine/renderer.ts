@@ -8,6 +8,7 @@
 
 import { Compositor, type EffectRunner, type SourceResolver, type TransitionRunner } from './compositor';
 import { Kit } from './kit';
+import type { BuildStackOptions } from './stack';
 import type { SpectrumTextures } from './spectrum-texture';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
 import type { Project } from '../core/schema';
@@ -124,10 +125,16 @@ export class Renderer {
     this.exportSize = null;
   }
 
-  /** 渲染一帧到画布。任何调用方只许传 project 与 t。 */
-  renderFrame(project: Project, t: number): void {
+  /**
+   * 渲染一帧到画布。
+   *
+   * 默认只传 project 与 t；`opts`（可选）目前只用来「只渲染某条视觉轨」
+   * （见 `BuildStackOptions`）。**必须是可选参数**：它是预览与导出共用的唯一
+   * 渲染入口，加必选参数会改变既有调用行为。
+   */
+  renderFrame(project: Project, t: number, opts?: BuildStackOptions): void {
     if (!this.exportSize) this.syncSize(project.resolution);
-    this.compositor.render(project, t);
+    this.compositor.render(project, t, opts);
   }
 
   /**

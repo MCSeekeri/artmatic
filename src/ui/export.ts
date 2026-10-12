@@ -96,13 +96,65 @@ function safeBase(name?: string): string {
   return n || baseName();
 }
 
+/* ----------------------------------------------------------- PNG 体积采样 */
+
+/**
+ * 采样一帧的**真实 PNG 字节数**，供 PNG 序列的体积估算用。
+ *
+ * 旧口径（每帧 RGBA 原始大小 × 帧数）是**未压缩上界**，常比真实产物大 1~2 个
+ * 数量级（PNG 对纯色 / 平坦画面能压到百分之几）。这里把当前帧渲到工程分辨率、
+ * 用 `canvas.toBlob('image/png')` 量出真实字节，调用方再乘帧数 —— 是**按当前帧
+ * 采样**的估计值，会随画面内容波动，不是承诺。
+ *
+ * 三件必须做对的事：
+ *  - **钉尺寸必须还原**：`setExportSize` 之后 `syncSize` 会直接 return（见 §5.9），
+ *    不还原的话预览会**停在工程分辨率**上，而且不报错。`finally` 里
+ *    `clearExportSize` + `appState.refreshPreview()` 把预览尺寸与画面一次复原。
+ *  - **必须在钉尺寸的内层 toBlob**：`refreshPreview` 里的 `syncSize` 会改画布尺寸，
+ *    而改尺寸会清空帧缓冲 —— 先还原再截图只会拿到黑图。
+ *  - `onSeek` + `prepareFrame` + 导出模式：反馈类特效跨帧有历史、排版位图是异步
+ *    光栅化的、导出模式的文字与预览不同 —— 不做的采样帧不代表真实导出帧。
+ *    三者与 `runExport` 逐条对齐，`finally` 里对称还原。
+ *
+ * @param t 采样时刻（通常传当前播放头 `appState.playT`）。
+ * @param onlyTrackId 只采样该视觉轨（与导出同参数）；省略 = 全部视觉轨。
+ * @returns 单帧 PNG 字节数；无 renderer 或 `toBlob` 失败时返回 `null`（调用方
+ *          回退到未压缩上界）。
+ */
+export async function samplePngFrameBytes(t: number, onlyTrackId?: string): Promise<number | null> {
+  // 导出进行中绝不能动 renderer：导出循环正用它渲权威帧，采样插进去会
+  // 在某一帧的 submit 之前多渲一帧、污染产物。面板此时本来就隐藏了提示。
+  if (appState.exportProgress !== null) return null;
+  const renderer = appState.renderer;
+  if (!renderer) return null;
+  const project = appState.store.project;
+  const { w, h } = project.resolution;
+  try {
+    renderer.setExportSize(w, h);
+    renderer.onSeek();
+    renderer.enterExportMode();
+    await renderer.prepareFrame(project, t);
+    renderer.renderFrame(project, t, onlyTrackId !== undefined ? { onlyTrackId } : undefined);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      renderer.kit.canvas.toBlob(resolve, 'image/png'),
+    );
+    return blob ? blob.size : null;
+  } catch {
+    return null;
+  } finally {
+    renderer.exitExportMode();
+    renderer.clearExportSize();
+    appState.refreshPreview();
+  }
+}
+
 /**
  * 导出 MP4（含音轨）。
  *
  * 混流在开跑之前做完，这样渲染循环里一次 `await` 都不用为音频分心，
  * 而且混流出的 PCM 长度与工程时长对齐，音视频时间戳共用一个 fps。
  */
-export async function exportMp4(name?: string): Promise<void> {
+export async function exportMp4(name?: string, onlyTrackId?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
   if (!mp4Supported()) {
     appState.flash(tr('err.export.noWebCodecs'), 'error');
@@ -122,9 +174,11 @@ export async function exportMp4(name?: string): Promise<void> {
 
   try {
     const sink = new Mp4Sink({ audio });
+    // 只导某视觉轨时音轨照常混入（音频不属视觉轨，见 onlyTrackId 语义）。
     const blob = (await runExport(appState.renderer, project, {
       sink,
       codec: MP4_CODEC,
+      onlyTrackId,
       onProgress: (f) => {
         appState.exportProgress = f;
       },
@@ -144,7 +198,7 @@ export async function exportMp4(name?: string): Promise<void> {
 }
 
 /** 导出 PNG 序列（zip）。重复调用是空操作。 */
-export async function exportPngSequence(name?: string): Promise<void> {
+export async function exportPngSequence(name?: string, onlyTrackId?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
 
   const ctrl = new AbortController();
@@ -154,6 +208,7 @@ export async function exportPngSequence(name?: string): Promise<void> {
   try {
     const blob = await runExport(appState.renderer, appState.store.project, {
       sink: new PngSequenceSink(),
+      onlyTrackId,
       onProgress: (f) => {
         appState.exportProgress = f;
       },
@@ -243,6 +298,7 @@ export function gifPlan(opts: GifOptions): GifPlan {
 export async function gifBlob(
   opts: GifOptions,
   hooks: { onProgress?: (frac: number) => void; signal?: AbortSignal } = {},
+  onlyTrackId?: string,
 ): Promise<Blob> {
   const plan = gifPlan(opts);
   return (await runExport(appState.renderer, appState.store.project, {
@@ -259,6 +315,7 @@ export async function gifBlob(
     // 区间用帧号传：秒 → 帧号的换算只有 gif-plan 那一处，面板的帧数与
     // 真正渲的帧数因此不可能各算一套。
     frameRange: plan.frameRange,
+    onlyTrackId,
     // 量化是纯 CPU 的（每帧几十毫秒），默认的「10 帧让渡一次」会让取消按钮
     // 半秒才响应。理由见 ExportOptions.yieldEvery。
     yieldEvery: 1,
@@ -268,7 +325,11 @@ export async function gifBlob(
 }
 
 /** 导出 GIF。重复调用是空操作。 */
-export async function exportGif(name: string | undefined, opts: GifOptions): Promise<void> {
+export async function exportGif(
+  name: string | undefined,
+  opts: GifOptions,
+  onlyTrackId?: string,
+): Promise<void> {
   if (appState.exportProgress !== null) return;
 
   const ctrl = new AbortController();
@@ -276,12 +337,16 @@ export async function exportGif(name: string | undefined, opts: GifOptions): Pro
   appState.exportProgress = 0;
 
   try {
-    const blob = await gifBlob(opts, {
-      onProgress: (f) => {
-        appState.exportProgress = f;
+    const blob = await gifBlob(
+      opts,
+      {
+        onProgress: (f) => {
+          appState.exportProgress = f;
+        },
+        signal: ctrl.signal,
       },
-      signal: ctrl.signal,
-    });
+      onlyTrackId,
+    );
     appState.flash(tr('err.export.gifDone', { size: fmtSize(blob.size) }), 'success');
     await browserPlatform.download(blob, `${safeBase(name)}.gif`);
   } catch (e) {

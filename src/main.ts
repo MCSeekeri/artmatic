@@ -87,7 +87,11 @@ const projectDebug = {
   async open(name = 'e2e-project'): Promise<boolean> {
     const root = await opfsRoot();
     const dir = await root.openDir(name, { create: true });
-    return openProjectDirectory(dir, { key: `opfs:${name}` });
+    // 把原生句柄一起交出去，让句柄被持久化到 IndexedDB —— 与生产路径
+    // （`showDirectoryPicker` → `putHandle`）一致，于是在这里打开的工程
+    // 也能被「最近工程 / 恢复上次打开的工程」重新打开。
+    const raw = (dir as { raw?: unknown }).raw;
+    return openProjectDirectory(dir, { raw, key: `opfs:${name}` });
   },
   /** 读工程目录里的一个文件（相对路径，POSIX 斜杠）。 */
   async read(path: string): Promise<string | null> {

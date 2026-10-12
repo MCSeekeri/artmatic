@@ -97,7 +97,7 @@ export const effects = {
   'fx.desc.swirl': '把画面拧成漩涡。',
   'fx.desc.thermal': '按温度映射成热成像。',
   'fx.desc.tile': '平铺、旋转与镜像。',
-  'fx.desc.transform3d': '把画面放进三维空间里转。',
+  'fx.desc.transform3d': '把画面放进三维空间里转；旋转平面之外是透明的。',
   'fx.desc.trioTone': '三段色阶的调色。',
   'fx.desc.tunnel': '向画面深处推进的隧道。',
   'fx.desc.vhs': '磁带噪点、色偏与抖动。',

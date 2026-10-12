@@ -24,7 +24,8 @@ export const ribbon = {
   'rib.group.para': '段落',
   'rib.group.alignTextH': '水平对齐',
   'rib.group.alignTextV': '垂直对齐',
-  'rib.group.textColor': '文本颜色',
+  'rib.group.text': '文本',
+  'rib.group.icons': '图标',
   'rib.group.align': '对齐',
   'rib.group.order': '层级',
   'rib.group.edit': '编辑',
@@ -82,6 +83,8 @@ export const ribbon = {
   'rib.texturePattern': '图案',
   'rib.textureScale': '周期',
   'rib.textureThickness': '线宽',
+  'rib.group.textFill': '文字填充',
+  'rib.textFillFollow': '跟随文字色',
 
   /* ------------------------------------------------ [Contextual] 组合格式 */
   'rib.groupFormat': '组合格式',
@@ -95,7 +98,10 @@ export const ribbon = {
   'rib.ungroup': '解除组合',
   /* ------------------------------------------------ 开始 → 字体 */
   'rib.fontFamily': '字体',
+  'rib.fontSearch': '搜索字体',
   'rib.fontSize': '字号',
+  'rib.fontSizeDown': '减小字号',
+  'rib.fontSizeUp': '增大字号',
   'rib.bold': '加粗',
   'rib.italic': '斜体',
   'rib.underline': '下划线',

@@ -17,15 +17,28 @@
   import Icon from '../Icon.svelte';
   import { appState } from '../app-state.svelte';
   import { editorState } from './editor-state.svelte';
-  import { presetLabel } from '../../typography/animation';
+  import { customSubAnimations, isPresetId, presetLabel } from '../../typography/animation';
   import type { TypographyElement, ElementAnimation } from '../../typography/document';
   import { tr } from '../../i18n/index.svelte';
+
+  /**
+   * 一条**实际会跑**的动画。预设 / 旧单 body 自定义条目 = 一条；
+   * 多动画自定义条目（逗号简写）= 每条一行 —— 这样时间轴画出的条数
+   * 与烘焙要 seek 的动画数一致（都来自 customSubAnimations）。
+   */
+  interface AnimEntry {
+    /** 稳定键：单条用条目 id，多条再加序号。 */
+    key: string;
+    label: string;
+    delay: number;
+    duration: number;
+  }
 
   interface AnimRow {
     id: string;
     name: string;
     kind: TypographyElement['kind'];
-    anims: ElementAnimation[];
+    entries: AnimEntry[];
   }
 
   const KIND_ICON: Record<TypographyElement['kind'], 'type' | 'shapes' | 'image'> = {
@@ -47,6 +60,26 @@
     return c ? appState.playT - c.start : 0;
   });
 
+  function labelOf(a: ElementAnimation): string {
+    return a.kind === 'preset' ? presetLabel(a.preset) : tr('typo.anim.custom');
+  }
+
+  function entryLabel(name: string): string {
+    return isPresetId(name) ? presetLabel(name) : name;
+  }
+
+  function entriesOf(a: ElementAnimation): AnimEntry[] {
+    if (a.kind === 'custom' && a.animation) {
+      return customSubAnimations(a).map((p, i) => ({
+        key: `${a.id}:${i}`,
+        label: entryLabel(p.name),
+        delay: p.delay,
+        duration: p.duration,
+      }));
+    }
+    return [{ key: a.id, label: labelOf(a), delay: a.delay, duration: a.duration }];
+  }
+
   /** 有动画的元素。倒序 = 与图层列表同向（前景在上）。 */
   const rows = $derived.by<AnimRow[]>(() => {
     void appState.version;
@@ -56,39 +89,33 @@
         id: e.id,
         name: e.name || e.kind,
         kind: e.kind,
-        anims: e.animations.map((a) => ({ ...a })),
+        entries: e.animations.flatMap((a) => entriesOf(a)),
       }))
       .reverse();
   });
 
-  function labelOf(a: ElementAnimation): string {
-    return a.kind === 'preset' ? presetLabel(a.preset) : tr('typo.anim.custom');
-  }
-
-  /** 动画在片段时间轴上的条（百分比）。迭代次数不计入长度 —— 那是循环，不是"更长的一根"。 */
-  function barStyle(a: ElementAnimation): string {
-    const left = Math.min(100, Math.max(0, (a.delay / clipDur) * 100));
-    const w = Math.min(100 - left, Math.max(0.6, (a.duration / clipDur) * 100));
+  /** 一条动画在片段时间轴上的条（百分比）。迭代次数不计入长度 —— 那是循环，不是"更长的一根"。 */
+  function barStyle(e: AnimEntry): string {
+    const left = Math.min(100, Math.max(0, (e.delay / clipDur) * 100));
+    const w = Math.min(100 - left, Math.max(0.6, (e.duration / clipDur) * 100));
     return `left:${left}%;width:${w}%`;
   }
 
   const playheadPct = $derived(Math.min(100, Math.max(0, (localSec / clipDur) * 100)));
 
-  /** 这段动画最早从什么时候开始 —— 一键预览就是从这里往前一点起播。 */
-  function earliestDelay(anims: ElementAnimation[]): number {
-    return anims.reduce((m, a) => Math.min(m, a.delay), Number.POSITIVE_INFINITY);
+  /** 这些动画最早从什么时候开始 —— 一键预览就是从这里往前一点起播。 */
+  function earliestDelay(entries: AnimEntry[]): number {
+    return entries.reduce((m, e) => Math.min(m, e.delay), Number.POSITIVE_INFINITY);
   }
 
-  function preview(anims: AnimationElementList): void {
+  function preview(entries: AnimEntry[]): void {
     const c = clip;
     if (!c) return;
-    const first = earliestDelay(anims);
+    const first = earliestDelay(entries);
     const at = Number.isFinite(first) ? Math.max(0, first - 0.2) : 0;
     appState.seek(c.start + at);
     if (!appState.playing) appState.togglePlay();
   }
-
-  type AnimationElementList = ElementAnimation[];
 
   function selectRow(id: string): void {
     editorState.selectOnly(id);
@@ -153,19 +180,19 @@
             onclick={(e) => {
               e.stopPropagation();
               selectRow(row.id);
-              preview(row.anims);
+              preview(row.entries);
             }}
           >
             <Icon name="play" size={11} />
           </button>
         </div>
-        {#each row.anims as a (a.id)}
+        {#each row.entries as e (e.key)}
           <div class="entry" data-testid="typo-anim-entry">
-            <span class="alabel">{labelOf(a)}</span>
+            <span class="alabel">{e.label}</span>
             <span class="span">
-              <i class="seg" style={barStyle(a)}></i>
+              <i class="seg" style={barStyle(e)}></i>
             </span>
-            <span class="time mono">{a.delay.toFixed(2)}s · {a.duration.toFixed(2)}s</span>
+            <span class="time mono">{e.delay.toFixed(2)}s · {e.duration.toFixed(2)}s</span>
           </div>
         {/each}
       </div>

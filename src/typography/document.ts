@@ -40,6 +40,20 @@ export interface PaintStop {
 }
 
 /**
+ * 色标的**渲染归一化**：钳制 offset 到 0..1 并按 offset 排序。
+ *
+ * 这是「数组顺序 = 用户编辑顺序」这条约定的另一半：编辑时保持用户顺序
+ * （色标列表不跳位），渲染时按 offset 排（渐变只能按位置走）。
+ * 所有消费 stopped 的渲染路径（SVG `<defs>` / CSS background）都必须过这里
+ * —— 两处各写一份排序的话，「编辑器里这样、导出那样」迟早出现。
+ */
+export function normalizeStops(stops: readonly PaintStop[] | undefined): PaintStop[] {
+  return (stops ?? [])
+    .map((s) => ({ offset: Math.max(0, Math.min(1, Number(s.offset) || 0)), color: s.color }))
+    .sort((a, b) => a.offset - b.offset);
+}
+
+/**
  * 程序化纹理的图案。都是**参数化生成**的 SVG `<pattern>`，不是位图 ——
  * 位图要么进工程文件变成大 blob（违反 AGENTS §1.7 的「素材用引用而非拷贝」），
  * 要么就要一套内嵌素材表。程序化生成还顺带解决了「缩放不糊」。
@@ -65,11 +79,11 @@ export const TEXTURE_PATTERNS: { id: TexturePattern; labelKey: MessageKey }[] = 
  */
 export type Paint =
   | { kind: 'none' }
-  | { kind: 'solid'; color: string }
+  | { kind: 'solid'; color: string; opacity?: number }
   /** 线性渐变。`angle` 是**度**：0 = 从左到右，顺时针增大（屏幕坐标，y 向下）。 */
-  | { kind: 'linear'; angle: number; stops: PaintStop[] }
+  | { kind: 'linear'; angle: number; stops: PaintStop[]; opacity?: number }
   /** 径向渐变，从中心向外。 */
-  | { kind: 'radial'; stops: PaintStop[] }
+  | { kind: 'radial'; stops: PaintStop[]; opacity?: number }
   | {
       kind: 'texture';
       pattern: TexturePattern;
@@ -81,7 +95,19 @@ export type Paint =
       scale: number;
       /** 线宽（文档 px）。 */
       thickness: number;
+      opacity?: number;
     };
+
+/**
+ * `Paint.opacity`（四种带色变体共有的可选字段，0..1）说明：
+ *
+ * 缺省（`undefined`）= 1，即完全不透明 —— **可选字段不进 `SCHEMA_VERSION`**，
+ * 老工程没有这个键，运行期逐键合并即可（见 AGENTS §5.5）。
+ *
+ * 语义是「把这份填充整体淡出」，不是「给每个色标各调一次 alpha」，所以它
+ * 作用在**填充层**上：SVG 图形走 `fill-opacity` 属性（一处就覆盖纯色 / 渐变 /
+ * 纹理），CSS 盒子走 `color-mix(…, transparent)`（见 css.ts::paintToBackground）。
+ */
 
 export interface Stroke {
   color: string;
@@ -218,6 +244,39 @@ export interface TextElement extends ElementBase {
   style: TextStyle;
   /** true = 宽固定、高随内容（PPT 文本框的默认行为）。 */
   autoHeight: boolean;
+  /**
+   * 字形填充。**缺省 = 不上色**，沿用 `style.color` 那条老路。
+   *
+   * 语义边界（重要）：
+   *  - `style.color` 仍是「**纯色字形色**」的唯一入口 —— `fill` 是 `solid`
+   *    / `none` 时一律不参与字形着色，纯色仍然读 `style.color`；
+   *  - `fill` 只在 `linear` / `radial` / `texture` 时**覆盖**字形着色，
+   *    实现走 CSS `background-clip: text`（见 css.ts::textFillStyle）。
+   *
+   * ⚠️ 已知限制：`background-clip: text` 把整块的背景裁到**所有**字形上，
+   * 于是行内 run 各自的 `color` 会被盖掉。渲染侧遇到「有行内彩色 run」时会
+   * 退回 `style.color`（见 render-dom.ts::textFillOf），宁可少一个能力，
+   * 也不静默改掉用户已经设好的行内语义。
+   */
+  fill?: Paint;
+  /**
+   * **文本框背景**填充。缺省 = 透明。
+   *
+   * 与 `fill`（字形着色）是两件事，别混。实现上这个走外壳节点
+   * （`.typo-el`）的 CSS `background-*`（见 css.ts::textBoxStyle），在文字
+   * **之下**；`fill` 走内层 `.typo-text` 的 `background-clip: text`，裁的是
+   * 内层自己的背景。两者落在不同节点上，所以互不干扰 —— 这正是它们必须
+   * 分成两个字段的原因：共用一个字段的话，`background-clip: text` 会把
+   * 背景色一起裁到字形里，「给文本框填个底色」就变成了给字上色。
+   */
+  boxFill?: Paint;
+  /**
+   * 文本框边框。画在外壳节点上的 CSS border。
+   *
+   * `box-sizing: border-box` 已由 elementStyle 设死，所以边框往文本框**内部**
+   * 占宽，不会把框撑大（尺寸输入框里的数字因此就是最终外框尺寸）。
+   */
+  boxStroke?: Stroke;
 }
 
 export type ShapeKind =
@@ -432,6 +491,12 @@ export function createTextElement(
     runs: over.runs ?? runsFromText(over.text ?? tr('typo.defaultText')),
     style: over.style ?? defaultTextStyle(size),
     autoHeight: over.autoHeight ?? true,
+    // 可选字段逐个显式带过去（与 createShapeElement 同款）：不写的话
+    // `createTextElement(size, { boxFill })` 会**静默丢弃**那一项 ——
+    // 从 UI 走不到这里（那边是直接改文档对象），但构造期入参会莫名不生效。
+    fill: over.fill,
+    boxFill: over.boxFill,
+    boxStroke: over.boxStroke,
   };
 }
 
@@ -455,54 +520,154 @@ export interface ShapePaintPatch {
   pattern?: TexturePattern;
   scale?: number;
   thickness?: number;
+  /** 填充整体不透明度（0..1）。1 = 完全不透明。 */
+  opacity?: number;
+  /**
+   * 整份色标列表 —— 线性 / 径向渐变的**完整替换**（增删色标、改颜色、改位置）。
+   *
+   * 为什么是整份而不是「按下标改一项」：面板上的色标行会增删、会移动位置，
+   * 逐项打补丁要求调用方为每一步维护一份稳定的下标映射 —— 那正是
+   * 「删掉一个色标之后颜色串位」这类 bug 的来源。整份替换把它整个消掉。
+   *
+   * 只钳制 offset、**不排序**：列表顺序是用户的编辑顺序（编辑时行不跳），
+   * 渲染前由 `normalizeStops` 按 offset 排。
+   */
+  stops?: PaintStop[];
 }
 
-function stopColorOf(paint: Paint, index: number): string | null {
-  if (paint.kind !== 'linear' && paint.kind !== 'radial') return null;
-  return paint.stops[index]?.color ?? null;
+/** 渐变的色标列表（非渐变返回 null）。 */
+function stopsOf(paint: Paint): PaintStop[] | null {
+  return paint.kind === 'linear' || paint.kind === 'radial' ? paint.stops : null;
+}
+
+/**
+ * 首 / 末色标在**用户数组**里的下标（按 offset，并列时取首现）。
+ * `patch.color` / `patch.color2` 的语义是「开始色 / 结束色」，所以定位必须
+ * 按 offset 而不是数组下标 —— 用户把数组第 2 个色标拖到最左边之后，
+ * 它才是「开始色」。
+ */
+function edgeStopIndices(stops: PaintStop[]): { first: number; last: number } {
+  let first = 0;
+  let last = 0;
+  for (let i = 1; i < stops.length; i++) {
+    if (stops[i]!.offset < stops[first]!.offset) first = i;
+    if (stops[i]!.offset > stops[last]!.offset) last = i;
+  }
+  return { first, last };
 }
 
 export const DEFAULT_PAINT_A = '#6f64ef';
 export const DEFAULT_PAINT_B = '#00e3c0';
 
+/** 从一份 Paint 上取已有的整体不透明度（none 没有这个概念）。 */
+function paintOpacityOf(paint: Paint): number | undefined {
+  return paint.kind === 'none' ? undefined : paint.opacity;
+}
+
+/**
+ * 把不透明度写进一份**已经构造好的** Paint。
+ *
+ * `undefined` 时**不写这个键** —— 缺省即 1，没必要给每份没碰过透明度的
+ * 填充都塞一个字段（工程文件会因此无谓地膨胀，序列化断言也会变脆）。
+ */
+function withOpacity(paint: Paint, opacity: number | undefined): Paint {
+  if (opacity === undefined) return paint;
+  const v = Math.max(0, Math.min(1, opacity));
+  switch (paint.kind) {
+    case 'solid':
+      return { kind: 'solid', color: paint.color, opacity: v };
+    case 'linear':
+      return { kind: 'linear', angle: paint.angle, stops: paint.stops, opacity: v };
+    case 'radial':
+      return { kind: 'radial', stops: paint.stops, opacity: v };
+    case 'texture':
+      return {
+        kind: 'texture',
+        pattern: paint.pattern,
+        color: paint.color,
+        bg: paint.bg,
+        scale: paint.scale,
+        thickness: paint.thickness,
+        opacity: v,
+      };
+    default:
+      return paint;
+  }
+}
+
 export function applyPaintPatch(paint: Paint, patch: ShapePaintPatch): Paint {
   const kind = patch.kind ?? paint.kind;
   // 换类型时把能带过去的颜色带过去：用户先在纯色里调好一个色，切到渐变
   // 却发现它变回默认紫，是这类控件最烦的体验。
-  const a = patch.color ?? stopColorOf(paint, 0) ?? (paint.kind === 'solid' ? paint.color : null) ?? (paint.kind === 'texture' ? paint.color : null) ?? DEFAULT_PAINT_A;
-  const b = patch.color2 ?? stopColorOf(paint, 1) ?? (paint.kind === 'texture' ? paint.bg : null) ?? DEFAULT_PAINT_B;
+  const base = stopsOf(paint);
+  const edge = base && base.length ? edgeStopIndices(base) : null;
+  const a =
+    patch.color ??
+    (edge ? base![edge.first]!.color : null) ??
+    (paint.kind === 'solid' ? paint.color : null) ??
+    (paint.kind === 'texture' ? paint.color : null) ??
+    DEFAULT_PAINT_A;
+  const b =
+    patch.color2 ??
+    (edge ? base![edge.last]!.color : null) ??
+    (paint.kind === 'texture' ? paint.bg : null) ??
+    DEFAULT_PAINT_B;
+  // 不透明度同理带过去：只有补丁显式给了才覆盖，否则沿用原值（切换类型也保住）。
+  const opacity = patch.opacity ?? paintOpacityOf(paint);
+
+  /**
+   * 本次要写进渐变的色标列表。
+   *
+   * 三条路：整份替换（面板的色标编辑器）→ 在**原列表**上只改首/末色
+   * （Ribbon 的两个颜色控件；多色标与各停靠位置因此毫发无损）→ 从两个颜色
+   * 现造一份（原来不是渐变）。
+   */
+  const stopList = (): PaintStop[] => {
+    if (patch.stops?.length) {
+      return patch.stops.map((s) => ({
+        offset: Math.max(0, Math.min(1, Number(s.offset) || 0)),
+        color: s.color,
+      }));
+    }
+    if (base && edge && base.length) {
+      return base.map((s, i) =>
+        i === edge.first ? { ...s, color: a } : i === edge.last ? { ...s, color: b } : s,
+      );
+    }
+    return [
+      { offset: 0, color: a },
+      { offset: 1, color: b },
+    ];
+  };
 
   switch (kind) {
     case 'none':
       return { kind: 'none' };
     case 'solid':
-      return { kind: 'solid', color: a };
+      return withOpacity({ kind: 'solid', color: a }, opacity);
     case 'linear':
-      return {
-        kind: 'linear',
-        angle: patch.angle ?? (paint.kind === 'linear' ? paint.angle : 0),
-        stops: [
-          { offset: 0, color: a },
-          { offset: 1, color: b },
-        ],
-      };
+      return withOpacity(
+        {
+          kind: 'linear',
+          angle: patch.angle ?? (paint.kind === 'linear' ? paint.angle : 0),
+          stops: stopList(),
+        },
+        opacity,
+      );
     case 'radial':
-      return {
-        kind: 'radial',
-        stops: [
-          { offset: 0, color: a },
-          { offset: 1, color: b },
-        ],
-      };
+      return withOpacity({ kind: 'radial', stops: stopList() }, opacity);
     case 'texture':
-      return {
-        kind: 'texture',
-        pattern: patch.pattern ?? (paint.kind === 'texture' ? paint.pattern : 'dots'),
-        color: a,
-        bg: patch.color2 ?? (paint.kind === 'texture' ? paint.bg : 'rgba(0,0,0,0)'),
-        scale: patch.scale ?? (paint.kind === 'texture' ? paint.scale : 28),
-        thickness: patch.thickness ?? (paint.kind === 'texture' ? paint.thickness : 3),
-      };
+      return withOpacity(
+        {
+          kind: 'texture',
+          pattern: patch.pattern ?? (paint.kind === 'texture' ? paint.pattern : 'dots'),
+          color: a,
+          bg: patch.color2 ?? (paint.kind === 'texture' ? paint.bg : 'rgba(0,0,0,0)'),
+          scale: patch.scale ?? (paint.kind === 'texture' ? paint.scale : 28),
+          thickness: patch.thickness ?? (paint.kind === 'texture' ? paint.thickness : 3),
+        },
+        opacity,
+      );
     default:
       return paint;
   }
@@ -647,6 +812,9 @@ export function resizeDocument(doc: TypographyDocument, size: Size): TypographyD
     }
     if (next.kind === 'shape' && next.stroke) {
       next.stroke = { ...next.stroke, width: next.stroke.width * k };
+    }
+    if (next.kind === 'text' && next.boxStroke) {
+      next.boxStroke = { ...next.boxStroke, width: next.boxStroke.width * k };
     }
     return next;
   });

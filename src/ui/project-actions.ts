@@ -19,6 +19,7 @@ import { NotAProjectError, openProject, saveProject } from '../project/io';
 import {
   adoptNativeDir,
   hasDirectoryPicker,
+  isNativeBacked,
   pickDirectory,
   queryPermission,
   requestPermission,
@@ -193,6 +194,10 @@ export async function openProjectDirectory(
 export function attachProjectDirectory(dir: FsDirHandle, key: string): void {
   appState.projectDir = dir;
   appState.projectKey = key;
+  // 让这个位置也能被「最近工程 / 恢复上次打开的工程」重新打开 —— 与
+  // `openAt` 里那次 `putHandle` 同一件事。缺了它，E2E 的 OPFS 工程
+  // 打开着却永远恢复不了（句柄没进 IndexedDB）。
+  if (isNativeBacked(dir)) void putHandle(key, dir.raw);
 }
 
 /** 从最近工程列表恢复（新开一份）。 */

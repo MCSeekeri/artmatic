@@ -14,6 +14,7 @@
   import { appState } from './app-state.svelte';
   import { beatAtTime, SNAP_MODES, type SnapMode } from '../core/time';
   import type { OverlapBehavior } from '../core/schema';
+  import { browserPlatform } from '../platform/browser';
   import { tip } from './tip';
   import { tr } from '../i18n/index.svelte';
 
@@ -59,6 +60,24 @@
     { value: 'push', label: tr('tp.overlapPush') },
     { value: 'trim', label: tr('tp.overlapTrim') },
   ]);
+
+  /**
+   * 导出**当前预览帧**为 PNG。
+   *
+   * 渲染那段收在 `appState.snapshotFrame()`（它要碰 renderer 与工程分辨率，
+   * 属于状态层的活）；这里只管「拿到 Blob → 交给平台的下载通道 → 报一句结果」。
+   * 走 `browserPlatform.download` 而不是自己拼 anchor：objectURL 的创建与
+   * 延迟 revoke 只有那一处实现。
+   */
+  async function saveCurrentFrame(): Promise<void> {
+    const shot = await appState.snapshotFrame();
+    if (!shot) {
+      appState.flash(tr('tp.snapshotFailed'), 'error');
+      return;
+    }
+    await browserPlatform.download(shot.blob, shot.filename);
+    appState.flash(tr('tp.snapshotSaved', { frame: shot.frame }), 'success');
+  }
 </script>
 
 <div class="transport">
@@ -82,6 +101,17 @@
   <span class="time" use:tip={{ placement: 'top', text: tr('tp.timeTip') }}>
     {fmt(playT)}<em>{barBeat}</em>
   </span>
+
+  <!-- 当前帧截图：与时间读数同一簇（都是「此刻这一帧」的事）。 -->
+  <IconButton
+    icon="image"
+    label={tr('tp.snapshot')}
+    tipText={tr('tp.snapshotTip')}
+    tipPlacement="top"
+    testid="preview-snapshot"
+    disabled={appState.snapshotting}
+    onclick={() => void saveCurrentFrame()}
+  />
 
   <span class="sep"></span>
 
@@ -141,7 +171,7 @@
     <Select
       value={appState.snap}
       options={snapOptions}
-      onchange={(v) => (appState.snap = v)}
+      onchange={(v) => appState.setSnap(v)}
       testid="snap-mode"
       optionTestidPrefix="snap-mode-opt"
       minWidth={88}

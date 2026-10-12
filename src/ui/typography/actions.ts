@@ -23,7 +23,9 @@ import {
   type MixBlend,
   type ShapeElement,
   type ShapePaintPatch,
+  type Stroke,
   type TextStyle,
+  type TextureFrame,
   type TypographyDocument,
   type TypographyElement,
   type ZOrderOp,
@@ -39,7 +41,7 @@ import {
 import {
   createCustomAnimation,
   createPresetAnimation,
-  sanitizeKeyframeBody,
+  parseCustomCss,
   type AnimPreset,
   type AnimTiming,
 } from '../../typography/animation';
@@ -211,6 +213,15 @@ export interface TypographyActions {
   /* 通用元素属性 */
   setBlend(value: MixBlend): void;
   setOpacity(value: number): void;
+  /**
+   * 元素几何（属性面板的「位置 / 大小 / 旋转」）。
+   *
+   * 多选语义：改位置时以**首元素为锚整体平移**（相对位置保持），而不是把
+   * 每个元素都设成同一个值 —— 后者会把它们叠在一起。宽 / 高 / 旋转只对单选
+   * 有意义（多选时「那条边」没有唯一定义，与拖拽缩放不做组版本同源）：
+   * 面板在多选时禁用它们，这里再兜一道，非单选直接忽略。
+   */
+  setFrame(patch: Partial<TextureFrame>): void;
   toggleFlag(key: 'locked' | 'visible'): void;
   duplicateSelection(): void;
   deleteSelection(): void;
@@ -239,6 +250,26 @@ export interface TypographyActions {
   setShapeFill(color: string): void;
   /** 填充类型 / 渐变 / 纹理的**一处**写入路径（见 document.ts 的 applyPaintPatch）。 */
   setShapePaint(patch: ShapePaintPatch): void;
+  /**
+   * 文本**字形填充**的局部更新（渐变 / 径向 / 纹理）。
+   *
+   * 与图形填充共用 `applyPaintPatch` —— 只有渲染落点不同（字形走 CSS
+   * `background-clip: text`，见 css.ts::textFillStyle）。`solid` / `none`
+   * 对字形没有意义：纯色字形仍走 `style.color`，「跟随文字色」由
+   * `clearTextFill` 把字段整个清掉。
+   */
+  setTextFill(patch: ShapePaintPatch): void;
+  /** 清掉文本字形填充，回到 `style.color` 纯色字形。 */
+  clearTextFill(): void;
+  /**
+   * **文本框背景**填充的局部更新（属性面板）。
+   *
+   * 与 `setTextFill` 是两层东西：那个是字形着色（`background-clip: text`），
+   * 这个是画在文本元素外壳上的背景（文字之下）。见 TextElement.boxFill。
+   */
+  setTextBoxFill(patch: ShapePaintPatch): void;
+  /** 文本框边框（颜色 / 宽度 / 线型）。局部更新，缺省字段沿用原值。 */
+  setTextBoxStroke(patch: Partial<Stroke>): void;
   /**
    * 布尔运算（并 / 差 / 交 / 异或）。作用于选中的图形，结果为**一个** `svg` 图形。
    * 差集是「最前景那个减去其余」，与设计工具一致。
@@ -547,6 +578,31 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
+    setFrame(patch) {
+      const ids = new Set(editorState.groupAwareIds);
+      if (!ids.size) return;
+      editorState.commit(tr('typo.undo.frame'), (doc) => {
+        const targets = doc.elements.filter((el) => ids.has(el.id) && !el.locked);
+        const anchor = targets[0];
+        if (!anchor) return;
+        const single = targets.length === 1;
+        const dx = patch.x !== undefined ? patch.x - anchor.frame.x : 0;
+        const dy = patch.y !== undefined ? patch.y - anchor.frame.y : 0;
+        for (const el of targets) {
+          const f = el.frame;
+          el.frame = {
+            x: patch.x !== undefined ? (single ? patch.x : f.x + dx) : f.x,
+            y: patch.y !== undefined ? (single ? patch.y : f.y + dy) : f.y,
+            // 宽 / 高 / 旋转只在单选时生效（见接口注释）。宽高至少 1px：
+            // 0 宽的元素在画布上再也点不回来。
+            w: single && patch.w !== undefined ? Math.max(1, patch.w) : f.w,
+            h: single && patch.h !== undefined ? Math.max(1, patch.h) : f.h,
+            rot: single && patch.rot !== undefined ? patch.rot : f.rot,
+          };
+        }
+      });
+    },
+
     toggleFlag(key) {
       editorState.commit(key === 'locked' ? tr('typo.undo.lock') : tr('typo.undo.hide'), (doc) => {
         for (const el of writable(doc)) el[key] = !el[key];
@@ -701,6 +757,46 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
+    setTextFill(patch) {
+      // 起步用一份纯色：applyPaintPatch 会把颜色带到新类型，于是「第一次点
+      // 渐变」不会得到一份没有颜色、画出来全透明的填充。
+      editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
+        for (const el of onlyText(doc)) {
+          el.fill = applyPaintPatch(el.fill ?? { kind: 'solid', color: DEFAULT_PAINT_A }, patch);
+        }
+      });
+    },
+
+    clearTextFill() {
+      editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
+        for (const el of onlyText(doc)) el.fill = undefined;
+      });
+    },
+
+    setTextBoxFill(patch) {
+      // 与 setTextFill 同款：起步给一份纯色，applyPaintPatch 会把颜色带进新类型。
+      editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
+        for (const el of onlyText(doc)) {
+          el.boxFill = applyPaintPatch(el.boxFill ?? { kind: 'solid', color: DEFAULT_PAINT_A }, patch);
+        }
+      });
+    },
+
+    setTextBoxStroke(patch) {
+      editorState.commit(tr('typo.undo.shapeStroke'), (doc) => {
+        for (const el of onlyText(doc)) {
+          const cur = el.boxStroke;
+          el.boxStroke = {
+            color: patch.color ?? cur?.color ?? '#ffffff',
+            // 宽度 0 = 无边框（与图形描边同一套语义：不做「有 / 无」两态，
+            // 少一个状态就少一处「为什么这里还有个隐形边框」）。
+            width: patch.width !== undefined ? Math.max(0, patch.width) : (cur?.width ?? 2),
+            style: patch.style ?? cur?.style ?? 'solid',
+          };
+        }
+      });
+    },
+
     setShapeStroke(color) {
       editorState.commit(tr('typo.undo.shapeStroke'), (doc) => {
         for (const el of onlyShape(doc)) {
@@ -712,8 +808,12 @@ export function createTypographyActions(): TypographyActions {
     setShapeStrokeWidth(width) {
       editorState.commit(tr('typo.undo.strokeWidth'), (doc) => {
         for (const el of onlyShape(doc)) {
-          if (!el.stroke) continue;
-          el.stroke = { ...el.stroke, width: Math.max(0, width) };
+          // 本来没有描边时也**创建**：面板与 Ribbon 上「先调宽度、再挑颜色」
+          // 是常见顺序，静默不生效会让人以为控件坏了。宽度 0 在视觉上仍然
+          // 等于没有描边，所以这不会给用户多出一个隐形状态。
+          el.stroke = el.stroke
+            ? { ...el.stroke, width: Math.max(0, width) }
+            : { color: '#ffffff', width: Math.max(0, width), style: 'solid' };
         }
       });
     },
@@ -928,27 +1028,29 @@ export function createTypographyActions(): TypographyActions {
     },
 
     applyCustomCss(css) {
-      // 清洗放在写库之前：非法代码绝不能进文档 —— 一旦进了，光栅化时
+      // 解析（含清洗）放在写库之前：非法代码绝不能进文档 —— 一旦进了，光栅化时
       // animationStyleSheet 会跳过它，但用户已经以为「保存成功」了。
-      const body = sanitizeKeyframeBody(css);
-      if (!body) return false;
+      // 支持旧单 body 与「多个 @keyframes 块 + 逗号分隔 animation 简写」两种形态。
+      const parsed = parseCustomCss(css);
+      if (!parsed.ok) return false;
       editorState.commit(tr('typo.undo.customAnim'), (doc) => {
         for (const el of anyElement(doc)) {
           const prev = el.animations[0];
           // 继承上一段动画的时序，否则用户手写一段 keyframes 之后时长会跳回
           // 默认的 0.6s，「只是改了下缓动」变成了「动画变快了」。
-          el.animations = [
-            createCustomAnimation(newId(), body, prev
-              ? {
-                  delay: prev.delay,
-                  duration: prev.duration,
-                  iterations: prev.iterations,
-                  easing: prev.easing,
-                  direction: prev.direction,
-                  fill: prev.fill,
-                }
-              : {}),
-          ];
+          // （多动画简写自带每条时序，这里的字段只服务于旧单 body 形态。）
+          const over: Partial<AnimTiming> & { animation?: string } = prev
+            ? {
+                delay: prev.delay,
+                duration: prev.duration,
+                iterations: prev.iterations,
+                easing: prev.easing,
+                direction: prev.direction,
+                fill: prev.fill,
+              }
+            : {};
+          if (parsed.animation) over.animation = parsed.animation;
+          el.animations = [createCustomAnimation(newId(), parsed.css, over)];
         }
       });
       return true;

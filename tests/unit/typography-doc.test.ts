@@ -65,6 +65,12 @@ describe('元素工厂', () => {
     expect(createTextElement({ w: 100, h: 100 }, { id: 'fixed' }).id).toBe('fixed');
   });
 
+  it('文本默认**没有**字形填充 —— 纯色字形仍走 style.color', () => {
+    const el = createTextElement({ w: 1000, h: 500 });
+    expect(el.fill).toBeUndefined();
+    expect(el.style.color).toBeTruthy();
+  });
+
   it('直线默认只描边：填充 none + 有描边，否则它什么都看不见', () => {
     const d = createTypographyDocument({ w: 1000, h: 500 });
     const line = createShapeElement(d.size, 'line');

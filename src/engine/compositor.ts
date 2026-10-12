@@ -16,8 +16,13 @@
  *
  * 设了影响深度的特效（`EffectOp.scope`，见 `stack.ts` 文件头）不是「作用于 acc
  * 目前的样子」，而是作用于**只留下那几条轨道时的那幅画面**：`runOps` 递归跑一遍
- * 作用域、从透明起合成，特效链作用在它上面，最后以 normal 贴回 acc。嵌套的组各用
+ * 作用域、从透明起合成，特效链作用在它上面，最后贴回 acc。嵌套的组各用
  * 一对自己的目标（`groupTargets(depth)`）。没设深度时走的还是老路 —— 逐字节没变。
+ *
+ * ⚠️ **贴回用的不是写死的 normal，而是作用域最底层那个 op 自己的混合模式**：
+ * 组是从透明起合成的，组内最底层没有背景板，对着透明黑做 `add`/`multiply` 只会
+ * 得到黑（alpha 却照常累积）。所以组内那一层按 normal 收进来，混合模式留到贴回
+ * 那一步、对着真正的背景板执行。细节与已知近似见 `runOps` 与 `bottomScopeBlend`。
  *
  * 反馈池：feedback 类特效（echo）需要跨帧历史，每个特效实例一对 Target，
  * seek 时由 Renderer 调 clearFeedback() 清空（预览 seek 后的暖帧差异是
@@ -35,7 +40,8 @@
 import { frameOf } from './clock';
 import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
-import { buildStack, type RenderOp, type ResolvedSource, type TransitionOp } from './stack';
+import { buildStack, type BuildStackOptions, type RenderOp, type ResolvedSource, type TransitionOp } from './stack';
+import { bottomScopeBlend, neutralizeBottomBlend } from './scope-blend';
 import type { Kit, Program, Target } from './kit';
 import type { SpectrumTextures } from './spectrum-texture';
 import type { BeatGrid } from '../core/time';
@@ -179,12 +185,12 @@ export class Compositor {
   }
 
   /** 渲染一帧到屏幕（默认帧缓冲）。预览与导出都走这一个入口。 */
-  render(project: Project, t: number): void {
+  render(project: Project, t: number, opts?: BuildStackOptions): void {
     const w = this.kit.w;
     const h = this.kit.h;
     this.ensure(w, h);
     const frame = frameOf(t, project.fps);
-    const ops = buildStack(project, t);
+    const ops = buildStack(project, t, opts);
 
     const acc = this.ping!;
     acc.bind();
@@ -249,7 +255,7 @@ export class Compositor {
         const g = this.groupTargets(depth, c.w, c.h);
         g.a.bind();
         this.kit.clear();
-        src = this.runOps(op.scope, g.a, g.b, depth + 1, c);
+        src = this.runOps(neutralizeBottomBlend(op.scope), g.a, g.b, depth + 1, c);
         dst = src === g.a ? g.b : g.a;
       }
       for (const inst of op.clip.chain) {
@@ -267,12 +273,23 @@ export class Compositor {
         buf = dst;
         continue;
       }
-      // 有作用域：特效的输出是「只留下这些轨道」的一整层，以 normal 贴回下层。
+      // 有作用域：特效的输出是「只留下这些轨道」的一整层，贴回下层。
+      //
+      // 用**作用域最底下那个 op 自己的混合模式**贴回，而不是写死 normal ——
+      // 组是从透明起合成的，最底层那个源在组内没有背景板可混（组内已按 normal
+      // 收进来，见 neutralizeBottomBlend），它的混合模式必须留到这一步、对着
+      // 真正的背景板（acc）做。否则 `add` / `multiply` / `screen` 这类依赖背景的
+      // 模式会对着透明黑算：实测「黑填充 + 线性加深(add)」的圆形在作用域里变成
+      // 不透明黑块，把下方的画面盖住。
+      //
+      // 已知近似：组内的 rgb 是**预乘 alpha** 的（normal 混合的结果），而混合公式
+      // 又乘一次本层 alpha，所以**半透明边缘**会被多压一次（完全不透明的实心区域
+      // 逐位一致）。要精确就得让组内保留直通色，代价是改动整条混合通路，暂不做。
       this.blendProg.use();
       this.blendProg
         .tex('u_texture', acc.tex)
         .tex('u_texture2', src.tex)
-        .u1i('u_blendMode', BLEND_MODE_INDEX.normal)
+        .u1i('u_blendMode', BLEND_MODE_INDEX[bottomScopeBlend(op.scope)])
         .u('u_opacity', 1);
       this.kit.pass(this.blendProg, buf);
       const tmp = acc;

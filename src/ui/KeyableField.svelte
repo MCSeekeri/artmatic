@@ -42,6 +42,15 @@
     onClearCurve: () => void;
     /** 额外的说明，进 tooltip 与底栏。 */
     tipText?: string;
+    /**
+     * 编辑信号：本字段属于哪条片段 / 哪条曲线键。
+     *
+     * 拖动滑杆 / 数字框时写进 `appState.editingKey`，供**跨剪切点两帧预览**的
+     * 自动模式判断「正在给哪条片段设关键帧值」（见 app-state 的字段注释）。
+     * 用状态信号而不是 DOM 查询——检查器整块会被 structuredClone 重建，聚焦态很脆。
+     */
+    clipId?: string;
+    curveKey?: string;
   }
   const {
     label,
@@ -57,6 +66,8 @@
     onAnchorChange,
     onClearCurve,
     tipText,
+    clipId,
+    curveKey,
   }: Props = $props();
 
   const grid = $derived(appState.project.beatGrid);
@@ -72,6 +83,19 @@
   function slide(v: number): void {
     if (curve) onKey(v, curve.beatAnchor ?? null);
     else onBase(v);
+  }
+
+  /**
+   * 只有**已经有曲线**的字段才算「在设关键帧的值」（没有曲线的拖动改的是基值）。
+   * 上报之后由控件的收尾事件（滑杆 onchange / 数字框 onliveend）清掉。
+   */
+  function markEditing(): void {
+    if (curve && clipId && curveKey) appState.beginEditKey(clipId, curveKey);
+  }
+
+  function beginSlide(v: number): void {
+    markEditing();
+    slide(v);
   }
 
   function toggleKey(): void {
@@ -104,7 +128,8 @@
     {step}
     value={Math.max(min, Math.min(max, value))}
     ariaLabel={label}
-    oninput={slide}
+    oninput={beginSlide}
+    onchange={() => appState.endEditKey()}
   />
   <NumberInput
     value={value}
@@ -113,8 +138,12 @@
     {step}
     width={58}
     ariaLabel={tr('ctl.valueAria', { label })}
-    oninput={slide}
-    onchange={slide}
+    oninput={beginSlide}
+    onchange={(v) => {
+      slide(v);
+      appState.endEditKey();
+    }}
+    onliveend={() => appState.endEditKey()}
   />
   {#snippet trailing()}
     <IconButton

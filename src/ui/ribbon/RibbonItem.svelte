@@ -69,6 +69,8 @@
       ariaLabel={item.label}
       editable={item.editable}
       numeric={item.numeric}
+      filterable={item.filterable}
+      filterPlaceholder={item.filterPlaceholder}
       onchange={item.onchange}
     />
     <span class="lbl">{item.label}</span>

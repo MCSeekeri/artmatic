@@ -20,9 +20,10 @@
   } from '../core/schema';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
-  import { getGenerator } from '../algos/registry';
+  import { defaultParams, getGenerator } from '../algos/registry';
   import { defaultEffectValues, getEffect } from '../effects/registry';
   import EffectPickerModal from './effect-picker/EffectPickerModal.svelte';
+  import AlgoPickerModal from './algo-picker/AlgoPickerModal.svelte';
   import TransitionPickerModal from './transition-picker/TransitionPickerModal.svelte';
   import { transitionThumbUrl } from './transition-picker/thumb-assets';
   import { transitionCatalogInfo } from '../effects/transitions/catalog-info';
@@ -44,6 +45,7 @@
 
   let pickerOpen = $state(false);
   let transitionPickerOpen = $state(false);
+  let algoPickerOpen = $state(false);
 
   /**
    * 按**选择顺序**把若干特效追加到链尾。
@@ -97,6 +99,9 @@
       base: Number(inst.values[p.key] ?? p.defaultValue),
       curve: clip.curves[curveKey],
       clipStart: clip.start,
+      /* 编辑信号（跨剪切点两帧预览的自动模式用）。见 KeyableField 与 app-state。 */
+      clipId: clip.id,
+      curveKey,
       onBase: (v: number) => setEffectParam(clip, inst, p.key, v),
       onKey: (v: number, anchor: { beat: number } | null) =>
         upd(clip, tr('insp.keyframe'), (c) => upsertCurveKey(c, curveKey, v, appState.playT, anchor, appState.project.beatGrid)),
@@ -131,6 +136,26 @@
     });
   }
 
+  /**
+   * 更换算法生成器：**整体替换** `clip.source`（一笔撤销）。
+   *
+   * 不同生成器的参数表完全不同（`rule` 对雪花没有意义、`speed` 含义也未必一样），
+   * 所以旧参数一律不保留，新源写入新生成器的默认参数。旧生成器**同名参数上
+   * 打的关键帧**也必须一起删 —— 否则新生成器若有同名的 `speed`，那条旧曲线会
+   * 静默作用到新参数上（“换了算法却带着旧动画”）。只删旧生成器参数表里的键，
+   * 不碰 opacity / transform.* 这些片段级曲线。
+   */
+  function changeAlgo(clip: AnyClip, genId: string): void {
+    if (clip.kind !== 'source' || clip.source.type !== 'algo') return;
+    if (clip.source.generator === genId) return;
+    const oldKeys = new Set(getGenerator(clip.source.generator)?.params.map((p) => p.key) ?? []);
+    upd(clip, tr('insp.changeAlgo'), (c) => {
+      if (c.kind !== 'source' || c.source.type !== 'algo') return;
+      c.source = { type: 'algo', generator: genId, params: defaultParams(genId) };
+      for (const k of oldKeys) delete c.curves[k];
+    });
+  }
+
   function paramKeyableProps(clip: AnyClip, p: RangeParam) {
     return {
       base:
@@ -139,6 +164,8 @@
           : p.defaultValue,
       curve: clip.curves[p.key],
       clipStart: clip.start,
+      clipId: clip.id,
+      curveKey: p.key,
       onBase: (v: number) => setAlgoParam(clip, p.key, v),
       onKey: (v: number, anchor: { beat: number } | null) =>
         upd(clip, tr('insp.keyframe'), (c) => upsertCurveKey(c, p.key, v, appState.playT, anchor, appState.project.beatGrid)),
@@ -189,6 +216,8 @@
       base: baseOf(clip, key),
       curve: clip.curves[key],
       clipStart: clip.start,
+      clipId: clip.id,
+      curveKey: key,
       onBase: (v: number) => upd(clip, tr('insp.editParam'), (c) => setBase(c, key, v)),
       onKey: (v: number, anchor: { beat: number } | null) =>
         upd(clip, tr('insp.keyframe'), (c) => upsertCurveKey(c, key, v, appState.playT, anchor, appState.project.beatGrid)),
@@ -380,7 +409,16 @@
         </Field>
       {:else if clip.source.type === 'algo'}
         {@const def = getGenerator(clip.source.generator)}
-        <p class="note">{tr('insp.algoGenerator', { name: def ? resolveLabel(def.nameKey, tr) : clip.source.generator })}</p>
+        <div class="algo-head">
+          <span class="note algo-name">{tr('insp.algoGenerator', { name: def ? resolveLabel(def.nameKey, tr) : clip.source.generator })}</span>
+          <Button
+            label={tr('insp.changeAlgo')}
+            icon="wand-sparkles"
+            variant="outline"
+            testid="insp-change-algo"
+            onclick={() => (algoPickerOpen = true)}
+          />
+        </div>
         {#if def}
           {#each visibleParams(def.params, clip.source.params) as p (p.key)}
             {#if p.type === 'range'}
@@ -468,6 +506,17 @@
               </Field>
             {/if}
           {/each}
+        {/if}
+
+        {#if algoPickerOpen}
+          <AlgoPickerModal
+            current={clip.source.generator}
+            onclose={() => (algoPickerOpen = false)}
+            onapply={(id) => {
+              changeAlgo(clip, id);
+              algoPickerOpen = false;
+            }}
+          />
         {/if}
       {:else if clip.source.type === 'image'}
         <p class="note">{tr('insp.imageAsset', { name: appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId })}</p>
@@ -854,6 +903,22 @@
      这些都不阻断操作，只是「照这样下去不会按你想的生效」。 */
   .note.insp-warn {
     color: var(--warning);
+  }
+  /* 算法片段顶部：生成器名 + 「更换算法艺术」按钮。名字占满剩余宽度并省略，
+     按钮贴右不换行 —— 名字再长也不该把按钮挤到第二行。 */
+  .algo-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-2);
+  }
+  .algo-name {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* 区块分隔：转场与「片段自身属性」是两回事（见模板里的注释），靠一条上边线 +
      一个小写字标题把它隔开，而不是靠一个更大的 margin —— margin 在滚动到底部时

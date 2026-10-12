@@ -23,6 +23,8 @@
   import SelectionLayer from './SelectionLayer.svelte';
   import NodeEditor from './NodeEditor.svelte';
   import SidePanel from './SidePanel.svelte';
+  import BackgroundLayer from './BackgroundLayer.svelte';
+  import { bgPreview } from './background-preview.svelte';
   import {
     startMoveGesture,
     startNodeDrag,
@@ -51,7 +53,7 @@
   import CustomCssModal from './CustomCssModal.svelte';
   import IconPickerModal from './IconPickerModal.svelte';
   import type { IconInsert } from '../../typography/icon-shapes';
-  import { SNAP_PX, hitTest, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
+  import { SNAP_PX, hitTest, hitTestAll, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
   import { gridSpacing } from '../../typography/grid';
   import { groupById } from '../../typography/groups';
   import { tr } from '../../i18n/index.svelte';
@@ -255,11 +257,23 @@
     return first ? keyframeBodyOf(first) : '';
   });
 
+  /**
+   * 舞台的时钟（绝对秒）。
+   *
+   * 平时跟随工程播放头 `appState.playT`；背景预览在**局部播放 / 拖动进度条**时
+   * （`bgPreview.at` 非 null）改由它驱动。这样元素动画与底图看的是同一个时刻。
+   * **绝不去推 `appState.playT`** —— 那是时间轴的播放头，另一份状态。
+   */
+  const stageTime = $derived.by(() => {
+    void appState.playT;
+    void bgPreview.at;
+    return bgPreview.at ?? appState.playT;
+  });
+
   /** 片段内本地时间 —— 舞台上的 CSS 动画就是被它 seek 的（唯一时钟仍是 t）。 */
   const localSec = $derived.by(() => {
     const clip = editorState.clip;
-    void appState.playT;
-    return clip ? appState.playT - clip.start : 0;
+    return clip ? stageTime - clip.start : 0;
   });
 
   /**
@@ -267,10 +281,9 @@
    * 直接用 localSec 会让播放时每帧重烘一张全尺寸位图（每帧几十毫秒）。
    */
   const rasterFrame = $derived.by(() => {
-    void appState.playT;
     const clip = editorState.clip;
     if (!clip) return 0;
-    return Math.round((appState.playT - clip.start) * appState.store.project.fps);
+    return Math.round((stageTime - clip.start) * appState.store.project.fps);
   });
 
   const zoom = $derived(editorState.zoom);
@@ -381,7 +394,8 @@
     const d = doc;
     const runtime = appState.textRaster;
     const host = rasterHostEl;
-    if (!editorState.rasterPreview || !d || !runtime || !host || playing) {
+    // 局部播放期间也不重烘：它是用来核对「所见即所得」的，不是播放器。
+    if (!editorState.rasterPreview || !d || !runtime || !host || playing || bgPreview.playing) {
       if (host) host.replaceChildren();
       return;
     }
@@ -525,6 +539,39 @@
     editorState.setZoom(pct / 100);
   }
 
+  /* ------------------------------------------------------------ 背景预览 */
+
+  /** 当前片段的时长（进度条量程）。至少 0.001 免得量程为 0。 */
+  const clipDur = $derived.by(() => {
+    void appState.version;
+    const c = editorState.clip;
+    return c ? Math.max(0.001, c.end - c.start) : 1;
+  });
+
+  /** 进度条读数：局部预览时间（片段内秒），夹进 [0, clipDur]。 */
+  const bgLocalSec = $derived.by(() => {
+    void appState.playT;
+    void bgPreview.at;
+    const c = editorState.clip;
+    if (!c) return 0;
+    return Math.min(clipDur, Math.max(0, stageTime - c.start));
+  });
+
+  /**
+   * 拖动进度条 / 播放共用的「seek 到 localSec」。
+   * 一次调用同时更新底图与动画（两者都读 `bgPreview.at`）。
+   */
+  function seekBgLocal(sec: number): void {
+    const c = editorState.clip;
+    if (!c) return;
+    bgPreview.seekLocal(c.start + sec);
+  }
+
+  function toggleBgPlay(): void {
+    if (bgPreview.playing) bgPreview.pause();
+    else bgPreview.play();
+  }
+
   /* ------------------------------------------------------------ 手势环境 */
 
   function toDoc(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -550,6 +597,26 @@
   function hitAt(e: { clientX: number; clientY: number }) {
     const p = toDoc(e);
     return hitTest(editorState.selectableRects, p.x, p.y);
+  }
+
+  /** 点下的**全部**命中 id，从最上层到最下层（Alt 轮询用）。 */
+  function hitIdsAt(e: { clientX: number; clientY: number }): string[] {
+    const p = toDoc(e);
+    return hitTestAll(editorState.selectableRects, p.x, p.y);
+  }
+
+  /**
+   * Alt 单击重叠元素时，在命中集合里**轮询**到下一个。
+   *
+   * 规则：当前选区若已包含命中集合中的某个元素，就选它的下一个（在集合内循环）；
+   * 否则选第一个（最上层）。用 `selectOnly` 而不是 `toggle` —— 轮询是「换一个」，
+   * 不是「加一个」，否则连续 Alt 点会把重叠元素全选上、再也分不开。
+   */
+  function cycleOverlap(hits: string[]): void {
+    if (hits.length === 0) return;
+    const cur = hits.findIndex((id) => editorState.isSelected(id));
+    const next = cur >= 0 ? hits[(cur + 1) % hits.length]! : hits[0]!;
+    editorState.selectOnly(next);
   }
 
   /** 右侧面板宽度拖曳。指针动一下写一次（节流交给 setTypoPanelWidth 的去重）。 */
@@ -579,7 +646,12 @@
    * 必须在这里补 —— 而且只能补在**没拖动**的那次上：按下去就进组的话，
    * 想拖整组的人会发现自己拖走的是组里的一个子元素。
    *
-   * 只对**组内**的元素做这件事。多选时选择框是整个选区的外接框，随便按一下
+   * **Shift / Alt 的单击语义也补在这里**：选择框覆盖着已选元素，指针落在框上，
+   * `onStageDown` 根本收不到那次 pointerdown。不在这里补的话，多选时 Shift 点已选
+   * 元素不会把它移出选区、Alt 点也不会轮询到下层元素（都表现成「这个手势没反应」）。
+   * 二者都只在**没拖动**时生效，所以 Shift/Alt 拖拽（单轴 / 关吸附）的手感不变。
+   *
+   * 只对**组内**的元素做「进组」这件事。多选时选择框是整个选区的外接框，随便按一下
    * 就把选择收缩成指针底下那一个，那是很烦人的事故。
    */
   function onSelectionBoxDown(e: PointerEvent): void {
@@ -587,6 +659,19 @@
     const el = hit ? (doc?.elements.find((x) => x.id === hit.id) ?? null) : null;
     startMoveGesture(makeEnv(), toDoc(e), {
       onClick: () => {
+        // Alt：在重叠元素里轮询（与 onStageDown 的同一条判据，避免两个入口两套行为）。
+        if (e.altKey) {
+          const hits = hitIdsAt(e);
+          if (hits.length > 1) {
+            cycleOverlap(hits);
+            return;
+          }
+        }
+        // Shift：单击已选项 = 移出选区（其余保留），点未选项 = 加入。
+        if (e.shiftKey) {
+          if (hit) editorState.toggle(hit.id);
+          return;
+        }
         if (el?.groupId) editorState.pickElement(el);
       },
     });
@@ -613,6 +698,21 @@
       startMarquee(e, toDoc(e));
       return;
     }
+
+    /*
+     * Alt 单击 = 轮询重叠元素。**只在命中多个时启用** —— 命中一个时保持普通
+     * 选择语义（Alt 本来就是「关吸附」的修饰键，单元素场景别抢它的含义）。
+     * 用 selectOnly 逐个换选：同一位置连续 Alt 单击能把叠在一起的元素挨个选中。
+     */
+    if (e.altKey) {
+      const hits = hitIdsAt(e);
+      if (hits.length > 1) {
+        cycleOverlap(hits);
+        if (editorState.selectedIds.length) startMoveGesture(makeEnv(), toDoc(e));
+        return;
+      }
+    }
+
     // Shift = 加/减选，此时不做组合语义（用户明确在按元素挑）。
     if (e.shiftKey) {
       editorState.toggle(hit.id);
@@ -1022,6 +1122,11 @@
         style:height={`${docSize.h * zoom}px`}
         style:margin={`${PAD}px auto`}
       >
+        <!--
+          背景帧层：铺在最底下（先于 .paper），被编辑内容之下。
+          它按 document 像素取「当前帧画面」的截图，半透明地正好占满画幅框。
+        -->
+        <BackgroundLayer />
         <div
           class="raster-host"
           bind:this={rasterHostEl}
@@ -1186,6 +1291,53 @@
     <span class="canvas-size mono" data-testid="typo-canvas-size" title={tr('typo.canvasSize')}>
       {docSize.w} × {docSize.h}
     </span>
+
+    <!--
+      背景预览：播放按钮 + 进度条（用户要求放在缩放区右侧）+ 开关 + 不透明度。
+      播放/拖动都走 `bgPreview`（局部时间），同时驱动底图与排版动画。
+    -->
+    <div class="typo-bg-controls" data-testid="typo-bg-controls">
+      <IconButton
+        icon={bgPreview.playing ? 'pause' : 'play'}
+        label={bgPreview.playing ? tr('typo.bgPause') : tr('typo.bgPlay')}
+        testid="typo-bg-play"
+        onclick={toggleBgPlay}
+      />
+      <span class="typo-bg-scrub">
+        <Slider
+          min={0}
+          max={clipDur}
+          step={0}
+          value={bgLocalSec}
+          ariaLabel={tr('typo.bgScrub')}
+          tipText={tr('typo.bgScrub')}
+          testid="typo-bg-scrub"
+          oninput={seekBgLocal}
+        />
+      </span>
+      <span class="typo-bg-time mono" data-testid="typo-bg-time">{bgLocalSec.toFixed(2)}s</span>
+      <IconButton
+        icon="image"
+        label={tr('typo.bgToggle')}
+        testid="typo-bg-toggle"
+        active={bgPreview.enabled}
+        onclick={() => bgPreview.toggleEnabled()}
+      />
+      <span class="typo-bg-opacity">
+        <Slider
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(bgPreview.opacity * 100)}
+          ariaLabel={tr('typo.bgOpacity')}
+          tipText={tr('typo.bgOpacity')}
+          disabled={!bgPreview.enabled}
+          testid="typo-bg-opacity"
+          oninput={(v) => bgPreview.setOpacity(v / 100)}
+        />
+      </span>
+    </div>
+
     <span class="spacer"></span>
     <!-- 固定宽度：.sel 带 flex:1，直接放进 flex 行会被拉成整行宽。 -->
     <span class="scale-pick">
@@ -1430,6 +1582,35 @@
   }
   .spacer {
     margin-left: auto;
+  }
+  /*
+   * 背景预览控件组：与左侧缩放区分开（一条竖线），进度条紧挨缩放区的右侧。
+   * 定宽框住自带 flex:1 的 .sld —— 同 .zoom-slider 的处理。
+   */
+  .typo-bg-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    flex: none;
+    margin-left: var(--sp-3);
+    padding-left: var(--sp-3);
+    border-left: 1px solid var(--border);
+  }
+  .typo-bg-scrub {
+    display: inline-flex;
+    flex: none;
+    width: 120px;
+  }
+  .typo-bg-opacity {
+    display: inline-flex;
+    flex: none;
+    width: 72px;
+  }
+  .typo-bg-time {
+    min-width: 44px;
+    text-align: center;
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
   }
   /* .sel 自带 flex:1，放进 flex 行会被拉成整行宽（实测占满 90% 屏幕）——
      包一层定宽容器把它框住。 */

@@ -37,12 +37,13 @@ import { setMediaAssetsListener } from '../engine/media-assets';
 import type { VideoSourceManager } from '../engine/video-source';
 import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
-import { snapTime, type SnapMode } from '../core/time';
+import { SNAP_MODES, snapTime, timeAtFrame, frameAtTime, type SnapMode } from '../core/time';
 import type { ShortcutScheme } from './shortcuts';
 import type { FsDirHandle } from '../project/fs';
 import type { AssetIssue } from '../project/ledger';
 import type { ProjectRef } from '../project/handles';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
+import { loadOpenTabs, saveOpenTabs } from '../project/open-tabs';
 import { DENSITY } from './tokens';
 import { DEFAULT_TYPO_GRID, normalizeTypoGrid, type TypoGridPrefs } from '../typography/grid';
 import { tr } from '../i18n/index.svelte';
@@ -71,6 +72,11 @@ interface UiPrefs {
   previewRestoreOnPause: boolean;
   /** 预览工具条收成一个悬浮球（画面小时很挡视线）。 */
   previewBarCollapsed: boolean;
+  /**
+   * 吸附档位。存 UI 偏好而不是工程：它描述的是**这次剪辑的工作习惯**
+   * （对手感而言「吸附到拍」还是「自由」是跨工程都一致的），与内容无关。
+   */
+  snap: SnapMode;
   /**
    * 快捷键方案（「操作习惯」）。只影响切分键，见 ui/shortcuts.ts。
    * 存 UI 偏好而不是工程：它描述的是**用的人**，不是这份工程。
@@ -114,6 +120,13 @@ function normalizeScheme(v: unknown): ShortcutScheme {
   return SCHEME_IDS.includes(v as ShortcutScheme) ? (v as ShortcutScheme) : 'artmatic';
 }
 
+/** 合法的吸附档位。`SNAP_MODES` 是全仓库唯一那张表，直接取它的键。 */
+const SNAP_IDS = Object.keys(SNAP_MODES) as SnapMode[];
+
+function normalizeSnap(v: unknown): SnapMode {
+  return SNAP_IDS.includes(v as SnapMode) ? (v as SnapMode) : 'beat';
+}
+
 function normalizeDiv(v: unknown): number {
   const n = Number(v);
   return (PREVIEW_FPS_DIVS as readonly number[]).includes(n) ? n : 1;
@@ -135,6 +148,7 @@ function loadUiPrefs(): UiPrefs {
     previewScale: 1,
     previewRestoreOnPause: true,
     previewBarCollapsed: false,
+    snap: 'beat',
     shortcutScheme: 'artmatic',
     mascotEnabled: false,
     typoGrid: { ...DEFAULT_TYPO_GRID },
@@ -160,6 +174,7 @@ function loadUiPrefs(): UiPrefs {
         typeof p.previewBarCollapsed === 'boolean'
           ? p.previewBarCollapsed
           : fallback.previewBarCollapsed,
+      snap: normalizeSnap(p.snap),
       shortcutScheme: normalizeScheme(p.shortcutScheme),
       mascotEnabled:
         typeof p.mascotEnabled === 'boolean' ? p.mascotEnabled : fallback.mascotEnabled,
@@ -337,9 +352,33 @@ class AppState {
   previewScale = $state<number>(1);
   previewRestoreOnPause = $state(true);
   previewBarCollapsed = $state(false);
+  /** 正在把当前帧导出成 PNG（挡住连点、禁用按钮；见 `snapshotFrame`）。 */
+  snapshotting = $state(false);
   shortcutScheme = $state<ShortcutScheme>('artmatic');
   /** 左下角的看板娘（设置 → 外观）。默认关。 */
   mascotEnabled = $state(false);
+
+  /* ---- 跨剪切点两帧预览（达芬奇式交互） ----
+   *
+   * 命中判据是**左闭右开**（`engine/stack.ts`：`t >= clip.end` 的片段不参与合成），
+   * 所以播放头停在剪切点（= 上游片段的 `end`）时，预览显示的是**下游片段的开头**
+   * —— 在末尾帧打关键帧就成了盲操。这里补两条入口把「前一帧」也摆到画面上。
+   *
+   * 三个信号：
+   *  - `editingKey`：检查器里某个 `KeyableField` 正在被设置值（拖动滑杆/数字框、
+   *    方向键）。由 `KeyableField` 写入，**自动模式**靠它判断「正在设哪条片段的关键帧」。
+   *    不用 DOM 查询判「谁被聚焦」——那在组件重排/结构化克隆下很脆。
+   *  - `splitDrag`：预览画面上横向拖动越过了阈值（`Preview.svelte` 写）。**临时**出现。
+   *  - `splitVisible`：当前是否正在显示两帧并排（渲染侧写，模板读）。 */
+  editingKey = $state<{ clipId: string; curveKey: string } | null>(null);
+  splitDrag = $state(false);
+  splitVisible = $state(false);
+  private splitLeftEl: HTMLCanvasElement | null = null;
+  private splitRightEl: HTMLCanvasElement | null = null;
+  /** 用来量可用区域（`.preview` 容器；**不是**浮层本身 —— 浮层在首帧还是 display:none，量到 0）。 */
+  private splitHostEl: Element | null = null;
+  /** 翻行用的临时画布，惰性建、复用。 */
+  private splitScratch: HTMLCanvasElement | null = null;
 
   /* ---- 排版编辑器（全局，不跟工程走：这是「怎么看」，不是「看什么」） ---- */
 
@@ -566,6 +605,9 @@ class AppState {
   }
   set projectKey(v: string | null) {
     this.activeProject.key = v;
+    // 带上句柄 key 就意味着「这份工程在磁盘上、可以恢复」——同步给离开后
+    // 回来时的恢复提示（`useOpfs` / 另存到此处都只经过这一个 setter）。
+    this.syncOpenTabs();
   }
 
   /**
@@ -645,7 +687,22 @@ class AppState {
     };
     this.projects.push(p);
     if (init.activate !== false) this.activateProject(p.id);
+    this.syncOpenTabs();
     return p;
+  }
+
+  /**
+   * 把「当前打开着哪几份工程」同步到 localStorage。
+   *
+   * 供离开页面（`/lab` 是另一个 HTML 入口）后回到主应用时提示恢复用。
+   * 只记带句柄 key 的工程 —— 内存里没保存过的无从恢复。
+   */
+  private syncOpenTabs(): void {
+    saveOpenTabs(
+      this.projects
+        .filter((p): p is OpenProject & { key: string } => !!p.key)
+        .map((p) => ({ key: p.key, name: p.dir?.name ?? p.key })),
+    );
   }
 
   /**
@@ -683,6 +740,7 @@ class AppState {
     this.refreshPreview();
     // 音频位置属于上一份工程，停掉。素材仓各自独立，不用动。
     this.player?.stop();
+    this.syncOpenTabs();
   }
 
   /**
@@ -710,6 +768,7 @@ class AppState {
     }
 
     this.projects.splice(i, 1);
+    this.syncOpenTabs();
 
     /*
      * 释放这份工程持有的插件。现在才做（而不是在 splice 之前）是为了让
@@ -834,6 +893,233 @@ class AppState {
     this.renderer?.renderFrame(this.store.project, this.playT);
   }
 
+  /* ------------------------------------------- 跨剪切点两帧预览（见字段注释） */
+
+  /** 检查器里某个可关键帧字段开始被设置值（`KeyableField` 写）。幂等。 */
+  beginEditKey(clipId: string, curveKey: string): void {
+    const cur = this.editingKey;
+    if (cur && cur.clipId === clipId && cur.curveKey === curveKey) return;
+    this.editingKey = { clipId, curveKey };
+  }
+
+  /** 停止设置关键帧值。整块信号只有一个槽位，直接清空即可。 */
+  endEditKey(): void {
+    if (this.editingKey !== null) this.editingKey = null;
+  }
+
+  /** 预览画面上的横向拖动是否越过阈值（`Preview.svelte` 写）。 */
+  setSplitDrag(active: boolean): void {
+    if (this.splitDrag !== active) this.splitDrag = active;
+  }
+
+  /** 把两帧展示用的画布与量尺寸的容器交给渲染侧（`Preview.svelte` 在 onMount 调）。 */
+  attachSplit(left: HTMLCanvasElement, right: HTMLCanvasElement, measureHost: Element): void {
+    this.splitLeftEl = left;
+    this.splitRightEl = right;
+    this.splitHostEl = measureHost;
+  }
+
+  /**
+   * 播放头是否正卡在某个**视觉片段的出点**上（`clip.end`，左闭右开的右端）。
+   *
+   * 容差取**半个帧长**：`seek({snap})` 吸的是拍、片段几何也吸拍，但拍长未必是帧长
+   * 的整数倍，用浮点直等会漏；半帧又天然把「停在切点」与「停在切点前一帧」
+   * （相距一整帧）分开，不会误触发。
+   *
+   * 返回命中的上游片段 id（出点 = t）与下游片段 id（覆盖 t，判据同样是左闭右开）
+   * —— 自动模式要用它判断「正在设值的这条片段是否就在这个切点上」。`null` = 不在剪切点。
+   */
+  cutAt(t: number): { upstreamIds: string[]; downstreamIds: string[] } | null {
+    const p = this.store.project;
+    const eps = 0.5 / Math.max(1, p.fps);
+    const upstreamIds: string[] = [];
+    const downstreamIds: string[] = [];
+    for (const track of p.tracks) {
+      // 只有启用的视觉轨才参与合成，才算得上「画面在这里换了一幅」。
+      if (track.kind !== 'visual' || !track.enabled) continue;
+      for (const clip of track.clips) {
+        if (Math.abs(clip.end - t) <= eps) upstreamIds.push(clip.id);
+        // 下游 = 覆盖 t 的片段。判据与 `buildStack` 一致：`start <= t < end`
+        // （`end` 加 eps 会把上游片段本身也算进来，所以要加就加在 start 那一侧）。
+        if (clip.start <= t + eps && t < clip.end) downstreamIds.push(clip.id);
+      }
+    }
+    return upstreamIds.length ? { upstreamIds, downstreamIds } : null;
+  }
+
+  /**
+   * 「跨剪切点两帧预览」的规格。`null` = 正常单幅显示。
+   *
+   * 显示内容恒为 **左 = t − 1/fps、右 = t**（帧长取自 `project.fps`，不硬编码）：
+   *  - `t − 1/fps` = 上游片段在时间轴上的**最后一帧**（end 左闭右开，end 本身不参与
+   *    合成，所以最后一帧是 end 减一帧）。上游不存在（切点前有缝）时该块自动为黑。
+   *  - `t` = 下游片段的**首帧**；下游不存在（切点是最后一段的结尾）时该块为黑。
+   *
+   * 两种自动模式的诉求都落在这同一对上：
+   *  - **上游在设末尾关键帧** → 左 = 上游末帧、右 = 下游首帧 / 黑（用户原话的场景）。
+   *  - **下游在设起始关键帧** → 左 = 上游末帧 / 黑、右 = 下游首帧。
+   *
+   * 触发条件（满足其一）：
+   *  - `splitDrag`：预览上横向拖动越过阈值（临时出现，松手收起）。
+   *  - `editingKey` 且**被编辑的片段正是这个切点的上游或下游**（自动出现，停止设值收起）。
+   */
+  private splitSpec(): { leftT: number; rightT: number } | null {
+    // 导出/截图期间渲染器被钉在工程分辨率上，额外取帧会按那个尺寸再来两遍 —— 停手。
+    if (this.playing || !this.hasProject || this.exportProgress !== null || this.snapshotting) {
+      return null;
+    }
+    const p = this.store.project;
+    const t = this.playT;
+    const cut = this.cutAt(t);
+    if (!cut) return null;
+    if (!this.splitDrag) {
+      const editing = this.editingKey;
+      if (!editing) return null;
+      const involved =
+        cut.upstreamIds.includes(editing.clipId) || cut.downstreamIds.includes(editing.clipId);
+      if (!involved) return null;
+    }
+    const step = 1 / Math.max(1, p.fps);
+    return { leftT: Math.max(0, t - step), rightT: t };
+  }
+
+  /**
+   * 渲染两帧并排到浮层画布上，**然后把预览恢复成正常播放头那一帧**。
+   *
+   * 取帧只走 `renderer.renderFrame` + `readPixels`（硬约束 1.1：预览与导出同一条
+   * 求值路径，读数只是再读一次它的输出）。`readPixels` 是**自下而上**的，翻行
+   * 交给 `paintSplitPanel`。最后那次 `renderFrame(playT)` 不能省 —— 否则 GL 画布
+   * 停在左侧那一帧上（浮层收起时会露出来）。
+   */
+  private renderSplit(spec: { leftT: number; rightT: number }): void {
+    const renderer = this.renderer;
+    const left = this.splitLeftEl;
+    const right = this.splitRightEl;
+    const host = this.splitHostEl;
+    if (!renderer || !left || !right || !host) {
+      renderer?.renderFrame(this.store.project, this.playT);
+      this.setSplitVisible(false);
+      return;
+    }
+    const project = this.store.project;
+    renderer.renderFrame(project, spec.leftT);
+    const L = renderer.readPixels();
+    renderer.renderFrame(project, spec.rightT);
+    const R = renderer.readPixels();
+
+    const rect = host.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const availW = Math.max(1, rect.width * dpr);
+    const availH = Math.max(1, rect.height * dpr);
+    const aspect = project.resolution.w / project.resolution.h;
+    // 两块等宽并排、各自等比：整体宽高比 = 2·aspect，先按高度铺满，横向放不下再按宽度收。
+    let panelH = availH;
+    let panelW = panelH * aspect;
+    if (panelW * 2 > availW) {
+      panelW = availW / 2;
+      panelH = panelW / aspect;
+    }
+    this.paintSplitPanel(left, L, panelW, panelH, dpr);
+    this.paintSplitPanel(right, R, panelW, panelH, dpr);
+
+    // 还原预览到正常播放头那一帧。
+    renderer.renderFrame(project, this.playT);
+    this.setSplitVisible(true);
+  }
+
+  /** 把一帧读回的像素（翻行后）画进一块并排面板画布。先铺不透明黑 —— 空处要的正是黑，不是透明。 */
+  private paintSplitPanel(
+    target: HTMLCanvasElement,
+    src: { data: Uint8Array; w: number; h: number },
+    panelW: number,
+    panelH: number,
+    dpr: number,
+  ): void {
+    const { data, w, h } = src;
+    const scratch = (this.splitScratch ??= document.createElement('canvas'));
+    if (scratch.width !== w || scratch.height !== h) {
+      scratch.width = w;
+      scratch.height = h;
+    }
+    const sctx = scratch.getContext('2d');
+    if (!sctx) return;
+    const img = sctx.createImageData(w, h);
+    const row = w * 4;
+    for (let y = 0; y < h; y++) {
+      const from = (h - 1 - y) * row; // GL 自下而上 → 翻行
+      img.data.set(data.subarray(from, from + row), y * row);
+    }
+    sctx.putImageData(img, 0, 0);
+
+    const bw = Math.max(1, Math.round(panelW));
+    const bh = Math.max(1, Math.round(panelH));
+    if (target.width !== bw || target.height !== bh) {
+      target.width = bw;
+      target.height = bh;
+    }
+    target.style.width = `${panelW / dpr}px`;
+    target.style.height = `${panelH / dpr}px`;
+    const ctx = target.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, bw, bh);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(scratch, 0, 0, w, h, 0, 0, bw, bh);
+  }
+
+  private setSplitVisible(v: boolean): void {
+    if (this.splitVisible !== v) this.splitVisible = v;
+  }
+
+  /**
+   * 把**当前预览帧**导出为一张 PNG（工程分辨率），返回可下载的 Blob。
+   *
+   * 与 `ui/export.ts::samplePngFrameBytes` 同一套「钉尺寸 → 用完还原」纪律
+   * （AGENTS §5.9），三件不能省的事：
+   *  - **钉尺寸必须还原**：`setExportSize` 之后 `syncSize` 会直接 return，
+   *    不还原预览会**停在工程分辨率**上且不报错。`finally` 里 `clearExportSize`
+   *    + `refreshPreview()` 一次复原尺寸与画面。
+   *  - **必须在钉尺寸的内层取材**：`refreshPreview` 的 `syncSize` 会改画布尺寸，
+   *    而改尺寸会清空帧缓冲 —— 先还原再截只会拿到黑图。
+   *  - `onSeek` + `prepareFrame`：反馈类特效跨帧有历史、排版位图是异步光栅化的，
+   *    不做的话截到的不是「此刻这一帧」。
+   *
+   * 取向直接用 `canvas.toBlob`（与 PNG 序列导出 `PngSequenceSink` 同一路径）：
+   * canvas 是左上原点，**不需要**像 `readPixels` 那样翻行 —— 翻行是 GL 读回的
+   * 专利，多翻一次反而把图倒过来。取 `t` 先吸附到帧栅格（`round(t·fps)/fps`），
+   * 文件名里的帧号与画面严格对应。
+   *
+   * @returns `{ blob, filename, frame }`；无 renderer / 正在导出 / 编码失败时 null。
+   */
+  async snapshotFrame(): Promise<{ blob: Blob; filename: string; frame: number } | null> {
+    if (this.snapshotting) return null;
+    const renderer = this.renderer;
+    if (!renderer) return null;
+    this.snapshotting = true;
+    try {
+      const project = this.store.project;
+      const { w, h } = project.resolution;
+      const frame = frameAtTime(this.playT, project.fps);
+      const t = timeAtFrame(frame, project.fps);
+      const base = project.name.trim() || 'artmatic';
+      const filename = `${base}-frame-${String(frame).padStart(5, '0')}.png`;
+      renderer.setExportSize(w, h);
+      renderer.onSeek();
+      await renderer.prepareFrame(project, t);
+      renderer.renderFrame(project, t);
+      const blob = await new Promise<Blob | null>((resolve) =>
+        renderer.kit.canvas.toBlob(resolve, 'image/png'),
+      );
+      return blob ? { blob, filename, frame } : null;
+    } catch {
+      return null;
+    } finally {
+      renderer.clearExportSize();
+      this.refreshPreview();
+      this.snapshotting = false;
+    }
+  }
+
   /** 编辑器注册「取消当前手势」的钩子（切工程 / 关排版页时调用）。 */
   registerGestureCancel(fn: (() => void) | null): void {
     this.pendingGestureCancel = fn;
@@ -865,6 +1151,7 @@ class AppState {
     this.previewScale = prefs.previewScale;
     this.previewRestoreOnPause = prefs.previewRestoreOnPause;
     this.previewBarCollapsed = prefs.previewBarCollapsed;
+    this.snap = prefs.snap;
     this.shortcutScheme = prefs.shortcutScheme;
     this.mascotEnabled = prefs.mascotEnabled;
     this.typoGrid = prefs.typoGrid;
@@ -906,6 +1193,17 @@ class AppState {
   setPreviewBarCollapsed(v: boolean): void {
     if (this.previewBarCollapsed === v) return;
     this.previewBarCollapsed = v;
+    this.persistUi();
+  }
+
+  /**
+   * 吸附档位。走 setter 而不是让调用点直接赋 `appState.snap = v` ——
+   * 只有一处写才能保证「改了就落盘」（直赋会绕过 persistUi，重启后回到默认）。
+   */
+  setSnap(v: SnapMode): void {
+    const next = normalizeSnap(v);
+    if (this.snap === next) return;
+    this.snap = next;
     this.persistUi();
   }
 
@@ -967,6 +1265,7 @@ class AppState {
       previewScale: this.previewScale,
       previewRestoreOnPause: this.previewRestoreOnPause,
       previewBarCollapsed: this.previewBarCollapsed,
+      snap: this.snap,
       shortcutScheme: this.shortcutScheme,
       mascotEnabled: this.mascotEnabled,
       typoGrid: this.typoGrid,
@@ -1009,7 +1308,13 @@ class AppState {
    * 组件一挂载就会读 `appState.store.project`。
    */
   init(store: ProjectStore): void {
+    // 启动时那份 demo 工程没有句柄 key，`adoptProject` 的同步会把它写成
+    // 「打开的工程 = 空」，从而冲掉「上次离开时打开着哪些工程」——
+    // 那正是回来时恢复提示要用的记录。先读、adopt 之后再写回。
+    const remembered = loadOpenTabs();
     this.adoptProject({ store });
+    // `keepDismiss`：这是把记录写回，不是「用户开了工程」，不该把「已忽略」抹掉。
+    if (remembered.length) saveOpenTabs(remembered, { keepDismiss: true });
     this.subscribePlugins();
   }
 
@@ -1293,7 +1598,10 @@ class AppState {
 
     // 导出期间预览循环停手：rAF 在预览尺寸下渲染会重排反馈历史
     // （feedbackFor 按尺寸重建目标），污染正在进行的顺序导出。
-    if (this.exportProgress !== null) return;
+    if (this.exportProgress !== null) {
+      this.setSplitVisible(false);
+      return;
+    }
 
     /*
      * 没有工程时不渲染。
@@ -1302,13 +1610,17 @@ class AppState {
      * 所以这里必须显式停手 —— 否则背后那台渲染器会一直按占位工程出帧，
      * 白烧 GPU 还让「没有工程」这件事在性能上看不出来。
      */
-    if (!this.hasProject) return;
+    if (!this.hasProject) {
+      this.setSplitVisible(false);
+      return;
+    }
 
     // 排版编辑页激活时**不渲染 WebGL**：.body 已被 display:none 隐藏，
     // measureDisplaySize() 会量到 0 并触发 UNMEASURED_MAX_PIXELS 兜底分配，
     // 既浪费显存又会让预览尺寸无谓变形。
     // 但播放头照常推进 —— 排版页的 CSS 动画就是靠 playT 驱动 seek 的。
     if (this.editorOpen) {
+      this.setSplitVisible(false);
       if (this.playing) this.advancePlayhead();
       return;
     }
@@ -1351,7 +1663,18 @@ class AppState {
      */
     const fps = Math.max(1, this.store.project.fps);
     const renderT = this.playing ? Math.round(this.playT * fps) / fps : this.playT;
-    this.renderer.renderFrame(this.store.project, renderT);
+
+    /*
+     * 剪切点两帧并排优先：它自己会把预览恢复成 `playT` 那一帧（见 `renderSplit`），
+     * 所以走这条分支时不要再渲一遍单幅。触发条件与显示内容见 `splitSpec`。
+     */
+    const split = this.splitSpec();
+    if (split) {
+      this.renderSplit(split);
+    } else {
+      this.setSplitVisible(false);
+      this.renderer.renderFrame(this.store.project, renderT);
+    }
     this.countFrame();
   }
 

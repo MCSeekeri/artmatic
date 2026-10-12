@@ -5,6 +5,7 @@ import {
   boundsOf,
   distribute,
   hitTest,
+  hitTestAll,
   rectsIntersect,
   resizeFramesRotated,
   rotateFrames,
@@ -303,6 +304,47 @@ describe('hitTest', () => {
 
   it('空集合返回 null', () => {
     expect(hitTest([], 0, 0)).toBeNull();
+  });
+});
+
+describe('hitTestAll', () => {
+  const rects = [
+    rect('bottom', 0, 0, 100, 100),
+    rect('mid', 40, 40, 80, 80),
+    rect('top', 50, 50, 100, 100),
+  ];
+
+  it('返回命中的全部 id，顺序从最上层到最下层', () => {
+    // (60,60) 落在三个框里（bottom / mid / top），数组末位 = 最前景。
+    expect(hitTestAll(rects, 60, 60)).toEqual(['top', 'mid', 'bottom']);
+  });
+
+  it('首个元素与 hitTest 一致（最上层）', () => {
+    const all = hitTestAll(rects, 60, 60);
+    expect(all[0]).toBe(hitTest(rects, 60, 60)!.id);
+  });
+
+  it('只命中一个时返回单元素数组', () => {
+    expect(hitTestAll(rects, 10, 10)).toEqual(['bottom']);
+  });
+
+  it('都没命中返回空数组', () => {
+    expect(hitTestAll(rects, 500, 500)).toEqual([]);
+  });
+
+  it('边界包含，出界即落空（与 hitTest 同一口径）', () => {
+    expect(hitTestAll(rects, 0, 0)).toEqual(['bottom']);
+    expect(hitTestAll(rects, 150, 150)).toEqual(['top']);
+    expect(hitTestAll(rects, 150.5, 150)).toEqual([]);
+  });
+
+  it('空集合返回空数组', () => {
+    expect(hitTestAll([], 0, 0)).toEqual([]);
+  });
+
+  it('数组顺序即 z 序：交换两个框的顺序，返回顺序随之交换', () => {
+    const swapped = [rect('top', 50, 50, 100, 100), rect('bottom', 0, 0, 100, 100)];
+    expect(hitTestAll(swapped, 60, 60)).toEqual(['bottom', 'top']);
   });
 });
 

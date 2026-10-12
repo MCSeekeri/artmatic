@@ -30,7 +30,10 @@ import {
   runsWrapperStyle,
   shapePaintAttrs,
   spanStyle,
+  textBoxStyle,
+  textFillStyle,
   textStyle,
+  textureMotifSpec,
 } from './css';
 import { normalizeRuns, runsSignature, type TextRun, type TextSpanStyle } from './rich-text';
 import { groupBox } from './groups';
@@ -41,8 +44,11 @@ import {
   RUNS_SIG_ATTR,
   RUNS_WRAP_ATTR,
   SPAN_ATTR,
+  normalizeStops,
+  type Paint,
   type PaintStop,
   type ShapeElement,
+  type TextElement,
   type TexturePattern,
   type TypographyDocument,
   type TypographyElement,
@@ -140,6 +146,9 @@ function buildElement(el: TypographyElement, opts: BuildDocOptions): HTMLElement
   shell.className = `typo-el typo-el-${el.kind}`;
   shell.setAttribute(EL_ID_ATTR, el.id);
   applyDecls(shell, elementStyle(el));
+  // 文本框背景 / 边框画在**外壳**上，在文字之下；字形填充在内层另一个节点
+  // （`background-clip: text`），两者互不干扰 —— 见 css.ts::textBoxStyle。
+  if (el.kind === 'text') applyDecls(shell, textBoxStyle(el));
 
   // 动画层：doc.elements[i].animations 的第一个在最外层。
   // 嵌套而不是并列，是因为多个动画会各自写 transform，并列只能有一个生效。
@@ -159,11 +168,31 @@ function buildElement(el: TypographyElement, opts: BuildDocOptions): HTMLElement
   return shell;
 }
 
+/**
+ * 文本元素的**字形填充**取值（`fill` 经过「行内彩色 run」这道关卡之后的实际值）。
+ *
+ * ⚠️ 已知限制：字形填充用 CSS `background-clip: text` 实现，它把整块的背景
+ * （渐变 / 纹理）裁到**所有**字形上 —— 于是行内 run 各自的 `color` 会被一并盖掉。
+ * 一旦发现任何一个 run 设了行内 `color`，这里就返回 `undefined`（回落到
+ * `style.color` 那条老路）：宁可少一个能力，也不静默改掉用户已经设好的行内语义。
+ * 这条限制同时写在 document.ts 的 `TextElement.fill` 上。
+ */
+function textFillOf(el: TextElement): Paint | undefined {
+  if (!el.fill) return undefined;
+  for (const run of el.runs) {
+    if (run.style?.color) return undefined;
+  }
+  return el.fill;
+}
+
 function buildContent(el: TypographyElement, opts: BuildDocOptions): Element | null {
   if (el.kind === 'text') {
     const box = document.createElement('div');
     box.className = 'typo-text';
     applyDecls(box, textStyle(el.style));
+    // 字形填充（渐变 / 径向 / 纹理）。放在 textStyle **之后** —— 它要能覆盖
+    // textStyle 里的 `color`（裁切填充时字形本身是透明的）。
+    applyDecls(box, textFillStyle(textFillOf(el)));
     applyRuns(box, el.runs);
     if (!opts.forRaster) {
       // 舞台上的双击进入编辑由编辑器自己接管（设置 contenteditable）。
@@ -291,6 +320,8 @@ function syncStyleSheet(root: HTMLElement, doc: TypographyDocument): void {  // 
 
 function syncElement(shell: HTMLElement, el: TypographyElement, opts: BuildDocOptions): void {
   applyDecls(shell, elementStyle(el));
+  // 与 buildElement 同一份声明：就地同步时切回「无填充」由它复位。
+  if (el.kind === 'text') applyDecls(shell, textBoxStyle(el));
 
   // 钻进动画层，停在内容节点上。
   let cursor: Element | null = shell.firstElementChild;
@@ -305,6 +336,8 @@ function syncElement(shell: HTMLElement, el: TypographyElement, opts: BuildDocOp
 
   if (el.kind === 'text') {
     applyDecls(content, textStyle(el.style));
+    // 与 buildContent 同一份声明：切回纯色时这里负责**复位**上一次的裁切。
+    applyDecls(content, textFillStyle(textFillOf(el)));
     const editing = opts.editingId === el.id;
     /*
      * 编辑态与文档内容**不能同时写**：同步每帧都跑，覆写 textContent 会把用户
@@ -475,79 +508,29 @@ function syncPaintDefs(svg: SVGSVGElement, el: ShapeElement, scaleFrom100: boole
   defs.appendChild(pat);
 }
 
-/** 图案的原始形状。统一在这里生成 —— 加一种纹理只需要在 switch 里加一条。 */
+/**
+ * 图案的原始形状 → SVG 节点。
+ *
+ * 几何真源在 css.ts 的 `textureMotifSpec`（纯数据），这里只做「数据 → DOM」——
+ * 图形与文本字形填充因此共用同一套图案，加一种纹理只改那一处 switch。
+ */
 function textureMotifs(
   pattern: TexturePattern,
   cell: number,
   thick: number,
   color: string,
 ): SVGElement[] {
-  const el = (tag: string): SVGElement => document.createElementNS(SVG_NS, tag);
-  const line = (x1: number, y1: number, x2: number, y2: number): SVGElement => {
-    const l = el('line');
-    l.setAttribute('x1', String(x1));
-    l.setAttribute('y1', String(y1));
-    l.setAttribute('x2', String(x2));
-    l.setAttribute('y2', String(y2));
-    l.setAttribute('stroke', color);
-    l.setAttribute('stroke-width', String(thick));
-    return l;
-  };
-  const half = cell / 2;
-  switch (pattern) {
-    case 'dots': {
-      const c = el('circle');
-      c.setAttribute('cx', String(half));
-      c.setAttribute('cy', String(half));
-      c.setAttribute('r', String(thick));
-      c.setAttribute('fill', color);
-      return [c];
-    }
-    case 'grid':
-      // 画在上/左两条边上，平铺之后就是一整张网格。
-      return [line(0, 0, cell, 0), line(0, 0, 0, cell)];
-    case 'diagonal':
-      return [line(0, cell, cell, 0)];
-    case 'cross':
-      return [line(0, 0, cell, cell), line(0, cell, cell, 0)];
-    case 'checker': {
-      const out: SVGElement[] = [];
-      for (const [x, y] of [
-        [0, 0],
-        [half, half],
-      ] as const) {
-        const r = el('rect');
-        r.setAttribute('x', String(x));
-        r.setAttribute('y', String(y));
-        r.setAttribute('width', String(half));
-        r.setAttribute('height', String(half));
-        r.setAttribute('fill', color);
-        out.push(r);
-      }
-      return out;
-    }
-    case 'wave': {
-      const p = el('path');
-      // 一个周期的正弦（两个二次贝塞尔拼）。控制点取 4/3·(√2−1) 的近似，
-      // 0.55 是肉眼看着最像正弦的那个系数。
-      p.setAttribute('d', `M0,${half} Q${cell * 0.25},${half - cell * 0.55} ${half},${half} Q${cell * 0.75},${half + cell * 0.55} ${cell},${half}`);
-      p.setAttribute('fill', 'none');
-      p.setAttribute('stroke', color);
-      p.setAttribute('stroke-width', String(thick));
-      return [p];
-    }
-    default:
-      return [];
-  }
+  return textureMotifSpec(pattern, cell, thick, color).map((prim) => {
+    const el = document.createElementNS(SVG_NS, prim.tag);
+    for (const [k, v] of Object.entries(prim.attrs)) el.setAttribute(k, v);
+    return el;
+  });
 }
 
 /** 色标归一化：排序、钳制、不足两个时补足 —— 单色标的渐变是无效的。 */
 export function sortedStops(stops: PaintStop[]): PaintStop[] {
-  const list = (stops ?? []).map((s) => ({
-    offset: Math.max(0, Math.min(1, Number(s.offset) || 0)),
-    color: s.color,
-  }));
-  list.sort((a, b) => a.offset - b.offset);
+  // 排序 / 钳制（offset 0..1）的真源在 document.normalizeStops，与 CSS 那条路共用。
+  const list = normalizeStops(stops);
   if (list.length === 0) return [
     { offset: 0, color: '#ffffff' },
     { offset: 1, color: '#000000' },

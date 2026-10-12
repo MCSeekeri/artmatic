@@ -451,6 +451,34 @@ class TypographyEditorState {
   setZoom(z: number): void {
     this.zoom = Math.max(0.05, Math.min(4, z));
   }
+
+  /**
+   * 重命名元素（可撤销）。
+   *
+   * **空名回退为不改名**：清空输入框再回车是个很常见的手滑，把它写成空名字
+   * 会让图层行只剩一个类型图标、再也认不出是谁。判据放在这里而不是组件里，
+   * 因为「什么算有效的名字」是数据层的规则。
+   */
+  renameElement(id: string, name: string): void {
+    const next = name.trim();
+    const el = this.doc?.elements.find((e) => e.id === id);
+    if (!el || !next || el.name === next) return;
+    this.commit(tr('typo.undo.renameElement'), (doc) => {
+      const target = doc.elements.find((e) => e.id === id);
+      if (target) target.name = next;
+    });
+  }
+
+  /** 重命名组合（可撤销）。空名同样回退为不改名。 */
+  renameGroup(id: string, name: string): void {
+    const next = name.trim();
+    const g = this.doc?.groups?.find((x) => x.id === id);
+    if (!g || !next || g.name === next) return;
+    this.commit(tr('typo.undo.renameGroup'), (doc) => {
+      const target = (doc.groups ?? []).find((x) => x.id === id);
+      if (target) target.name = next;
+    });
+  }
 }
 
 export const editorState = new TypographyEditorState();

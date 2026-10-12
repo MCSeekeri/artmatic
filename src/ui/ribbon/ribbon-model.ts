@@ -57,6 +57,10 @@ export interface RibbonSelectSpec extends RibbonItemBase {
   editable?: boolean;
   /** editable 时：输入非预设值也按数字提交。 */
   numeric?: boolean;
+  /** 弹层顶部加一个筛选输入框（选项上百时必需，如字体）。 */
+  filterable?: boolean;
+  /** 筛选框的占位/无障碍名。 */
+  filterPlaceholder?: string;
 }
 
 /** 数值输入的可选实时预览回调（详见 NumberInput 的 `oninput` / `onliveend`）。 */

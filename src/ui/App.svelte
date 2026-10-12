@@ -10,6 +10,7 @@
   import Tip from './Tip.svelte';
   import EmptyState from './EmptyState.svelte';
   import PluginMissingBanner from './PluginMissingBanner.svelte';
+  import RestoreTabsBanner from './RestoreTabsBanner.svelte';
   import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
@@ -206,6 +207,7 @@
             多一个流内子项会把轨道区顶出去。见组件自己的说明。
           -->
           <PluginMissingBanner />
+          <RestoreTabsBanner />
           <div class="toolbar">
             <Transport />
             <span class="toolbar-tail">

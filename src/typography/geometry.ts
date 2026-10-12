@@ -100,6 +100,25 @@ export function hitTest(rects: Rect[], x: number, y: number): Rect | null {
   return null;
 }
 
+/**
+ * 命中测试（全部）：返回点下**所有**命中的元素 id。
+ *
+ * **顺序与 `hitTest` 一致 —— 从最上层（数组靠后）到最下层**。这是它唯一的
+ * 价值：重叠处「最上面那个」之外还有谁。`hitTest` 只能回答「最上面是谁」，
+ * Alt 单击轮询重叠元素需要这份完整列表（顺序错了就会从最下面开始轮，用户看到
+ * 的是「第一次 Alt 点选中了最底下那个」）。
+ *
+ * 与 `hitTest` 共用同一套「数组末位 = 最前景」的约定（见 document.ts 文件头）。
+ */
+export function hitTestAll(rects: Rect[], x: number, y: number): string[] {
+  const out: string[] = [];
+  for (let i = rects.length - 1; i >= 0; i--) {
+    const r = rects[i]!;
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) out.push(r.id);
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------ 吸附 */
 
 interface AxisTarget {

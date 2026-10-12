@@ -572,17 +572,31 @@
 
 /* ------------------------------------------------------------ 提示气泡 */
 
+/*
+ * 长文案必须换行，不能只靠 `nowrap`。
+ *
+ * 旧写法 `white-space: nowrap` + `max-width: 280px` 会让超长提示**溢出盒子**
+ * （`.tip` 自身没有 `overflow: hidden`，又是 `position: fixed`，于是那截文字
+ * 要么被别的层盖住、要么飘在视口外看不见）—— 用户反馈「提示看不全」。
+ *
+ * 选**换行**而不是省略号：tooltip 是「把这句话读完」才起作用的东西，
+ * 截断成 `…` 等于信息丢失，而且还得再点一次或换措辞去猜。换行只是让气泡
+ * 变高，`Tip.svelte` 的视口钳位按 `offsetHeight` 算，钳入逻辑天然跟得上。
+ * `overflow-wrap: anywhere` 兜住没有空格的长串（路径 / 标识符 / 英文单词），
+ * 否则一个超长 token 仍然会顶破 max-width。
+ */
 .tip {
   position: fixed;
   z-index: var(--z-tooltip);
-  max-width: 280px;
+  max-width: 320px;
   padding: 3px var(--sp-3);
   background: var(--tip-bg);
   color: var(--tip-fg);
   border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
   line-height: 1.45;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
 .tip-key {

@@ -54,6 +54,16 @@ export class TypographyRuntime {
 
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inflight = new Set<string>();
+  /**
+   * `docHash|WxH` → 该文档在该尺寸下**最近一次**已烘焙好的条目键。
+   *
+   * 动画文档的缓存键含帧号 ⇒ 播放头每前进一帧就是一次 miss，而光栅化是异步的，
+   * 等它完成时播放头往往已经走到下一帧 —— 于是每一帧都错过、偶尔命中上一帧的产物，
+   * 表现成「隔一帧消失一帧」的频闪。这里保留最近一帧，缺帧时**用它顶上**（与视频
+   * 取帧「缺帧用最近的帧顶上」同构）：只落后一帧，不闪。导出走 `prewarmFrame`
+   * 逐帧 await，永远是命中，不会用到这条回退。
+   */
+  private readonly latest = new Map<string, string>();
   private clock = 0;
   private exportMode = false;
 
@@ -80,6 +90,21 @@ export class TypographyRuntime {
     }
 
     this.schedule(key, doc, size.w, size.h, localSec);
+
+    // 预览缺帧时用同一个文档+尺寸下最近烘焙好的那一帧顶上，避免「隔一帧消失一帧」。
+    // 导出不走这条（prewarmFrame 已逐帧 await，必命中）。
+    if (!this.exportMode) {
+      const sizeKey = key.slice(0, key.lastIndexOf('|'));
+      const fb = this.latest.get(sizeKey);
+      if (fb) {
+        const e = this.entries.get(fb);
+        if (e) {
+          e.used = ++this.clock;
+          return { tex: e.tex, w: e.w, h: e.h };
+        }
+        this.latest.delete(sizeKey);
+      }
+    }
     return null; // 这一层这帧缺席；准备好后 onReady 会触发下一帧重绘
   };
 
@@ -224,6 +249,7 @@ export class TypographyRuntime {
   dispose(): void {
     for (const e of this.entries.values()) this.kit.gl.deleteTexture(e.tex);
     this.entries.clear();
+    this.latest.clear();
     this.inflight.clear();
     this.backends.dispose();
   }
@@ -261,6 +287,8 @@ export class TypographyRuntime {
     const bytes = w * h * 4;
     const entry: CacheEntry = { tex, w: canvas.width, h: canvas.height, bytes, used: ++this.clock };
     this.entries.set(key, entry);
+    // 记成该「文档+尺寸」的最近一帧，供 resolve 在缺帧时回退（见 latest 的说明）。
+    this.latest.set(key.slice(0, key.lastIndexOf('|')), key);
 
     this.evict(
       this.exportMode ? EXPORT_ENTRIES : MAX_RASTER_ENTRIES,

@@ -14,7 +14,7 @@
  * 所以 CSS 动画可以做帧精确导出，但必须走这条烘焙路径。
  */
 
-import { animationCurrentTimeMs, ANIM_ID_ATTR, type ElementAnimation } from './animation';
+import { animationCurrentTimeMs, customSubAnimations, ANIM_ID_ATTR, type ElementAnimation } from './animation';
 import type { TypographyDocument } from './document';
 
 export type AnimValueSnapshot = {
@@ -39,6 +39,11 @@ function animLayers(root: HTMLElement): HTMLElement[] {
  * 把 root 内所有动画 seek 到 localSec。
  * 调用方必须保证 root **已经挂进文档** —— 脱离文档的元素拿不到 CSSAnimation，
  * `getAnimations()` 会返回空数组，表现为「动画永远停在第一帧」。
+ *
+ * 一个动画层可能同时挂着**多条动画**（自定义条目的逗号简写，见 animation.ts）：
+ * 每条各有自己的延迟。`getAnimations()` 按简写里的顺序返回它们，所以逐条用
+ * 各自的延迟 seek。预设 / 旧单 body 自定义只有一条、延迟 = spec.delay，
+ * 结果与扩展前逐字一致。数量对不上时整层退回 spec.delay（防御，正常不会发生）。
  */
 export function seekAnimations(
   root: HTMLElement,
@@ -50,11 +55,14 @@ export function seekAnimations(
     if (!animId) continue;
     const spec = specs.get(animId);
     if (!spec) continue;
-    const ms = animationCurrentTimeMs(spec, localSec);
-    for (const a of layer.getAnimations()) {
+    const parts = customSubAnimations(spec);
+    const list = layer.getAnimations();
+    const perPart = list.length === parts.length;
+    list.forEach((a, i) => {
+      const delay = perPart ? parts[i]!.delay : spec.delay;
       a.pause();
-      a.currentTime = ms;
-    }
+      a.currentTime = animationCurrentTimeMs({ delay }, localSec);
+    });
   }
 }
 
@@ -72,6 +80,10 @@ function snapshot(layers: HTMLElement[]): AnimValueSnapshot[] {
  * 顺序很关键：**先停动画，再写内联**。CSS 动画在层叠里压过内联样式，
  * 反过来的话我们写进去的值会被动画的计算值盖掉，等于什么都没做，
  * 而且看起来「有时候对有时候不对」，极难定位。
+ *
+ * 一个条目里无论几条动画（逗号简写）都渲染成**同一层**（render-dom.ts），
+ * 所以这里逐层快照即可：计算值已经叠加了该层所有动画的结果，多动画不需要
+ * 单独的处理分支。嵌套只发生在**多个条目**之间（每条目一层）。
  */
 export function bakeAnimations(
   root: HTMLElement,

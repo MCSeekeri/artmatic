@@ -5,10 +5,16 @@ import {
   elementStyle,
   imageStyle,
   paintCss,
+  paintToBackground,
   shapePaintAttrs,
+  textBoxStyle,
+  textFillBackgroundImage,
+  textFillStyle,
   textStyle,
+  textureMotifSpec,
 } from '../../src/typography/css';
 import { createShapeElement, createTextElement, createTypographyDocument, defaultTextStyle } from '../../src/typography/document';
+import type { Paint } from '../../src/typography/document';
 
 const SIZE = { w: 1000, h: 500 };
 const doc = createTypographyDocument(SIZE);
@@ -238,5 +244,181 @@ describe('舞台与光栅化必须同源', () => {
     const el = createTextElement(d.size);
     expect(elementStyle(el)).toEqual(elementStyle(el));
     expect(textStyle(el.style)).toEqual(textStyle(el.style));
+  });
+});
+
+describe('填充整体不透明度', () => {
+  it('shapePaintAttrs：不透明时不写 fill-opacity（老工程渲染结果逐字节不变）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createShapeElement(d.size, 'rect', {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+      fill: { kind: 'solid', color: '#123456' },
+    });
+    expect(shapePaintAttrs(el)).not.toHaveProperty('fill-opacity');
+  });
+
+  it('shapePaintAttrs：半透明时 fill-opacity 出现在**同一个** <path> 上（一处覆盖三种填充）', () => {
+    const d = createTypographyDocument(SIZE);
+    const withOp = (fill: Paint) =>
+      shapePaintAttrs(
+        createShapeElement(d.size, 'rect', { frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 }, fill }),
+      )['fill-opacity'];
+    expect(
+      withOp({ kind: 'solid', color: '#123456', opacity: 0.5 }),
+    ).toBe('0.5');
+    // 渐变 / 纹理同样走这一个属性，不必分别处理
+    expect(
+      withOp({ kind: 'linear', angle: 0, stops: [], opacity: 0.25 }),
+    ).toBe('0.25');
+    expect(
+      withOp({ kind: 'texture', pattern: 'dots', color: '#fff', bg: '#000', scale: 10, thickness: 2, opacity: 0.75 }),
+    ).toBe('0.75');
+  });
+
+  it('paintToBackground：不透明原样，半透明走 color-mix（纯色 / 色标 / 纹理底色）', () => {
+    expect(paintToBackground({ kind: 'solid', color: '#ff0000' })).toBe('#ff0000');
+    expect(paintToBackground({ kind: 'solid', color: '#ff0000', opacity: 0.5 })).toBe(
+      'color-mix(in srgb, #ff0000 50%, transparent)',
+    );
+    const grad = paintToBackground({
+      kind: 'linear',
+      angle: 0,
+      stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }],
+      opacity: 0.5,
+    });
+    expect(grad).toContain('color-mix(in srgb, #ff0000 50%, transparent) 0%');
+    expect(grad).toContain('color-mix(in srgb, #0000ff 50%, transparent) 100%');
+    // 组合壳的纹理回落到**底色**，所以透明度只乘底色
+    expect(paintToBackground({ kind: 'texture', pattern: 'dots', color: '#fff', bg: '#000', scale: 10, thickness: 2, opacity: 0.5 })).toBe(
+      'color-mix(in srgb, #000 50%, transparent)',
+    );
+  });
+});
+
+describe('textFillStyle（文本字形填充）', () => {
+  it('线性渐变 → background-clip: text + 透明字形色', () => {
+    const s = textFillStyle({ kind: 'linear', angle: 90, stops: [
+      { offset: 0, color: '#ff0000' },
+      { offset: 1, color: '#0000ff' },
+    ] });
+    expect(s['background-clip']).toBe('text');
+    expect(s['-webkit-background-clip']).toBe('text');
+    expect(s.color).toBe('transparent');
+    expect(s['background-image']).toContain('linear-gradient');
+  });
+
+  it('纹理 → 内联 SVG data-URI 并按周期平铺', () => {
+    const s = textFillStyle({
+      kind: 'texture', pattern: 'dots', color: '#fff', bg: '#000', scale: 20, thickness: 3,
+    });
+    expect(s['background-image']).toContain('data:image/svg+xml');
+    expect(s['background-size']).toBe('20px 20px');
+    expect(s['background-repeat']).toBe('repeat');
+    expect(s['background-clip']).toBe('text');
+  });
+
+  it('none / solid / undefined → 复位（回到 style.color 纯色字形）', () => {
+    for (const f of [undefined, { kind: 'none' } as const, { kind: 'solid', color: '#fff' } as const]) {
+      const s = textFillStyle(f);
+      expect(s['background-clip']).toBe('border-box');
+      expect(s['background-image']).toBe('none');
+      // 不复位颜色，交给 textStyle 的 style.color
+      expect(s.color).toBeUndefined();
+    }
+  });
+
+  it('不透明度乘进渐变色标', () => {
+    const img = textFillBackgroundImage({
+      kind: 'radial', stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }], opacity: 0.5,
+    });
+    expect(img).toContain('color-mix(in srgb, #ff0000 50%, transparent)');
+  });
+});
+
+describe('textBoxStyle（文本框背景 / 边框）', () => {
+  const withBox = (over: Parameters<typeof createTextElement>[1]) =>
+    textBoxStyle(createTextElement(SIZE, over));
+
+  it('无背景无边框时是一份**完整**的复位声明（就地同步不会残留上一份）', () => {
+    const s = withBox({});
+    expect(s['background-color']).toBe('transparent');
+    expect(s['background-image']).toBe('none');
+    expect(s['background-size']).toBe('auto');
+    expect(s.border).toBe('0 solid transparent');
+  });
+
+  it('纯色背景 → background-color，背景图保持 none', () => {
+    const s = withBox({ boxFill: { kind: 'solid', color: '#ff0000' } });
+    expect(s['background-color']).toBe('#ff0000');
+    expect(s['background-image']).toBe('none');
+  });
+
+  it('渐变 → background-image（带所有色标与位置）', () => {
+    const s = withBox({
+      boxFill: {
+        kind: 'linear',
+        angle: 0,
+        stops: [
+          { offset: 0, color: '#ff0000' },
+          { offset: 0.25, color: '#00ff00' },
+          { offset: 1, color: '#0000ff' },
+        ],
+      },
+    });
+    expect(s['background-image']).toContain('linear-gradient');
+    expect(s['background-image']).toContain('25%');
+  });
+
+  it('纹理 → 内联 SVG 平铺（不是回落到纯底色）', () => {
+    const s = withBox({
+      boxFill: { kind: 'texture', pattern: 'dots', color: '#ffffff', bg: '#000000', scale: 20, thickness: 3 },
+    });
+    expect(s['background-image']).toContain('data:image/svg+xml');
+    expect(s['background-size']).toBe('20px 20px');
+  });
+
+  it('边框走 CSS border；宽度 0 也是显式声明（有 → 无能复位）', () => {
+    expect(withBox({ boxStroke: { color: '#abcdef', width: 3, style: 'dashed' } }).border).toBe(
+      '3px dashed #abcdef',
+    );
+    expect(withBox({ boxStroke: { color: '#abcdef', width: 0 } }).border).toBe('0px solid #abcdef');
+  });
+
+  it('不透明度乘进色标（与组合壳同一口径）', () => {
+    const s = withBox({ boxFill: { kind: 'solid', color: '#ff0000', opacity: 0.5 } });
+    expect(s['background-color']).toBe('color-mix(in srgb, #ff0000 50%, transparent)');
+  });
+
+  it('渐变色标按 offset 排序后输出（数组顺序是编辑顺序，不是渲染顺序）', () => {
+    const s = withBox({
+      boxFill: {
+        kind: 'linear',
+        angle: 0,
+        stops: [
+          { offset: 1, color: '#0000ff' },
+          { offset: 0, color: '#ff0000' },
+        ],
+      },
+    });
+    const img = s['background-image']!;
+    expect(img.indexOf('#ff0000')).toBeLessThan(img.indexOf('#0000ff'));
+  });
+});
+
+describe('textureMotifSpec（图形与文本共用的图案几何）', () => {
+  it('每种图案都有对应的图元（不返回空）', () => {
+    for (const p of ['dots', 'grid', 'diagonal', 'cross', 'checker', 'wave'] as const) {
+      expect(textureMotifSpec(p, 20, 3, '#fff').length).toBeGreaterThan(0);
+    }
+  });
+
+  it('纹理 data-URI 里的图案与 spec 一致（不会两套图案分家）', () => {
+    const url = textFillBackgroundImage({
+      kind: 'texture', pattern: 'checker', color: '#abcdef', bg: '#000000', scale: 16, thickness: 2,
+    });
+    // checker 的几何是两块 rect；颜色进 data-URI 前做了转义
+    const decoded = decodeURIComponent(url.replace(/^url\("/, '').replace(/"\)$/, ''));
+    expect(decoded).toContain('abcdef');
+    expect((decoded.match(/<rect /g) ?? []).length).toBeGreaterThanOrEqual(3); // 底色 + 两块棋盘格
   });
 });

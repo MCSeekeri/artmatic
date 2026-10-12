@@ -1,0 +1,90 @@
+/**
+ * picker-model.ts — 算法生成器选择器的**纯逻辑**：建造条目、搜索、排序。
+ *
+ * 与 `ui/effect-picker/picker-model.ts` / `ui/transition-picker/picker-model.ts`
+ * 同构：全部是纯函数（翻译函数从外面传进来），可以脱离 DOM 单测。
+ *
+ * ## 生成器数量远少于特效，所以这里更简单
+ *
+ * 二十多个生成器不需要分类 / 标签 / 多选 —— 一个搜索框 + 一张缩略图网格就够。
+ * 说明来自 `algos/catalog.ts`（内置）或 def 自带的 `desc`（插件），名称来自
+ * def 的 `nameKey`（`Label`，经 `resolveLabel` 解析）。
+ *
+ * 生成器目录里没有「分类」这类数据，硬造筛选就是假选项 —— 与转场选择器同一条
+ * 取舍：**没有的维度不出现**。
+ */
+
+import { ALGO_CATALOG } from '../../algos/catalog';
+import { listGenerators } from '../../algos/registry';
+import { resolveLabel } from '../../i18n/label';
+import type { MessageKey } from '../../i18n/locales';
+import type { GeneratorDef } from '../../algos/types';
+
+export type Translate = (key: MessageKey) => string;
+
+export type AlgoView = 'grid' | 'list';
+export type AlgoSort = 'default' | 'name';
+
+export const ALGO_SORTS: AlgoSort[] = ['default', 'name'];
+
+export interface AlgoItem {
+  /** 生成器 id，也是工程里 `SourceClip.source.generator` 与缩略图文件名。 */
+  id: string;
+  /** 已翻译的显示名。 */
+  name: string;
+  /** 已翻译的一句话说明。插件没写说明时是空串（卡片据此不画那一行）。 */
+  desc: string;
+  /** 生成器类型：决定「有没有关键帧」等，列表视图里显示。 */
+  kind: GeneratorDef['kind'];
+  /** 提供者：`null` = 内置，否则是插件 id。 */
+  pluginId: string | null;
+  /** 搜索用的**预折叠**小写串：id + 名称 + 说明。 */
+  haystack: string;
+}
+
+/** 建造全部条目。顺序 = 注册表顺序（内置在前、插件在后）。 */
+export function buildItems(tr: Translate): AlgoItem[] {
+  const out: AlgoItem[] = [];
+  for (const e of listGenerators()) {
+    const meta = ALGO_CATALOG[e.id];
+    const name = resolveLabel(e.nameKey, tr);
+    // 内置说明在 ALGO_CATALOG；插件写在 def 自己的 desc 上（没有就是空串）。
+    const desc = meta ? tr(meta.descKey) : e.desc ? resolveLabel(e.desc, tr) : '';
+    out.push({
+      id: e.id,
+      name,
+      desc,
+      kind: e.kind,
+      pluginId: e.pluginId,
+      haystack: [e.id, name, desc].join(' ').toLowerCase(),
+    });
+  }
+  return out;
+}
+
+export interface AlgoFilterState {
+  query: string;
+}
+
+export const EMPTY_ALGO_FILTER: AlgoFilterState = { query: '' };
+
+/** 只按关键词过滤（中文名 / 说明 / id）。空查询返回原数组的浅拷。 */
+export function filterItems(items: readonly AlgoItem[], f: AlgoFilterState): AlgoItem[] {
+  const q = f.query.trim().toLowerCase();
+  if (!q) return items.slice();
+  return items.filter((it) => it.haystack.includes(q));
+}
+
+/** 排序。`name` 走本地化比较（中文按拼音）；`default` = 注册表原生顺序。 */
+export function sortItems(items: readonly AlgoItem[], sort: AlgoSort): AlgoItem[] {
+  const out = items.slice();
+  if (sort === 'name') {
+    out.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN') || a.id.localeCompare(b.id));
+  }
+  return out;
+}
+
+/** 已知 id → 显示名；未知 id → null（调用方自行退回显示 id）。 */
+export function labelOf(items: readonly AlgoItem[], id: string): string | null {
+  return items.find((it) => it.id === id)?.name ?? null;
+}
