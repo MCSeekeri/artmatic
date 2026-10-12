@@ -72,6 +72,18 @@ export class ProjectAudio implements AudioFeatureSource {
     this.frames.drop(instanceId);
   }
 
+  /**
+   * 素材消失（关工程 / 删素材）时忘掉它的频谱分析。
+   *
+   * 这一条是**内存**而不是显存：分析结果是按 1025 bins × 50 字节/秒存的，
+   * 一首 5 分钟的歌 ≈ 60 MB，而且 `analyses` 是按 assetId 记的、与「现在用不用
+   * 它」无关 —— 不显式丢就会跟着页面一直长。
+   */
+  forget(assetId: string): void {
+    this.analyses.delete(assetId);
+    this.pending.delete(assetId);
+  }
+
   /** 显式重置（导出开始、素材重算之后）。 */
   reset(): void {
     this.frames.reset();

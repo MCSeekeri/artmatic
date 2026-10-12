@@ -13,7 +13,8 @@
     "test:mutate": "stryker run",
     "test:e2e": "node scripts/e2e.mjs",
     "mcp": "node mcp/index.mjs",
-    "cli": "node scripts/cli.mjs"
+    "cli": "node scripts/cli.mjs",
+    "capacity": "node scripts/capacity.mjs"
   },
   "dependencies": {
     "@lucide/svelte": "^1.49.0",

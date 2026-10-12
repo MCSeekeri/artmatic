@@ -159,6 +159,16 @@ export class Renderer {
     this.seekExtraFn?.();
   }
 
+  /**
+   * 特效池的容量读数（预算、占用、在帧条目数、是否超支）。
+   *
+   * 暴露出来是因为这一层的失败模式是**静默**的（显存耗尽 → 上下文丢失）：
+   * 没有读数就只能靠猜。E2E 与诊断用它。
+   */
+  poolStats(): ReturnType<Compositor['poolStats']> {
+    return this.compositor.poolStats();
+  }
+
   /* ---------------------------------------------------------- 导出预热
    *
    * 排版层的位图来自异步光栅化（与 algo 烘焙同构）。预览允许「这一帧缺席」，

@@ -25,8 +25,14 @@
  *    不 close 会让 `decode()` 在几十帧后**停住**（不报错，只是不再出帧）。
  *    所以流程是「解码 → 画进 canvas → 上传 → close」，缓存里只有纹理。
  * 3. **有界纹理缓存 + 上传宽度封顶。** 超过渲染宽度的像素是纯浪费，所以上传
- *    宽度取 `min(素材宽度, renderW)`：预览（≈960）下比全分辨率小一个量级，
- *    导出（1920）时自动拿到全分辨率。缓存按字节预算 LRU 淘汰并删纹理。
+ *    宽度取 `min(素材宽度, renderW, maxUploadWidth)`：预览（≈960）下比全分辨率
+ *    小一个量级，导出（1920）时自动拿到全分辨率。
+ *
+ * ⚠️ **预算是「所有素材合起来」的一份**（`core/capacity.ts` 按机器派生）。
+ * 这条曾经写错成一个**每素材**的数字（`new FrameCache(192MB)` 建在每条条目里）
+ * 而注释写着「纹理缓存预算」—— 于是 N 个素材是 N × 192 MB，实测一次 4 秒的导出
+ * 就用掉 398 MB 显存。显存超额的收场是整块卡变慢或丢上下文，**静默**。
+ * 现在由 `rebalance()` 统一裁决，读数见 `stats()` 的 `budgetMB` / `overBudget`。
  */
 
 import {
@@ -42,13 +48,9 @@ import type { Kit } from './kit';
 import type { SourceTexture } from './compositor';
 import { buildStack, walkOps } from './stack';
 import { videoMediaFor, type VideoMedia } from './media-assets';
+import { planEviction } from './video-budget';
+import { getLimits, mbToBytes } from '../core/capacity';
 import type { Project, SourceClip } from '../core/schema';
-
-/** 上传宽度兜底上限：防 8K 素材在预览时把显存吃光。 */
-const MAX_UPLOAD_WIDTH = 3840;
-
-/** 纹理缓存预算。1080p RGBA8 一帧 8.3 MB，192 MB ≈ 23 帧。 */
-const DEFAULT_BUDGET_BYTES = 192 * 1024 * 1024;
 
 /**
  * 顺序访问窗口（秒）：请求的 ts 落在「已消费位置」之后这么远以内，就继续用常驻
@@ -69,13 +71,16 @@ interface CachedFrame {
 }
 
 class FrameCache {
+  /** 按插入顺序（= 时间戳顺序）：淘汰永远从头部开始，那里是最旧的一帧。 */
   private frames: CachedFrame[] = [];
   private bytes = 0;
 
-  constructor(
-    private readonly budget: number,
-    private readonly gl: WebGL2RenderingContext,
-  ) {}
+  constructor(private readonly gl: WebGL2RenderingContext) {}
+
+  /** 逐帧字节数，最旧在前 —— 淘汰决策（`video-budget.ts`）的输入。 */
+  sizes(): number[] {
+    return this.frames.map((f) => f.w * f.h * 4);
+  }
 
   /**
    * 命中判定是**区间包含**而不是等值：素材可以是变帧率的，
@@ -120,16 +125,23 @@ class FrameCache {
     }
     this.frames.push(frame);
     this.bytes += frame.w * frame.h * 4;
-    this.evict();
+    // **不在这里淘汰**：预算现在是「所有素材合起来」的一份，单条缓存看不见全局，
+    // 详见 VideoBudget。放进来的帧由 `rebalance()` 统一裁决。
   }
 
-  private evict(): void {
-    // 至少留一帧：正在显示的那一帧被淘汰会立刻变空白。
-    while (this.bytes > this.budget && this.frames.length > 1) {
-      const old = this.frames.shift()!;
-      this.gl.deleteTexture(old.tex);
-      this.bytes -= old.w * old.h * 4;
-    }
+  /** 执行淘汰计划：从最旧的一端丢掉 `n` 帧。 */
+  dropOldestN(n: number): void {
+    for (let i = 0; i < n; i++) this.dropOldest();
+  }
+
+  /** 丢掉最旧的一帧，返回释放的字节数。只剩一帧时不动（返回 0）。 */
+  dropOldest(): number {
+    if (this.frames.length <= 1) return 0;
+    const old = this.frames.shift()!;
+    this.gl.deleteTexture(old.tex);
+    const n = old.w * old.h * 4;
+    this.bytes -= n;
+    return n;
   }
 
   get count(): number {
@@ -167,6 +179,14 @@ interface MediaEntry {
   failure: string | null;
   displayW: number;
   displayH: number;
+  /**
+   * 最近一次被取用的逻辑时刻（越大越新）。
+   *
+   * 全局淘汰的判据是**缓存的**新旧而不是帧的新旧：正在播的那个素材几乎每帧都被
+   * 取用，而很久没上时间轴的那个素材整条都可以放掉 —— 这比「谁的帧更老」更贴近
+   * 用户接下来会看什么。
+   */
+  used: number;
 }
 
 export interface VideoSourceStats {
@@ -184,6 +204,9 @@ export interface VideoSourceStats {
   streams: number;
   cachedFrames: number;
   cachedBytes: number;
+  /** 当前生效的全局预算（MB）与「连每条一帧都放不下」时的超额状态。 */
+  budgetMB: number;
+  overBudget: boolean;
   failures: { assetId: string; reason: string }[];
 }
 
@@ -322,6 +345,51 @@ export function createVideoSourceManager(
   const gl = kit.gl;
   const entries = new Map<string, MediaEntry>();
   const counters = { decodes: 0, hits: 0, misses: 0, dropped: 0, streams: 0 };
+  /** 取用顺序的逻辑时钟（`MediaEntry.used`），只用于全局淘汰。 */
+  let clock = 0;
+  /** 上一次再平衡是否连「每条一帧」都放不下 —— 记在 `stats()` 里，别静默。 */
+  let overBudget = false;
+
+  /* ------------------------------------------------------------- 全局预算 */
+
+  function totalBytes(): number {
+    let n = 0;
+    for (const e of entries.values()) n += e.frames.byteLength;
+    return n;
+  }
+
+  /**
+   * 全局再平衡：**预算是所有素材合起来的一份**。
+   *
+   * 这一点是这次修的核心：预算过去写在每条缓存里（`new FrameCache(BUDGET)`），
+   * 于是「192 MB 预算」在 N 个素材上是 N × 192 MB —— 实测一次 4 秒的导出就用掉
+   * 398 MB 显存，而代码看上去永远「很安全」。显存没有进程配额，超了的收场是
+   * 整块卡一起变慢或直接丢上下文（**静默**）。
+   *
+   * 决策在 `video-budget.ts`（纯函数、有单测），这里只负责把计划执行掉 ——
+   * 删纹理是副作用，而副作用是最不该藏逻辑的地方。
+   */
+  function rebalance(): void {
+    const limits = getLimits();
+    const list = [...entries.values()];
+    const plan = planEviction(
+      list.map((e) => ({ used: e.used, sizes: e.frames.sizes() })),
+      mbToBytes(limits.videoPerAssetMB),
+      mbToBytes(limits.videoTextureMB),
+    );
+    for (let i = 0; i < list.length; i++) {
+      const n = plan.drop[i] ?? 0;
+      if (n > 0) list[i]!.frames.dropOldestN(n);
+    }
+    if (plan.overBudget && !overBudget) {
+      console.warn(
+        `[video] 缓存连「每条一帧」都放不下全局预算 ${limits.videoTextureMB} MB，` +
+          '这次不再继续淘汰（会删掉正在显示的画面）；' +
+          '素材规格与机器能力不匹配，可在 artmatic.capacity.json 里调大 videoTextureMB。',
+      );
+    }
+    overBudget = plan.overBudget;
+  }
 
   /** 复用一个 2D canvas：每帧新建会持续制造 GC 压力。 */
   let scratch: OffscreenCanvas | null = null;
@@ -350,7 +418,7 @@ export function createVideoSourceManager(
       assetId,
       input: null,
       sink: null,
-      frames: new FrameCache(DEFAULT_BUDGET_BYTES, gl),
+      frames: new FrameCache(gl),
       chain: Promise.resolve(),
       busy: false,
       pending: null,
@@ -359,6 +427,7 @@ export function createVideoSourceManager(
       failure: null,
       displayW: 0,
       displayH: 0,
+      used: ++clock,
     };
     entries.set(assetId, entry);
 
@@ -391,9 +460,16 @@ export function createVideoSourceManager(
     return entry;
   }
 
-  /** 上传宽度 = min(素材宽度, 渲染宽度, 兜底上限)。超过渲染宽度的像素是纯浪费。 */
+  /**
+   * 上传宽度 = min(素材宽度, 渲染宽度, 上限)。
+   *
+   * 超过渲染宽度的像素是纯浪费；上限来自机器能力（`maxUploadWidth`，8K 素材在
+   * 大显存机器上不再被无条件缩到 3840）。这条是**质量**旋钮，不是容量旋钮 ——
+   * 一张纹理多大只影响清晰度，总占用由全局预算兜着。
+   */
   function uploadWidthFor(entry: MediaEntry, renderW: number): number {
-    const cap = Math.max(16, Math.min(renderW || MAX_UPLOAD_WIDTH, MAX_UPLOAD_WIDTH));
+    const edge = getLimits().maxUploadWidth;
+    const cap = Math.max(16, Math.min(renderW || edge, edge));
     return Math.max(1, Math.min(entry.displayW || cap, cap));
   }
 
@@ -483,6 +559,9 @@ export function createVideoSourceManager(
         dur: sample.duration > 0 ? sample.duration : 1 / 60,
       });
       counters.decodes++;
+      // 新帧落地之后再裁决全局预算：淘汰的是**别的**素材里没人再看的帧，
+      // 刚放进来这一帧一定是各缓存里最新的，不会被自己挤掉。
+      rebalance();
       opts.onFrameReady?.();
     } finally {
       sample.close();
@@ -537,6 +616,8 @@ export function createVideoSourceManager(
       }
       const ts = mediaTimeOf(clip, t);
       const w = uploadWidthFor(entry, renderW);
+      // 每次取用都刷新这个素材的「新旧」：全局淘汰全靠它判断谁可以先放掉。
+      entry.used = ++clock;
       const hit = entry.frames.get(ts, w);
       if (hit) {
         counters.hits++;
@@ -576,6 +657,13 @@ export function createVideoSourceManager(
       await Promise.all(clips.map((c) => api.prepare(c, t, renderW)));
     },
 
+    /**
+     * 彻底放掉一个素材：顺序迭代器（内含解码器）、帧缓存纹理、容器 Input。
+     *
+     * **必须有人在恰当的时候调它**，否则这些资源会活到页面结束 —— 关掉一份
+     * 2 GB 素材的工程再开一份，两份的显存叠在一起，而用户看不到任何提示。
+     * 调用点见 `app-state.closeProject`（关工程 = 这份工程的所有素材）。
+     */
     forget(assetId) {
       const entry = entries.get(assetId);
       if (!entry) return;
@@ -583,6 +671,8 @@ export function createVideoSourceManager(
       entry.frames.dispose();
       entry.input?.dispose();
       entries.delete(assetId);
+      // 少了一条缓存，超预算的判断也该跟着重算（否则读数会一直停在旧结论上）。
+      rebalance();
     },
 
     stats() {
@@ -602,6 +692,8 @@ export function createVideoSourceManager(
         streams: counters.streams,
         cachedFrames: frames,
         cachedBytes: bytes,
+        budgetMB: getLimits().videoTextureMB,
+        overBudget,
         failures,
       };
     },

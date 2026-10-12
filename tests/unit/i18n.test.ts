@@ -220,6 +220,11 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
     '[video ${assetId}] 打开失败：${entry.failure}',
     '[video ${assetId}] 初始化失败：${entry.failure}',
     '[video ${entry.assetId}] 解码失败：${entry.failure}',
+    /* 全局预算连「每条一帧」都放不下时的停手警告：用户出口是**画面保住** +
+       `stats().overBudget` 读数，这行只是告诉改代码的人该调哪个数字。 */
+    '[video] 缓存连「每条一帧」都放不下全局预算 ${limits.videoTextureMB} MB，',
+    '这次不再继续淘汰（会删掉正在显示的画面）；',
+    '素材规格与机器能力不匹配，可在 artmatic.capacity.json 里调大 videoTextureMB。',
   ],
   'ui/app-state.svelte.ts': ['[tempo] 估计失败：'],
 
@@ -279,6 +284,31 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
    */
   'ui/typography/icon-library.ts': [
     '[artmatic] 图标数据解析失败：${name}（@lucide/svelte 的模板可能变了）',
+  ],
+  /*
+   * 容量预算告罄：池子**停手**的那条（`trimPools`，与 video-source 的
+   * `rebalance` 同一形态）。用户出口是两件具体的事 —— 画面保住（不再继续
+   * 淘汰）+ 读数（`poolStats().overBudget`）；这行 console 是给改代码的人看
+   * 「该调哪个数字、数字在哪个文件里」，带的是变量名与文件名，翻译没有意义。
+   */
+  'engine/compositor.ts': [
+    '[fx] 特效池在用的历史已超过预算 ${getLimits().effectPoolMB} MB，',
+    '这些是状态，不能淘汰；',
+    '可在 artmatic.capacity.json 里调大 effectPoolMB。',
+  ],
+  /*
+   * 启动期的那一条容量播报。**它就是诊断本身**：把「这台机器上实际生效的预算是
+   * 多少、数字从哪来」打出来，而用户能看到的是同样的数字在面板上的读数。
+   * 探测失败那条走的是 `console.info`（不是错误），因为「拿不到机器能力」
+   * 是**可缺路径**（纯静态部署），回落默认预算继续跑。
+   */
+  'ui/capacity-profile.ts': [
+    '[capacity] 拿不到宿主机器能力，使用保守默认预算',
+    '[capacity] 来源 ${snap.source}｜内存 ${probed.machine.freeRamMB}/${probed.machine.totalRamMB} MB',
+    "｜显存 ${probed.machine.vramMB ?? '未知'} MB",
+    '｜预算：视频 ${l.videoTextureMB} MB、排版 ${l.textRasterMB} MB、',
+    '特效池 ${l.effectPoolMB} MB、模拟 ${l.simStateMB} MB、',
+    '导出内存 ${l.exportMemoryMB} MB、撤销 ${l.undoSteps} 步',
   ],
 };
 

@@ -38,6 +38,7 @@
  */
 
 import { frameOf } from './clock';
+import { getLimits, mbToBytes } from '../core/capacity';
 import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
 import { buildStack, type BuildStackOptions, type RenderOp, type ResolvedSource, type TransitionOp } from './stack';
@@ -128,16 +129,44 @@ export class Compositor {
   private readonly passProg: Program;
   private readonly feedback = new Map<
     string,
-    { a: Target; b: Target; flip: boolean; hdr: boolean }
+    { a: Target; b: Target; flip: boolean; hdr: boolean; used: number }
   >();
   /** 非 feedback 的 pre-pass 草稿（半分辨率 HDR，按尺寸复用一对）。 */
   private preScratch: { w: number; h: number; a: Target; b: Target } | null = null;
   /** 带 feedback 的 pre-pass 的全分辨率历史，键 `${instanceId}:${index}`。 */
-  private readonly preFeedback = new Map<string, { a: Target; b: Target; flip: boolean }>();
+  private readonly preFeedback = new Map<string, { a: Target; b: Target; flip: boolean; used: number }>();
   /** 逐实例的「上一帧链输入」（见 `delayedInputFor`）。 */
-  private readonly delayedInput = new Map<string, Target>();
-  /** 影响深度（作用域组）的中间目标，按下标 = 嵌套深度（见 `groupTargets`）。 */
-  private readonly groups: { a: Target; b: Target }[] = [];
+  private readonly delayedInput = new Map<string, { t: Target; used: number }>();
+  /**
+   * 影响深度（作用域组）的中间目标，**按下标 = 嵌套深度**。
+   *
+   * 用 `Map` 而不是数组：每帧结束会把「这一帧没用到的更深层级」放掉
+   * （见 `trimPools`），数组上删元素会让下表整体前移、把还在用的那层挪走。
+   */
+  private readonly groups = new Map<number, { a: Target; b: Target }>();
+
+  /*
+   * 池子的**在帧记账**（与 `typography/runtime.ts` 的 `protectedKeys` 同构）。
+   *
+   * 这些池子是按实例键（`instanceId` / `instanceId:index`）常驻的，**从不释放**：
+   * 反复改特效链、拖参数、删片段会让条目只增不减，每一条都是 1~2 张全分辨率
+   * （可能是浮点）目标 —— 4K 下一条就是 132 MB。表现同样是静默的：显存耗尽 →
+   * 上下文丢失 → 画面停更。
+   *
+   * 所以每帧记下「这一帧真的用到了哪些键」，池子按字节预算淘汰**不在这个集合里**
+   * 的条目（`effectPoolMB`，按机器派生）。正在用的绝不淘汰：那些是**状态**
+   * （反馈历史 / 上一帧输入），删了画面就错，而不是「变慢」。
+   */
+  private nowT = Number.NaN;
+  private liveFx = new Set<string>();
+  private liveFxPrev = new Set<string>();
+  private liveFxT = Number.NaN;
+  private poolOverBudget = false;
+  private poolWarned = false;
+  /** 池子条目的取用顺序（`used`），只用于「谁最久没被用到」的淘汰排序。 */
+  private fxClock = 0;
+  /** 本帧用到的最大作用域嵌套深度：比它更深的组目标可以放掉。 */
+  private depthUsed = 0;
 
   /**
    * 转场执行器。默认实现只把入画层搬过去（不混合）——真正的实现在
@@ -192,6 +221,8 @@ export class Compositor {
     const frame = frameOf(t, project.fps);
     const ops = buildStack(project, t, opts);
 
+    this.nowT = t;
+    this.depthUsed = 0;
     const acc = this.ping!;
     acc.bind();
     this.kit.clear();
@@ -201,6 +232,9 @@ export class Compositor {
     this.passProg.use();
     this.passProg.tex('u_texture', out.tex);
     this.kit.pass(this.passProg, null);
+
+    // 帧末收池：把这一帧没用到的实例历史按预算放掉（见 trimPools）。
+    this.trimPools();
   }
 
   /**
@@ -302,13 +336,16 @@ export class Compositor {
   /**
    * 作用域组的中间目标，**按嵌套深度取**：外层的组还在攒内容时内层的组也要一对，
    * 共用一对会让内层把外层的中间结果覆盖掉（表现是「嵌套一次，画面就少一层」）。
-   * 深度上界 = 实际发生的嵌套层数，所以这里按需生长、从不清扫。
+   *
+   * 深度上界 = **这一帧**实际发生的嵌套层数：帧末 `trimPools` 会把更深的层级放掉，
+   * 所以「删掉几层嵌套特效」之后那几张全分辨率目标不会一直留着。
    */
   private groupTargets(depth: number, w: number, h: number): { a: Target; b: Target } {
-    let g = this.groups[depth];
+    this.depthUsed = Math.max(this.depthUsed, depth);
+    let g = this.groups.get(depth);
     if (!g) {
       g = { a: this.kit.target(w, h), b: this.kit.target(w, h) };
-      this.groups[depth] = g;
+      this.groups.set(depth, g);
     }
     g.a.resize(w, h);
     g.b.resize(w, h);
@@ -474,11 +511,14 @@ export class Compositor {
         b: this.kit.target(w, h, { float: hdr }),
         flip: false,
         hdr,
+        used: 0,
       };
       this.feedback.set(instanceId, e);
     }
     e.a.resize(w, h);
     e.b.resize(w, h);
+    e.used = ++this.fxClock;
+    this.markFx('fx', instanceId);
     return e.flip ? { read: e.b, write: e.a } : { read: e.a, write: e.b };
   }
 
@@ -531,11 +571,14 @@ export class Compositor {
         a: this.kit.target(w, h, { float: true }),
         b: this.kit.target(w, h, { float: true }),
         flip: false,
+        used: 0,
       };
       this.preFeedback.set(key, e);
     }
     e.a.resize(w, h);
     e.b.resize(w, h);
+    e.used = ++this.fxClock;
+    this.markFx('pre', key);
     return e.flip ? { read: e.b, write: e.a } : { read: e.a, write: e.b };
   }
 
@@ -555,13 +598,119 @@ export class Compositor {
    * 由 runner 在整条链跑完之后写入本帧的链输入（见 `effects/runner.ts`）。
    */
   delayedInputFor(instanceId: string, w: number, h: number): Target {
-    let t = this.delayedInput.get(instanceId);
-    if (!t) {
-      t = this.kit.target(w, h);
-      this.delayedInput.set(instanceId, t);
+    let e = this.delayedInput.get(instanceId);
+    if (!e) {
+      e = { t: this.kit.target(w, h), used: 0 };
+      this.delayedInput.set(instanceId, e);
     }
-    t.resize(w, h);
-    return t;
+    e.t.resize(w, h);
+    e.used = ++this.fxClock;
+    this.markFx('in', instanceId);
+    return e.t;
+  }
+
+  /* ------------------------------------------------------- 池子的在帧记账 */
+
+  /** 记下「这一帧用到了这个键」（与本帧 t 绑定，翻帧时把上一帧的集合并进来）。 */
+  private markFx(tag: 'fx' | 'pre' | 'in', key: string): void {
+    if (this.nowT !== this.liveFxT) {
+      this.liveFxT = this.nowT;
+      this.liveFxPrev = this.liveFx;
+      this.liveFx = new Set();
+    }
+    this.liveFx.add(`${tag}:${key}`);
+  }
+
+  /** 不许淘汰的键（当前帧 ∪ 上一帧：淘汰可能落在两帧之间，屏幕上还是上一帧）。 */
+  private protectedFx(): Set<string> {
+    if (this.liveFxPrev.size === 0) return this.liveFx;
+    if (this.liveFx.size === 0) return this.liveFxPrev;
+    return new Set([...this.liveFx, ...this.liveFxPrev]);
+  }
+
+  /** 池子当前占的显存字节数（浮点目标按 RGBA16F 算 8 字节/像素）。 */
+  private poolBytes(): number {
+    const targetBytes = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+    let n = 0;
+    for (const e of this.feedback.values()) n += targetBytes(e.a) + targetBytes(e.b);
+    for (const e of this.preFeedback.values()) n += targetBytes(e.a) + targetBytes(e.b);
+    for (const e of this.delayedInput.values()) n += targetBytes(e.t);
+    for (const g of this.groups.values()) n += targetBytes(g.a) + targetBytes(g.b);
+    return n;
+  }
+
+  /**
+   * 帧末收池（`render()` 最后一步）。只做两件事：
+   *
+   * 1. **更深的组目标直接放掉**（这一帧没用到那么深）。
+   * 2. 池子按 `effectPoolMB` 淘汰**不在在帧集合里**的条目，从最久没取用的开始，
+   *    直到回到预算内。全都在用就停手并置 `poolOverBudget` ——
+   *    反馈历史是**状态**，删掉画面就错（不是「变慢」），所以宁可显式超支。
+   *
+   * 这一条补的是「有池子没回收」：反复改特效链 / 拖参数 / 删片段会让条目只增不减，
+   * 每一条 1~2 张全分辨率目标（4K 下一条 132 MB），而症状是静默的显存耗尽。
+   */
+  private trimPools(): void {
+    for (const [d, g] of [...this.groups]) {
+      if (d > this.depthUsed) {
+        g.a.dispose();
+        g.b.dispose();
+        this.groups.delete(d);
+      }
+    }
+
+    const budget = mbToBytes(getLimits().effectPoolMB);
+    let bytes = this.poolBytes();
+    this.poolOverBudget = false;
+    if (bytes <= budget) return;
+
+    const keep = this.protectedFx();
+    const targetBytes = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+    type Candidate = { used: number; free: () => number };
+    const cands: Candidate[] = [];
+    for (const [k, e] of this.feedback) {
+      if (!keep.has(`fx:${k}`)) {
+        cands.push({ used: e.used, free: () => { const n = targetBytes(e.a) + targetBytes(e.b); e.a.dispose(); e.b.dispose(); this.feedback.delete(k); return n; } });
+      }
+    }
+    for (const [k, e] of this.preFeedback) {
+      if (!keep.has(`pre:${k}`)) {
+        cands.push({ used: e.used, free: () => { const n = targetBytes(e.a) + targetBytes(e.b); e.a.dispose(); e.b.dispose(); this.preFeedback.delete(k); return n; } });
+      }
+    }
+    for (const [k, e] of this.delayedInput) {
+      if (!keep.has(`in:${k}`)) {
+        cands.push({ used: e.used, free: () => { const n = targetBytes(e.t); e.t.dispose(); this.delayedInput.delete(k); return n; } });
+      }
+    }
+    cands.sort((a, b) => a.used - b.used);
+    for (const c of cands) {
+      if (bytes <= budget) return;
+      bytes -= c.free();
+    }
+    this.poolOverBudget = bytes > budget;
+    if (this.poolOverBudget && !this.poolWarned) {
+      this.poolWarned = true;
+      console.warn(
+        `[fx] 特效池在用的历史已超过预算 ${getLimits().effectPoolMB} MB，` +
+          '这些是状态，不能淘汰；' +
+          '可在 artmatic.capacity.json 里调大 effectPoolMB。',
+      );
+    }
+  }
+
+  /** 诊断读数（`__artmatic.poolStats`）：预算、占用、在帧条目数与超支标志。 */
+  poolStats(): { bytes: number; budgetMB: number; feedback: number; preFeedback: number; delayed: number; groups: number; live: number; overBudget: boolean } {
+    return {
+      bytes: this.poolBytes(),
+      budgetMB: getLimits().effectPoolMB,
+      feedback: this.feedback.size,
+      preFeedback: this.preFeedback.size,
+      delayed: this.delayedInput.size,
+      groups: this.groups.size,
+      live: this.protectedFx().size,
+      overBudget: this.poolOverBudget,
+    };
   }
 
   /** seek / 跳帧后清掉所有历史。 */
@@ -579,8 +728,8 @@ export class Compositor {
       this.kit.clear();
     }
     // 延迟输入也是跨帧状态：不清的话 seek 之后第一帧会拿跳变前的画面做差分。
-    for (const t of this.delayedInput.values()) {
-      t.bind();
+    for (const e of this.delayedInput.values()) {
+      e.t.bind();
       this.kit.clear();
     }
   }

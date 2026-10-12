@@ -13,6 +13,7 @@
  */
 
 import { evalCurve } from '../core/curve';
+import { getLimits, mbToBytes } from '../core/capacity';
 import { hashSeed } from '../core/prng';
 import { colorVec3 } from '../core/color';
 import type { BeatGrid } from '../core/time';
@@ -186,6 +187,9 @@ export class AlgoRuntime {
   private readonly revealProg: Program;
   private readonly tintProg: Program;
   private readonly outPool = new Map<string, Target>();
+  /** `outPool` 每张的取用顺序（淘汰排序用），与 `outPool` 同生命周期。 */
+  private readonly outUsed = new Map<string, number>();
+  private outClock = 0;
   private readonly sims = new Map<string, SimEntry>();
   /**
    * 上传 / 创建纹理前的安全纹理单元。
@@ -386,6 +390,9 @@ export class AlgoRuntime {
       const hash = cacheHash(def.id, createParams, def.volatile, seed);
       let entry = this.sims.get(clip.id);
       if (!entry || entry.hash !== hash) {
+        // 换了构造参数（拖滑杆最常见）= 重建这个模拟：**旧的参数纹理必须先还回去**，
+        // 否则每拖一格就漏一张（512² R8 = 256 KB，RGBA = 1 MB；拖一次滑杆几十格）。
+        if (entry) this.kit.gl.deleteTexture(entry.tex);
         const handle = def.create(createParams, seed);
         const channels = normalizeChannels(handle.channels);
         entry = {
@@ -566,14 +573,84 @@ export class AlgoRuntime {
     return out;
   }
 
+  /**
+   * 按尺寸复用一张输出目标。
+   *
+   * 尺寸来自 `intRes` 之类的**可调参数**，所以「拖一次滑杆扫过几十个分辨率」
+   * 就会攒下几十张全尺寸目标（1080p 一张 8.3 MB）—— 这条池子因此也要有预算。
+   * 目标是**逐帧中间结果**（`resolve` 里立刻被画进合成链），所以淘汰是安全的：
+   * 下一帧按同一尺寸再取时会重建。淘汰时**排除本次请求的这张**，否则刚建好就
+   * 被自己丢掉。
+   */
   private outFor(w: number, h: number): Target {
     const key = `${w}x${h}`;
     let target = this.outPool.get(key);
     if (!target) {
       target = this.kit.target(w, h);
       this.outPool.set(key, target);
+      this.evictOutPool(key);
     }
+    this.outUsed.set(key, ++this.outClock);
     return target;
+  }
+
+  /** 按 `simStateMB` 淘汰输出池里最久没用的那张（不动 `keepKey`）。 */
+  private evictOutPool(keepKey: string): void {
+    const budget = mbToBytes(getLimits().simStateMB);
+    const bytesOf = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+    let total = 0;
+    for (const t of this.outPool.values()) total += bytesOf(t);
+    while (total > budget) {
+      let victim: string | null = null;
+      let oldest = Infinity;
+      for (const [k, t] of this.outPool) {
+        if (k === keepKey) continue;
+        const used = this.outUsed.get(k) ?? 0;
+        if (used < oldest) {
+          oldest = used;
+          victim = k;
+        }
+      }
+      if (!victim) return; // 只剩刚请求的这张：停手（读数在 stats() 里）
+      const t = this.outPool.get(victim)!;
+      total -= bytesOf(t);
+      t.dispose();
+      this.outPool.delete(victim);
+      this.outUsed.delete(victim);
+    }
+  }
+
+  /**
+   * 放掉一个模拟状态（片段被删 / 工程关闭时调）。
+   *
+   * 状态纹理**不能靠预算淘汰**：它装的是模拟的当前状态，删掉就必须从第 0 帧
+   * 重推（硬约束 1.3 的 `seek(f) ≡ 顺序 step f 次` 那条会在时间上炸掉）。
+   * 所以它的回收只能是**显式**的：谁不再需要这个片段，谁来调这里。
+   */
+  forget(clipId: string): void {
+    const e = this.sims.get(clipId);
+    if (!e) return;
+    this.kit.gl.deleteTexture(e.tex);
+    this.sims.delete(clipId);
+    this.liveSims.delete(clipId);
+  }
+
+  /** 诊断读数（`__artmatic.algoStats`）。 */
+  stats(): { sims: number; simBytes: number; outTargets: number; outBytes: number; budgetMB: number } {
+    const bytesOf = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+    let simBytes = 0;
+    for (const e of this.sims.values()) {
+      simBytes += e.handle.gridW * e.handle.gridH * e.channels;
+    }
+    let outBytes = 0;
+    for (const t of this.outPool.values()) outBytes += bytesOf(t);
+    return {
+      sims: this.sims.size,
+      simBytes,
+      outTargets: this.outPool.size,
+      outBytes,
+      budgetMB: getLimits().simStateMB,
+    };
   }
 
   /**

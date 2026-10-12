@@ -33,7 +33,7 @@ import {
   type TextBackendRegistry,
 } from '../typography/rasterizer';
 import { resolveImageAsset } from '../typography/image-assets';
-import { setMediaAssetsListener } from '../engine/media-assets';
+import { forgetMedia, setMediaAssetsListener } from '../engine/media-assets';
 import type { VideoSourceManager } from '../engine/video-source';
 import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
@@ -779,6 +779,9 @@ class AppState {
      */
     this.plugins.release(p.id);
 
+    // 素材资源跟着工程一起放掉（纹理 / 解码器 / 解码位图 / 频谱分析）。
+    this.releaseProjectAssets(p);
+
     if (this.projects.length === 0) {
       this.activeProjectId = '';
       // 回落值不是一个真的工程，没有版本可订阅；退订并把 version 归零，
@@ -798,6 +801,54 @@ class AppState {
       this.player?.stop();
     }
     return 'ok';
+  }
+
+  /**
+   * 把一份工程占的**素材级**资源还回去。
+   *
+   * ## 为什么必须有这一条
+   *
+   * 这些资源都是「按 assetId 记账、进程级存活」的：视频的顺序解码器 + 帧缓存
+   * 纹理、解码后的图片 canvas 与它的 GL 纹理、AudioBuffer、频谱分析、波形。
+   * 它们**不会**因为工程从选项卡里消失而消失 —— 关闭一份 2 GB 素材的工程再开
+   * 下一份，两份的显存叠在一起，而用户看不到任何提示（表现是「用得越久越卡、
+   * 偶发 context lost」）。这正是「有 `forget()` 但零调用方」的那种漏洞：
+   * 接口在，生命周期钩子没接。
+   *
+   * 判据取「工程声明的素材」∪「素材仓里的素材」：前者是真相，后者兜住
+   * 「导入了但还没 commit 进工程」的中间态。
+   *
+   * 素材级之外的东西（排版位图按文档哈希记账、特效反馈池按实例记账）不在这里
+   * 回收，它们由各自的**在屏集合**决定（见 typography/runtime.ts 与
+   * engine/compositor.ts）：没有工程再用它们，下一次淘汰自然放掉。
+   */
+  private releaseProjectAssets(p: OpenProject): void {
+    // ① 片段级的资源：模拟状态纹理（装的是状态，只能显式回收）与音频包络。
+    for (const track of p.store.project.tracks) {
+      for (const clip of track.clips) {
+        if (clip.kind === 'source' && clip.source.type === 'algo') this.algos?.forget(clip.id);
+        if (clip.kind === 'effect') {
+          for (const inst of clip.chain) this.audio?.drop(inst.instanceId);
+        }
+      }
+    }
+
+    // ② 素材级的资源：视频（解码器 + 帧缓存纹理）、图片（canvas + 纹理）、
+    //    解码后的 AudioBuffer、频谱分析、波形。判据取「工程声明」∪「素材仓」，
+    //    后者兜住「导入了但还没 commit 进工程」的中间态。
+    const ids = new Set<string>([...Object.keys(p.store.project.assets), ...p.assets.ids()]);
+    if (ids.size === 0) return;
+
+    const wave = { ...this.waveforms };
+    for (const id of ids) {
+      this.video?.forget(id);
+      this.sources?.invalidateImage(id);
+      forgetMedia(id);
+      this.audio?.forget(id);
+      this.player?.forget(id);
+      delete wave[id];
+    }
+    this.waveforms = wave;
   }
 
   /**

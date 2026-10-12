@@ -21,6 +21,17 @@ export class AudioPlayer {
     this.buffers.set(assetId, buffer);
   }
 
+  /**
+   * 放掉一个素材的解码结果（关工程时调）。
+   *
+   * AudioBuffer 是**摊开在内存里的 PCM**：一段 5 分钟的立体声 48 kHz 就是
+   * ~110 MB，它不会自己消失（`buffers` 是按 assetId 记的进程级表）。
+   * 正在播的那条**不用管** —— 关闭工程前调用方已经 `stop()` 过了。
+   */
+  forget(assetId: string): void {
+    this.buffers.delete(assetId);
+  }
+
   has(assetId: string): boolean {
     return this.buffers.has(assetId);
   }

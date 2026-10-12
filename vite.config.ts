@@ -14,6 +14,73 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 /**
+ * `GET /__capacity.json` —— 把**这台机器**的真实内存 / 显存交给页面。
+ *
+ * ## 为什么走服务端
+ *
+ * 页面测不到容量（`navigator.deviceMemory` 粗到 GB、`performance.memory` 只是
+ * JS 堆、WebGL 连显存大小都不说）。而 Node 侧 `os.freemem()` + `nvidia-smi` /
+ * 注册表拿得到真实数字 —— 而且**必须由服务端在启动后探测**：这时用户的工作负载
+ * （IDE、浏览器）已经在跑了，「可用内存」才是那个能用的判据。
+ *
+ * ## 为什么两边都注册
+ *
+ * 与 `labRedirect` 同一条理由：E2E 与 `bun run preview` 跑的是 preview 服务，
+ * 只注册 dev 那侧等于让自动化测试永远拿不到真实容量（也就永远测不到「预算不足时
+ * 的降级路径」）。
+ *
+ * ## 刻意不做的事
+ *
+ * **不在这里派生预算**，只给「机器事实」+ 配置文件里的显式覆盖。比例与夹取
+ * 属于策略，必须与页面共用同一份（`src/core/capacity.ts`）—— 两处各算一遍
+ * 「推荐值」是必然会漂的形态。纯静态部署（没有 Node）时这个路由不存在，
+ * 页面 fetch 失败后退回保守默认。
+ */
+function capacityEndpoint(): Plugin {
+  /** 探测要 spawn 外部命令，别每个请求都做；缓存 30 s（会话内够用且不吃 IO）。 */
+  const TTL_MS = 30_000;
+  let cached: { at: number; body: string } | null = null;
+
+  const handler = (
+    req: { url?: string; method?: string },
+    res: { statusCode: number; setHeader(k: string, v: string): void; end(b?: string): void },
+    next: () => void,
+  ): void => {
+    if (!req.url?.startsWith('/__capacity.json')) return next();
+    void (async () => {
+      try {
+        const now = Date.now();
+        if (!cached || now - cached.at > TTL_MS) {
+          const { capacityPayload } = await import('./scripts/capacity.mjs');
+          cached = { at: now, body: JSON.stringify(await capacityPayload()) };
+        }
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        // 同源、只读：显式禁掉缓存，免得浏览器把「启动那一刻」的可用内存缓存一整天。
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(cached.body);
+      } catch (e) {
+        // 探测失败不是错误：页面那边会退回默认预算。这里只回一个空壳。
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(JSON.stringify({ machine: null, overrides: null, error: String(e) }));
+      }
+    })();
+  };
+
+  return {
+    name: 'artmatic:capacity',
+    configureServer(server) {
+      server.middlewares.use(handler);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handler);
+    },
+  };
+}
+
+/**
  * `/lab`（无尾斜杠）会被 SPA fallback 静默端上**主应用** —— 页面看起来能开，
  * 其实是另一个页面，排查起来很费时间。dev 与 preview 两侧都要兜住：
  * openmosh 的 lab 只注册了 dev 那一侧，而我们的 E2E 跑的是 preview。
@@ -47,7 +114,7 @@ function labRedirect(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [svelte(), labRedirect()],
+  plugins: [svelte(), labRedirect(), capacityEndpoint()],
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   worker: { format: 'es' },
   build: {

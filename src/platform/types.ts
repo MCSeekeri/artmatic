@@ -6,9 +6,38 @@
  * Electron 解耦靠这一个注入点守住。
  */
 
+import type { MachineCapacity } from '../core/capacity';
+
 export interface PickedFile {
   name: string;
   data: ArrayBuffer;
+}
+
+/**
+ * 流式落盘的出口。
+ *
+ * 存在的理由只有一条：**导出的产物可能大于内存预算**。MP4 与 PNG 序列过去都是
+ * 「整份屯在内存里 → 再交给下载」，几百帧就是几百 MB，标签页 OOM 会把没保存的
+ * 编辑一起带走（见 `core/capacity.ts` 的 `exportMemoryMB`）。有了它，边编码边写盘，
+ * 内存占用与时长无关。
+ *
+ * 两种形态都给，因为两个消费方的形状不同：
+ *  - `writable`：mediabunny 的 `StreamTarget` 直接吃一个
+ *    `WritableStream<{type:'write', data, position}>` —— FSA 的
+ *    `FileSystemWritableFileStream` 恰好就是那个形状（官方文档点名支持）；
+ *  - `write`/`close`/`abort`：PNG 序列的流式 zip 是「回调里塞字节」的形状。
+ */
+export interface SaveStream {
+  /** 给 mediabunny `StreamTarget` 用。 */
+  writable: WritableStream;
+  /** 直接写一块（流式 zip 用）。 */
+  write(data: Uint8Array): Promise<void>;
+  /** 收尾。**不调它等于什么都没写**（FSA 的 siloed 写入只在 close 时落盘）。 */
+  close(): Promise<void>;
+  /** 放弃这次写入：目标文件保持原样。 */
+  abort(reason?: unknown): Promise<void>;
+  /** 用户选的最终文件名（可能被对话框改过）。 */
+  name: string;
 }
 
 /**
@@ -54,4 +83,30 @@ export interface Platform {
   download(blob: Blob, filename: string): Promise<void>;
   saveProject(json: string, suggestedName: string): Promise<void>;
   openProject(): Promise<{ name: string; json: string } | null>;
+
+  /**
+   * 探测**宿主机器**的内存 / 显存容量。
+   *
+   * 浏览器里测不准（这是本节最重要的一条约束，别绕过它去读
+   * `navigator.deviceMemory`）：真正的数字由开发/预览服务端的 Node 进程给出
+   * （`scripts/capacity.mjs`）。**拿不到就返回 null**，由调用方退回保守默认 ——
+   * 纯静态部署、或探测失败时，这条路径必须是可缺的而不是报错。
+   */
+  probeCapacity(): Promise<{ machine: MachineCapacity; overrides: Partial<Record<string, number>> | null } | null>;
+
+  /**
+   * 申请一个**流式**落盘出口（浏览器：FSA 保存对话框）。
+   *
+   * 返回 null = 这个环境没有这条能力（Firefox/Safari），调用方必须回退到
+   * 「内存里屯完再下载」。**必须在用户手势里调用**（`showSaveFilePicker` 要求
+   * 瞬时激活），所以调用方要在开始渲帧之前就把它要来。
+   */
+  saveStream(opts: {
+    suggestedName: string;
+    /** 保存对话框里那行说明（i18n 后的文案）。 */
+    description: string;
+    mime: string;
+    /** 扩展名，带点，如 `.mp4`。 */
+    ext: string;
+  }): Promise<SaveStream | null>;
 }

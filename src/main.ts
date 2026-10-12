@@ -29,6 +29,8 @@ import {
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
+import { applyMachine, currentCapacity, resetCapacity, setLimits } from './core/capacity';
+import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
 import { createControlPlane } from './agent/index';
 import type { ControlContext, OpenProjectView } from './agent/types';
@@ -50,6 +52,12 @@ const app = mount(App, { target: document.getElementById('app')! });
 // 恢复一个工程需要 requestPermission()，而它必须有用户手势 ——
 // 页面加载时做不到，所以只能等用户点。
 refreshRecentProjects();
+
+/*
+ * 机器能力 → 容量预算。**起了不等**（见 ui/capacity-profile.ts）：
+ * 各池子读的是 `getLimits()`，结果晚到也照样在下次取用时生效。
+ */
+void loadCapacityProfile();
 
 // 演示音频：程序生成（无外部文件依赖），解码/波形都在后台完成。
 const demoBuffer = await renderDemoAudio();
@@ -317,6 +325,33 @@ const control = createControlPlane(controlContext);
   },
   /** E2E 专用：视频帧缓存的读数（证明解码真的发生了、缓存是有界的）。 */
   videoStats: () => appState.video.stats(),
+  /** E2E / 诊断：特效池与模拟状态的容量读数（失败模式是静默的，所以要有读数）。 */
+  poolStats: () => appState.renderer.poolStats(),
+  algoStats: () => appState.algos.stats(),
+  /**
+   * 容量预算的读数与写入。
+   *
+   * 读：`capacity()` 给出 `{ machine, limits, source }` —— 回答「这台机器上
+   * 实际生效的预算是多少、数字从哪来」。
+   * 写：`capacity.set({...})` 覆盖几项（E2E 用它把预算钉死，否则一条用例的
+   * 行为会跟着跑测试的机器变）；`capacity.probe()` 重新问一次服务端。
+   */
+  capacity: {
+    get: () => currentCapacity(),
+    set: (patch: Parameters<typeof setLimits>[0]) => {
+      setLimits(patch, 'override');
+      return currentCapacity();
+    },
+    probe: () => loadCapacityProfile(),
+    apply: (machine: Parameters<typeof applyMachine>[0]) => {
+      applyMachine(machine);
+      return currentCapacity();
+    },
+    reset: () => {
+      resetCapacity();
+      return currentCapacity();
+    },
+  },
   /**
    * E2E 专用：把一个 Blob 登记成图片素材（等价于导入图片 / 排版「转为图片」
    * 走的那一步）。E2E 里造不出真实文件，但可以造真实 PNG 字节。

@@ -10,7 +10,7 @@
  * endTx() 把整段拖拽 coalesce 成一条撤销记录。
  */
 
-const UNDO_MAX = 80;
+import { getLimits } from './capacity';
 
 export class CommandStack {
   private undoStack: string[] = [];
@@ -98,9 +98,23 @@ export class CommandStack {
     return true;
   }
 
+  /**
+   * 入栈并把栈深夹回上限。
+   *
+   * 上限**每次入栈时读**（`limits.undoSteps`，按可用内存派生）而不是构造时抄一份：
+   * 每条记录是一份**整工程快照**，所以「能存几步」是内存量的函数，而工程大小
+   * 会随编辑增长 —— 构造时定死的话，一个排版多、曲线密的工程会悄悄把内存吃掉
+   * （80 步 × 5 MB = 400 MB），而用户只看到「还能撤」。
+   */
   private pushUndo(before: string): void {
     this.undoStack.push(before);
-    if (this.undoStack.length > UNDO_MAX) this.undoStack.shift();
+    const max = getLimits().undoSteps;
+    while (this.undoStack.length > max) this.undoStack.shift();
     this.redoStack.length = 0;
+  }
+
+  /** 诊断读数：当前栈深与生效上限。 */
+  depth(): { undo: number; redo: number; max: number } {
+    return { undo: this.undoStack.length, redo: this.redoStack.length, max: getLimits().undoSteps };
   }
 }
