@@ -243,7 +243,8 @@
     border-radius: 2px;
     cursor: pointer;
   }
-  .sw:hover {
+  .sw:hover:not(:disabled) {
+    background: var(--c);
     border-color: var(--text-primary);
   }
   .sw.active {
