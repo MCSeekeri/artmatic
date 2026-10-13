@@ -7,6 +7,7 @@ import {
   paintCss,
   paintToBackground,
   shapePaintAttrs,
+  spanStyle,
   textBoxStyle,
   textFillBackgroundImage,
   textFillStyle,
@@ -402,6 +403,70 @@ describe('textBoxStyle（文本框背景 / 边框）', () => {
     });
     const img = s['background-image']!;
     expect(img.indexOf('#ff0000')).toBeLessThan(img.indexOf('#0000ff'));
+  });
+});
+
+describe('文字阴影 / 高亮 / 配色方案解析', () => {
+  it('阴影尺寸按**字号倍数**换算成 px（文档改分辨率时阴影跟着缩）', () => {
+    const s = textStyle({
+      ...defaultTextStyle(SIZE),
+      fontSize: 100,
+      shadow: { color: '#000000', dx: 0.05, dy: 0.1, blur: 0.2 },
+    });
+    expect(s['text-shadow']).toBe('5px 10px 20px #000000');
+  });
+
+  it('无阴影写 none 而不是省略 —— 就地同步时「有 → 无」才能复位', () => {
+    expect(textStyle(defaultTextStyle(SIZE))['text-shadow']).toBe('none');
+  });
+
+  it('高亮通过 `--typo-hl` 变量下发（背景不继承，只能这么传）', () => {
+    expect(textStyle({ ...defaultTextStyle(SIZE), highlight: '#ffff00' })['--typo-hl']).toBe('#ffff00');
+    // 无高亮时写 transparent：就地同步不会重建节点，省略会留下上一帧的底色。
+    expect(textStyle(defaultTextStyle(SIZE))['--typo-hl']).toBe('transparent');
+  });
+
+  it('颜色里的配色方案引用被解析成真实色（字形色 / 阴影色 / 高亮色都要）', () => {
+    const s = textStyle(
+      {
+        ...defaultTextStyle(SIZE),
+        color: '@accent1',
+        highlight: '@accent2',
+        shadow: { color: '@dk1', dx: 0, dy: 0, blur: 0 },
+      },
+      'office',
+    );
+    expect(s.color).toBe('#156082');
+    expect(s['--typo-hl']).toBe('#e97132');
+    expect(s['text-shadow']).toBe('0px 0px 0px #000000');
+  });
+
+  it('spanStyle：默认跟随元素级变量，行内自带高亮时覆盖它', () => {
+    expect(spanStyle(undefined)['background-color']).toBe('var(--typo-hl, transparent)');
+    expect(spanStyle({ fontWeight: 700 })['background-color']).toBe('var(--typo-hl, transparent)');
+    expect(spanStyle({ highlight: '@accent1' }, 'office')['background-color']).toBe('#156082');
+  });
+
+  it('图形填充 / 描边 / 渐变色标里的引用同样被解析', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createShapeElement(d.size, 'rect', {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+      fill: { kind: 'linear', angle: 0, stops: [
+        { offset: 0, color: '@accent1' },
+        { offset: 1, color: '@accent2.l80' },
+      ] },
+      stroke: { color: '@dk1', width: 2 },
+    });
+    expect(shapePaintAttrs(el, false, 'office').stroke).toBe('#000000');
+    const bg = paintToBackground(el.fill, 'office');
+    expect(bg).toContain('#156082');
+    expect(bg).not.toContain('@accent2');
+  });
+
+  it('换配色方案 ⇒ 同一份文档渲染出不同颜色（引用的意义所在）', () => {
+    const style = { ...defaultTextStyle(SIZE), color: '@accent1' };
+    expect(textStyle(style, 'office').color).not.toBe(textStyle(style, 'office-2007').color);
+    expect(textStyle(style, 'office-2007').color).toBe('#4f81bd');
   });
 });
 

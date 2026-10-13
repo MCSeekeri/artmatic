@@ -15,13 +15,35 @@
 import { DENSITY } from '../tokens';
 import type { IconName } from '../icons';
 
+/**
+ * 按钮尺寸档。
+ *
+ *  - `large`：icon 在上、文字在下（50×56）。给「一眼要认得出来」的主按钮。
+ *  - `small`：icon + 短文字横排（32×24）。
+ *  - `icon`：**纯图标**（26×24），只有 tooltip 说明它是什么。
+ *
+ * `icon` 这一档是 Office 字体区那种密集布局的前提：第二排十来个字形格式
+ * 按钮，每个都带文字的话光这一组就能吃掉整条 Ribbon —— 而 B / I / U / S
+ * 这些符号本身就是写法，配文字反而是噪声。
+ */
+export type RibbonItemSize = 'large' | 'small' | 'icon';
+
 export interface RibbonItemBase {
   id: string;
   label: string;
+  /**
+   * 控件下方那行小字不渲染，`label` 只留作无障碍名。
+   *
+   * 给「控件自己已经说清了」的场合用：字体下拉里显示的就是字体名、字号框里
+   * 显示的就是字号，各配一行「字体」「字号」纯属噪声（这些控件的宽度也因此
+   * 不必再为小字留白）。只有 `select` / `number` / `segment` 渲染小字，
+   * 其余 kind 本来就是拿 `label` 当 tooltip，传了也是空操作。
+   */
+  hideLabel?: boolean;
   testid?: string;
   disabled?: boolean;
   /** 按钮尺寸档。不传则按 kind 推断（select / number 偏 large）。 */
-  size?: 'large' | 'small';
+  size?: RibbonItemSize;
   /** 布局宽度（px）。不传则按 kind 与 size 推断。 */
   width?: number;
 }
@@ -75,7 +97,75 @@ export interface RibbonColorSpec extends RibbonItemBase {
   kind: 'color';
   icon?: IconName;
   value: string;
+  /**
+   * 当前文档的配色方案 id（取色卡的「主题颜色」网格的数据源）。
+   *
+   * 由 `ribbon-defs` 从文档上取 —— Ribbon 组件不认识 TypographyDocument，
+   * 所以这里必须是**已经查好的值**，不能是「自己去文档里拿」的回调。
+   */
+  themeId?: string;
+  /** 允许「无颜色」（高亮这类可以没有的颜色）。 */
+  allowNone?: boolean;
+  /** 当前值就是某个主题色时的显示形态由它决定（见 RibbonColor）。 */
   onchange: (value: string) => void;
+}
+
+/** 下拉菜单里的一项。 */
+export interface RibbonMenuItemSpec {
+  id: string;
+  label: string;
+  icon?: IconName;
+  /** 当前生效项（打勾）。 */
+  active?: boolean;
+  disabled?: boolean;
+  onselect: () => void;
+}
+
+/**
+ * 带下拉的图标按钮（大小写转换、字符间距这类「点开是一组选项」的控件）。
+ *
+ * 与 `select` 的分工：那个是**显示当前值**的下拉（宽度大、要放得下文本），
+ * 这个是**纯图标 + 一次性动作**（选项之间是并列的动作，不是同一个值的状态）。
+ * 用 select 表达「全部大写 / 全部小写」会得到一个宽度随选项名变化的按钮 ——
+ * 那不是 Office 的形态，也不稳定。
+ */
+export interface RibbonMenuSpec extends RibbonItemBase {
+  kind: 'menu';
+  icon: IconName;
+  items: RibbonMenuItemSpec[];
+  /**
+   * 弹层底部的数值输入（字符间距的「自定义」）。
+   *
+   * 放在菜单底部而不是另开一个控件：预设与自定义是同一个属性的两种调法，
+   * 分开摆会让人以为它们是两件事。
+   */
+  numeric?: RibbonMenuNumeric;
+}
+
+export interface RibbonMenuNumeric extends RibbonLiveHooks {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  precision?: number;
+  suffix?: string;
+  onchange: (value: number) => void;
+}
+
+/**
+ * 配色方案图库（「设计」选项卡用）。
+ *
+ * 与 `gallery` 分开一个 kind：那个是「一张图 = 一个形状」，这个是
+ * 「一排色块 = 一个配色方案」—— 卡片的构成完全不同（多色 vs 单色 path），
+ * 硬塞进同一套渲染里会立刻长出两个 if 分支。
+ */
+export interface RibbonThemesSpec extends RibbonItemBase {
+  kind: 'themes';
+  options: { id: string; label: string; colors: string[] }[];
+  /** 当前方案 id。 */
+  value: string;
+  onselect: (id: string) => void;
 }
 
 /**
@@ -140,6 +230,20 @@ export interface RibbonGallerySpec extends RibbonItemBase {
   onselect: (id: string) => void;
 }
 
+/**
+ * 纯布局元素：吃掉一行里的剩余空间，把它后面的项推到行尾。
+ *
+ * 用途是**让两排的右边缘对齐**（字体组：第一排是宽下拉、第二排是图标 +
+ * 右侧的字体资源按钮）。没有它的话第二排会在半途结束，看起来像是没排完。
+ *
+ * 不继承 `RibbonItemBase`：它没有 label / testid / disabled 这些概念，
+ * 硬塞一个空 label 只会让类型替调用方记一条没有内容的规则。
+ */
+export interface RibbonSpacerSpec {
+  kind: 'spacer';
+  id: string;
+}
+
 export type RibbonItemSpec =
   | RibbonButtonSpec
   | RibbonToggleSpec
@@ -147,7 +251,10 @@ export type RibbonItemSpec =
   | RibbonColorSpec
   | RibbonSegmentSpec
   | RibbonNumberSpec
-  | RibbonGallerySpec;
+  | RibbonGallerySpec
+  | RibbonMenuSpec
+  | RibbonThemesSpec
+  | RibbonSpacerSpec;
 
 export interface RibbonGroupDef {
   id: string;
@@ -160,9 +267,18 @@ export interface RibbonGroupDef {
    * 一字排开时那一行只有 20 多个像素高却横着占掉两三百像素，
    * 改成两行之后同样多的按钮只占一半宽度，省下的横向空间留给真正需要宽度的组
    * （字体、字号、下拉）。列的条数由 Ribbon 按 `ceil(项数 / 2)` 推出来。
+   *
+   * `'rows'` 用于**上下两排内容形态不同**的组（字体组：第一排是宽下拉，
+   * 第二排是纯图标）。它不能用 grid 表达 —— grid 会按列等宽切，
+   * 而这里第一排的字体下拉本身就占 148px。
    */
-  layout?: 'row' | 'grid';
+  layout?: 'row' | 'grid' | 'rows';
   items: RibbonItemSpec[];
+  /**
+   * `layout: 'rows'` 时逐行给出的项。给了它就**忽略 `items`**（两者表达同一件事，
+   * 同时给只会有两处真源）。
+   */
+  rows?: RibbonItemSpec[][];
 }
 
 export interface RibbonTabDef {
@@ -182,28 +298,43 @@ export interface RibbonTabDef {
  */
 export const DEFAULT_ITEM_W = DENSITY.ribbonBtnW;
 export const SMALL_ITEM_W = DENSITY.ribbonBtnSmallW;
+/** 纯图标按钮（`size: 'icon'`）的宽度。 */
+export const ICON_ITEM_W = DENSITY.ribbonIconW;
+/** 带下拉箭头的图标按钮（`menu` 的 icon 档）：多出一个箭头的位子。 */
+export const MENU_ICON_W = DENSITY.ribbonIconW + 4;
 export const SELECT_ITEM_W = 108;
 export const COLOR_ITEM_W = DEFAULT_ITEM_W;
 export const NUMBER_ITEM_W = 88;
 /** 分段控件按选项数计费：每项 34px。 */
 export const SEGMENT_OPTION_W = 34;
 
+/** 按 size 档推按钮宽度（`large` / `small` / `icon`）。 */
+function sizedWidth(size: RibbonItemSize | undefined): number {
+  if (size === 'icon') return ICON_ITEM_W;
+  if (size === 'small') return SMALL_ITEM_W;
+  return DEFAULT_ITEM_W;
+}
+
 export function itemWidth(item: RibbonItemSpec): number {
+  // 间隔占的是**剩余**空间，本身没有固定宽度（也就不占组宽预算）。
+  if (item.kind === 'spacer') return 0;
   if (item.width !== undefined) return item.width;
   switch (item.kind) {
     case 'select':
       return SELECT_ITEM_W;
-    case 'color':
-      return COLOR_ITEM_W;
     case 'segment':
       return item.options.length * SEGMENT_OPTION_W;
     case 'number':
       return NUMBER_ITEM_W;
+    case 'themes':
+      return item.size === 'icon' ? ICON_ITEM_W : SMALL_ITEM_W;
+    case 'menu':
+      return item.size === 'icon' ? MENU_ICON_W : sizedWidth(item.size);
+    case 'color':
     case 'gallery':
-      return item.size === 'small' ? SMALL_ITEM_W : DEFAULT_ITEM_W;
     case 'toggle':
     case 'button':
-      return item.size === 'small' ? SMALL_ITEM_W : DEFAULT_ITEM_W;
+      return sizedWidth(item.size);
   }
 }
 

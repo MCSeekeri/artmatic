@@ -34,7 +34,19 @@ interface DocShape {
     frame: { x: number; y: number; w: number; h: number; rot: number };
     /** 富文本内容段。**`text` 字段在 v4 之后没了** —— 纯文本是 runs 拼出来的。 */
     runs?: { text: string; style?: Record<string, string | number> }[];
-    style?: { fontWeight: number; letterSpacing: number; fontSize: number; color: string };
+    style?: {
+      fontWeight: number;
+      letterSpacing: number;
+      fontSize: number;
+      /** 字形色。**可能是配色方案引用**（`@accent1`），与渲染侧同一套语义。 */
+      color: string;
+      /** 大小写转换。 */
+      textTransform: string;
+      /** 文字高亮（「突出显示颜色」）。缺省 = 不高亮。 */
+      highlight?: string;
+      /** 文字阴影。三个尺寸都是**字号倍数**（见 document.ts）。 */
+      shadow?: { color: string; dx: number; dy: number; blur: number };
+    };
     radius?: number;
     /** 星形的谷半径比例。 */
     waist?: number;
@@ -49,6 +61,8 @@ interface DocShape {
   }[];
   /** 组合表。老工程没有这一项。 */
   groups?: { id: string; name: string; padding: number; radius: number }[];
+  /** 配色方案 id。缺省 = 默认方案。 */
+  theme?: string;
 }
 
 interface Hooks {
@@ -211,7 +225,9 @@ test('Ribbon 改属性落库，且可撤销', async ({ page }) => {
   await page.keyboard.press('Control+z');
   expect((await readDoc(page)).elements[0]!.style!.fontWeight).toBe(700);
 
-  const spacing = page.getByTestId('ribbon-letter-spacing');
+  // 字距在「字符间距」菜单里（预设列表 + 底部的自定义输入框）
+  await page.getByTestId('ribbon-letter-spacing').click();
+  const spacing = page.getByTestId('ribbon-letter-spacing-custom');
   await spacing.fill('7');
   await spacing.press('Enter');
   expect((await readDoc(page)).elements[0]!.style!.letterSpacing).toBe(7);
@@ -1863,4 +1879,252 @@ test('下拉弹层里的滚轮不会带着 Ribbon 一起横滚', async ({ page, 
     await page.evaluate(() => (globalThis as unknown as { __wheelOnRibbon: number }).__wheelOnRibbon),
     'wheel 不该冒泡到 Ribbon（冒泡了它的横向滚动就会被带走）',
   ).toBe(0);
+});
+
+/* ------------------------------------------------------------ 字体区（PPT 式两排布局）与配色方案
+ *
+ * 这一组用例守的是本轮的三条**跨层链路**，它们每一环单看都"应该没问题"：
+ *   ① 取色卡选主题色 → 文档里存引用 → 渲染时解析 → 换方案时画面跟着变；
+ *   ② 高亮色下发到**行内段**（变量那条路），不是给文本框刷底色；
+ *   ③ 字体区的纯图标按钮与菜单仍能改到文档（紧凑布局没有把功能弄丢）。
+ *
+ * 只读 store 抓不到任何一条 —— 所以这里一律断言**画布上的 computed style**。
+ */
+
+/** 画布上第一个文本框的**实际渲染颜色**（换方案后它必须变）。 */
+async function domTextColor(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>('.paper .typo-text');
+    return el ? getComputedStyle(el).color : '';
+  });
+}
+
+test('取色卡选的是「主题色引用」：换配色方案时字体颜色跟着变', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  // 字体颜色按钮 = 图标 + 当前色条，点开是本项目的取色卡
+  await page.getByTestId('ribbon-text-color').click();
+  await expect(page.getByTestId('ribbon-text-color-pop')).toBeVisible();
+  await page.getByTestId('ribbon-text-color-palette-theme-@accent1').click();
+
+  // 存的是**引用**而不是 hex —— 这是整条联动链的根
+  expect((await readDoc(page)).elements[0]!.style!.color).toBe('@accent1');
+  // 画布上已按当前方案（Office）渲染
+  expect(await domTextColor(page)).toBe('rgb(21, 96, 130)');
+
+  // 「设计」里换配色方案 ⇒ 同一个引用渲染出另一个颜色
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-themes').click();
+  await page.getByTestId('ribbon-themes-opt-office-2007').click();
+
+  expect((await readDoc(page)).theme).toBe('office-2007');
+  expect(await domTextColor(page)).toBe('rgb(79, 129, 189)');
+});
+
+test('标准色是裸色：换配色方案时它**不**变（「仅限于用了配色的元素」）', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  await page.getByTestId('ribbon-text-color').click();
+  await page.getByTestId('ribbon-text-color-palette-std-ff0000').click();
+  expect((await readDoc(page)).elements[0]!.style!.color).toBe('#ff0000');
+  expect(await domTextColor(page)).toBe('rgb(255, 0, 0)');
+
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-themes').click();
+  await page.getByTestId('ribbon-themes-opt-violet-ii').click();
+
+  // 裸色**不跟着变** —— 与上一条互为对照
+  expect(await domTextColor(page)).toBe('rgb(255, 0, 0)');
+});
+
+test('突出显示颜色画在**字形底色**上（不是给文本框刷底），并且能清掉', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  await page.getByTestId('ribbon-text-highlight').click();
+  await page.getByTestId('ribbon-text-highlight-palette-std-ffff00').click();
+  expect((await readDoc(page)).elements[0]!.style!.highlight).toBe('#ffff00');
+
+  // 落点在行内段（含 var(--typo-hl) 兜底的那一层）上，而不是 .typo-text 盒子上
+  const painted = await page.evaluate(() => {
+    const span = document.querySelector<HTMLElement>('.paper .typo-text span[data-run]');
+    const box = document.querySelector<HTMLElement>('.paper .typo-text');
+    return {
+      span: span ? getComputedStyle(span).backgroundColor : '',
+      box: box ? getComputedStyle(box).backgroundColor : '',
+    };
+  });
+  expect(painted.span).toBe('rgb(255, 255, 0)');
+  expect(painted.box).not.toBe('rgb(255, 255, 0)');
+
+  // 「无颜色」清掉
+  await page.getByTestId('ribbon-text-highlight').click();
+  await page.getByTestId('ribbon-text-highlight-palette-none').click();
+  expect((await readDoc(page)).elements[0]!.style!.highlight).toBeUndefined();
+});
+
+test('文字阴影开关：开有 shadow 且画布上真的画了，再点关掉', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  await page.getByTestId('ribbon-text-shadow').click();
+  const shadow = (await readDoc(page)).elements[0]!.style!.shadow;
+  expect(shadow?.blur).toBeGreaterThan(0);
+  const css = await page.evaluate(() =>
+    getComputedStyle(document.querySelector('.paper .typo-text')!).textShadow,
+  );
+  expect(css).not.toBe('none');
+
+  await page.getByTestId('ribbon-text-shadow').click();
+  expect((await readDoc(page)).elements[0]!.style!.shadow).toBeUndefined();
+});
+
+test('字符间距菜单：预设与自定义输入框都能改到同一个属性', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  await page.getByTestId('ribbon-letter-spacing').click();
+  await page.getByTestId('ribbon-spacing-8').click();
+  expect((await readDoc(page)).elements[0]!.style!.letterSpacing).toBe(8);
+
+  // 预设之外的任意值走菜单底部的输入框（NumberInput 的 testid 直接挂在 input 上）
+  await page.getByTestId('ribbon-letter-spacing').click();
+  const input = page.getByTestId('ribbon-letter-spacing-custom');
+  await input.fill('3.5');
+  await input.press('Enter');
+  expect((await readDoc(page)).elements[0]!.style!.letterSpacing).toBeCloseTo(3.5, 2);
+});
+
+test('大小写转换：菜单勾选当前项，画布上真的变更了大小写', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  await page.getByTestId('ribbon-text-case').click();
+  await page.getByTestId('ribbon-case-uppercase').click();
+  expect((await readDoc(page)).elements[0]!.style!.textTransform).toBe('uppercase');
+  const css = await page.evaluate(() =>
+    getComputedStyle(document.querySelector('.paper .typo-text')!).textTransform,
+  );
+  expect(css).toBe('uppercase');
+});
+
+test('清除全部格式：选中文本就能用，字形类属性回默认、段落对齐保留', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  // 先改出一身非默认：取消加粗（700 → 400）+ 字体颜色改红
+  await page.getByTestId('ribbon-bold').click();
+  await page.getByTestId('ribbon-text-color').click();
+  await page.getByTestId('ribbon-text-color-palette-std-ff0000').click();
+  expect((await readDoc(page)).elements[0]!.style!.fontWeight).toBe(400);
+
+  await page.getByTestId('typo-clear-format').click();
+  const after = (await readDoc(page)).elements[0]!.style!;
+  expect(after.fontWeight).toBe(700);
+  // 默认字形色是「文字色 1」这个槽位的引用，不是写死的白（见 document.ts）
+  expect(after.color).toBe('@lt1');
+  expect(await domTextColor(page)).toBe('rgb(255, 255, 255)');
+});
+
+test('切换配色方案后，图形填充的取色卡跟着刷新（回归）', async ({ page }) => {
+  /*
+   * 这条守的是「取色卡画的色格」与「选出来的颜色」用的是**同一个**方案。
+   *
+   * 曾经的 bug：颜色控件没有把自己的方案 id 带给取色卡，于是取色卡画的是
+   * **默认**方案的格子，而选中之后颜色按**当前**方案解析 —— 「看着是深蓝、
+   * 选出来是蓝绿」，并且只在切换过配色方案之后才出现，不报任何错。
+   * 根因是「themeId 要每个颜色控件各带一遍」，现在收口在
+   * `ribbon-defs.ts::injectThemeId` 一处，这条用例是它的守卫。
+   */
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await insertShape(page, 'rect');
+  await page.getByTestId('ribbon-tab-shape-format').click();
+
+  const cell = page.getByTestId('ribbon-shape-fill-palette-theme-@accent1');
+  await page.getByTestId('ribbon-shape-fill').click();
+  await expect(cell).toBeVisible();
+  const before = await cell.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(before).toBe('rgb(21, 96, 130)'); // 「Office」的强调色 1
+
+  // 换配色方案。点 tab 会顺带关掉取色卡（外点关闭），不用按 Escape ——
+  // 那个在排版页是「退出选择」，会把选中集清掉，图形格式页随之消失。
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-themes').click();
+  await page.getByTestId('ribbon-themes-opt-office-2007').click();
+
+  // 回到图形格式重开取色卡：色格必须已经是新方案的颜色
+  await page.getByTestId('ribbon-tab-shape-format').click();
+  await page.getByTestId('ribbon-shape-fill').click();
+  await expect(cell).toBeVisible();
+  const after = await cell.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(after).toBe('rgb(79, 129, 189)'); // 「Office 2007-2010」的强调色 1
+});
+
+test('「其他颜色」的原生取色器：拖动（input）不关弹层，确认（change）才关（回归）', async ({ page }) => {
+  /*
+   * 回归：曾经把原生取色器的 `input` 也接进了提交流程 —— 拖动中弹层就被关掉，
+   * 而弹层里的 `<input type=color>` 一被销毁，**原生取色器也跟着消失**，
+   * 颜色根本拖不动（用户报的现象）。
+   *
+   * 原生取色器是浏览器 widget，Playwright 点不到它，所以这里直接对那个
+   * input 派发 DOM 事件 —— 这正是「拖动中 / 确认时」在页面侧的样子。
+   */
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  await page.getByTestId('ribbon-text-color').click();
+  const pop = page.getByTestId('ribbon-text-color-pop');
+  const native = page.getByTestId('ribbon-text-color-palette-native');
+  await expect(pop).toBeVisible();
+  // 「其他颜色…」= 唤起原生取色器（headless 下不弹窗，但路径要走通）
+  await page.getByTestId('ribbon-text-color-palette-more').click();
+
+  // 拖动中的一串 input：弹层必须一直在，否则原生取色器会被连坐关闭
+  await native.evaluate((el) => {
+    const input = el as HTMLInputElement;
+    for (const v of ['#112233', '#445566', '#778899']) {
+      input.value = v;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  });
+  await expect(pop).toBeVisible();
+  // 而且拖动中**不该**改文档 —— 一次确认 = 一笔撤销
+  expect((await readDoc(page)).elements[0]!.style!.color).toBe('@lt1');
+
+  // 确认：这时才提交并关掉取色卡
+  await native.evaluate((el) => {
+    (el as HTMLInputElement).value = '#123456';
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await expect(pop).toHaveCount(0);
+  expect((await readDoc(page)).elements[0]!.style!.color).toBe('#123456');
 });

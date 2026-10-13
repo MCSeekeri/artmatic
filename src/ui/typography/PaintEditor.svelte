@@ -24,6 +24,7 @@
     type ShapePaintPatch,
     type TexturePattern,
   } from '../../typography/document';
+  import { resolveThemeColor } from '../../typography/theme';
   import { tr } from '../../i18n/index.svelte';
 
   interface Props {
@@ -37,8 +38,22 @@
     onpatch: (patch: ShapePaintPatch) => void;
     /** testid 前缀：`${prefix}-kind` / `${prefix}-color` / `${prefix}-stop-pos-0` … */
     prefix: string;
+    /** 当前文档的配色方案 id：颜色可能是 `@accent1` 这样的引用，显示前要解析。 */
+    themeId?: string;
   }
-  const { paint, kindOptions, onkind, onpatch, prefix }: Props = $props();
+  const { paint, kindOptions, onkind, onpatch, prefix, themeId }: Props = $props();
+
+  /**
+   * 颜色 → 可显示的值（把配色方案引用解析成真实 hex）。
+   *
+   * 原生 `<input type="color">` 不认 `@accent1`，不解析的话色块会显示成黑色 ——
+   * 而「看到黑色」正是用户会去改它的理由，这个误导很难被察觉。
+   * 反过来：面板里改色写回的是**裸色**（引用只在取色卡里产生）—— 这是有意的，
+   * 这里是精细调整区，改完就该钉死。
+   */
+  function dc(color: string | undefined, fallback: string): string {
+    return color ? resolveThemeColor(color, themeId) : fallback;
+  }
 
   const kind = $derived(paint?.kind ?? 'none');
   /** 色标（仅渐变有）。**保持文档顺序**，见文件头。 */
@@ -111,7 +126,7 @@
   </Field>
 
   {#if kind === 'solid'}
-    {@render colorRow(tr('typo.propFillSolid'), paint?.kind === 'solid' ? paint.color : '#6f64ef', `${prefix}-color`, (v) =>
+    {@render colorRow(tr('typo.propFillSolid'), dc(paint?.kind === 'solid' ? paint.color : undefined, '#6f64ef'), `${prefix}-color`, (v) =>
       onpatch({ color: v }))}
   {:else if kind === 'linear' || kind === 'radial'}
     {#if kind === 'linear'}
@@ -134,7 +149,7 @@
           <span class="prop-swatch prop-swatch-sm">
             <input
               type="color"
-              value={s.color}
+              value={dc(s.color, '#ffffff')}
               aria-label={tr('typo.propStops')}
               data-testid={`${prefix}-stop-color-${i}`}
               oninput={(e) =>
@@ -179,9 +194,9 @@
         onchange={(v) => onpatch({ pattern: v as TexturePattern })}
       />
     </Field>
-    {@render colorRow(tr('typo.propTextureInk'), paint?.kind === 'texture' ? paint.color : '#6f64ef', `${prefix}-color`, (v) =>
+    {@render colorRow(tr('typo.propTextureInk'), dc(paint?.kind === 'texture' ? paint.color : undefined, '#6f64ef'), `${prefix}-color`, (v) =>
       onpatch({ color: v }))}
-    {@render colorRow(tr('typo.propTextureBg'), paint?.kind === 'texture' ? paint.bg : '#000000', `${prefix}-bg`, (v) =>
+    {@render colorRow(tr('typo.propTextureBg'), dc(paint?.kind === 'texture' ? paint.bg : undefined, '#000000'), `${prefix}-bg`, (v) =>
       onpatch({ color2: v }))}
     <Field label={tr('typo.propTextureScale')} labelWidth={74}>
       <NumberInput

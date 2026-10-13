@@ -18,6 +18,8 @@
   import RibbonColor from './RibbonColor.svelte';
   import RibbonSegment from './RibbonSegment.svelte';
   import RibbonGallery from './RibbonGallery.svelte';
+  import RibbonMenu from './RibbonMenu.svelte';
+  import RibbonThemes from './RibbonThemes.svelte';
   import { itemWidth, type RibbonItemSpec } from './ribbon-model';
 
   interface Props {
@@ -25,7 +27,8 @@
   }
   const { item }: Props = $props();
 
-  const w = $derived(item.width ?? itemWidth(item));
+  // 间隔没有宽度（它吃的是剩余空间），所以不走通用的宽度推算。
+  const w = $derived(item.kind === 'spacer' ? 0 : (item.width ?? itemWidth(item)));
   /** 数字框比按钮窄，减去左右内边距才是控件宽度。 */
   const inner = $derived(Math.max(40, w - 8));
 </script>
@@ -53,10 +56,36 @@
   <RibbonColor
     label={item.label}
     value={item.value}
+    theme={item.themeId}
+    icon={item.icon}
+    size={item.size}
+    allowNone={item.allowNone}
     disabled={item.disabled}
     testid={item.testid}
     onchange={item.onchange}
   />
+{:else if item.kind === 'menu'}
+  <RibbonMenu
+    label={item.label}
+    icon={item.icon}
+    items={item.items}
+    numeric={item.numeric}
+    size={item.size}
+    disabled={item.disabled}
+    testid={item.testid}
+  />
+{:else if item.kind === 'themes'}
+  <RibbonThemes
+    label={item.label}
+    options={item.options}
+    value={item.value}
+    size={item.size}
+    disabled={item.disabled}
+    testid={item.testid}
+    onselect={item.onselect}
+  />
+{:else if item.kind === 'spacer'}
+  <span class="rspacer" aria-hidden="true"></span>
 {:else if item.kind === 'select'}
   <div class="stack" style:--stack-w={`${w}px`}>
     <Select
@@ -73,7 +102,9 @@
       filterPlaceholder={item.filterPlaceholder}
       onchange={item.onchange}
     />
-    <span class="lbl">{item.label}</span>
+    {#if !item.hideLabel}
+      <span class="lbl">{item.label}</span>
+    {/if}
   </div>
 {:else if item.kind === 'number'}
   <div class="stack" style:--stack-w={`${w}px`}>
@@ -92,7 +123,9 @@
       onliveend={item.onliveend}
       onchange={item.onchange}
     />
-    <span class="lbl">{item.label}</span>
+    {#if !item.hideLabel}
+      <span class="lbl">{item.label}</span>
+    {/if}
   </div>
 {:else if item.kind === 'gallery'}
   <RibbonGallery
@@ -112,7 +145,9 @@
       testid={item.testid}
       onchange={item.onchange}
     />
-    <span class="lbl">{item.label}</span>
+    {#if !item.hideLabel}
+      <span class="lbl">{item.label}</span>
+    {/if}
   </div>
 {/if}
 
@@ -142,5 +177,16 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /*
+   * 行内间隔：吃掉剩余宽度。
+   *
+   * `min-width` 不是装饰 —— 两排内容一样长时剩余是 0，没有下限的话这一格
+   * 会塌成 0 宽，两侧的按钮贴在一起（看起来像少了一个间隔）。
+   */
+  .rspacer {
+    flex: 1 1 0;
+    min-width: 6px;
+    align-self: stretch;
   }
 </style>

@@ -1289,6 +1289,47 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
   `const iconData = {...}` 由该包的构建模板写死。**升级这个包之后先跑
   `typography-icon-shapes.test.ts` 的全量守卫**（1800+ 个图标逐个转换、坐标必须落在
   0..100）—— 模板变了的话表现是「选择器里那一格是空的」，没有任何报错。
+- **配色方案：颜色是「引用」而不是值**。`TextStyle.color` / `highlight` /
+  `shadow.color`、`Paint` 的各个色、`Stroke.color`、`boxFill` / `boxStroke` 都可以是
+  `@accent1`（或带明暗变体的 `@accent1.l80`），见 `typography/theme.ts`。这是
+  「换配色方案 ⇒ 用了主题色的元素自动跟着变」的全部机制；从标准色 / 最近使用 /
+  其他颜色进来的**裸 hex 不跟着变**，这就是「仅限于使用了配色的元素」。
+  三条硬纪律：
+  1. **一切颜色的渲染出口都要过 `resolveThemeColor()`** —— 全项目只有两个出口
+     （`css.ts` 的 CSS 声明表 + `render-dom.ts` 的 `<defs>`）。漏一处的表现是
+     「舞台上变了、导出没变」，而且不报错。
+  2. `doc.theme` 是**可选字段**（缺省 = 默认方案），所以**不抬 `SCHEMA_VERSION`** ——
+     与 `groups` / `Paint.opacity` 同一条约定。
+  3. **明暗变体是实测标定的，不是「凭印象调亮度」**：三支规则（常规色走 OOXML 的
+     `lumMod/lumOff`、纯黑纯白走固定灰阶、极亮色走亮度乘系数）的实测依据写在
+     `theme.ts` 的文件头。改算法前先 `node scripts/extract-theme-colors.mjs analyze <取色卡截图>`
+     对照 —— 常规色那 7 列的实测与预测是**逐通道误差 ≤ 1** 的。
+- **文字高亮走 `--typo-hl` 自定义属性下发到行内段**，不是给 `.typo-text` 上色：
+  那个盒子是 flex 容器、撑满整个元素框，背景会连换行处的空白一起填满
+  （看起来是「给文本框刷了底色」而不是「把字涂黄」）。背景**不继承**，所以元素级
+  高亮只能靠变量传给每个 `<span data-run>`；行内覆盖则直接写 `background-color`。
+- **Ribbon 的弹层必须是 `position: fixed`**（`controls/popover.ts` 的纯函数定位）。
+  面板是 `overflow: auto/hidden`（横向滚动 + 固定高度），absolute 弹层会被整个裁掉。
+  取色卡、菜单、下拉、图库全部走这一套。
+- **「开始」的字体区是 PPT 式两排**（`layout: 'rows'` + `size: 'icon'` 的纯图标按钮）：
+  第一排是宽下拉（字体 / 字号 / 字号 ∓ / 清除格式），第二排是字形格式，**行尾**是
+  字体资源（本机字体 / 导入字体）—— 两者之间靠 `{ kind: 'spacer' }` 撑开，两排的
+  右边缘因此天然对齐（间距不定死，改了字号/字体名也不会破坏对齐）。
+  这是 `align-items: stretch` 的直接推论：每行必须撑满组宽，行内的弹性间隔才有
+  空间可吃。宽度口径有**两处必须同源**——
+  `ribbon-model.ts::itemWidth()`（组宽预算）与 `Ribbon.svelte` 在根元素下发的 CSS 变量
+  （`--ribbon-icon-w` 等，值来自 `DENSITY`）。各写一遍的表现是「预算说 26px、按钮实际
+  30px」，整条 Ribbon 的横向排布会慢慢错位。
+- **取色卡的「最近使用的颜色」只记裸色**（`ui/typography/recent-colors.ts`，localStorage、
+  可丢）：把 `@accent1` 混进最近色会让那一行在换方案后显示一堆与主题网格重复、
+  但语义不同的格子。
+- **颜色控件的 `themeId` 由 `ribbon-defs.ts::injectThemeId` 一处注入**，不要在
+  `kind: 'color'` 项上各写一遍。漏掉一处的表现是「取色卡画的是默认方案的色格，
+  而选出来的颜色按当前方案解析」—— 切过配色方案才现形，且不报错。
+- **原生取色器（`<input type="color">`）只接 `change`，不接 `input`**：那个 input
+  活在取色卡的弹层里，而提交动作会关掉弹层 ⇒ input 被销毁 ⇒ **原生取色器被连坐关闭**，
+  颜色根本拖不动（用户报过）。拖动中的实时预览要用手势事务（`live`/`endGesture`）做，
+  不能「每次 `input` 都提交」—— 那还会往撤销栈里塞几十笔。
 
 ### 5.8 导出
 

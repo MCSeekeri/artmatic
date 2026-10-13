@@ -46,6 +46,8 @@ export const SPAN_STYLE_KEYS = [
   'letterSpacing',
   'color',
   'textDecoration',
+  /** 「突出显示颜色」：只给选中的那几个字上底色，是典型的一段字级属性。 */
+  'highlight',
 ] as const;
 
 export type SpanStyleKey = (typeof SPAN_STYLE_KEYS)[number];
@@ -102,8 +104,14 @@ export function normalizeRuns(runs: readonly TextRun[]): TextRun[] {
   return out.length ? out : [{ text: '' }];
 }
 
-/** 元素级样式的可读投影（把 `TextStyle` 里能行内覆盖的那几项取出来）。 */
-function baseSpanStyle(base: TextStyle): Required<Pick<TextStyle, SpanStyleKey>> {
+/**
+ * 元素级样式的可读投影（把 `TextStyle` 里能行内覆盖的那几项取出来）。
+ *
+ * 用映射类型而不是 `Required<Pick<…>>`：`highlight` 在模型里本身就是可选的
+ * （没设高亮 ≠ 高亮成 undefined 这个值），`Required` 会把「没有高亮」这件事
+ * 从类型上抹掉，逼出一堆假的默认值。
+ */
+function baseSpanStyle(base: TextStyle): { [K in SpanStyleKey]: TextStyle[K] } {
   return {
     fontFamily: base.fontFamily,
     fontSize: base.fontSize,
@@ -112,6 +120,7 @@ function baseSpanStyle(base: TextStyle): Required<Pick<TextStyle, SpanStyleKey>>
     letterSpacing: base.letterSpacing,
     color: base.color,
     textDecoration: base.textDecoration,
+    highlight: base.highlight,
   };
 }
 

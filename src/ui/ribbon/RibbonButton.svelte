@@ -7,11 +7,12 @@
    */
   import Icon from '../Icon.svelte';
   import type { IconName } from '../icons';
+  import type { RibbonItemSize } from './ribbon-model';
 
   interface Props {
     icon: IconName;
     label: string;
-    size?: 'large' | 'small';
+    size?: RibbonItemSize;
     active?: boolean;
     disabled?: boolean;
     testid?: string;
@@ -19,20 +20,25 @@
   }
   const { icon, label, size = 'large', active = false, disabled = false, testid, onactivate }: Props =
     $props();
+
+  /** 图标边长按档位：大按钮 18、紧凑 13、纯图标 15（没有文字，可以稍微大一点）。 */
+  const iconSize = $derived(size === 'large' ? 18 : size === 'small' ? 13 : 15);
 </script>
 
 <button
   type="button"
   class="rbtn"
   class:small={size === 'small'}
+  class:icon={size === 'icon'}
   class:active
   data-testid={testid}
+  title={label}
   {disabled}
   aria-pressed={active}
   onclick={onactivate}
 >
-  <Icon name={icon} size={size === 'small' ? 13 : 18} />
-  <span class="lbl">{label}</span>
+  <Icon name={icon} size={iconSize} />
+  {#if size !== 'icon'}<span class="lbl">{label}</span>{/if}
 </button>
 
 <style>
@@ -59,6 +65,14 @@
     min-width: var(--ribbon-btn-small-w, 32px);
     height: 24px;
     padding: 0 6px;
+  }
+  /* 纯图标档：方按钮、无文字。名字仍是 `label`（tooltip 与无障碍名靠它）。 */
+  .rbtn.icon {
+    flex-direction: row;
+    gap: 0;
+    width: var(--ribbon-icon-w, 26px);
+    height: var(--ribbon-icon-h, 24px);
+    padding: 0;
   }
   .rbtn:hover:not(:disabled) {
     background: var(--ribbon-btn-bg-hover);

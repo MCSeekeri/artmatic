@@ -25,10 +25,24 @@
   import { editorState } from './editor-state.svelte';
   import { createTypographyActions } from './actions';
   import { MIX_BLENDS, type MixBlend, type Paint, type Stroke } from '../../typography/document';
+  import { resolveThemeColor } from '../../typography/theme';
   import { tr } from '../../i18n/index.svelte';
 
   /** actions 只是回调的集合，无内部状态；建一次就够（与 TypographyEditor 同款）。 */
   const actions = createTypographyActions();
+
+  /** 当前配色方案 id。传下去给 PaintEditor，也用来解析这里的两处描边色。 */
+  const themeId = $derived(editorState.doc?.theme);
+
+  /**
+   * 颜色 → 可显示的值（配色方案引用解析成真实 hex）。
+   *
+   * 原生 `<input type="color">` 不认 `@accent1`，不解析就会把色块画成黑色 ——
+   * 看起来像「颜色被改坏了」，而实际只是没解析。见 PaintEditor 的同名说明。
+   */
+  function dc(color: string | undefined, fallback: string): string {
+    return color ? resolveThemeColor(color, themeId) : fallback;
+  }
 
   /** 线型选项。与 Ribbon 的同一套值，标签取自本面板的文案。 */
   const LINE_OPTIONS = [
@@ -191,12 +205,13 @@
           paint={model.fill}
           kindOptions={SHAPE_KIND_OPTIONS}
           prefix="prop-fill"
+          {themeId}
           onkind={(k) => actions.setShapePaint({ kind: k })}
           onpatch={(p) => actions.setShapePaint(p)}
         />
 
         <h4 class="prop-sec">{tr('typo.propStroke')}</h4>
-        {@render colorRow(tr('typo.propStrokeColor'), model.stroke?.color ?? '#ffffff', 'prop-stroke-color', (v) =>
+        {@render colorRow(tr('typo.propStrokeColor'), dc(model.stroke?.color, '#ffffff'), 'prop-stroke-color', (v) =>
           actions.setShapeStroke(v))}
         <Field label={tr('typo.propStrokeWidth')} labelWidth={74}>
           <NumberInput
@@ -225,12 +240,13 @@
           paint={model.boxFill}
           kindOptions={SHAPE_KIND_OPTIONS}
           prefix="prop-box"
+          {themeId}
           onkind={(k) => actions.setTextBoxFill({ kind: k })}
           onpatch={(p) => actions.setTextBoxFill(p)}
         />
 
         <h4 class="prop-sec">{tr('typo.propTextBorder')}</h4>
-        {@render colorRow(tr('typo.propStrokeColor'), model.boxStroke?.color ?? '#ffffff', 'prop-box-stroke-color', (v) =>
+        {@render colorRow(tr('typo.propStrokeColor'), dc(model.boxStroke?.color, '#ffffff'), 'prop-box-stroke-color', (v) =>
           actions.setTextBoxStroke({ color: v }))}
         <Field label={tr('typo.propStrokeWidth')} labelWidth={74}>
           <NumberInput
@@ -259,6 +275,7 @@
           paint={model.glyphFill}
           kindOptions={GLYPH_KIND_OPTIONS}
           prefix="prop-glyph"
+          {themeId}
           onkind={(k) => (k === 'none' ? actions.clearTextFill() : actions.setTextFill({ kind: k }))}
           onpatch={(p) => actions.setTextFill(p)}
         />

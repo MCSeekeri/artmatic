@@ -36,6 +36,7 @@ import {
   textureMotifSpec,
 } from './css';
 import { normalizeRuns, runsSignature, type TextRun, type TextSpanStyle } from './rich-text';
+import { resolveThemeColor, themeById, type TypographyTheme } from './theme';
 import { groupBox } from './groups';
 import {
   DOC_ROOT_ATTR,
@@ -91,6 +92,15 @@ export function docSignature(doc: TypographyDocument | null): string {
 }
 
 export function buildDocDom(doc: TypographyDocument, opts: BuildDocOptions = {}): HTMLElement {
+  /*
+   * 配色方案在**顶层查一次表**，往下逐层传对象。
+   *
+   * 不把 `doc.theme` 这一路透传下去，是因为解析发生在每个颜色上（一帧几十次），
+   * 每次都 `themeById()` 查一遍 Map 是白白多出来的。也不做成模块级缓存：
+   * 同一进程里可以同时存在多个文档（舞台 + 光栅化 host + lab），
+   * 缓存住会造成「A 文档的颜色跑进 B 文档」这种极难查的串味。
+   */
+  const theme = themeById(doc.theme);
   const root = document.createElement('div');
   root.className = 'typo-doc';
   root.setAttribute(DOC_ROOT_ATTR, '1');
@@ -120,35 +130,43 @@ export function buildDocDom(doc: TypographyDocument, opts: BuildDocOptions = {})
       shellDone.add(el.groupId);
       const g = (doc.groups ?? []).find((x) => x.id === el.groupId);
       if (g) {
-        const shell = buildGroupShell(doc, g);
+        const shell = buildGroupShell(doc, g, theme);
         if (shell) root.appendChild(shell);
       }
     }
-    const node = buildElement(el, opts);
+    const node = buildElement(el, opts, theme);
     if (node) root.appendChild(node);
   }
   return root;
 }
 
-function buildGroupShell(doc: TypographyDocument, g: TypographyGroup): HTMLElement | null {
+function buildGroupShell(
+  doc: TypographyDocument,
+  g: TypographyGroup,
+  theme: TypographyTheme,
+): HTMLElement | null {
   const box = groupBox(doc, g);
   // 没有任何可见成员就不画 —— 否则会在空处留一个孤零零的框。
   if (!box) return null;
   const shell = document.createElement('div');
   shell.className = 'typo-group';
   shell.setAttribute(GROUP_ID_ATTR, g.id);
-  applyDecls(shell, groupStyle(g, box));
+  applyDecls(shell, groupStyle(g, box, theme));
   return shell;
 }
 
-function buildElement(el: TypographyElement, opts: BuildDocOptions): HTMLElement | null {
+function buildElement(
+  el: TypographyElement,
+  opts: BuildDocOptions,
+  theme: TypographyTheme,
+): HTMLElement | null {
   const shell = document.createElement('div');
   shell.className = `typo-el typo-el-${el.kind}`;
   shell.setAttribute(EL_ID_ATTR, el.id);
   applyDecls(shell, elementStyle(el));
   // 文本框背景 / 边框画在**外壳**上，在文字之下；字形填充在内层另一个节点
   // （`background-clip: text`），两者互不干扰 —— 见 css.ts::textBoxStyle。
-  if (el.kind === 'text') applyDecls(shell, textBoxStyle(el));
+  if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
 
   // 动画层：doc.elements[i].animations 的第一个在最外层。
   // 嵌套而不是并列，是因为多个动画会各自写 transform，并列只能有一个生效。
@@ -162,7 +180,7 @@ function buildElement(el: TypographyElement, opts: BuildDocOptions): HTMLElement
     cursor = layer;
   }
 
-  const content = buildContent(el, opts);
+  const content = buildContent(el, opts, theme);
   if (!content) return null;
   cursor.appendChild(content);
   return shell;
@@ -185,15 +203,19 @@ function textFillOf(el: TextElement): Paint | undefined {
   return el.fill;
 }
 
-function buildContent(el: TypographyElement, opts: BuildDocOptions): Element | null {
+function buildContent(
+  el: TypographyElement,
+  opts: BuildDocOptions,
+  theme: TypographyTheme,
+): Element | null {
   if (el.kind === 'text') {
     const box = document.createElement('div');
     box.className = 'typo-text';
-    applyDecls(box, textStyle(el.style));
+    applyDecls(box, textStyle(el.style, theme));
     // 字形填充（渐变 / 径向 / 纹理）。放在 textStyle **之后** —— 它要能覆盖
     // textStyle 里的 `color`（裁切填充时字形本身是透明的）。
-    applyDecls(box, textFillStyle(textFillOf(el)));
-    applyRuns(box, el.runs);
+    applyDecls(box, textFillStyle(textFillOf(el), theme));
+    applyRuns(box, el.runs, theme);
     if (!opts.forRaster) {
       // 舞台上的双击进入编辑由编辑器自己接管（设置 contenteditable）。
       // 这里只标出可编辑意图，不直接开 —— 否则选择手势会被文本框吃掉。
@@ -210,7 +232,7 @@ function buildContent(el: TypographyElement, opts: BuildDocOptions): Element | n
     svg.style.width = '100%';
     svg.style.height = '100%';
     svg.style.overflow = 'visible';
-    syncShape(svg, el);
+    syncShape(svg, el, theme);
     return svg;
   }
 
@@ -254,9 +276,10 @@ export function syncDocDom(host: HTMLElement, doc: TypographyDocument, opts: Bui
     : host.querySelector<HTMLElement>(`[${DOC_ROOT_ATTR}]`);
   if (!root) return;
 
+  const theme = themeById(doc.theme);
   applyDecls(root, docStyle(doc));
   syncStyleSheet(root, doc);
-  syncGroupShells(root, doc);
+  syncGroupShells(root, doc, theme);
 
   const shells = new Map<string, HTMLElement>();
   for (const child of Array.from(root.children)) {
@@ -268,7 +291,7 @@ export function syncDocDom(host: HTMLElement, doc: TypographyDocument, opts: Bui
   for (const el of doc.elements) {
     const shell = shells.get(el.id);
     if (!shell) continue; // 结构差异由 docSignature 触发重建，这里不做增删
-    syncElement(shell, el, opts);
+    syncElement(shell, el, opts, theme);
   }
 }
 
@@ -279,7 +302,7 @@ export function syncDocDom(host: HTMLElement, doc: TypographyDocument, opts: Bui
  * **几何与样式**：拖一个成员时外壳要跟着长大/移动，而签名没变、不会重建。
  * 漏掉这一步的表现是「拖动组里的元素，组的背景框留在原地」。
  */
-function syncGroupShells(root: HTMLElement, doc: TypographyDocument): void {
+function syncGroupShells(root: HTMLElement, doc: TypographyDocument, theme: TypographyTheme): void {
   const shells = new Map<string, HTMLElement>();
   for (const child of Array.from(root.children)) {
     const gid = (child as HTMLElement).getAttribute(GROUP_ID_ATTR);
@@ -296,7 +319,7 @@ function syncGroupShells(root: HTMLElement, doc: TypographyDocument): void {
       continue;
     }
     shell.style.display = '';
-    applyDecls(shell, groupStyle(g, box));
+    applyDecls(shell, groupStyle(g, box, theme));
   }
 }
 
@@ -318,10 +341,15 @@ function syncStyleSheet(root: HTMLElement, doc: TypographyDocument): void {  // 
   }
 }
 
-function syncElement(shell: HTMLElement, el: TypographyElement, opts: BuildDocOptions): void {
+function syncElement(
+  shell: HTMLElement,
+  el: TypographyElement,
+  opts: BuildDocOptions,
+  theme: TypographyTheme,
+): void {
   applyDecls(shell, elementStyle(el));
   // 与 buildElement 同一份声明：就地同步时切回「无填充」由它复位。
-  if (el.kind === 'text') applyDecls(shell, textBoxStyle(el));
+  if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
 
   // 钻进动画层，停在内容节点上。
   let cursor: Element | null = shell.firstElementChild;
@@ -335,9 +363,9 @@ function syncElement(shell: HTMLElement, el: TypographyElement, opts: BuildDocOp
   if (!content) return;
 
   if (el.kind === 'text') {
-    applyDecls(content, textStyle(el.style));
+    applyDecls(content, textStyle(el.style, theme));
     // 与 buildContent 同一份声明：切回纯色时这里负责**复位**上一次的裁切。
-    applyDecls(content, textFillStyle(textFillOf(el)));
+    applyDecls(content, textFillStyle(textFillOf(el), theme));
     const editing = opts.editingId === el.id;
     /*
      * 编辑态与文档内容**不能同时写**：同步每帧都跑，覆写 textContent 会把用户
@@ -348,13 +376,13 @@ function syncElement(shell: HTMLElement, el: TypographyElement, opts: BuildDocOp
      * 变了才重建（应用了行内格式属于这一类，编辑器随后把光标还原）。
      */
     const sig = runsSignature(el.runs);
-    if (content.getAttribute(RUNS_SIG_ATTR) !== sig) applyRuns(content, el.runs);
+    if (content.getAttribute(RUNS_SIG_ATTR) !== sig) applyRuns(content, el.runs, theme);
     applyEditingState(content, editing);
     return;
   }
 
   if (el.kind === 'shape') {
-    syncShape(content as unknown as SVGSVGElement, el);
+    syncShape(content as unknown as SVGSVGElement, el, theme);
     return;
   }
 
@@ -376,7 +404,7 @@ function syncElement(shell: HTMLElement, el: TypographyElement, opts: BuildDocOp
  * authored）时才带 scale 变换。固定结构省掉了「条件插入/删除子节点」这类
  * 容易漏掉的分支。
  */
-export function syncShape(svg: SVGSVGElement, el: ShapeElement): void {
+export function syncShape(svg: SVGSVGElement, el: ShapeElement, theme?: TypographyTheme): void {
   const geo = shapeGeometry(el.shape, {
     w: el.frame.w,
     h: el.frame.h,
@@ -389,7 +417,7 @@ export function syncShape(svg: SVGSVGElement, el: ShapeElement): void {
   });
   svg.setAttribute('viewBox', geo.viewBox);
 
-  syncPaintDefs(svg, el, geo.scaleFrom100 === true);
+  syncPaintDefs(svg, el, geo.scaleFrom100 === true, theme);
 
   // 手写遍历而不是 `querySelector(':scope > g')`：后者在 SVG 子树里的支持
   // 各浏览器不一致，而这里的结构是固定的（defs? + g），手扫更省心。
@@ -416,7 +444,9 @@ export function syncShape(svg: SVGSVGElement, el: ShapeElement): void {
     g.appendChild(path);
   }
   path.setAttribute('d', geo.d);
-  for (const [k, v] of Object.entries(shapePaintAttrs(el, geo.evenOdd))) path.setAttribute(k, v);
+  for (const [k, v] of Object.entries(shapePaintAttrs(el, geo.evenOdd, theme))) {
+    path.setAttribute(k, v);
+  }
 }
 
 /* ------------------------------------------------------------ 填充的 <defs> */
@@ -433,7 +463,12 @@ export function syncShape(svg: SVGSVGElement, el: ShapeElement): void {
  * 也不用跟 `viewBox` 的单位换算打交道。纹理用 `userSpaceOnUse`，
  * 因为「每 20px 一个点」这种周期必须落在**文档像素**上才有意义。
  */
-function syncPaintDefs(svg: SVGSVGElement, el: ShapeElement, scaleFrom100: boolean): void {
+function syncPaintDefs(
+  svg: SVGSVGElement,
+  el: ShapeElement,
+  scaleFrom100: boolean,
+  theme?: TypographyTheme,
+): void {
   const needs = paintNeedsDefs(el.fill);
   let defs = svg.firstElementChild as SVGDefsElement | null;
   if (!defs || defs.tagName.toLowerCase() !== 'defs') defs = null;
@@ -475,7 +510,7 @@ function syncPaintDefs(svg: SVGSVGElement, el: ShapeElement, scaleFrom100: boole
     for (const stop of sortedStops(paint.stops)) {
       const node = document.createElementNS(SVG_NS, 'stop');
       node.setAttribute('offset', String(stop.offset));
-      node.setAttribute('stop-color', stop.color);
+      node.setAttribute('stop-color', resolveThemeColor(stop.color, theme));
       grad.appendChild(node);
     }
     defs.appendChild(grad);
@@ -501,10 +536,11 @@ function syncPaintDefs(svg: SVGSVGElement, el: ShapeElement, scaleFrom100: boole
   bg.setAttribute('y', '0');
   bg.setAttribute('width', String(cell));
   bg.setAttribute('height', String(cell));
-  bg.setAttribute('fill', paint.bg);
+  bg.setAttribute('fill', resolveThemeColor(paint.bg, theme));
   pat.appendChild(bg);
 
-  for (const motif of textureMotifs(paint.pattern, cell, thick, paint.color)) pat.appendChild(motif);
+  const ink = resolveThemeColor(paint.color, theme);
+  for (const motif of textureMotifs(paint.pattern, cell, thick, ink)) pat.appendChild(motif);
   defs.appendChild(pat);
 }
 
@@ -555,7 +591,7 @@ export function sortedStops(stops: PaintStop[]): PaintStop[] {
  * 没有覆盖的段**也**包一层 span：结构统一之后读回来不必分情况，
  * 而「有没有覆盖」这件事本来就写在 `SPAN_ATTR` 里。
  */
-export function applyRuns(box: HTMLElement, runs: readonly TextRun[]): void {
+export function applyRuns(box: HTMLElement, runs: readonly TextRun[], theme?: TypographyTheme): void {
   /*
    * 文本段装在**一个内层盒子**里，不是直接挂在 `.typo-text` 下。
    *
@@ -586,7 +622,7 @@ export function applyRuns(box: HTMLElement, runs: readonly TextRun[]): void {
   for (const run of runs) {
     const span = document.createElement('span');
     span.setAttribute(SPAN_ATTR, JSON.stringify(run.style ?? {}));
-    applyDecls(span, spanStyle(run.style));
+    applyDecls(span, spanStyle(run.style, theme));
     span.textContent = run.text;
     target.appendChild(span);
   }

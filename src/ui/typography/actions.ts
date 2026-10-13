@@ -19,12 +19,14 @@ import {
   createImageElement,
   createShapeElement,
   createTextElement,
+  defaultTextStyle,
   type ImageElement,
   type MixBlend,
   type ShapeElement,
   type ShapePaintPatch,
   type Stroke,
   type TextStyle,
+  type TextStyleShadow,
   type TextureFrame,
   type TypographyDocument,
   type TypographyElement,
@@ -69,6 +71,7 @@ import { booleanOp, multiToShape, shapeToMultiPolygon, type BoolOp } from '../..
 import {
   applySpanStyle,
   clearSpanStyle as clearRunsSpanStyle,
+  normalizeRuns,
   plainTextOf,
   SPAN_STYLE_KEYS,
   uniformSpanValue,
@@ -165,7 +168,17 @@ function writeTextProp<K extends keyof TextStyle>(
   key: K,
   value: TextStyle[K],
 ): void {
-  for (const el of onlyText(doc)) el.style = { ...el.style, [key]: value };
+  for (const el of onlyText(doc)) {
+    const next: TextStyle = { ...el.style, [key]: value };
+    /*
+     * `undefined` 的语义是**删掉这个键**，不是「把它设成 undefined」。
+     * 可选字段（highlight / shadow）靠它表达「没有」：留一个值为 undefined
+     * 的键虽然序列化时也会被丢掉，但它在 `Object.keys` 里是个幽灵 ——
+     * 「这段有没有高亮」这类判断会开始依赖「是 undefined 还是不存在」。
+     */
+    if (value === undefined) delete (next as unknown as Record<string, unknown>)[key as string];
+    el.style = next;
+  }
 }
 
 /** 对齐目标框：画布，或选区外接框。 */
@@ -202,6 +215,34 @@ export interface TypographyActions {
   setTextAlign(value: TextStyle['align']): void;
   setVAlign(value: TextStyle['vAlign']): void;
   toggleTextFlag(key: 'bold' | 'italic' | 'underline' | 'strike'): void;
+  /**
+   * 文字阴影的总开关。`undefined` = 去掉阴影。
+   *
+   * 独立一个动作而不是塞进 `setTextStyle`：阴影是个对象，而 `setTextStyle`
+   * 的键值语义（还能按行内覆盖）对它是错的 —— 阴影**只有元素级**
+   * （见 `SPAN_STYLE_KEYS`：同一行里两种阴影谁也画不对）。
+   */
+  setTextShadow(shadow: TextStyleShadow | undefined): void;
+  /**
+   * 「突出显示颜色」。`undefined` = 去掉高亮。
+   *
+   * 与 `setTextStyle('highlight', v)` 的差别只在**清除**：那边 `undefined`
+   * 是「这一项不动」（补丁语义），清不掉已经设好的高亮。这里显式表达
+   * 「删掉这条覆盖 / 删掉这个键」，所以得单独一个动作。
+   */
+  setTextHighlight(color: string | undefined): void;
+  /**
+   * 「清除全部格式」。
+   *
+   * 有行内选区 ⇒ 清那一段的覆盖（`clearSpanFormats`）；否则把选中文本元素的
+   * **字形类**属性恢复默认。段落级属性（行高 / 对齐 / 竖排）**保留** ——
+   * 它们是版式决定，不是「格式」，清掉会让整块文字的排版塌回默认。
+   */
+  clearTextFormatting(): void;
+
+  /* 配色方案 */
+  /** 切换文档的配色方案（用了主题色的元素会跟着变）。 */
+  setTheme(id: string): void;
 
   /* 插入 */
   addText(): void;
@@ -486,6 +527,76 @@ export function createTypographyActions(): TypographyActions {
       // 两种装饰共用一个 CSS 属性，所以「当前是另一种装饰」时直接换成新的，
       // 而不是先取消——用户的意图是「要这个」，不是「不要那个」。
       this.setTextStyle('textDecoration', v === want ? 'none' : want);
+    },
+
+    setTextShadow(shadow) {
+      editorState.commit(tr('typo.undo.textShadow'), (doc) => {
+        for (const el of onlyText(doc)) {
+          const next: TextStyle = { ...el.style };
+          if (shadow) next.shadow = { ...shadow };
+          else delete next.shadow;
+          el.style = next;
+        }
+      });
+    },
+
+    setTextHighlight(color) {
+      const r = textSpanRange();
+      if (r) {
+        editorState.commit(tr('typo.undo.highlight'), (d) => {
+          const el = d.elements.find((x) => x.id === r.elId);
+          if (el && el.kind === 'text') {
+            // `null`（不是 undefined）= 删掉这条行内覆盖，回到元素级。
+            el.runs = applySpanStyle(el.runs, r.start, r.end, { highlight: color ?? null });
+          }
+        });
+        return;
+      }
+      editorState.commit(tr('typo.undo.highlight'), (doc) => {
+        for (const el of onlyText(doc)) {
+          const next: TextStyle = { ...el.style };
+          if (color) next.highlight = color;
+          else delete next.highlight;
+          el.style = next;
+        }
+      });
+    },
+
+    clearTextFormatting() {
+      // 有行内选区时，「清除格式」的语义就是清那一段的覆盖 —— 与旧行为一致。
+      if (this.hasSpanRange()) {
+        this.clearSpanFormats();
+        return;
+      }
+      editorState.commit(tr('typo.undo.clearFormat'), (doc) => {
+        const base = defaultTextStyle(doc.size);
+        for (const el of onlyText(doc)) {
+          const next: TextStyle = {
+            ...el.style,
+            fontFamily: base.fontFamily,
+            fontSize: base.fontSize,
+            fontWeight: base.fontWeight,
+            fontStyle: base.fontStyle,
+            letterSpacing: base.letterSpacing,
+            color: base.color,
+            textDecoration: base.textDecoration,
+            textTransform: base.textTransform,
+          };
+          delete next.highlight;
+          delete next.shadow;
+          el.style = next;
+          // 字形填充（渐变 / 纹理）也是「格式」，一并清掉。
+          delete el.fill;
+          // 行内覆盖整段丢掉：清格式之后不该有任何一段还留着旧样式。
+          el.runs = normalizeRuns(el.runs.map((r) => ({ text: r.text })));
+        }
+      });
+    },
+
+    setTheme(id) {
+      editorState.commit(tr('typo.undo.theme'), (doc) => {
+        doc.theme = id;
+      });
     },
 
     /* ---------------------------------------------------------- 插入 */

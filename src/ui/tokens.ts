@@ -127,6 +127,10 @@ export const DENSITY = {
   ribbonBtnH: 56,
   /** small 按钮：只放得下一个图标加短文字的紧凑项。 */
   ribbonBtnSmallW: 32,
+  /** 纯图标按钮（字体区第二排的 B / I / U / S 那种，宽高比接近正方形）。 */
+  ribbonIconW: 26,
+  /** 图标按钮高。与 --control-h 无关：它是按钮而不是输入框。 */
+  ribbonIconH: 24,
 } as const;
 
 /* ------------------------------------------------------------ primitive */

@@ -7,12 +7,13 @@
    */
   import RibbonButton from './RibbonButton.svelte';
   import type { IconName } from '../icons';
+  import type { RibbonItemSize } from './ribbon-model';
 
   interface Props {
     icon: IconName;
     label: string;
     active: boolean;
-    size?: 'large' | 'small';
+    size?: RibbonItemSize;
     disabled?: boolean;
     testid?: string;
     onchange: (active: boolean) => void;

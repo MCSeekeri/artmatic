@@ -17,6 +17,7 @@
 import { newId } from '../core/schema';
 import type { ElementAnimation } from './animation';
 import { runsFromText, type TextRun } from './rich-text';
+import { themeRef } from './theme';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
@@ -209,6 +210,32 @@ export interface TypographyGroup {
   padding: number;
 }
 
+/**
+ * 文字阴影。
+ *
+ * 三个尺寸都是**字号倍数**而不是 px：`resizeDocument` 会把字号按比例缩放，
+ * 跟着字号走的阴影自动一起缩；写死 px 的话，「1080 上刚好的阴影」在 720 上
+ * 会糊成一团。倍数还让不同字号的观感一致（大标题的阴影不该是一条细线）。
+ *
+ * 只有一层、四个参数是刻意的：Office 的「文字效果」里那套多层发光/倒影属于
+ * 「有人真的要再说」的范畴，而单层阴影覆盖了绝大多数用法。
+ */
+export interface TextStyleShadow {
+  /** 阴影色。**支持配色方案引用**（`@dk1`、`@accent1.l40`），见 theme.ts。 */
+  color: string;
+  /** 水平偏移，字号倍数（0.04 = 字号的 4%）。 */
+  dx: number;
+  /** 垂直偏移，字号倍数。 */
+  dy: number;
+  /** 模糊半径，字号倍数。0 = 硬边。 */
+  blur: number;
+}
+
+/** 默认阴影：向右下偏一点、带轻微模糊（与 Office 的默认文字阴影观感一致）。 */
+export function defaultTextShadow(): TextStyleShadow {
+  return { color: '#000000', dx: 0, dy: 0.045, blur: 0.09 };
+}
+
 export interface TextStyle {
   fontFamily: string;
   /** px */
@@ -223,9 +250,21 @@ export interface TextStyle {
   align: 'left' | 'center' | 'right' | 'justify';
   /** 框内垂直对齐 */
   vAlign: 'top' | 'middle' | 'bottom';
+  /** 字形色。**可以是配色方案引用**（`@accent1`），见 theme.ts。 */
   color: string;
   textDecoration: 'none' | 'underline' | 'line-through';
   textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+  /**
+   * 文字**高亮底色**（Office 的「突出显示颜色」）。缺省 = 不高亮。
+   *
+   * 与 `TextElement.boxFill`（文本框背景）不是一回事：那个铺满整块框，
+   * 这个只跟着字形走。实现落在**行内段的 background-color** 上
+   * （见 css.ts::textStyle 的 `--typo-hl` 变量），不是给 `.typo-text` 上色 ——
+   * 那个盒子是 flex 容器，背景会连换行处的空白一起填满。
+   */
+  highlight?: string;
+  /** 文字阴影。缺省 = 无阴影。 */
+  shadow?: TextStyleShadow;
   /** M4 预留；CSS text-autospace 普及前恒为 'none'。 */
   textAutospace?: 'none' | 'normal';
   writingMode: 'horizontal-tb' | 'vertical-rl';
@@ -355,6 +394,13 @@ export interface TypographyDocument {
    * （不做 schema 迁移 —— 缺省语义就是「没有组合」，迁移反而多一个会失败的步骤）。
    */
   groups?: TypographyGroup[];
+  /**
+   * 配色方案 id（见 theme.ts）。
+   *
+   * **可选**：老工程没有这个键，缺省 = 默认方案 —— 与上面 `groups` 同一条约定
+   * （缺省语义明确的可选字段不进 SCHEMA_VERSION）。
+   */
+  theme?: string;
 }
 
 /** 层级调整操作。与 geometry.ts 无关，所以放在文档模型这边。 */
@@ -431,7 +477,14 @@ export function defaultTextStyle(size: Size): TextStyle {
     lineHeight: 1.2,
     align: 'center',
     vAlign: 'middle',
-    color: '#ffffff',
+    /*
+     * 默认字形色是**「文字色 1」这个槽位的引用**，不是写死的白。
+     *
+     * 与 Office 一致（新建文字默认用主题的文字色），也让「换配色方案」对
+     * 默认文字成立 —— 今天 23 个内置方案的 lt1 都是纯白，所以逐像素结果
+     * 与写死 `#ffffff` 完全相同；但那是数据巧合，不该写进模型。
+     */
+    color: themeRef('lt1'),
     textDecoration: 'none',
     textTransform: 'none',
     textAutospace: 'none',

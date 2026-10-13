@@ -14,6 +14,7 @@
   import RibbonGroup from './RibbonGroup.svelte';
   import RibbonItem from './RibbonItem.svelte';
   import { resolveVisibleTabs, type RibbonTabDef } from './ribbon-model';
+  import { DENSITY } from '../tokens';
   import { tr } from '../../i18n/index.svelte';
 
   interface Props {
@@ -90,6 +91,11 @@
   文本输入（字号、字距）必须能聚焦，所以对 input / textarea 放行；
   那种情况下靠 editorState 保留 textRange 兜住（见它的注释）。
 -->
+<!--
+  尺寸口径统一在**这里**下发 CSS 变量：`ribbon-model.ts` 的 `itemWidth()`（组的宽度
+  预算）与按钮自己的 `width` 必须同源，两处各写一遍的话「预算说 26px、按钮实际
+  30px」这种偏差会让整条 Ribbon 的横向排布慢慢错位。值全部来自 `DENSITY`。
+-->
 <div
   class="ribbon"
   role="toolbar"
@@ -97,6 +103,12 @@
   // -1：不进 Tab 序（面板里的控件自己排），但满足 toolbar 角色的可达性要求。
   tabindex="-1"
   data-testid="ribbon"
+  style:--ribbon-btn-w={`${DENSITY.ribbonBtnW}px`}
+  style:--ribbon-btn-h={`${DENSITY.ribbonBtnH}px`}
+  style:--ribbon-btn-small-w={`${DENSITY.ribbonBtnSmallW}px`}
+  style:--ribbon-icon-w={`${DENSITY.ribbonIconW}px`}
+  style:--ribbon-icon-h={`${DENSITY.ribbonIconH}px`}
+  style:--ribbon-menu-icon-w={`${DENSITY.ribbonIconW + 4}px`}
   onmousedown={(e) => {
     const t = e.target as HTMLElement | null;
     if (!t?.closest('input, textarea')) e.preventDefault();
@@ -127,9 +139,19 @@
           layout={group.layout}
           columns={group.layout === 'grid' ? Math.ceil(group.items.length / 2) : undefined}
         >
-          {#each group.items as item (item.id)}
-            <RibbonItem {item} />
-          {/each}
+          {#if group.layout === 'rows' && group.rows}
+            {#each group.rows as row, ri (ri)}
+              <div class="ribbon-row">
+                {#each row as item (item.id)}
+                  <RibbonItem {item} />
+                {/each}
+              </div>
+            {/each}
+          {:else}
+            {#each group.items as item (item.id)}
+              <RibbonItem {item} />
+            {/each}
+          {/if}
         </RibbonGroup>
       {/each}
     {/if}
@@ -180,6 +202,13 @@
   }
   .r-tab.contextual[data-active='true'] {
     border-top-color: var(--accent);
+  }
+
+  /* `layout: 'rows'` 的一行。间距比组内列间距略小：同一排的按钮是一件事。 */
+  .ribbon-row {
+    display: flex;
+    align-items: center;
+    gap: 1px;
   }
 
   .ribbon-body {

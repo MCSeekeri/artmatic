@@ -9,10 +9,11 @@
  * actions 不认识按钮，两边都只通过这一层对接。
  */
 
-import type { RibbonTabDef } from '../ribbon/ribbon-model';
+import type { RibbonItemSpec, RibbonTabDef } from '../ribbon/ribbon-model';
 import {
   DEFAULT_PAINT_A,
   MIX_BLENDS,
+  defaultTextShadow,
   normalizeStops,
   type ImageElement,
   type MixBlend,
@@ -24,6 +25,8 @@ import {
   type TypographyElement,
   type TypographyGroup,
 } from '../../typography/document';
+import { BUILTIN_THEMES, themeById } from '../../typography/theme';
+import type { MessageKey } from '../../i18n/locales';
 import { ANIM_PRESETS, type AnimTiming } from '../../typography/animation';
 import { GRID_LIMITS, type TypoGridPrefs } from '../../typography/grid';
 import {
@@ -90,6 +93,24 @@ export interface TypographyRibbonInput {
 
 const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
 const FONT_SIZES = [12, 16, 20, 24, 32, 40, 48, 64, 72, 96, 128, 160, 200];
+
+/** 字符间距预设（px）。档位与 Office 的「很紧 / 紧密 / 常规 / 疏松 / 很松 / 更松」对齐。 */
+const SPACING_PRESETS: { value: number; labelKey: MessageKey }[] = [
+  { value: -4, labelKey: 'rib.spacingVeryTight' },
+  { value: -2, labelKey: 'rib.spacingTight' },
+  { value: 0, labelKey: 'rib.spacingNormal' },
+  { value: 2, labelKey: 'rib.spacingLoose' },
+  { value: 4, labelKey: 'rib.spacingVeryLoose' },
+  { value: 8, labelKey: 'rib.spacingWider' },
+];
+
+/** 大小写转换的四个选项（模型里 `textTransform` 能表达的四种）。 */
+const CASE_OPTIONS: { value: TextStyle['textTransform']; labelKey: MessageKey }[] = [
+  { value: 'none', labelKey: 'rib.caseNone' },
+  { value: 'capitalize', labelKey: 'rib.caseCapitalize' },
+  { value: 'uppercase', labelKey: 'rib.caseUpper' },
+  { value: 'lowercase', labelKey: 'rib.caseLower' },
+];
 
 /**
  * 字号阶梯上的相邻档（字号 ∓/+ 按钮用）。
@@ -221,9 +242,6 @@ export function buildTypographyTabs(
     return text.style[key];
   }
 
-  /** 有行内选区 ⇒ 这次改的是一段字（「清除格式」按钮据此显示）。 */
-  const hasSpan = range !== null && text !== null;
-
   const group = input.soleGroup;
   /** 布尔运算至少要两个图形（多了才有「并」可言）。 */
   const canBool = selection.filter((e) => e.kind === 'shape').length >= 2;
@@ -237,6 +255,15 @@ export function buildTypographyTabs(
   /** 时序控件的显示值：取选中元素上的第一个动画。 */
   const anim: AnimTiming | null = selection.flatMap((e) => e.animations)[0] ?? null;
 
+  /**
+   * 当前配色方案（「设计」选项卡的数据源）。
+   *
+   * 走 `themeById` 而不是直接读 `doc.theme`：未设、或工程里存着一个本版本
+   * 没有的方案 id 时，界面必须显示**渲染时真正用的那个方案** ——
+   * 两处各判一次的话，会出现「面板显示 A、画面用的是 B」。
+   */
+  const theme = themeById(input.doc.theme);
+
   const tabs: RibbonTabDef[] = [
     /* ------------------------------------------------------------ 开始 */
     {
@@ -247,182 +274,282 @@ export function buildTypographyTabs(
         {
           id: 'font',
           label: tr('rib.group.font'),
-          items: [
-            {
-              kind: 'select',
-              id: 'font-family',
-              label: tr('rib.fontFamily'),
-              testid: 'ribbon-font-family',
-              // 固定宽度 + 触发区自己 ellipsis：字体名长度不可控，让它撑开的话
-              // 整条 Ribbon 的布局会在换字体时跳一下（用户反馈的「tab 跳变」）。
-              width: 148,
-              optionTestidPrefix: 'ribbon-font-option',
-              // 本机字体加载后选项有几百条，扫不动：开筛选框（Select 自带，
-              // 输入即模糊过滤），最近用过的族已由 fontOptions 置顶。
-              filterable: true,
-              filterPlaceholder: tr('rib.fontSearch'),
-              value: tv('fontFamily') ?? '',
-              disabled: !hasText,
-              options: fontOptions(input, tv('fontFamily') ?? ''),
-              onchange: (v) => {
-                // 记一次「最近使用」——必须在 commit 之前写，因为下面那次
-                // setTextStyle 会触发 Ribbon 重建，重建时才读得到新顺序。
-                rememberFont(v);
-                a.setTextStyle('fontFamily', v);
+          /*
+           * 两排（`layout: 'rows'`），排法与 PowerPoint 一致：
+           *   第一排 = 字体 · 字号 · 字号 ∓ · 清除全部格式 · 字体资源
+           *   第二排 = 粗体 斜体 下划线 阴影 删除线 字距 大小写 高亮 字体颜色
+           *
+           * 为什么要分排：原来九个字形按钮全部是「icon 在上、文字在下」的大按钮，
+           * 字号 ∓ 还各带一个「减小字号」这样的四字标签 —— 光这一组就吃掉 700 多
+           * 像素，把别的组全挤到滚动条的右边去。而 B / I / U / S 这些符号本身
+           * 就是写法，配文字只是噪声。纯图标之后同一组只占 ~380px。
+           */
+          layout: 'rows',
+          items: [],
+          rows: [
+            [
+              {
+                kind: 'select',
+                id: 'font-family',
+                label: tr('rib.fontFamily'),
+                // 触发区里显示的就是字体名，底下再压一行小字「字体」是纯噪声。
+                hideLabel: true,
+                testid: 'ribbon-font-family',
+                // 固定宽度 + 触发区自己 ellipsis：字体名长度不可控，让它撑开的话
+                // 整条 Ribbon 的布局会在换字体时跳一下（用户反馈的「tab 跳变」）。
+                width: 148,
+                optionTestidPrefix: 'ribbon-font-option',
+                // 本机字体加载后选项有几百条，扫不动：开筛选框（Select 自带，
+                // 输入即模糊过滤），最近用过的族已由 fontOptions 置顶。
+                filterable: true,
+                filterPlaceholder: tr('rib.fontSearch'),
+                value: tv('fontFamily') ?? '',
+                disabled: !hasText,
+                options: fontOptions(input, tv('fontFamily') ?? ''),
+                onchange: (v) => {
+                  // 记一次「最近使用」——必须在 commit 之前写，因为下面那次
+                  // setTextStyle 会触发 Ribbon 重建，重建时才读得到新顺序。
+                  rememberFont(v);
+                  a.setTextStyle('fontFamily', v);
+                },
               },
-            },
-            {
-              kind: 'button',
-              id: 'font-size-dec',
-              label: tr('rib.fontSizeDown'),
-              icon: 'minus',
-              size: 'small',
-              testid: 'ribbon-font-size-dec',
-              disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, -1) === null,
-              onselect: () => {
-                const n = fontSizeStep(tv('fontSize') ?? 0, -1);
-                if (n !== null) a.setTextStyle('fontSize', n);
+              {
+                kind: 'select',
+                id: 'font-size',
+                label: tr('rib.fontSize'),
+                hideLabel: true,
+                testid: 'ribbon-font-size',
+                width: 84,
+                // 可编辑 + numeric
+                editable: true,
+                numeric: true,
+                value: String(tv('fontSize') ?? 0),
+                disabled: !hasText,
+                options: FONT_SIZES.map((s) => ({ value: String(s), label: String(s) })),
+                onchange: (v) => a.setTextStyle('fontSize', Number(v)),
               },
-            },
-            {
-              kind: 'select',
-              id: 'font-size',
-              label: tr('rib.fontSize'),
-              testid: 'ribbon-font-size',
-              width: 84,
-              // 可编辑 + numeric：能直接输 37（预设里没有），也能点箭头挑预设。
-              editable: true,
-              numeric: true,
-              value: String(tv('fontSize') ?? 0),
-              disabled: !hasText,
-              options: FONT_SIZES.map((s) => ({ value: String(s), label: String(s) })),
-              onchange: (v) => a.setTextStyle('fontSize', Number(v)),
-            },
-            {
-              kind: 'button',
-              id: 'font-size-inc',
-              label: tr('rib.fontSizeUp'),
-              icon: 'plus',
-              size: 'small',
-              testid: 'ribbon-font-size-inc',
-              disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, 1) === null,
-              onselect: () => {
-                const n = fontSizeStep(tv('fontSize') ?? 0, 1);
-                if (n !== null) a.setTextStyle('fontSize', n);
+              {
+                kind: 'button',
+                id: 'font-size-dec',
+                label: tr('rib.fontSizeDown'),
+                icon: 'a-arrow-down',
+                size: 'icon',
+                testid: 'ribbon-font-size-dec',
+                disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, -1) === null,
+                onselect: () => {
+                  const n = fontSizeStep(tv('fontSize') ?? 0, -1);
+                  if (n !== null) a.setTextStyle('fontSize', n);
+                },
               },
-            },
-            {
-              kind: 'toggle',
-              id: 'bold',
-              label: tr('rib.bold'),
-              icon: 'bold',
-              testid: 'ribbon-bold',
-              disabled: !hasText,
-              active: (tv('fontWeight') ?? 400) >= 600,
-              onchange: () => a.toggleTextFlag('bold'),
-            },
-            {
-              kind: 'toggle',
-              id: 'italic',
-              label: tr('rib.italic'),
-              icon: 'italic',
-              testid: 'ribbon-italic',
-              disabled: !hasText,
-              active: tv('fontStyle') === 'italic',
-              onchange: () => a.toggleTextFlag('italic'),
-            },
-            {
-              kind: 'toggle',
-              id: 'underline',
-              label: tr('rib.underline'),
-              icon: 'underline',
-              testid: 'ribbon-underline',
-              disabled: !hasText,
-              active: tv('textDecoration') === 'underline',
-              onchange: () => a.toggleTextFlag('underline'),
-            },
-            {
-              kind: 'toggle',
-              id: 'strike',
-              label: tr('rib.strike'),
-              icon: 'strikethrough',
-              testid: 'ribbon-strike',
-              disabled: !hasText,
-              active: tv('textDecoration') === 'line-through',
-              onchange: () => a.toggleTextFlag('strike'),
-            },
-            {
-              // 文本颜色：与粗体/斜体同属「字符级格式」，所以并进 font 组、
-              // 紧挨着它们 —— 原来它是独立的一组，中间隔着段落/对齐三个组，
-              // 改个颜色要横跨半条 Ribbon。
-              kind: 'color',
-              id: 'text-color',
-              label: tr('rib.color'),
-              testid: 'ribbon-text-color',
-              value: tv('color') ?? '#ffffff',
-              disabled: !hasText,
-              onchange: (v) => a.setTextStyle('color', v),
-            },
-            {
-              kind: 'button',
-              id: 'clear-format',
-              label: tr('typo.clearFormat'),
-              // 只在「选了一段字」时可用 —— 它清的是行内覆盖，没选区时无对象。
-              icon: 'eraser',
-              testid: 'typo-clear-format',
-              disabled: !hasSpan,
-              onselect: () => a.clearSpanFormats(),
-            },
-            {
-              kind: 'button',
-              id: 'load-local-fonts',
-              label: tr('rib.loadLocalFonts'),
-              // 「系统里已有的字体」—— 用字体字形而不是 import（那个是把文件拿进来）。
-              icon: 'a-large-small',
-              testid: 'typo-local-fonts',
+              {
+                kind: 'button',
+                id: 'font-size-inc',
+                label: tr('rib.fontSizeUp'),
+                icon: 'a-arrow-up',
+                size: 'icon',
+                testid: 'ribbon-font-size-inc',
+                disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, 1) === null,
+                onselect: () => {
+                  const n = fontSizeStep(tv('fontSize') ?? 0, 1);
+                  if (n !== null) a.setTextStyle('fontSize', n);
+                },
+              },
+              {
+                kind: 'button',
+                id: 'clear-format',
+                label: tr('rib.clearFormat'),
+                /*
+                 * 「清除全部格式」：**选中文本**就能用（清元素级），有行内选区时
+                 * 只清那一段的覆盖（见 actions.clearTextFormatting）。
+                 * 原来只在「选了一段字」时可用 —— 但「整块文字全是花字体想回默认」
+                 * 是最常见的用法，那时反而点不动。
+                 */
+                icon: 'eraser',
+                size: 'icon',
+                testid: 'typo-clear-format',
+                disabled: !hasText,
+                onselect: () => a.clearTextFormatting(),
+              },
+            ],
+            [
+              {
+                kind: 'toggle',
+                id: 'bold',
+                label: tr('rib.bold'),
+                icon: 'bold',
+                size: 'icon',
+                testid: 'ribbon-bold',
+                disabled: !hasText,
+                active: (tv('fontWeight') ?? 400) >= 600,
+                onchange: () => a.toggleTextFlag('bold'),
+              },
+              {
+                kind: 'toggle',
+                id: 'italic',
+                label: tr('rib.italic'),
+                icon: 'italic',
+                size: 'icon',
+                testid: 'ribbon-italic',
+                disabled: !hasText,
+                active: tv('fontStyle') === 'italic',
+                onchange: () => a.toggleTextFlag('italic'),
+              },
+              {
+                kind: 'toggle',
+                id: 'underline',
+                label: tr('rib.underline'),
+                icon: 'underline',
+                size: 'icon',
+                testid: 'ribbon-underline',
+                disabled: !hasText,
+                active: tv('textDecoration') === 'underline',
+                onchange: () => a.toggleTextFlag('underline'),
+              },
+              {
+                kind: 'toggle',
+                id: 'text-shadow',
+                label: style?.shadow ? tr('rib.textShadowOn') : tr('rib.textShadow'),
+                icon: 'text-shadow',
+                size: 'icon',
+                testid: 'ribbon-text-shadow',
+                disabled: !hasText,
+                active: !!style?.shadow,
+                // 开关语义：有阴影就关掉，没有就套一份默认参数（偏移/模糊按字号比例，
+                // 见 document.ts::defaultTextShadow）。
+                onchange: () => a.setTextShadow(style?.shadow ? undefined : defaultTextShadow()),
+              },
+              {
+                kind: 'toggle',
+                id: 'strike',
+                label: tr('rib.strike'),
+                icon: 'strikethrough',
+                size: 'icon',
+                testid: 'ribbon-strike',
+                disabled: !hasText,
+                active: tv('textDecoration') === 'line-through',
+                onchange: () => a.toggleTextFlag('strike'),
+              },
+              {
+                kind: 'menu',
+                id: 'letter-spacing',
+                label: tr('rib.letterSpacing'),
+                icon: 'letter-spacing',
+                size: 'icon',
+                testid: 'ribbon-letter-spacing',
+                disabled: !hasText,
+                items: SPACING_PRESETS.map((p) => ({
+                  id: `ribbon-spacing-${p.value}`,
+                  label: tr(p.labelKey),
+                  active: Math.abs((tv('letterSpacing') ?? 0) - p.value) < 0.01,
+                  onselect: () => a.setTextStyle('letterSpacing', p.value),
+                })),
+                // 预设之外的任意值走这个输入框 —— 「字距仍然能精确调」是必须的，
+                // 预设只是省掉大多数情况下的手输。
+                numeric: {
+                  label: tr('rib.spacingCustom'),
+                  value: tv('letterSpacing') ?? 0,
+                  min: -100,
+                  max: 400,
+                  step: 0.5,
+                  precision: 1,
+                  suffix: 'px',
+                  onchange: (v) => a.setTextStyle('letterSpacing', v),
+                },
+              },
+              {
+                kind: 'menu',
+                id: 'text-case',
+                label: tr('rib.caseTransform'),
+                icon: 'case-sensitive',
+                size: 'icon',
+                testid: 'ribbon-text-case',
+                disabled: !hasText,
+                items: CASE_OPTIONS.map((o) => ({
+                  id: `ribbon-case-${o.value}`,
+                  label: tr(o.labelKey),
+                  /*
+                   * 读**元素级**而不是 `tv()`：`textTransform` 不在行内可覆盖的
+                   * 白名单里（同一行里两种大小写转换谁也画不对），所以行内选区
+                   * 对它没有意义，勾选态只看元素级。
+                   */
+                  active: (style?.textTransform ?? 'none') === o.value,
+                  // 走 setTextProp 而不是 setTextStyle：后者只收「可行内覆盖」的键，
+                  // 而 textTransform 是段落级的（见上面的说明）。
+                  onselect: () => a.setTextProp('textTransform', o.value),
+                })),
+              },
+              {
+                kind: 'color',
+                id: 'text-highlight',
+                label: tr('rib.textHighlight'),
+                icon: 'highlighter',
+                size: 'icon',
+                // 高亮可以「没有」，所以给「无颜色」这一项。
+                allowNone: true,
+                testid: 'ribbon-text-highlight',
+                value: tv('highlight') ?? '',
+                disabled: !hasText,
+                onchange: (v) => a.setTextHighlight(v || undefined),
+              },
+              {
+                kind: 'color',
+                id: 'text-color',
+                label: tr('rib.fontColor'),
+                icon: 'baseline',
+                size: 'icon',
+                testid: 'ribbon-text-color',
+                value: tv('color') ?? '',
+                disabled: !hasText,
+                onchange: (v) => a.setTextStyle('color', v),
+              },
               /*
-               * 不支持就置灰。Firefox / Safari / 移动端上这个 API 根本不存在，
-               * 让它可点只会得到一句「你的浏览器不行」—— 不如一开始就说清楚。
-               * 另外它要求**用户手势**，所以只能挂在按钮上，不能在启动时自动跑。
+               * 字体资源两个按钮被推到**行尾**：它们不是字形格式，与左边那排
+               * （B / I / U …）本来就不同类；靠一个弹性间隔推到右端之后，
+               * 第二排的右边缘正好与第一排（宽下拉那一排）对齐 ——
+               * 间距不定死，字号/字体名变宽变窄都不会破坏对齐。
                */
-              disabled: !input.supportsLocalFonts,
-              onselect: () => a.loadLocalFonts(),
-            },
-            {
-              kind: 'button',
-              id: 'import-font',
-              label: tr('rib.importFont'),
-              // 语义是「拿进来」，不是「传上去」—— 用 upload 的箭头朝上会误导。
-              icon: 'import',
-              testid: 'typo-font-import',
-              onselect: () => a.importFont(),
-            },
+              { kind: 'spacer', id: 'font-spacer' },
+              {
+                kind: 'button',
+                id: 'load-local-fonts',
+                label: tr('rib.loadLocalFonts'),
+                // 「系统里已有的字体」—— 用字体字形而不是 import（那个是把文件拿进来）。
+                icon: 'type',
+                size: 'icon',
+                testid: 'typo-local-fonts',
+                /*
+                 * 不支持就置灰。Firefox / Safari / 移动端上这个 API 根本不存在，
+                 * 让它可点只会得到一句「你的浏览器不行」—— 不如一开始就说清楚。
+                 * 另外它要求**用户手势**，所以只能挂在按钮上，不能在启动时自动跑。
+                 */
+                disabled: !input.supportsLocalFonts,
+                onselect: () => a.loadLocalFonts(),
+              },
+              {
+                kind: 'button',
+                id: 'import-font',
+                label: tr('rib.importFont'),
+                // 语义是「拿进来」，不是「传上去」—— 用 upload 的箭头朝上会误导。
+                icon: 'file-type-corner',
+                size: 'icon',
+                testid: 'typo-font-import',
+                onselect: () => a.importFont(),
+              },
+            ],
           ],
         },
         {
           id: 'para',
           label: tr('rib.group.para'),
           items: [
-            {
-              kind: 'number',
-              id: 'letter-spacing',
-              label: tr('rib.letterSpacing'),
-              testid: 'ribbon-letter-spacing',
-              value: tv('letterSpacing') ?? 0,
-              step: 1,
-              suffix: 'px',
-              disabled: !hasText,
-              // 有行内选区时不做实时预览：那需要把「拖动中的值」实时写进 runs，
-              // 而每一帧重写 runs 都会重建 DOM、把选区弄丢 —— 预览反而看不清。
-              // 元素级那条路不受影响，仍然是拖动即所见。
-              ...(hasSpan
-                ? {}
-                : {
-                    oninput: (v: number) => a.setTextPropLive('letterSpacing', v),
-                    onliveend: () => a.endTextPropLive(),
-                  }),
-              onchange: (v) => a.setTextStyle('letterSpacing', v),
-            },
+            /*
+             * 这里原来还有一个「字距」输入框，现在归字体组的「字符间距」菜单
+             * （预设 + 自定义输入框）。
+             *
+             * 同一个属性摆两个入口看着更「方便」，实际是困惑源：改了其中一个，
+             * 另一个的值会跟着变，而用户会以为它们是两件事。字距是字形属性，
+             * 与字体/字号同组才是对的位置；段落组留下真正段落级的那一项（行高）。
+             */
             {
               kind: 'number',
               id: 'line-height',
@@ -773,11 +900,53 @@ export function buildTypographyTabs(
       ],
     },
 
+    /* ------------------------------------------------------------ 设计 */
+    {
+      id: 'design',
+      label: tr('rib.design'),
+      order: 1,
+      groups: [
+        {
+          id: 'theme',
+          label: tr('rib.group.theme'),
+          items: [
+            {
+              kind: 'themes',
+              id: 'theme-gallery',
+              label: tr('rib.themeGallery'),
+              testid: 'ribbon-themes',
+              value: theme.id,
+              options: BUILTIN_THEMES.map((t) => ({
+                id: t.id,
+                label: tr(t.labelKey),
+                /*
+                 * 缩略图的色带顺序与 Office 一致：深色 2 / 浅色 2 / 六个强调色。
+                 * 不给「白色 + 黑色」两个端点 —— 所有内置方案的这两个槽都是纯白
+                 * 纯黑，画进缩略图只会让 23 个方案看起来一模一样。
+                 */
+                colors: [
+                  t.colors.dk2,
+                  t.colors.lt2,
+                  t.colors.accent1,
+                  t.colors.accent2,
+                  t.colors.accent3,
+                  t.colors.accent4,
+                  t.colors.accent5,
+                  t.colors.accent6,
+                ],
+              })),
+              onselect: (id) => a.setTheme(id),
+            },
+          ],
+        },
+      ],
+    },
+
     /* ------------------------------------------------------------ 插入 */
     {
       id: 'insert',
       label: tr('rib.insert'),
-      order: 1,
+      order: 2,
       groups: [
         {
           id: 'shapes',
@@ -852,7 +1021,7 @@ export function buildTypographyTabs(
     {
       id: 'anim',
       label: tr('rib.anim'),
-      order: 2,
+      order: 3,
       groups: [
         {
           id: 'presets',
@@ -1020,7 +1189,7 @@ export function buildTypographyTabs(
     {
       id: 'view',
       label: tr('rib.view'),
-      order: 3,
+      order: 4,
       groups: [
         {
           id: 'grid',
@@ -1485,7 +1654,29 @@ export function buildTypographyTabs(
     },
   ];
 
-  return tabs;
+  return injectThemeId(tabs, theme.id);
+}
+
+/**
+ * 给所有颜色控件补上当前配色方案 id —— **唯一的注入点**。
+ *
+ * 为什么不在每个 `kind: 'color'` 项上各写一遍：漏掉一处的表现是
+ * 「取色卡里画的是**默认**方案的色格，而选出来的颜色按**当前**方案解析」
+ * —— 只在切换过配色方案之后才看得出来，而且不报任何错
+ * （用户报的正是这个：图形格式 → 填充的取色卡不跟着刷新）。
+ * 收口到这里之后，「新增颜色控件忘了带主题」从不可能发生。
+ */
+function injectThemeId(tabs: RibbonTabDef[], themeId: string): RibbonTabDef[] {
+  const fix = (item: RibbonItemSpec): RibbonItemSpec =>
+    item.kind === 'color' && item.themeId === undefined ? { ...item, themeId } : item;
+  return tabs.map((tab) => ({
+    ...tab,
+    groups: tab.groups.map((g) => ({
+      ...g,
+      items: g.items.map(fix),
+      rows: g.rows?.map((row) => row.map(fix)),
+    })),
+  }));
 }
 
 /** 「艺术效果」组：混合模式 + 不透明度。图形格式与图片格式共用。 */

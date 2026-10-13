@@ -15,6 +15,8 @@
  * 就是照着 `align-left` 写的，编译直接报「找不到模块」。
  */
 
+import AArrowDown from '@lucide/svelte/icons/a-arrow-down';
+import AArrowUp from '@lucide/svelte/icons/a-arrow-up';
 import AlignCenterHorizontal from '@lucide/svelte/icons/align-center-horizontal';
 import AlignCenterVertical from '@lucide/svelte/icons/align-center-vertical';
 import AlignEndHorizontal from '@lucide/svelte/icons/align-end-horizontal';
@@ -29,9 +31,11 @@ import ArrowRight from '@lucide/svelte/icons/arrow-right';
 import ArrowUp from '@lucide/svelte/icons/arrow-up';
 import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
+import Baseline from '@lucide/svelte/icons/baseline';
 import Blend from '@lucide/svelte/icons/blend';
 import Bold from '@lucide/svelte/icons/bold';
 import BringToFront from '@lucide/svelte/icons/bring-to-front';
+import CaseSensitive from '@lucide/svelte/icons/case-sensitive';
 import Check from '@lucide/svelte/icons/check';
 import ChevronDown from '@lucide/svelte/icons/chevron-down';
 import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -49,6 +53,7 @@ import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 import Eye from '@lucide/svelte/icons/eye';
 import EyeOff from '@lucide/svelte/icons/eye-off';
 import FilePlus from '@lucide/svelte/icons/file-plus';
+import FileTypeCorner from '@lucide/svelte/icons/file-type-corner';
 import FlaskConical from '@lucide/svelte/icons/flask-conical';
 import Folder from '@lucide/svelte/icons/folder';
 import FolderOpen from '@lucide/svelte/icons/folder-open';
@@ -57,6 +62,7 @@ import Grid2x2 from '@lucide/svelte/icons/grid-2x2';
 import Group from '@lucide/svelte/icons/group';
 import HardDrive from '@lucide/svelte/icons/hard-drive';
 import Hexagon from '@lucide/svelte/icons/hexagon';
+import Highlighter from '@lucide/svelte/icons/highlighter';
 import ImageIcon from '@lucide/svelte/icons/image';
 import ImagePlus from '@lucide/svelte/icons/image-plus';
 import Images from '@lucide/svelte/icons/images';
@@ -131,8 +137,18 @@ import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
 import Waypoints from '@lucide/svelte/icons/waypoints';
 import X from '@lucide/svelte/icons/x';
 
+/*
+ * 自绘图标。Lucide 里没有对应形状，但这两件事在 Office 里是**固定字形**
+ * （「AV 加双向箭头」与「A 带重影」），用别的图标凑合会让人认不出来。
+ * 统一遵守 Lucide 的形态约定：24×24 viewBox、描边、currentColor、无填充。
+ */
+import LetterSpacing from './icons/letter-spacing.svelte';
+import TextShadow from './icons/text-shadow.svelte';
+
 /** 名字 → 组件。新增图标只在这里加一行，调用点写 `name="eye"` 即得类型检查。 */
 export const ICONS = {
+  'a-arrow-down': AArrowDown,
+  'a-arrow-up': AArrowUp,
   'align-center-horizontal': AlignCenterHorizontal,
   'align-center-vertical': AlignCenterVertical,
   'align-end-horizontal': AlignEndHorizontal,
@@ -148,9 +164,11 @@ export const ICONS = {
   'arrow-up': ArrowUp,
   'arrow-up-down': ArrowUpDown,
   'audio-lines': AudioLines,
+  baseline: Baseline,
   blend: Blend,
   bold: Bold,
   'bring-to-front': BringToFront,
+  'case-sensitive': CaseSensitive,
   check: Check,
   'chevron-down': ChevronDown,
   'chevron-right': ChevronRight,
@@ -168,6 +186,7 @@ export const ICONS = {
   eye: Eye,
   'eye-off': EyeOff,
   'file-plus': FilePlus,
+  'file-type-corner': FileTypeCorner,
   'flask-conical': FlaskConical,
   folder: Folder,
   'folder-open': FolderOpen,
@@ -176,6 +195,7 @@ export const ICONS = {
   group: Group,
   'hard-drive': HardDrive,
   hexagon: Hexagon,
+  highlighter: Highlighter,
   image: ImageIcon,
   'image-plus': ImagePlus,
   images: Images,
@@ -229,6 +249,8 @@ export const ICONS = {
   star: Star,
   strikethrough: Strikethrough,
   sun: Sun,
+  'letter-spacing': LetterSpacing,
+  'text-shadow': TextShadow,
   'text-align-center': TextAlignCenter,
   'text-align-end': TextAlignEnd,
   'text-align-justify': TextAlignJustify,

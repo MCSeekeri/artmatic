@@ -11,6 +11,7 @@
  */
 
 import type { TextSpanStyle } from './rich-text';
+import { resolveThemeColor, type TypographyTheme } from './theme';
 import {
   normalizeStops,
   type ImageElement,
@@ -26,8 +27,17 @@ import {
 
 export type CssDecls = Record<string, string>;
 
-export function paintCss(p: Paint): string {
-  return p.kind === 'solid' ? p.color : 'transparent';
+/**
+ * 配色方案入参：方案对象、方案 id、或什么都不给（缺省 = 默认方案）。
+ *
+ * 三种都接受是为了让**调用点各取所需**：渲染路径在顶层查一次表把对象传下来
+ * （每帧几十次解析，省掉重复查表），单测与临时调用点直接省略即可。所有
+ * 「颜色 → 真实颜色」的换算都收口在 `resolveThemeColor()` 里。
+ */
+export type ThemeArg = TypographyTheme | string | null | undefined;
+
+export function paintCss(p: Paint, theme?: ThemeArg): string {
+  return p.kind === 'solid' ? resolveThemeColor(p.color, theme) : 'transparent';
 }
 
 /** 渐变 / 纹理在文档里的 `<defs>` id 前缀。 */
@@ -45,8 +55,8 @@ export function paintNeedsDefs(p: Paint): boolean {
 }
 
 /** SVG `fill` 属性的值。 */
-export function fillAttr(p: Paint, elId: string): string {
-  if (p.kind === 'solid') return p.color;
+export function fillAttr(p: Paint, elId: string, theme?: ThemeArg): string {
+  if (p.kind === 'solid') return resolveThemeColor(p.color, theme);
   if (p.kind === 'none') return 'transparent';
   return `url(#${paintDefId(elId)})`;
 }
@@ -136,7 +146,20 @@ export function animLayerStyle(): CssDecls {
 
 /* ------------------------------------------------------------ 文本 */
 
-export function textStyle(style: TextStyle): CssDecls {
+/**
+ * 文字阴影 → `text-shadow` 声明。**尺寸是字号倍数**，这里才换算成 px
+ * （见 document.ts::TextStyleShadow 的理由）。无阴影返回 `'none'` ——
+ * 声明表逐键同构，就地同步时「有 → 无」才能复位。
+ */
+function textShadow(style: TextStyle, theme: ThemeArg): string {
+  const sh = style.shadow;
+  if (!sh) return 'none';
+  const k = style.fontSize;
+  const blur = Math.max(0, sh.blur * k);
+  return `${px(sh.dx * k)} ${px(sh.dy * k)} ${px(blur)} ${resolveThemeColor(sh.color, theme)}`;
+}
+
+export function textStyle(style: TextStyle, theme?: ThemeArg): CssDecls {
   // 竖排时「垂直对齐」在视觉上变成了水平方向，所以主轴翻转。
   const vertical = style.writingMode === 'vertical-rl';
   const vAlign =
@@ -163,9 +186,21 @@ export function textStyle(style: TextStyle): CssDecls {
     'letter-spacing': px(style.letterSpacing),
     'line-height': String(style.lineHeight),
     'text-align': style.align,
-    color: style.color,
+    color: resolveThemeColor(style.color, theme),
     'text-decoration': style.textDecoration,
     'text-transform': style.textTransform,
+    'text-shadow': textShadow(style, theme),
+    /*
+     * 高亮底色通过这个**自定义属性**传给行内段（见 spanStyle / applyRuns）。
+     *
+     * 为什么不直接给 `.typo-text` 设 background-color：这个盒子是 flex 容器、
+     * 撑满整个元素框，背景会把换行处的空白一起填满 —— 看起来是「给文本框
+     * 刷了底色」，不是「把字涂黄」。而背景**不继承**，所以只能靠变量下发。
+     *
+     * 无高亮时写 `transparent` 而不是省略：就地同步不会重建节点，
+     * 省略会让上一帧的底色留在那里。
+     */
+    '--typo-hl': style.highlight ? resolveThemeColor(style.highlight, theme) : 'transparent',
     'white-space': 'pre-wrap',
     'word-break': 'break-word',
     'writing-mode': style.writingMode,
@@ -193,17 +228,17 @@ export function textStyle(style: TextStyle): CssDecls {
  *  - **总是返回完整声明**：就地同步（syncDocDom）不重建节点，切回「无填充」
  *    时必须能把上一份 background 复位。
  */
-export function textBoxStyle(el: TextElement): CssDecls {
+export function textBoxStyle(el: TextElement, theme?: ThemeArg): CssDecls {
   const fill = el.boxFill;
   const out: CssDecls = {};
   if (fill && fill.kind === 'solid') {
-    out['background-color'] = fade(fill.color, paintOpacity(fill));
+    out['background-color'] = fade(resolveThemeColor(fill.color, theme), paintOpacity(fill));
     out['background-image'] = 'none';
     out['background-size'] = 'auto';
   } else if (fill && fill.kind !== 'none') {
     const cell = fill.kind === 'texture' ? Math.max(2, fill.scale) : null;
     out['background-color'] = 'transparent';
-    out['background-image'] = textFillBackgroundImage(fill);
+    out['background-image'] = textFillBackgroundImage(fill, theme);
     // 纹理按周期平铺（与 textFillStyle 同一口径），渐变铺满整个文本框。
     out['background-size'] = cell === null ? 'auto' : `${cell}px ${cell}px`;
   } else {
@@ -216,7 +251,9 @@ export function textBoxStyle(el: TextElement): CssDecls {
   const s = el.boxStroke;
   // 无边框写 `0 solid transparent` 而不是 `none`：声明表逐键同构，
   // 「有 → 无」在就地同步下才能逐键复位（没有删除语义）。
-  out.border = s ? `${px(Math.max(0, s.width))} ${s.style ?? 'solid'} ${s.color}` : '0 solid transparent';
+  out.border = s
+    ? `${px(Math.max(0, s.width))} ${s.style ?? 'solid'} ${resolveThemeColor(s.color, theme)}`
+    : '0 solid transparent';
   return out;
 }
 
@@ -230,9 +267,9 @@ export function textBoxStyle(el: TextElement): CssDecls {
  * 非等比缩放时边框一边粗一边细（水平边按 sy 缩放、垂直边按 sx）—— 看起来就像
  * 被 `transform: scale()` 拉歪了。改成像素盒之后这类换算整体消失。
  */
-export function shapePaintAttrs(el: ShapeElement, evenOdd = false): CssDecls {
+export function shapePaintAttrs(el: ShapeElement, evenOdd = false, theme?: ThemeArg): CssDecls {
   const attrs: CssDecls = {
-    fill: fillAttr(el.fill, el.id),
+    fill: fillAttr(el.fill, el.id, theme),
     // 圆环 / 方框靠**嵌套子路径 + evenodd** 挖洞，不用 evenodd 的话内圈会被填满，
     // 看起来就是一个实心圆/矩形 —— 形状参数全都"没生效"。
     'fill-rule': evenOdd ? 'evenodd' : 'nonzero',
@@ -247,7 +284,7 @@ export function shapePaintAttrs(el: ShapeElement, evenOdd = false): CssDecls {
   if (fillOpacity < 1) attrs['fill-opacity'] = String(fillOpacity);
   if (!el.stroke) return attrs;
 
-  attrs.stroke = el.stroke.color;
+  attrs.stroke = resolveThemeColor(el.stroke.color, theme);
   attrs['stroke-width'] = String(Math.max(0, el.stroke.width));
   if (el.stroke.style === 'dashed') attrs['stroke-dasharray'] = '6 4';
   if (el.stroke.style === 'dotted') attrs['stroke-dasharray'] = '1 3';
@@ -319,6 +356,7 @@ export function imageStyle(el: ImageElement): { wrapper: CssDecls; img: CssDecls
 export function groupStyle(
   g: TypographyGroup,
   box: { x: number; y: number; w: number; h: number },
+  theme?: ThemeArg,
 ): CssDecls {
   const decls: CssDecls = {
     position: 'absolute',
@@ -329,10 +367,10 @@ export function groupStyle(
     'border-radius': g.radius ? px(g.radius) : '0',
     'box-sizing': 'border-box',
     'pointer-events': 'none',
-    background: paintToBackground(g.fill),
+    background: paintToBackground(g.fill, theme),
   };
   if (g.stroke) {
-    decls.border = `${px(g.stroke.width)} ${g.stroke.style ?? 'solid'} ${g.stroke.color}`;
+    decls.border = `${px(g.stroke.width)} ${g.stroke.style ?? 'solid'} ${resolveThemeColor(g.stroke.color, theme)}`;
   }
   return decls;
 }
@@ -349,27 +387,27 @@ function stopPct(offset: number): string {
 }
 
 /** 渐变色标的 CSS 片段（`色 33.33%`），排序归一化与 SVG 那条路共用。 */
-function cssStops(p: Paint, op: number): string {
+function cssStops(p: Paint, op: number, theme: ThemeArg): string {
   return normalizeStops(p.kind === 'linear' || p.kind === 'radial' ? p.stops : [])
-    .map((s) => `${fade(s.color, op)} ${stopPct(s.offset)}`)
+    .map((s) => `${fade(resolveThemeColor(s.color, theme), op)} ${stopPct(s.offset)}`)
     .join(', ');
 }
 
-export function paintToBackground(p: Paint): string {
+export function paintToBackground(p: Paint, theme?: ThemeArg): string {
   // 整体不透明度按**色标**乘进去（CSS 背景没有「层不透明度」这种属性）。
   const op = paintOpacity(p);
   switch (p.kind) {
     case 'solid':
-      return fade(p.color, op);
+      return fade(resolveThemeColor(p.color, theme), op);
     case 'linear': {
-      return `linear-gradient(${Math.round(p.angle + 90)}deg, ${cssStops(p, op)})`;
+      return `linear-gradient(${Math.round(p.angle + 90)}deg, ${cssStops(p, op, theme)})`;
     }
     case 'radial': {
-      return `radial-gradient(circle at 50% 50%, ${cssStops(p, op)})`;
+      return `radial-gradient(circle at 50% 50%, ${cssStops(p, op, theme)})`;
     }
     case 'texture':
       // 组合壳的纹理回落到**底色**（见 groupStyle 的说明），所以这里只乘底色。
-      return fade(p.bg, op);
+      return fade(resolveThemeColor(p.bg, theme), op);
     default:
       return 'transparent';
   }
@@ -467,7 +505,7 @@ export function textureMotifSpec(
  * 只有 `linear` / `radial` / `texture` 才覆盖字形着色；`solid` / `none` /
  * `undefined` 一律复位，交回 `style.color` 那条老路（见 TextElement.fill 的语义）。
  */
-export function textFillStyle(fill: Paint | undefined): CssDecls {
+export function textFillStyle(fill: Paint | undefined, theme?: ThemeArg): CssDecls {
   const usable =
     fill && fill.kind !== 'none' && fill.kind !== 'solid' ? fill : null;
   if (!usable) {
@@ -482,7 +520,7 @@ export function textFillStyle(fill: Paint | undefined): CssDecls {
   // 纹理要按周期平铺（background-size = 一个周期），渐变则铺满整个文本框（auto）。
   const cell = usable.kind === 'texture' ? Math.max(2, usable.scale) : null;
   return {
-    'background-image': textFillBackgroundImage(usable),
+    'background-image': textFillBackgroundImage(usable, theme),
     'background-clip': 'text',
     '-webkit-background-clip': 'text',
     'background-repeat': 'repeat',
@@ -492,15 +530,15 @@ export function textFillStyle(fill: Paint | undefined): CssDecls {
 }
 
 /** 文本字形填充的 `background-image`：渐变 / 径向直接映射成 CSS，纹理转成内联 SVG。 */
-export function textFillBackgroundImage(p: Paint): string {
+export function textFillBackgroundImage(p: Paint, theme?: ThemeArg): string {
   const op = paintOpacity(p);
   switch (p.kind) {
     case 'linear':
-      return `linear-gradient(${Math.round(p.angle + 90)}deg, ${cssStops(p, op)})`;
+      return `linear-gradient(${Math.round(p.angle + 90)}deg, ${cssStops(p, op, theme)})`;
     case 'radial':
-      return `radial-gradient(circle at 50% 50%, ${cssStops(p, op)})`;
+      return `radial-gradient(circle at 50% 50%, ${cssStops(p, op, theme)})`;
     case 'texture':
-      return textureDataUri(p, op);
+      return textureDataUri(p, op, theme);
     default:
       return 'none';
   }
@@ -513,13 +551,17 @@ export function textFillBackgroundImage(p: Paint): string {
  * —— 在 SVG 属性里用 `color-mix()` 的兼容性不稳，而组透明度哪都认。
  * 色标里的 `#` 交给 `encodeURIComponent` 转义成 `%23`，data-URI 才不会断。
  */
-function textureDataUri(paint: Extract<Paint, { kind: 'texture' }>, opacity: number): string {
+function textureDataUri(
+  paint: Extract<Paint, { kind: 'texture' }>,
+  opacity: number,
+  theme?: ThemeArg,
+): string {
   const cell = Math.max(2, paint.scale);
   const thick = Math.max(0.2, paint.thickness);
   const body: string[] = [
-    `<rect x="0" y="0" width="${cell}" height="${cell}" fill="${paint.bg}"/>`,
+    `<rect x="0" y="0" width="${cell}" height="${cell}" fill="${resolveThemeColor(paint.bg, theme)}"/>`,
   ];
-  for (const prim of textureMotifSpec(paint.pattern, cell, thick, paint.color)) {
+  for (const prim of textureMotifSpec(paint.pattern, cell, thick, resolveThemeColor(paint.color, theme))) {
     const attrs = Object.entries(prim.attrs)
       .map(([k, v]) => `${k}="${v}"`)
       .join(' ');
@@ -546,16 +588,27 @@ function textureDataUri(paint: Extract<Paint, { kind: 'texture' }>, opacity: num
  * 段落级属性（行高 / 对齐 / 竖排）刻意**不在**覆盖范围内：同一行里两种行高
  * 谁也画不对，见 rich-text.ts 里 `SPAN_STYLE_KEYS` 的说明。
  */
-export function spanStyle(span: TextSpanStyle | undefined): CssDecls {
-  if (!span) return {};
-  const out: CssDecls = {};
+export function spanStyle(span: TextSpanStyle | undefined, theme?: ThemeArg): CssDecls {
+  /*
+   * 高亮底色**总是**写出来：
+   *  - 这一段自己有高亮 → 用它的颜色；
+   *  - 没有 → `var(--typo-hl, transparent)`，即跟随元素级的高亮（见 textStyle）。
+   *
+   * 走变量而不是「元素级改高亮时重建整个 spans」：重建会打断正在编辑的
+   * contenteditable 选区（打字时换个高亮色光标就飞了）。
+   */
+  const out: CssDecls = { 'background-color': 'var(--typo-hl, transparent)' };
+  if (!span) return out;
   if (span.fontFamily !== undefined) out['font-family'] = span.fontFamily;
   if (span.fontSize !== undefined) out['font-size'] = px(span.fontSize);
   if (span.fontWeight !== undefined) out['font-weight'] = String(span.fontWeight);
   if (span.fontStyle !== undefined) out['font-style'] = span.fontStyle;
   if (span.letterSpacing !== undefined) out['letter-spacing'] = px(span.letterSpacing);
-  if (span.color !== undefined) out.color = span.color;
+  if (span.color !== undefined) out.color = resolveThemeColor(span.color, theme);
   if (span.textDecoration !== undefined) out['text-decoration'] = span.textDecoration;
+  if (span.highlight !== undefined) {
+    out['background-color'] = resolveThemeColor(span.highlight, theme);
+  }
   return out;
 }
 

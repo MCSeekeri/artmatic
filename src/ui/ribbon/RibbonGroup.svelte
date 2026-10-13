@@ -5,14 +5,17 @@
    * Ribbon 的可读性主要就靠这个分组：把 20 个按钮平铺是找不到东西的，
    * 分成「字体 / 段落 / 对齐 / 层级」四组之后，找东西靠的是位置记忆。
    *
-   * 纯小按钮的组排成两行（见 ribbon-model 的 `layout`）：既省横向空间，
-   * 也让「一排小图标」看起来仍然是一**组**而不是一条线。
+   * 三种排布（见 ribbon-model 的 `layout`）：
+   *  - `row`：一行平铺（默认）；
+   *  - `grid`：等宽两行，给「整组都是小按钮」的组省横向空间；
+   *  - `rows`：**内容自己分行**（字体组：第一排是宽下拉、第二排是纯图标）——
+   *    行由 Ribbon 逐行渲染好塞进来，这里只负责纵向排列。
    */
   import type { Snippet } from 'svelte';
 
   interface Props {
     label: string;
-    layout?: 'row' | 'grid';
+    layout?: 'row' | 'grid' | 'rows';
     /** grid 布局的列数（由 Ribbon 按项数推）。 */
     columns?: number;
     children: Snippet;
@@ -24,6 +27,7 @@
   <div
     class="rgroup-body"
     class:grid={layout === 'grid'}
+    class:rows={layout === 'rows'}
     style:--grid-cols={String(columns)}
   >{@render children()}</div>
   <div class="rgroup-label">{label}</div>
@@ -69,6 +73,20 @@
     justify-content: center;
     align-content: center;
     gap: 2px 3px;
+  }
+  /*
+   * 内容自己分行的组。两排之间留 4px：第一排是输入类控件（高 22-24px）、
+   * 第二排是图标按钮，贴着放会看起来像一排东西塞不下才折行的。
+   *
+   * `align-items` 必须是 stretch（默认）：每行都要**撑满组宽**，
+   * 行内的弹性间隔才有空间可吃、两排的右边缘才能对齐。
+   * 用 flex-start 的话每行只有内容宽，间隔恒为 0 宽。
+   */
+  .rgroup-body.rows {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 4px;
   }
   .rgroup-label {
     text-align: center;
