@@ -23,6 +23,8 @@ import { AudioPlayer } from '../audio/player';
 import { ProjectAudio } from './project-audio';
 // 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
 import { createRenderCore } from '../render/render-core';
+// 钉尺寸取材的唯一序列（截图 / 体积采样 / 导出循环共用），见该文件头。
+import { withExportFrame } from '../render/export-frame';
 import { FontRegistry } from '../typography/font-registry';
 import { PluginHost } from '../plugins/host';
 import { localFontSource, queryLocalFontFamilies } from '../typography/local-fonts';
@@ -32,7 +34,7 @@ import {
   createTextBackendRegistry,
   type TextBackendRegistry,
 } from '../typography/rasterizer';
-import { resolveImageAsset } from '../typography/image-assets';
+import { forgetImageAsset, resolveImageAsset } from '../typography/image-assets';
 import { forgetMedia, setMediaAssetsListener } from '../engine/media-assets';
 import type { VideoSourceManager } from '../engine/video-source';
 import { estimateTempo } from '../audio/tempo';
@@ -219,6 +221,24 @@ function saveUiPrefs(p: UiPrefs): void {
 
 /** 工程内部视图。排版编辑页不再是顶栏的一级页面。 */
 export type ProjectView = { kind: 'timeline' } | { kind: 'typography'; clipId: string };
+
+/**
+ * 一次当前帧截图的产物。
+ *
+ * `replayed / truncated` 来自 `render/export-frame.ts`：截图在栈里有反馈类特效时
+ * 会**按帧顺序从第 0 帧重放**（否则单帧取材拿不到跨帧历史，画面与预览不一致），
+ * 超过上限则退回单帧并把 `truncated` 置真 —— 提示语要说清这一点，
+ * 否则「截图和历史对不上」会变成一个哑谜。
+ */
+export interface SnapshotResult {
+  blob: Blob;
+  filename: string;
+  frame: number;
+  /** 实际重放的帧数（0 = 单帧取材）。 */
+  replayed: number;
+  /** 需要重放但超出上限，历史没有还原。 */
+  truncated: boolean;
+}
 
 export interface OpenProject {
   readonly id: string;
@@ -841,14 +861,52 @@ class AppState {
 
     const wave = { ...this.waveforms };
     for (const id of ids) {
-      this.video?.forget(id);
-      this.sources?.invalidateImage(id);
-      forgetMedia(id);
-      this.audio?.forget(id);
-      this.player?.forget(id);
       delete wave[id];
+      this.releaseAsset(id);
     }
     this.waveforms = wave;
+  }
+
+  /**
+   * 把**一条**素材占的运行期资源还回去：视频解码器 + 帧缓存、图片的 canvas 与
+   * GL 纹理、objectURL、AudioBuffer、频谱分析、波形。
+   *
+   * 关工程（`releaseProjectAssets`）与媒体池删素材（`removeAsset`）共用这一条 ——
+   * 两边各写一份的形态是「删素材时漏了 revoke 图片 URL」，而它只在长会话里表现为
+   * 内存慢慢涨。
+   */
+  private releaseAsset(id: string): void {
+    this.video?.forget(id);
+    this.sources?.invalidateImage(id);
+    forgetMedia(id);
+    forgetImageAsset(id);
+    this.audio?.forget(id);
+    this.player?.forget(id);
+    const wave = { ...this.waveforms };
+    delete wave[id];
+    this.waveforms = wave;
+  }
+
+  /**
+   * 从**媒体池**里移除一条素材（不可撤销，见下）。
+   *
+   * 两件事必须一起做，少一件都会留下不一致：
+   *  - `Project.assets` 里删掉 → 保存时 `project/io.ts` 的 diff 才知道这个文件
+   *    该从 `assets/` 删（**只有台账里被显式移除的素材才删文件**，见 §5.1）；
+   *  - 运行期的仓与缓存放掉（`releaseAsset`）。
+   *
+   * **刻意不入撤销栈**：撤销栈存的是 `Project` 快照，而素材**字节**不在里面 ——
+   * 补不回字节的撤销比不能撤销更坏（画面上会变成「缺失素材」）。所以这里弹确认框
+   * 说清楚，而不是给一个假的「可撤销」。文件要等到下次保存工程才真的从磁盘消失，
+   * 在那之前反悔还来得及（重新导入即可）。
+   */
+  removeAsset(assetId: string): void {
+    if (!this.hasProject) return;
+    this.store.commit(tr('pool.deleteConfirm'), (p) => {
+      delete p.assets[assetId];
+    });
+    this.assets.remove(assetId);
+    this.releaseAsset(assetId);
   }
 
   /**
@@ -912,6 +970,26 @@ class AppState {
     }
     p.view = { kind: 'timeline' };
     if (projectId === this.activeProjectId) this.refreshPreview();
+  }
+
+  /**
+   * 正在就地改名的片段 id（`ClipView` 据此把那块标签换成输入框）。
+   *
+   * 放在 appState 而不是 ClipView 内部，是因为**触发点有两个且都在组件外**：
+   * 双击标签（那次双击由 ClipView 处理，但它要能设置状态）与 F2（在 App 的
+   * 全局快捷键里）。做成组件内部状态的话 F2 就没法让某一行进入编辑态。
+   */
+  renamingClipId = $state<string | null>(null);
+
+  /** 进入就地改名（双击片段名 / F2）。 */
+  beginClipRename(clipId: string): void {
+    this.renamingClipId = clipId;
+    this.selectedClipId = clipId;
+  }
+
+  /** 退出就地改名（提交或取消都走它）。 */
+  endClipRename(): void {
+    if (this.renamingClipId !== null) this.renamingClipId = null;
   }
 
   /**
@@ -1123,49 +1201,49 @@ class AppState {
   }
 
   /**
-   * 把**当前预览帧**导出为一张 PNG（工程分辨率），返回可下载的 Blob。
+   * 把**当前预览帧**取成一张 PNG（工程分辨率），返回 Blob 与文件名。
    *
-   * 与 `ui/export.ts::samplePngFrameBytes` 同一套「钉尺寸 → 用完还原」纪律
-   * （AGENTS §5.9），三件不能省的事：
-   *  - **钉尺寸必须还原**：`setExportSize` 之后 `syncSize` 会直接 return，
-   *    不还原预览会**停在工程分辨率**上且不报错。`finally` 里 `clearExportSize`
-   *    + `refreshPreview()` 一次复原尺寸与画面。
-   *  - **必须在钉尺寸的内层取材**：`refreshPreview` 的 `syncSize` 会改画布尺寸，
-   *    而改尺寸会清空帧缓冲 —— 先还原再截只会拿到黑图。
-   *  - `onSeek` + `prepareFrame`：反馈类特效跨帧有历史、排版位图是异步光栅化的，
-   *    不做的话截到的不是「此刻这一帧」。
+   * 渲染那段整个交给 `render/export-frame.ts::withExportFrame` —— 那是预览截图、
+   * 体积采样与导出循环共用的一条取材序列（钉尺寸 → 导出模式 → 字体预热 → 取材 →
+   * 对称还原）。**不要再在这里现写一遍**：抄一份的下场已经出现过（漏掉导出模式与
+   * 字体预热，画面与预览不同且不报错）。
+   *
+   * 本方法只管三件属于状态层的事：
+   *  - 帧栅格吸附：`t = timeAtFrame(frameAtTime(playT, fps), fps)`，
+   *    文件名里的帧号与画面严格对应；
+   *  - 连点保护（`snapshotting`）与 `finally` 里的 `refreshPreview()`
+   *    （尺寸还原 + 画面重画；它必须在取材窗口之外）；
+   *  - 把 `replayed / truncated` 透出去给提示语用（反馈类特效的顺序重放）。
    *
    * 取向直接用 `canvas.toBlob`（与 PNG 序列导出 `PngSequenceSink` 同一路径）：
    * canvas 是左上原点，**不需要**像 `readPixels` 那样翻行 —— 翻行是 GL 读回的
-   * 专利，多翻一次反而把图倒过来。取 `t` 先吸附到帧栅格（`round(t·fps)/fps`），
-   * 文件名里的帧号与画面严格对应。
+   * 专利，多翻一次反而把图倒过来。
    *
-   * @returns `{ blob, filename, frame }`；无 renderer / 正在导出 / 编码失败时 null。
+   * @returns 无 renderer / 编码失败 / 连点时为 null。
    */
-  async snapshotFrame(): Promise<{ blob: Blob; filename: string; frame: number } | null> {
+  async snapshotFrame(): Promise<SnapshotResult | null> {
     if (this.snapshotting) return null;
     const renderer = this.renderer;
     if (!renderer) return null;
     this.snapshotting = true;
     try {
       const project = this.store.project;
-      const { w, h } = project.resolution;
       const frame = frameAtTime(this.playT, project.fps);
       const t = timeAtFrame(frame, project.fps);
       const base = project.name.trim() || 'artmatic';
       const filename = `${base}-frame-${String(frame).padStart(5, '0')}.png`;
-      renderer.setExportSize(w, h);
-      renderer.onSeek();
-      await renderer.prepareFrame(project, t);
-      renderer.renderFrame(project, t);
-      const blob = await new Promise<Blob | null>((resolve) =>
-        renderer.kit.canvas.toBlob(resolve, 'image/png'),
-      );
-      return blob ? { blob, filename, frame } : null;
+      const out = await withExportFrame(renderer, project, t, async (canvas, info) => {
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, 'image/png'),
+        );
+        return blob
+          ? { blob, filename, frame, replayed: info.replayed, truncated: info.truncated }
+          : null;
+      });
+      return out;
     } catch {
       return null;
     } finally {
-      renderer.clearExportSize();
       this.refreshPreview();
       this.snapshotting = false;
     }
@@ -1355,15 +1433,19 @@ class AppState {
   private servicesReady = false;
 
   /**
-   * main.ts 在 mount 之前调。首份工程必须在这里就存在，
-   * 组件一挂载就会读 `appState.store.project`。
+   * main.ts 在 mount 之前调。
+   *
+   * `store` 可以不给：**首屏是零选项卡的欢迎界面**（不再自动开一份 demo ——
+   * 那份工程每次都要用户手动关掉）。不给的时候 `store` 这个 getter 会回落到
+   * `placeholder`（一份丢弃用的空白工程），所有「读当前工程」的代码照常工作，
+   * 只是 `hasProject` 为假、`tick()` 直接返回。
    */
-  init(store: ProjectStore): void {
+  init(store?: ProjectStore): void {
     // 启动时那份 demo 工程没有句柄 key，`adoptProject` 的同步会把它写成
     // 「打开的工程 = 空」，从而冲掉「上次离开时打开着哪些工程」——
     // 那正是回来时恢复提示要用的记录。先读、adopt 之后再写回。
     const remembered = loadOpenTabs();
-    this.adoptProject({ store });
+    if (store) this.adoptProject({ store });
     // `keepDismiss`：这是把记录写回，不是「用户开了工程」，不该把「已忽略」抹掉。
     if (remembered.length) saveOpenTabs(remembered, { keepDismiss: true });
     this.subscribePlugins();
@@ -1398,80 +1480,151 @@ class AppState {
   /**
    * Preview.onMount 调：canvas 此刻才存在，渲染服务在这里惰性创建。
    * 挂载顺序由此单一化——不存在「renderer 还没建组件就先渲染」的窗口。
+   *
+   * ## 画布身份是会变的（这一段是踩过的坑，别按「canvas 只有一个」来读）
+   *
+   * `Kit` 在构造时把 canvas 存死（`engine/kit.ts`），整套服务**没有改绑 canvas 的
+   * 办法**。而 Preview 组件被卸载再挂载（dev 的组件级 hot-update 就是这条路，
+   * 将来任何「把 `<Preview />` 放进 `{#if}`」也是）会带来一块**新的** canvas：
+   * 不重建的话渲染会一直落在**已经脱离 DOM**的那块上 —— GL 不报错、rAF 照跑、
+   * 屏幕上永久空白。表现就是「偶发黑屏，刷新一下才好」。
+   * 所以这里显式比对身份，不同就整块重建（插件宿主支持换 Kit，见 `attachKit`）。
    */
   attachPreview(canvas: HTMLCanvasElement, host: Element): void {
-    if (!this.servicesReady) {
-      // 源解析 / 算法运行时 / 特效执行器的装配在 render-core —— 与 lab 试炼场
-      // 共用同一份真源。这里只做「主应用特有的追加装配」（排版、字体、音频）。
-      //
-      // 音频来源先建：两次回调都是**惰性**的（`player` 在下面几行才创建），
-      // 所以这里的顺序不影响正确性。频谱与特征由它一次走查产出。
-      this.audio = new ProjectAudio(
-        () => this.store.project,
-        (assetId) => this.player?.buffer(assetId) ?? null,
-      );
-      const core = createRenderCore(canvas, {
-        getProject: () => this.store.project,
-        onAlgoReady: () => this.store.touch(),
-        // 频谱 + 特征来源：读当前工程的音频片段。`player.buffer()` 解码好之前返回 null，
-        // 那时是静音的，解码完成后的首次请求会触发一次离线分析（之后按 t 查表）。
-        spectrum: this.audio,
-        features: this.audio,
-      });
-      this.renderer = core.renderer;
-      this.algos = core.algos;
-      this.sources = core.sources;
-      this.video = core.video;
-
-      /*
-       * 插件着色器的编译校验需要真 GL，而 Kit 是这一刻才有的。
-       * 在此之前挂载的插件（打开工程时还没有预览的场景）在这里补做校验 ——
-       * 漏掉这一步的表现是「坏插件的着色器直到被点到才报错」，
-       * 那正是这条校验要消灭的东西（见 plugins/host.ts 的文件头）。
-       */
-      this.plugins.attachKit(core.kit);
-
-      // 排版层与 algo 烘焙同构：异步光栅化 → 结果就绪时 touch() → 下一帧重绘。
-      // 光栅化本身必须在主线程做（要走 DOM 与 document.fonts），
-      // 所以只有「异步结果 → 缓存 → bump version」这一层是复用的。
-      this.fonts = new FontRegistry();
-      // 随软件分发的 OFL 西文（Inter 400/700）。只登记 URL，第一次用才 fetch。
-      this.fonts.registerBundled();
-      this.fontFamilies = this.fonts.families();
-      this.textBackends = createTextBackendRegistry(createOffscreenHost(), this.fonts);
-      this.textRaster = new TypographyRuntime(this.renderer.kit, this.textBackends, this.fonts, {
-        onReady: () => this.store.touch(),
-        fps: () => this.store.project.fps,
-      });
-      this.sources.setTextResolver(this.textRaster.resolve);
-      // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。
-      this.textRaster.resolveImage = resolveImageAsset;
-
-      /*
-       * 导出预热是**两个来源共用同一个槽位**（`Renderer.setPrewarm` 只有一个）。
-       * 两者都是「异步就绪」的：排版等光栅化缓存，视频等解码到精确帧。
-       * 必须都 await —— 排版缺席只是少几个字，视频缺席就是一帧错画面。
-       */
-      this.renderer.setPrewarm(async (p, t) => {
-        await this.textRaster.prewarmFrame(p, t);
-        await this.video.prepareProject(p, t, this.renderer.kit.w);
-      });
-      this.renderer.setFontPrewarm((p) => this.textRaster.prewarmFonts(p));
-      this.renderer.setExportLifecycle(
-        () => this.textRaster.enterExportMode(),
-        () => this.textRaster.exitExportMode(),
-      );
-
-      // 素材登记处就绪/变化 → 下一帧重绘（视频新帧解出来就靠这条推画面）。
-      setMediaAssetsListener(() => this.store.touch());
-
-      this.player = new AudioPlayer();
-      this.servicesReady = true;
-    }
+    this.previewHost = host;
+    if (this.servicesReady && this.renderer.kit.canvas !== canvas) this.resetRenderServices();
+    if (!this.servicesReady) this.createRenderServices(canvas);
     this.renderer.attachDisplay(host);
     this.renderer.syncSize(this.store.project.resolution);
     this.renderer.renderFrame(this.store.project, this.playT);
   }
+
+  /**
+   * 上一次 `attachPreview` 给的显示容器。
+   *
+   * 上下文**恢复**那条路要用它：`webglcontextrestored` 事件里只有 canvas，
+   * 没有 host，而重建之后必须把 display 重新接回去。
+   */
+  private previewHost: Element | null = null;
+
+  /**
+   * 与 GL 无关的那一半服务（解码好的音频、用户导入的字体、离屏 2D 光栅化）。
+   *
+   * **只在第一次建**：重建渲染服务时若把它们一起换掉，表现是「黑屏修好了，
+   * 但音频没了、字体回落成默认」—— 这两个状态都活在浏览器里，重建不出来。
+   */
+  private createHostServices(): void {
+    if (this.hostServicesReady) return;
+    this.player = new AudioPlayer();
+    // 音频来源先建：两次回调都是**惰性**的（`player` 上面那行才创建），
+    // 所以这里的顺序不影响正确性。频谱与特征由它一次走查产出。
+    this.audio = new ProjectAudio(
+      () => this.store.project,
+      (assetId) => this.player?.buffer(assetId) ?? null,
+    );
+    // 排版层与 algo 烘焙同构：异步光栅化 → 结果就绪时 touch() → 下一帧重绘。
+    // 光栅化本身必须在主线程做（要走 DOM 与 document.fonts），
+    // 所以只有「异步结果 → 缓存 → bump version」这一层是复用的。
+    this.fonts = new FontRegistry();
+    // 随软件分发的 OFL 西文（Inter 400/700）。只登记 URL，第一次用才 fetch。
+    this.fonts.registerBundled();
+    this.fontFamilies = this.fonts.families();
+    this.textBackends = createTextBackendRegistry(createOffscreenHost(), this.fonts);
+    this.hostServicesReady = true;
+  }
+
+  /** 与 GL 绑定的那一半服务。**可重复调用**（换 canvas / 上下文恢复后重建）。 */
+  private createRenderServices(canvas: HTMLCanvasElement): void {
+    this.createHostServices();
+    // 源解析 / 算法运行时 / 特效执行器的装配在 render-core —— 与 lab 试炼场
+    // 共用同一份真源。这里只做「主应用特有的追加装配」（排版、字体、音频）。
+    const core = createRenderCore(canvas, {
+      getProject: () => this.store.project,
+      onAlgoReady: () => this.store.touch(),
+      // 频谱 + 特征来源：读当前工程的音频片段。`player.buffer()` 解码好之前返回 null，
+      // 那时是静音的，解码完成后的首次请求会触发一次离线分析（之后按 t 查表）。
+      spectrum: this.audio,
+      features: this.audio,
+    });
+    this.renderer = core.renderer;
+    this.algos = core.algos;
+    this.sources = core.sources;
+    this.video = core.video;
+
+    /*
+     * 插件着色器的编译校验需要真 GL，而 Kit 是这一刻才有的。
+     * 在此之前挂载的插件（打开工程时还没有预览的场景）在这里补做校验 ——
+     * 漏掉这一步的表现是「坏插件的着色器直到被点到才报错」，
+     * 那正是这条校验要消灭的东西（见 plugins/host.ts 的文件头）。
+     * 换 Kit 时 `attachKit` 会把已校验状态复位重编（它有自己的 swapped 分支）。
+     */
+    this.plugins.attachKit(core.kit);
+
+    this.textRaster = new TypographyRuntime(core.kit, this.textBackends, this.fonts, {
+      onReady: () => this.store.touch(),
+      fps: () => this.store.project.fps,
+    });
+    this.sources.setTextResolver(this.textRaster.resolve);
+    // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。
+    this.textRaster.resolveImage = resolveImageAsset;
+
+    /*
+     * 导出预热是**两个来源共用同一个槽位**（`Renderer.setPrewarm` 只有一个）。
+     * 两者都是「异步就绪」的：排版等光栅化缓存，视频等解码到精确帧。
+     * 必须都 await —— 排版缺席只是少几个字，视频缺席就是一帧错画面。
+     */
+    this.renderer.setPrewarm(async (p, t) => {
+      await this.textRaster.prewarmFrame(p, t);
+      await this.video.prepareProject(p, t, this.renderer.kit.w);
+    });
+    this.renderer.setFontPrewarm((p) => this.textRaster.prewarmFonts(p));
+    this.renderer.setExportLifecycle(
+      () => this.textRaster.enterExportMode(),
+      () => this.textRaster.exitExportMode(),
+    );
+
+    // 素材登记处就绪/变化 → 下一帧重绘（视频新帧解出来就靠这条推画面）。
+    setMediaAssetsListener(() => this.store.touch());
+
+    /*
+     * 上下文丢失 / 恢复。
+     *
+     * 丢失（显存不足、驱动重置、标签页被系统回收 GPU）之后，program / 纹理 / 缓冲
+     * 一个都不剩，每一帧的 GL 调用都会抛。**不 `preventDefault` 的话浏览器根本不会
+     * 尝试恢复** —— 那才是「黑屏之后再也不会好」。丢失期间靠 Preview 的 rAF 兜底
+     * （tick 的异常不再打死循环），恢复后在这里整块重建。
+     */
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      console.warn('[preview] WebGL 上下文丢失（多为显存不足 / 驱动重置），等待浏览器恢复');
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      // 恢复的上下文里旧的 GL 对象全部无效，只能整块重建。
+      // `loseContext: false` —— 否则会把这口刚恢复的上下文立刻再丢一次。
+      this.resetRenderServices(false);
+      const host = this.previewHost;
+      if (host) this.attachPreview(canvas, host);
+    });
+
+    this.servicesReady = true;
+  }
+
+  /**
+   * 丢掉 GL 侧服务，准备重建（见 `createRenderServices`）。
+   *
+   * `loseContext`：把旧上下文显式还给 GPU。**换 canvas 那条路必须做** ——
+   * 旧 canvas 已经脱离 DOM，不主动释放就一直占着显存；**恢复那条路不能做**，
+   * 那会把刚恢复的上下文立刻再丢一次。
+   */
+  private resetRenderServices(loseContext = true): void {
+    if (!this.servicesReady) return;
+    this.servicesReady = false;
+    this.plugins.attachKit(null);
+    if (loseContext) this.renderer.kit.gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+
+  /** 非 GL 服务是否已建（见 `createHostServices`）。 */
+  private hostServicesReady = false;
 
   get project() {
     return this.store.project;

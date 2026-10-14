@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildStage, hashAt, meanAt, settle } from './_stage';
+import { openDemo, buildStage, hashAt, meanAt, settle } from './_stage';
 import { bitmapFromRows, encodePattern } from '../../src/algos/pattern-codec';
 
 /**
@@ -40,6 +40,7 @@ import { bitmapFromRows, encodePattern } from '../../src/algos/pattern-codec';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /** 反应扩散的公共参数：96²、120 步/秒、居中团块种子。 */

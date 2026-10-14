@@ -48,6 +48,8 @@
   import { resolveImageAsset } from '../../typography/image-assets';
   import Menu from '../controls/Menu.svelte';
   import type { MenuItem } from '../controls/menu-model';
+  import MediaPoolDrawer from '../MediaPoolDrawer.svelte';
+  import { ASSET_DRAG_MIME, poolItemById, type PoolItem } from '../media-pool';
   import { animationSpecs, seekAnimations } from '../../typography/bake-animation';
   import { keyframeBodyOf } from '../../typography/animation';
   import CustomCssModal from './CustomCssModal.svelte';
@@ -237,6 +239,8 @@
         anim: selection.flatMap((e) => e.animations)[0] ?? null,
         onOpenCustomCss: () => (customCssOpen = true),
         onOpenIconPicker: () => (iconPickerOpen = true),
+        mediaPoolOpen: appState.mediaPoolOpen,
+        onToggleMediaPool: () => appState.toggleMediaPool(),
         onFlatten: () => actions.flattenToImage(appState.playT - (editorState.clip?.start ?? 0)),
         grid: gridPrefs,
         onGrid: (patch) => appState.setTypoGrid(patch),
@@ -581,6 +585,60 @@
     // 水平居中的，内容比视口窄时左边距远大于 PAD，按固定值算会整体偏移。
     const r = wrap.getBoundingClientRect();
     return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom };
+  }
+
+  /* ---------------------------------------------------- 媒体池 → 画布 */
+
+  /**
+   * 把媒体池的图片素材放到画布上。
+   *
+   * 两条入口共用：拖到画布（落点 = `toDoc(e)`）、双击 / +（画布中心）。
+   * 只有图片能进来 —— 排版文档里没有视频/音频的表达形式，那种拖拽给一句
+   * 说明而不是静默吞掉。
+   */
+  function placePoolImage(item: PoolItem, center?: { x: number; y: number }): void {
+    if (item.kind !== 'image') {
+      appState.flash(tr('pool.canvasImageOnly'));
+      return;
+    }
+    if (item.missing) {
+      appState.flash(tr('pool.missing'), 'error');
+      return;
+    }
+    actions.placeImageAsset(item.id, item.name, center);
+  }
+
+  /** 排版页里的媒体池条目落点：宿主接管（见 MediaPool 的 `oninsert`）。 */
+  function insertPoolItem(item: PoolItem): void {
+    placePoolImage(item);
+  }
+
+  /**
+   * 认我们自己的拖拽靠 `types`（拖动期间 `getData` 读不出来），与时间轴
+   * 落点同一条判据 —— 从系统拖文件的 `Files` 不在这里处理。
+   */
+  function onStageDragOver(e: DragEvent): void {
+    if (!e.dataTransfer?.types.includes(ASSET_DRAG_MIME)) return;
+    // 不 preventDefault 浏览器不允许落点（drop 根本不会发生）
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+
+  function onStageDrop(e: DragEvent): void {
+    const dt = e.dataTransfer;
+    if (!dt || !dt.types.includes(ASSET_DRAG_MIME)) return;
+    e.preventDefault();
+    const id = dt.getData(ASSET_DRAG_MIME);
+    // 拖拽期间工程可能被改（撤销 / 删除）：落地时按 id 重新解析，拿到的是当下的事实。
+    const item = id ? poolItemById(appState.store.project.assets, appState.assets, id) : null;
+    if (!item) return;
+    // 落点钳进画布：拖到画布边的空白处时，元素不该整个跑到画布外（中心贴边也算放下了）。
+    const p = toDoc(e);
+    const size = docSize;
+    placePoolImage(item, {
+      x: Math.min(Math.max(p.x, 0), size.w),
+      y: Math.min(Math.max(p.y, 0), size.h),
+    });
   }
 
   function makeEnv(): GestureEnv {
@@ -1099,7 +1157,20 @@
     {/if}
   </div>
 
-  <div class="main" class:resizing={panelResizing} style:--typo-panel-w={`${appState.typoPanelWidth}px`}>
+  <div
+    class="main"
+    class:resizing={panelResizing}
+    style:--typo-panel-w={`${appState.typoPanelWidth}px`}
+    style:--typo-pool-w={appState.mediaPoolOpen ? `${appState.mediaPoolWidth}px` : '0px'}
+  >
+    <!--
+      媒体池（左侧）：与时间轴共用同一个抽屉组件、同一个开关。在排版页里它是
+      「拖图片进画布」的来源，条目的落点由本页接管（见 insertPoolItem）。
+    -->
+    {#if appState.mediaPoolOpen}
+      <MediaPoolDrawer />
+    {/if}
+
     <!-- role="presentation" 与 Timeline 的 .rows 一致：这是指针手势面，不是语义容器。 -->
     <div
       class="viewport"
@@ -1107,6 +1178,8 @@
       role="presentation"
       bind:this={viewportEl}
       onpointerdown={onStageDown}
+      ondragover={onStageDragOver}
+      ondrop={onStageDrop}
       ondblclick={onStageDblClick}
       oncontextmenu={onStageContextMenu}
       oninput={onTextInput}
@@ -1410,13 +1483,25 @@
   }
   .main {
     display: grid;
-    /* 中间 4px 是拖曳把手列：用独立的 grid 列而不是绝对定位，
-       这样它天然吃满高度、也不会和两侧内容重叠。 */
-    grid-template-columns: minmax(0, 1fr) 4px var(--typo-panel-w, 208px);
+    /* 四列：媒体池 | 舞台 | 拖曳把手 | 右面板。中间 4px 是拖曳把手列：
+       用独立的 grid 列而不是绝对定位，这样它天然吃满高度、也不会和两侧内容重叠。 */
+    grid-template-columns: var(--typo-pool-w, 0px) minmax(0, 1fr) 4px var(--typo-panel-w, 208px);
     min-height: 0;
     min-width: 0;
   }
+  /*
+   * ⚠️ 每一列都必须**显式定位**：媒体池是条件渲染的，靠自动排布时它缺席会让
+   * 后面的子项整体前移一格 —— 舞台落进 0 宽的第一列，表现是「关掉媒体池，
+   * 画面整个消失」。与 App.svelte 的 .body 是同一条教训。
+   */
+  .main > :global(aside.media-drawer) {
+    grid-column: 1;
+  }
+  .main > :global(aside.side) {
+    grid-column: 4;
+  }
   .split {
+    grid-column: 3;
     /* 与片段编辑器的检查器抽屉（InspectorDrawer 的 .drawer-resize）保持同一套：
        4px 命中区、ew-resize 光标、hover / 拖动中都是**实心主题色**。
        之前这里是 col-resize + --accent-weak，同一个交互在两条链路上长得不一样。 */
@@ -1440,6 +1525,7 @@
   }
 
   .viewport {
+    grid-column: 2;
     position: relative;
     overflow: auto;
     min-height: 0;

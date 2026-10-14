@@ -239,6 +239,25 @@ export class ProjectStore {
     });
   }
 
+  /**
+   * 给片段改名。空名字不写库（与 `renameTrack` 同口径）——
+   * 时间轴上的片段靠名字认人，改成一个点不到的空标签等于把它藏起来。
+   *
+   * 与检查器里那个 `updateClip(…, c => c.label = …)` 是同一件事、同一笔撤销；
+   * 这里只是把它变成一个**有名字的入口**（就地改名与 F2 都走它）。
+   */
+  renameClip(clipId: string, label: string): void {
+    const next = label.trim();
+    if (!next) return;
+    const found = this.findClip(clipId);
+    if (!found || found.clip.label === next) return;
+    this.commit(tr('tl.renameClip'), (p) => {
+      for (const t of p.tracks) {
+        for (const c of t.clips) if (c.id === clipId) c.label = next;
+      }
+    });
+  }
+
   removeClip(clipId: string): void {
     this.commit(tr('tl.removeClip'), (p) => {
       for (const t of p.tracks) {

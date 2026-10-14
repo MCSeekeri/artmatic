@@ -62,6 +62,30 @@
   let gridCanvas: HTMLCanvasElement;
   let scrollEl: HTMLDivElement;
   let rowsEl: HTMLDivElement;
+  /** 轨道头列的滚动容器（竖直滚动与画布双向同步，见 `syncVertical`）。 */
+  let sideEl: HTMLDivElement;
+
+  /**
+   * 轨道头列与画布**竖直**滚动合一。
+   *
+   * 为什么不是「把两者塞进同一个滚动容器」：两侧的横向滚动语义完全不同
+   * （画布要能横向滚几千像素，轨道头列一点都不能动），合并会把 sticky 表头、
+   * 横向滚动与 `.rows` 的坐标原点（拖拽/框选/标尺都按 `scrollEl.scrollLeft` 换算）
+   * 一起搅进来。而竖直方向**本来就是 1:1 的**：两侧顶部各有一个同高的表头
+   * （`.side-head` / 粘住的 `.ruler`，都是 `RULER_HEIGHT`），行高也一样，
+   * 而且两侧滚动内容等高（见 `.side-add` 的注释）。所以互写 `scrollTop` 就够。
+   *
+   * 回环守卫是**值比较**，不是布尔量：写对方会再派发一次 scroll 事件，而 scroll
+   * 事件是异步派发的 —— 赋值后立刻复位的布尔量根本来不及挡。等那次事件到达时，
+   * 两边的值已经相等，`to.scrollTop === from.scrollTop` 直接返回。
+   * 值比较还顺带解决了「滚到底时两侧 max 不同」：多出来的那几像素会被下一次事件
+   * 拉回低位那一侧，而不是两边各停在自己的极限上。
+   */
+  function syncVertical(from: HTMLElement | undefined, to: HTMLElement | undefined): void {
+    if (!from || !to) return;
+    if (to.scrollTop === from.scrollTop) return;
+    to.scrollTop = from.scrollTop;
+  }
 
   /**
    * 框选进行中的矩形（**内容坐标**，相对 .rows 左上角）。null = 没在框选。
@@ -786,88 +810,98 @@
     行菜单 / 重命名输入框都在行内，所以拖曳是「位移超过阈值才算」——
     4px 以内的移动仍然是一次正常的点击。
   -->
-  <div
-    class="side"
-    use:reorder={{
-      axis: 'y',
-      itemSelector: '[data-testid=track-side-row]',
-      onReorder: (from, to) => appState.store.moveTrack(from, to),
-    }}
-  >
-    <div class="side-head" style:height={`${RULER_HEIGHT}px`}>
-      <span class="side-title">{tr('tl.sideTitle')}</span>
+  <div class="side-wrap">
+    <div
+      class="side"
+      bind:this={sideEl}
+      onscroll={() => syncVertical(sideEl, scrollEl)}
+      use:reorder={{
+        axis: 'y',
+        itemSelector: '[data-testid=track-side-row]',
+        onReorder: (from, to) => appState.store.moveTrack(from, to),
+      }}
+    >
+      <div class="side-head" style:height={`${RULER_HEIGHT}px`}>
+        <span class="side-title">{tr('tl.sideTitle')}</span>
+      </div>
+
+      {#each tracks as track (track.id)}
+        <div
+          class="side-row"
+          style:height={`${ROW_HEIGHT}px`}
+          class:muted={!track.enabled}
+          data-track-id={track.id}
+          data-testid="track-side-row"
+          role="presentation"
+          oncontextmenu={(e) => openCtx(e, track)}
+        >
+          <IconButton
+            icon={track.kind === 'audio'
+              ? track.enabled
+                ? 'megaphone'
+                : 'megaphone-off'
+              : track.enabled
+                ? 'eye'
+                : 'eye-off'}
+            label={track.kind === 'audio'
+              ? track.enabled
+                ? tr('tl.muteAudioTrack')
+                : tr('tl.unmuteAudioTrack')
+              : track.enabled
+                ? tr('tl.hideTrack')
+                : tr('tl.showTrack')}
+            size="sm"
+            active={track.enabled}
+            testid="track-enabled"
+            onclick={() => appState.store.toggleTrackEnabled(track.id)}
+          />
+
+          {#if renaming === track.id}
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              class="rename"
+              data-testid="track-rename-input"
+              value={track.name}
+              autofocus
+              onblur={(e) => commitRename(track.id, e.currentTarget.value)}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitRename(track.id, e.currentTarget.value);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  renaming = null;
+                }
+              }}
+              onpointerdown={(e) => e.stopPropagation()}
+            />
+          {:else}
+            <span
+              class="tname"
+              data-testid="track-name"
+              title={track.name}
+              role="presentation"
+              ondblclick={() => beginRename(track.id)}
+            >{track.name}</span>
+          {/if}
+
+          <IconButton
+            icon="ellipsis-vertical"
+            label={tr('tl.trackMenu')}
+            size="sm"
+            testid="track-menu"
+            onclick={(e) => openRowMenu(e, track)}
+          />
+        </div>
+      {/each}
     </div>
 
-    {#each tracks as track (track.id)}
-      <div
-        class="side-row"
-        style:height={`${ROW_HEIGHT}px`}
-        class:muted={!track.enabled}
-        data-track-id={track.id}
-        data-testid="track-side-row"
-        role="presentation"
-        oncontextmenu={(e) => openCtx(e, track)}
-      >
-        <IconButton
-          icon={track.kind === 'audio'
-            ? track.enabled
-              ? 'megaphone'
-              : 'megaphone-off'
-            : track.enabled
-              ? 'eye'
-              : 'eye-off'}
-          label={track.kind === 'audio'
-            ? track.enabled
-              ? tr('tl.muteAudioTrack')
-              : tr('tl.unmuteAudioTrack')
-            : track.enabled
-              ? tr('tl.hideTrack')
-              : tr('tl.showTrack')}
-          size="sm"
-          active={track.enabled}
-          testid="track-enabled"
-          onclick={() => appState.store.toggleTrackEnabled(track.id)}
-        />
-
-        {#if renaming === track.id}
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            class="rename"
-            data-testid="track-rename-input"
-            value={track.name}
-            autofocus
-            onblur={(e) => commitRename(track.id, e.currentTarget.value)}
-            onkeydown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                commitRename(track.id, e.currentTarget.value);
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                renaming = null;
-              }
-            }}
-            onpointerdown={(e) => e.stopPropagation()}
-          />
-        {:else}
-          <span
-            class="tname"
-            data-testid="track-name"
-            title={track.name}
-            role="presentation"
-            ondblclick={() => beginRename(track.id)}
-          >{track.name}</span>
-        {/if}
-
-        <IconButton
-          icon="ellipsis-vertical"
-          label={tr('tl.trackMenu')}
-          size="sm"
-          testid="track-menu"
-          onclick={(e) => openRowMenu(e, track)}
-        />
-      </div>
-    {/each}
-
+    <!--
+      加轨按钮是**固定页脚**，不参与竖直滚动。它同时钉住了一条不变量：
+      两侧的滚**动内容**等高 —— 画布那列是 RULER_HEIGHT + N × ROW_HEIGHT，
+      这里也正好是这么多。页脚若留在滚动区里，轨道头列就比画布多出一个行高，
+      滚到底时两边会被各自的 max 钳到不同的位置（表现是「同步了但总差一截」）。
+    -->
     <div class="side-add" style:height={`${ROW_HEIGHT}px`}>
       <span class="add-label">{tr('tl.addTrack')}</span>
       <button
@@ -889,7 +923,16 @@
     </div>
   </div>
 
-  <div class="scroll" data-testid="tl-scroll" bind:this={scrollEl} onwheel={wheel} onscroll={() => paint(false)}>
+  <div
+    class="scroll"
+    data-testid="tl-scroll"
+    bind:this={scrollEl}
+    onwheel={wheel}
+    onscroll={() => {
+      syncVertical(scrollEl, sideEl);
+      paint(false);
+    }}
+  >
     <div class="canvas-wrap" data-testid="tl-canvas-wrap" style:width={`${drawWidth}px`}>
       <canvas class="ruler" bind:this={rulerCanvas} onpointerdown={scrub}></canvas>
       <div
@@ -1001,13 +1044,30 @@
     display: flex;
     overflow: hidden;
   }
-  .side {
+  /*
+   * 轨道头列 = 外壳（定宽 + 右边框 + 纵向排布）+ 滚动区 + 固定页脚。
+   * 拆这一层是为了让「滚动内容」只有表头 + 各行 —— 与画布那列严格等高。
+   */
+  .side-wrap {
     width: var(--tl-side-w);
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     border-right: 1px solid var(--tl-border);
     background: var(--tl-side-bg);
+  }
+  .side {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    /* 竖直滚动条**只留画布那一条**（两者由 `syncVertical` 联动）。
+       这里再挂一条就是用户报的「两条各滚各的」。 */
+    scrollbar-width: none;
+  }
+  .side::-webkit-scrollbar {
+    display: none;
   }
   .side-head {
     display: flex;
@@ -1067,6 +1127,8 @@
     gap: var(--sp-2);
     padding: 0 var(--sp-2) 0 var(--sp-3);
     border-bottom: 1px solid var(--tl-gutter);
+    /* 固定页脚：不参与滚动，于是两侧滚动内容等高（见模板里的注释）。 */
+    flex-shrink: 0;
   }
   .add-label {
     color: var(--text-muted);

@@ -10,6 +10,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 type W = {
   __artmatic: {
@@ -27,6 +28,7 @@ const DIR = 'e2e-restore';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as W).__artmatic);
+  await openDemo(page);
 }
 
 function projects(page: Page): Promise<{ name: string; dir: string | null; active: boolean }[]> {
@@ -48,6 +50,7 @@ test('离开再回来：提示并一键恢复上次打开的工程', async ({ pa
   // 离开再回来
   await page.reload();
   await page.waitForFunction(() => (window as never as W).__artmatic);
+  await openDemo(page);
 
   const banner = page.getByTestId('restore-project');
   await expect(banner).toBeVisible();
@@ -64,6 +67,7 @@ test('忽略后不再提示，且跨 reload 保持', async ({ page }) => {
 
   await page.reload();
   await page.waitForFunction(() => (window as never as W).__artmatic);
+  await openDemo(page);
   await expect(page.getByTestId('restore-project')).toBeVisible();
 
   await page.getByTestId('restore-dismiss').click();
@@ -71,5 +75,6 @@ test('忽略后不再提示，且跨 reload 保持', async ({ page }) => {
 
   await page.reload();
   await page.waitForFunction(() => (window as never as W).__artmatic);
+  await openDemo(page);
   await expect(page.getByTestId('restore-project')).toHaveCount(0);
 });

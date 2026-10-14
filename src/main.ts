@@ -4,8 +4,7 @@ import './app.css';
 // 控件族样式必须在 app.css 的兜底样式**之后**载入，否则同特异度的
 // `button:hover` 会盖掉 `.ic-btn:hover`（纯图标按钮要保持透明底）。
 import './ui/controls/controls.css';
-import { ProjectStore } from './core/project-store';
-import { createBlankProject, createDemoProject, DEMO_ASSET_ID } from './core/demo-project';
+import { createBlankProject, DEMO_ASSET_ID } from './core/demo-project';
 import { renderDemoAudio } from './audio/demo-audio';
 import { computeWaveform } from './audio/decode';
 import { appState } from './ui/app-state.svelte';
@@ -42,9 +41,19 @@ import type { Renderer } from './engine/renderer';
 installTheme(theme.spec);
 applyFontScale(theme.fontScale);
 
-/* 首份工程先于 mount（组件挂载即读 appState.store.project），
-   渲染服务在 Preview.onMount → appState.attachPreview 里随 canvas 惰性创建。 */
-appState.init(new ProjectStore(createDemoProject()));
+/*
+ * **首屏零选项卡**：不自动开任何工程，直接进欢迎界面。
+ *
+ * 以前这里是 `init(new ProjectStore(createDemoProject()))` —— 每次打开/刷新都留一份
+ * 要手动关掉的 demo。示例工程本身没被砍：它是空界面上的一个入口
+ * （`EmptyState.svelte` 的「打开示例工程」→ `newProject(true)`）。
+ *
+ * 不传 store 是安全的：`appState.store` 会回落到一份丢弃用的空白工程
+ * （见 `app-state.svelte.ts` 的 `placeholder`），而 `hasProject` 为假时
+ * `tick()` 直接返回，不会有人对空工程渲染。
+ * 渲染服务在 Preview.onMount → `appState.attachPreview` 里随 canvas 惰性创建。
+ */
+appState.init();
 
 const app = mount(App, { target: document.getElementById('app')! });
 
@@ -215,7 +224,15 @@ const controlContext: ControlContext = {
 const control = createControlPlane(controlContext);
 
 (window as unknown as Record<string, unknown>).__artmatic = {
-  renderer: appState.renderer,
+  /**
+   * ⚠️ **getter，不是快照**：预览服务会在「换 canvas / WebGL 上下文恢复」时整块重建
+   * （见 `appState.attachPreview`），那之后 `appState.renderer` 是**另一个对象**。
+   * 写成快照的话，所有拿 `__artmatic.renderer` 的 E2E / 诊断脚本会在重建之后
+   * 对着已经废弃的 renderer 操作 —— 表现是「测试说画面没变」而其实是读错了对象。
+   */
+  get renderer() {
+    return appState.renderer;
+  },
   appState,
   theme,
   /**

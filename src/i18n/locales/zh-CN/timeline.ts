@@ -62,6 +62,7 @@ export const timeline = {
   'tl.enableTrack': '启用轨道',
   'tl.disableTrack': '禁用轨道',
   'tl.addClip': '新建片段',
+  'tl.renameClip': '重命名片段',
   'tl.removeClip': '删除片段',
   'tl.removeClips': '删除 {n} 个片段',
   'tl.moveTrackUp': '上移一轨',
@@ -129,8 +130,13 @@ export const timeline = {
   'tp.zoom': '时间轴缩放',
   'tp.zoomTip': '时间轴缩放（也可 Ctrl+滚轮，以鼠标为锚）',
   /* 当前帧截图：逐帧操作，所以放轨道工具条（§6.7）。文件名是「工程名-frame-帧号.png」。 */
-  'tp.snapshot': '导出当前帧',
-  'tp.snapshotTip': '把当前预览帧按工程分辨率导出为 PNG（文件名带帧号）',
+  'tp.snapshot': '复制当前帧',
+  'tp.snapshotTip':
+    '把当前预览帧按工程分辨率复制成 PNG（Ctrl/⌘+V 直接可用）。按住 Alt 点击 = 存成文件（工程名-frame-帧号.png）',
+  'tp.snapshotCopied': '已复制第 {frame} 帧到剪贴板',
+  'tp.snapshotCopiedPartial': '已复制第 {frame} 帧（反馈类特效的跨帧历史未重放：超出重放上限）',
   'tp.snapshotSaved': '已导出第 {frame} 帧',
-  'tp.snapshotFailed': '导出当前帧失败',
+  'tp.snapshotClipDenied': '已改为下载第 {frame} 帧（剪贴板权限被拒）',
+  'tp.snapshotClipUnsupported': '已改为下载第 {frame} 帧（此环境不支持写剪贴板）',
+  'tp.snapshotFailed': '取当前帧失败',
 } as const;

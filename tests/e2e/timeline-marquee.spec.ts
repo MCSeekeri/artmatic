@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * 时间轴框选：在空白处拖出矩形，选中与它相交的多个片段。
@@ -37,6 +38,7 @@ type AnyA = {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 const MK = `(id, start, end) => ({ kind:'source', id, start, end, label:id, fadeSec:0, curves:{},

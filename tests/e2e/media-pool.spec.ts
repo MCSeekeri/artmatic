@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * 媒体池（左侧素材抽屉）与「导入图片」这条新入口。
@@ -17,6 +18,7 @@ type Rgb = [number, number, number];
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /**
@@ -361,6 +363,56 @@ test('双击条目也能插入（同一条池子里的素材可以重复用）',
   const before = (await clipsOf(page)).length;
   await page.locator('[data-testid=pool-item][data-kind=image]').dblclick();
   await expect.poll(async () => (await clipsOf(page)).length, { timeout: 10_000 }).toBe(before + 1);
+});
+
+/**
+ * 移除素材。
+ *
+ * 三件事都要成立：**行从池子里消失**、**工程表里的那条也没了**（保存时才会真的删
+ * 磁盘文件 —— 台账里被显式移除才删，见 §5.1）、**引用它的片段留着**（它变成
+ * 「素材缺失」，而不是被连带删掉）。再加一条：引用数必须如实报出来 ——
+ * 「说没人用，删完画面空了」正是这条判据存在的理由。
+ */
+test('移除素材：⋯ → 确认后才删，且如实报出引用数', async ({ page }) => {
+  await boot(page);
+  const track = await cleanStage(page);
+  const assetId = await importImage(page, track, 'e2e-pic.png');
+
+  await page.getByTestId('rail-media').click();
+  await expect(page.getByTestId('media-drawer')).toBeVisible();
+
+  const row = page.locator(`[data-testid=pool-item][data-asset-id="${assetId}"]`);
+  await expect(row).toHaveCount(1);
+
+  const assetIds = async (): Promise<string[]> =>
+    page.evaluate(() =>
+      Object.keys(
+        (window as never as { __artmatic: { store: { project: { assets: Record<string, unknown> } } } })
+          .__artmatic.store.project.assets,
+      ),
+    );
+
+  // 刚导入的那个片段正引用着它 → 确认语必须说清引用数与后果
+  await row.getByTestId('pool-menu').click();
+  await page.getByTestId('pool-menu-delete').click();
+  const dialog = page.getByTestId('confirm-delete-asset');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('1 个片段引用');
+
+  // 取消：什么都不该变
+  await page.getByTestId('confirm-delete-asset-cancel').click();
+  await expect(row).toHaveCount(1);
+  expect(await assetIds()).toContain(assetId);
+
+  // 确认：池子里的行没了、工程表里的条目也没了
+  await row.getByTestId('pool-menu').click();
+  await page.getByTestId('pool-menu-delete').click();
+  await page.getByTestId('confirm-delete-asset-ok').click();
+  await expect(row).toHaveCount(0);
+  expect(await assetIds()).not.toContain(assetId);
+
+  // 引用它的片段还在（只是变成「素材缺失」）—— 删素材不该顺手删片段
+  expect((await clipsOf(page)).some((c) => c.source?.assetId === assetId)).toBe(true);
 });
 
 test('抽屉宽度可拖（往右变宽），收起后画面把宽度拿回来', async ({ page }) => {

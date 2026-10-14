@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -59,6 +60,7 @@ interface FontHooks {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 const CJK_TEXT = '高浓度CO₂胁迫下C₃杨树与C₄玉米的生理和分子响应差异';

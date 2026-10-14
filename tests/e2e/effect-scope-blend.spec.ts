@@ -16,7 +16,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
-import { buildDepthStage, gridL1, rgbaAt, setEffectDepth, settle } from './_stage';
+import { openDemo, buildDepthStage, gridL1, rgbaAt, setEffectDepth, settle } from './_stage';
 
 type Api = {
   __artmatic: {
@@ -32,6 +32,7 @@ type Api = {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 async function setScopeBlend(page: Page, trackId: string, blend: string): Promise<void> {

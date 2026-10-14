@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openDemo } from './_stage';
 
 test('应用启动：canvas 存在、画面非全黑、无 console 错误', async ({ page }) => {
   const errors: string[] = [];
@@ -10,6 +11,7 @@ test('应用启动：canvas 存在、画面非全黑、无 console 错误', asyn
   await page.goto('/');
   await expect(page.locator('#gl')).toBeVisible();
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 
   const mean = await page.evaluate(() => {
     const A = (window as never as { __artmatic: { readPixels: () => { data: number[] } } }).__artmatic;

@@ -15,6 +15,7 @@
 
 import { createHash } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /** `window.__artmatic` 在页面里的形状。类型只在编译期存在，运行时被擦除。 */
 type W = {
@@ -65,6 +66,7 @@ const ASSET_BYTES = [137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4];
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as W).__artmatic);
+  await openDemo(page);
   // 上一轮的残留会让「文件存在」这类断言假绿。
   await page.evaluate((d) => (window as never as W).__artmatic.project.wipe(d), DIR);
 }

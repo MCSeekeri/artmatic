@@ -15,6 +15,7 @@
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
   import Mascot from './mascot/Mascot.svelte';
+  import PasteAssetsModal from './PasteAssetsModal.svelte';
   import { handleTypographyKey, handleTypingFormatKey } from './typography/keys';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
@@ -22,7 +23,24 @@
   import { activeElementOwnsSpace, isExempt } from './focus';
   import { saveProjectAs, saveProjectNow } from './project-actions';
   import { isSplitKey } from './shortcuts';
+  import { clipboardAssets, type ClipboardAsset } from './clipboard-assets';
+  import { addAssetsToPool, pasteAssetsIntoTypography, placeAssetsAtPlayhead } from './paste-assets';
   import { tr } from '../i18n/index.svelte';
+
+  /**
+   * 剪贴板里有素材、等着选落点的那一批（时间轴视图）。
+   * 走 paste 事件而不是 Ctrl+V 的 keydown：`clipboardData` 只在事件派发期间
+   * 可读（同步、零权限），而 keydown 里只能去够 navigator.clipboard（要授权）。
+   */
+  let pendingPaste = $state<ClipboardAsset[] | null>(null);
+
+  function resolvePaste(target: 'timeline' | 'pool'): void {
+    const assets = pendingPaste;
+    pendingPaste = null;
+    if (!assets) return;
+    if (target === 'timeline') void placeAssetsAtPlayhead(assets);
+    else void addAssetsToPool(assets);
+  }
 
   /**
    * 主题的唯一写入口。main.ts 在 mount 前已经装过一次（防首帧闪默认值），
@@ -88,6 +106,16 @@
       }
 
       /*
+       * F2 = 给选中的片段就地改名（双击片段名是同一个入口）。
+       * 放在时间轴这一侧：排版页有自己的 keys.ts 分流，那边没有「片段」这个概念。
+       */
+      if (e.key === 'F2' && appState.selectedClipId) {
+        e.preventDefault();
+        appState.beginClipRename(appState.selectedClipId);
+        return;
+      }
+
+      /*
        * 切分键的方案别名（「操作习惯」）。默认方案下 `isSplitKey` 恒返回 false，
        * 走下面那条 `e.key === 's'` 的分支 —— 两处都判会让同一次击键切两刀。
        */
@@ -126,6 +154,33 @@
     };
 
     /**
+     * 粘贴素材。
+     *
+     * 只在剪贴板里**真的有素材**（图片 / 视频 / 音频）时才接管：粘贴一段文字
+     * 必须原样走浏览器的默认行为，否则输入类控件的粘贴会整个失灵。
+     * `isExempt` 放最前面 —— 输入框与自研控件（data-exempt）的粘贴归它们自己；
+     * 文本编辑区的粘贴守卫也会 `preventDefault`，由 defaultPrevented 让路。
+     *
+     * 时间轴视图弹 modal 问落点；排版视图按类型直接落地（图片进画布、
+     * 视频 / 音频进媒体池）—— 在那边这是唯一合理的解释，不值得再问一次。
+     */
+    const onPaste = (e: ClipboardEvent): void => {
+      if (e.defaultPrevented) return;
+      if (isExempt(e.target)) return;
+      // 没有工程时整段放行：素材仓属于「当前工程」，粘进 placeholder 等于无声丢弃。
+      if (!appState.hasProject) return;
+      const assets = clipboardAssets(Array.from(e.clipboardData?.items ?? []));
+      if (!assets.length) return;
+      e.preventDefault();
+      if (appState.editorOpen) {
+        void pasteAssetsIntoTypography(assets);
+        return;
+      }
+      // 已经在问一次了：第二次粘贴既不覆盖上一个询问、也不弹第二个框。
+      if (!pendingPaste) pendingPaste = assets;
+    };
+
+    /**
      * 原生右键菜单全应用禁用（轨道区与菜单都用自绘 div 菜单）。
      * 文本类输入例外：那里的复制/粘贴/拼写检查是系统能力，禁掉只会让人难受。
      */
@@ -152,10 +207,12 @@
     };
 
     window.addEventListener('keydown', onKey);
+    window.addEventListener('paste', onPaste);
     window.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('paste', onPaste);
       window.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('beforeunload', onBeforeUnload);
     };
@@ -194,8 +251,13 @@
         <!--
           媒体池（左）与检查器（右）是两个独立抽屉，各自条件渲染、各自记宽度。
           它们与 `.stage` 的关系见下面 `.body` 的网格注释。
+
+          ⚠️ `!editorOpen` 是必须的：排版编辑页也有自己的媒体池（同一个开关、
+          同一个组件）。主界面切到排版页只是 `display:none`、**不卸载**，
+          少了这个条件时两份抽屉会同时在 DOM 里 —— 两份列表、两份视频缩略图
+          队列，`getByTestId('media-drawer')` 也会同时命中两个。
         -->
-        {#if appState.mediaPoolOpen}
+        {#if appState.mediaPoolOpen && !appState.editorOpen}
           <MediaPoolDrawer />
         {/if}
 
@@ -252,6 +314,19 @@
 
 {#if !appState.hasProject}
   <EmptyState />
+{/if}
+
+<!--
+  粘贴素材的落点询问。挂在 shell **外面**：这里是根层叠上下文，
+  modal 不会被任何祖先的 z-index / 层叠上下文困住（见 tokens.ts 的 z-modal）。
+-->
+{#if pendingPaste}
+  <PasteAssetsModal
+    assets={pendingPaste}
+    onplace={() => resolvePaste('timeline')}
+    onpool={() => resolvePaste('pool')}
+    oncancel={() => (pendingPaste = null)}
+  />
 {/if}
 
 <Tip />

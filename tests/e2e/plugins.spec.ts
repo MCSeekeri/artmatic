@@ -18,7 +18,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
-import { buildStage } from './_stage';
+import { openDemo, buildStage } from './_stage';
 
 const DIR = 'e2e-plugins';
 
@@ -112,6 +112,7 @@ export const plugin = {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as PageApi).__artmatic);
+  await openDemo(page);
   // 上一轮的残留会让「文件存在」这类断言假绿。
   await page.evaluate((d) => (window as never as PageApi).__artmatic.project.wipe(d), DIR);
 }

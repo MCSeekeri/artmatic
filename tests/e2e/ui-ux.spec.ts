@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * UI/UX 一轮改动的回归。
@@ -13,14 +14,39 @@ import { expect, test, type Page } from '@playwright/test';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /* ------------------------------------------------------------ 空界面 */
 
+/*
+ * 首屏**不再自动开 demo**（main.ts 的 `appState.init()` 不传工程）。
+ * 这一条是那次改动的验收：不调 `openDemo`，直接看首屏。
+ */
+test('启动即欢迎界面（零选项卡）；「打开示例工程」能进去', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+
+  await expect(page.getByTestId('empty-state')).toBeVisible();
+  await expect(page.locator('.tab')).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => (window as never as { __artmatic: { projects: () => unknown[] } }).__artmatic.projects().length,
+    ),
+  ).toBe(0);
+
+  // 示例工程仍在，只是改成了空界面上的一个入口
+  await page.getByTestId('empty-demo').click();
+  await expect(page.getByTestId('empty-state')).toHaveCount(0);
+  await expect(page.locator('.tab')).toHaveCount(1);
+  // 它是一份真工程：时间轴上有轨道
+  await expect(page.locator('[data-testid=track-side-row]').first()).toBeVisible();
+});
+
 test('关掉最后一份工程 → 空界面；从空界面能新建回来', async ({ page }) => {
   await boot(page);
 
-  // 启动时那份 demo 是「从未保存过」的，所以算脏 —— 先弹确认，确认后才真关。
+  // 打开的那份 demo 是「从未保存过」的，所以算脏 —— 先弹确认，确认后才真关。
   await page.getByTestId('project-tab-close-0').click();
   await expect(page.getByTestId('confirm-close-project')).toBeVisible();
   await page.getByTestId('confirm-close-project-ok').click();

@@ -33,6 +33,7 @@ import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
 import { planGif, type GifPlan } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
 import { browserPlatform } from '../platform/browser';
+import { withExportFrame } from '../render/export-frame';
 import { getLimits, mbToBytes } from '../core/capacity';
 import type { SaveStream } from '../platform/types';
 import { tr } from '../i18n/index.svelte';
@@ -195,15 +196,10 @@ function safeBase(name?: string): string {
  * 用 `canvas.toBlob('image/png')` 量出真实字节，调用方再乘帧数 —— 是**按当前帧
  * 采样**的估计值，会随画面内容波动，不是承诺。
  *
- * 三件必须做对的事：
- *  - **钉尺寸必须还原**：`setExportSize` 之后 `syncSize` 会直接 return（见 §5.9），
- *    不还原的话预览会**停在工程分辨率**上，而且不报错。`finally` 里
- *    `clearExportSize` + `appState.refreshPreview()` 把预览尺寸与画面一次复原。
- *  - **必须在钉尺寸的内层 toBlob**：`refreshPreview` 里的 `syncSize` 会改画布尺寸，
- *    而改尺寸会清空帧缓冲 —— 先还原再截图只会拿到黑图。
- *  - `onSeek` + `prepareFrame` + 导出模式：反馈类特效跨帧有历史、排版位图是异步
- *    光栅化的、导出模式的文字与预览不同 —— 不做的采样帧不代表真实导出帧。
- *    三者与 `runExport` 逐条对齐，`finally` 里对称还原。
+ * 取材序列整个交给 `render/export-frame.ts::withExportFrame`（钉尺寸 → 导出模式 →
+ * 字体预热 → 取材 → 对称还原），与截图、导出循环共用一份纪律。
+ * **这里显式关掉重放**（`replay: false`）：一次「大约多少 MB」的估算不值得为
+ * 反馈类特效从上一次 seek 起重放上千帧，而重放与否对字节数的差异远小于估算误差。
  *
  * @param t 采样时刻（通常传当前播放头 `appState.playT`）。
  * @param onlyTrackId 只采样该视觉轨（与导出同参数）；省略 = 全部视觉轨。
@@ -217,22 +213,25 @@ export async function samplePngFrameBytes(t: number, onlyTrackId?: string): Prom
   const renderer = appState.renderer;
   if (!renderer) return null;
   const project = appState.store.project;
-  const { w, h } = project.resolution;
   try {
-    renderer.setExportSize(w, h);
-    renderer.onSeek();
-    renderer.enterExportMode();
-    await renderer.prepareFrame(project, t);
-    renderer.renderFrame(project, t, onlyTrackId !== undefined ? { onlyTrackId } : undefined);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      renderer.kit.canvas.toBlob(resolve, 'image/png'),
+    return await withExportFrame(
+      renderer,
+      project,
+      t,
+      async (canvas) => {
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, 'image/png'),
+        );
+        return blob ? blob.size : null;
+      },
+      { onlyTrackId, replay: false },
     );
-    return blob ? blob.size : null;
   } catch {
     return null;
   } finally {
-    renderer.exitExportMode();
-    renderer.clearExportSize();
+    // 尺寸还原与画面重画在 `refreshPreview` 里（它会 `onSeek` + `syncSize` +
+    // 重画一帧）。**必须在 withExportFrame 之外**：它内部的 syncSize 会改画布
+    // 尺寸并清空帧缓冲，先还原再截只会拿到黑图。
     appState.refreshPreview();
   }
 }

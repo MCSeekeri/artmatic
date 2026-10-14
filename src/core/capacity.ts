@@ -89,6 +89,16 @@ export interface CapacityLimits {
   exportMemoryMB: number;
   /** 撤销栈步数。每条是一份**整工程快照**，所以它是内存量的函数。 */
   undoSteps: number;
+  /**
+   * 快照（当前帧截图）**按帧顺序重放**的帧数上限。
+   *
+   * 反馈类特效的历史存在池子里，钉尺寸取材时会失效 —— 只有「从第 0 帧顺序走到
+   * 目标帧」才能等价于导出的那一帧。这条上限是那次重放的成本闸门：超了就不重放，
+   * 退回单帧并在提示语里说明（见 `render/export-frame.ts`）。
+   * 它是**帧数**而不是毫秒：重放循环里的每一帧都是一次完整渲染，
+   * 帧数 × 单帧开销才是耗时，而单帧开销随分辨率与特效数变化。
+   */
+  snapshotReplayMaxFrames: number;
 }
 
 /**
@@ -108,6 +118,9 @@ export const DEFAULT_LIMITS: CapacityLimits = {
   simStateMB: 128,
   exportMemoryMB: 512,
   undoSteps: 80,
+  // 900 帧 ≈ 15 s @60fps。1080p 一帧几毫秒，重放一次约 2~5 s ——
+  // 是「点一下截图会等一下」的量级，还能覆盖绝大多数带反馈特效的片段。
+  snapshotReplayMaxFrames: 900,
 };
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
@@ -168,6 +181,8 @@ export function deriveLimits(machine: MachineCapacity): CapacityLimits {
     // 特效池与模拟状态是**状态**（不能淘汰在用的那份），预算主要防「调参时越攒越多」。
     effectPoolMB: budget(gpu * 0.25, 64, 1024),
     simStateMB: budget(gpu * 0.1, 32, 512),
+    // 快照重放是**时间**而不是空间，与机器能力无关：跟着默认值走。
+    snapshotReplayMaxFrames: DEFAULT_LIMITS.snapshotReplayMaxFrames,
     ...ramSide,
   };
 }
@@ -248,6 +263,9 @@ export const RANGE: Record<keyof CapacityLimits, [number, number]> = {
   simStateMB: [8, 8192],
   exportMemoryMB: [16, 16384],
   undoSteps: [4, 2000],
+  // 下界 60 帧（1 s @60fps）是「至少还能重放一秒」，上界 6000 帧是「再长就不该卡在
+  // 一次点击上」—— 想重放整段长片，正确做法是走导出，不是截图。
+  snapshotReplayMaxFrames: [60, 6000],
 };
 
 /**

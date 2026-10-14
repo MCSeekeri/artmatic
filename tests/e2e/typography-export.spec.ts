@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * M4 排版：光栅化 → 纹理 → 合成的闭环。
@@ -148,6 +149,7 @@ function projectWith(doc: unknown, duration = 0.2) {
 const BOOT = async (page: import('@playwright/test').Page) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 };
 
 test('排版片段进入合成链，且方向正确（不上下颠倒）', async ({ page }) => {

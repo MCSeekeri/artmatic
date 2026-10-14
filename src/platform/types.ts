@@ -55,6 +55,16 @@ export interface PickedVideo {
   size: number;
 }
 
+/**
+ * 写图片到剪贴板的四种结果。
+ *
+ * 分开报而不是布尔值的理由：**调用方的下一步不一样**。
+ * `unsupported` / `denied` 都回退成下载并说明原因（Firefox 与权限被拒是常态，
+ * 不是错误），`failed` 才是「真的写坏了」。合成一个 false 的话，用户只会看到
+ * 「截图失败」，而磁盘上连文件都没有。
+ */
+export type ClipboardWriteResult = 'ok' | 'unsupported' | 'denied' | 'failed';
+
 export interface Platform {
   pickAudioFile(): Promise<PickedFile | null>;
   pickImageFile(): Promise<PickedFile | null>;
@@ -81,6 +91,15 @@ export interface Platform {
   pickPluginFile(): Promise<PickedFile | null>;
   /** 触发一次浏览器下载（Electron 版会是写文件对话框）。 */
   download(blob: Blob, filename: string): Promise<void>;
+  /**
+   * 把一张 PNG 写进系统剪贴板。
+   *
+   * **必须在用户手势里调用**（与 `saveStream` 同一条约束）：`clipboard.write()`
+   * 要求瞬时激活，绕一层 `setTimeout` 就会拿到 `NotAllowedError`。
+   * 非安全上下文（http 域名）与不认 `ClipboardItem` 的浏览器返回 `unsupported`，
+   * 由调用方回退到下载 —— 截图这件事在那些环境里**必须仍然可用**。
+   */
+  writeImageToClipboard(blob: Blob): Promise<ClipboardWriteResult>;
   saveProject(json: string, suggestedName: string): Promise<void>;
   openProject(): Promise<{ name: string; json: string } | null>;
 

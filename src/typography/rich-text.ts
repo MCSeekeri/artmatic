@@ -186,6 +186,116 @@ export function uniformSpanValue<K extends SpanStyleKey>(
 }
 
 /**
+ * 选区是不是**覆盖了整段文本**。
+ *
+ * 判据只有一条：区间从 0 起、到末尾止。它服务于「全选文本后点文本框级样式
+ * 应该改整块」这条用户直觉（PPT 的交互）：全选之后按加粗，用户想的是
+ * 「这一整块加粗」，而不是「给每个字加一条行内覆盖把整块包起来」——
+ * 后者会让元素级永远改不动这块字（观感是「设置了却没反应」）。
+ *
+ * 刻意**不做 trim**：只选了大部分文字时仍然是「改这一段」，
+ * 把「差一个字也算全选」这种模糊边界放进来的话，用户永远猜不到自己那一下
+ * 改的是整块还是一段。
+ */
+export function coversWholeText(runs: readonly TextRun[], start: number, end: number): boolean {
+  const total = plainTextOf(runs).length;
+  if (total === 0) return false;
+  const s = Math.max(0, Math.min(start, total));
+  const e = Math.max(s, Math.min(end, total));
+  return s === 0 && e >= total;
+}
+
+/**
+ * 区间内**数值键**的最小生效值。
+ *
+ * 字号输入框在「区间里字号不一致」时显示 `${min}+` —— 那个 `+` 必须有个基准，
+ * 而最小值的读法是唯一自洽的：「97+」= 至少 97。取区间起点的值（`uniformSpanValue`
+ * 在混合时的回落）会给出一个既不是最大也不是最小的数，读起来是假的。
+ */
+export function minSpanValue(
+  runs: readonly TextRun[],
+  start: number,
+  end: number,
+  base: TextStyle,
+  key: 'fontSize',
+): number {
+  const total = plainTextOf(runs).length;
+  const s = Math.max(0, Math.min(start, total));
+  const e = Math.max(s, Math.min(end, total));
+  const fallback = (baseSpanStyle(base)[key] ?? 0) as number;
+  if (e === s) return spanValueAt(runs, s, base, key) as number;
+
+  let min = Number.POSITIVE_INFINITY;
+  let at = 0;
+  for (const r of runs) {
+    const rs = at;
+    const re = at + r.text.length;
+    at = re;
+    if (re <= s || rs >= e) continue;
+    // 一段文本内字号只能有一个生效值，所以逐段取就够了（不需要逐字符）。
+    const v = (r.style?.[key] === undefined ? fallback : r.style[key]) as number;
+    if (v < min) min = v;
+  }
+  return Number.isFinite(min) ? min : fallback;
+}
+
+/**
+ * 把区间内**每一处的字号**按比例缩放（保留相对大小），写成行内覆盖。
+ *
+ * 「增大 / 减小字号」按钮用它，而**不是**设成阶梯上的某一个固定值：
+ * 一段 37 号字点一下 + 应该是 42.5 左右，而不是跳到 40 —— 后者在
+ * 「我就是要它大一点点」的场景里会把用户已经调好的关系弄丢。
+ * 阶梯仍然在（下拉里），只是不再支配这两个按钮。
+ *
+ * 每一段各自乘：区间里 24 与 48 混排时，缩放后仍是 1:2 的关系。
+ */
+export function scaleSpanFontSize(
+  runs: readonly TextRun[],
+  start: number,
+  end: number,
+  base: TextStyle,
+  factor: number,
+  limits: { min: number; max: number },
+): TextRun[] {
+  const total = plainTextOf(runs).length;
+  let s = Math.max(0, Math.min(start, total));
+  let e = Math.max(s, Math.min(end, total));
+  if (s === e) {
+    // 空区间：与 applySpanStyle 同口径 —— 退化成「光标所在的那一段」。
+    const seg = segmentAt(runs, s);
+    s = seg.at;
+    e = seg.at + seg.text.length;
+  }
+
+  const clampSize = (n: number): number =>
+    Math.round(Math.min(limits.max, Math.max(limits.min, n)) * 100) / 100;
+
+  const out: TextRun[] = [];
+  let at = 0;
+  for (const r of runs) {
+    const rs = at;
+    const re = at + r.text.length;
+    at = re;
+    const before = r.text.slice(0, Math.max(0, s - rs));
+    const inside = r.text.slice(Math.max(0, s - rs), Math.max(0, e - rs));
+    const after = r.text.slice(Math.max(0, e - rs));
+
+    if (before) out.push({ text: before, style: r.style ? { ...r.style } : undefined });
+    if (inside) {
+      const cur = (r.style?.fontSize ?? base.fontSize) as number;
+      const next = clampSize(cur * factor);
+      // 值没变（已经顶到上/下界）就什么都不写，免得白攒一条覆盖。
+      out.push({
+        text: inside,
+        style: mergeStyle(r.style, { fontSize: next === cur ? undefined : next }),
+      });
+    }
+    if (after) out.push({ text: after, style: r.style ? { ...r.style } : undefined });
+  }
+  return normalizeRuns(out);
+}
+
+/**
  * 给 `[start, end)` 加一层覆盖。**富文本的全部写操作都走这里。**
  *
  * 三件事：在两端切开 run、给区间内的每一段合上补丁、归一化。

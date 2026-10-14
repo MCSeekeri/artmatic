@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openDemo } from './_stage';
 import { readFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -38,6 +39,7 @@ test.afterEach(async () => {
 async function setupTinyProject(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   // demo 含 bake 型生成器：被动等烘焙落地（见 determinism.spec 的注释）
   await page.waitForTimeout(2500);
   await page.evaluate(() => {

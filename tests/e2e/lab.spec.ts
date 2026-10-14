@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 import { ALGO_HEAD, SCENE_GLSL, declaredUniforms } from '../../src/algos/shader-lib';
 import { zhCN } from '../../src/i18n/locales/zh-CN';
 

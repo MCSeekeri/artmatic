@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildTransitionStage, clearTransition, rgbMeanAt, renderTwiceDiff, hashAt, settle } from './_stage';
+import { openDemo, buildTransitionStage, clearTransition, rgbMeanAt, renderTwiceDiff, hashAt, settle } from './_stage';
 
 /**
  * 转场（gl-transitions）的 E2E。
@@ -20,6 +20,7 @@ async function boot(page: Page): Promise<void> {
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   expect(errors).toEqual([]);
 }
 

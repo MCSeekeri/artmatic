@@ -36,7 +36,7 @@ import {
   shapeParamSupport,
 } from '../../typography/shapes';
 import type { GalleryCard } from '../ribbon/ribbon-model';
-import { uniformSpanValue, type SpanStyleKey } from '../../typography/rich-text';
+import { minSpanValue, uniformSpanValue, type SpanStyleKey } from '../../typography/rich-text';
 import type { TypographyActions } from './actions';
 import { loadRecentFonts, orderByRecent, rememberFont } from './recent-fonts';
 import { tr } from '../../i18n/index.svelte';
@@ -66,6 +66,10 @@ export interface TypographyRibbonInput {
   onOpenCustomCss: () => void;
   /** 打开「插入图标」选择器（同上）。 */
   onOpenIconPicker: () => void;
+  /** 媒体池开着没有（「插入」页里的开合按钮显示激活态）。 */
+  mediaPoolOpen: boolean;
+  /** 开合媒体池（同上）。 */
+  onToggleMediaPool: () => void;
   /** 「转为图片」逃生舱。 */
   onFlatten: () => void;
   /** 网格 / 画幅线框的当前值。 */
@@ -92,6 +96,7 @@ export interface TypographyRibbonInput {
 }
 
 const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
+/** 字号下拉的阶梯。**增减按钮不再走它**（按比例缩放，见 actions.scaleFontSize）。 */
 const FONT_SIZES = [12, 16, 20, 24, 32, 40, 48, 64, 72, 96, 128, 160, 200];
 
 /** 字符间距预设（px）。档位与 Office 的「很紧 / 紧密 / 常规 / 疏松 / 很松 / 更松」对齐。 */
@@ -112,24 +117,6 @@ const CASE_OPTIONS: { value: TextStyle['textTransform']; labelKey: MessageKey }[
   { value: 'lowercase', labelKey: 'rib.caseLower' },
 ];
 
-/**
- * 字号阶梯上的相邻档（字号 ∓/+ 按钮用）。
- *
- * 当前值不在阶梯上时取相邻那一档：`-1` 取 ≤ 当前的最大档、`+1` 取 ≥ 当前的最小档；
- * 已在端点返回 null（按钮据此置灰）。与 select 共用同一张 `FONT_SIZES`，
- * 避免「按钮跳到的档位不在下拉里」。
- */
-function fontSizeStep(current: number, dir: -1 | 1): number | null {
-  if (dir < 0) {
-    for (let i = FONT_SIZES.length - 1; i >= 0; i--) {
-      const s = FONT_SIZES[i]!;
-      if (s < current) return s;
-    }
-    return null;
-  }
-  for (const s of FONT_SIZES) if (s > current) return s;
-  return null;
-}
 const LINE_STYLES = ['solid', 'dashed', 'dotted'] as const;
 
 function firstText(sel: TypographyElement[]): TextElement | null {
@@ -242,6 +229,41 @@ export function buildTypographyTabs(
     return text.style[key];
   }
 
+  /**
+   * 带「区间内是否一致」的读法（字号「XX+」用它）。
+   *
+   * `tv` 把 `uniform` 吞掉了，而**不一致这件事本身就是要显示出来的东西** ——
+   * 一致时刻意不显示的那个「+」正是它的信号。没有它，一行 24 与 48 混排的字
+   * 会在输入框里显示成其中一个值，用户改字号时看到的是假的现状。
+   */
+  function tvUniform<K extends SpanStyleKey>(
+    key: K,
+  ): { uniform: boolean; value: TextStyle[K] } | null {
+    if (!text) return null;
+    if (range) {
+      return uniformSpanValue(text.runs, range.start, range.end, text.style, key);
+    }
+    return { uniform: true, value: text.style[key] };
+  }
+
+  /**
+   * 字号输入框的显示值：区间内字号不一致时显示 `${min}+`（模糊值）。
+   *
+   * 「97+」读作「至少 97」—— 取的是区间里的**最小值**，不是起点值。
+   * 用户看到它就知道这里大小不一，按增减按钮也是整体缩放（见 `scaleFontSize`）。
+   */
+  const fontSizeText = (() => {
+    if (!text) return '0';
+    const u = tvUniform('fontSize');
+    if (!u) return String(text.style.fontSize);
+    if (u.uniform) return String(u.value);
+    const min = minSpanValue(text.runs, range?.start ?? 0, range?.end ?? 0, text.style, 'fontSize');
+    return `${Math.round(min)}+`;
+  })();
+
+  /** 每按一次「增大 / 减小字号」的比例。按比例而不是按档位，见 `scaleFontSize`。 */
+  const FONT_SCALE_STEP = 1.15;
+
   const group = input.soleGroup;
   /** 布尔运算至少要两个图形（多了才有「并」可言）。 */
   const canBool = selection.filter((e) => e.kind === 'shape').length >= 2;
@@ -320,10 +342,11 @@ export function buildTypographyTabs(
                 hideLabel: true,
                 testid: 'ribbon-font-size',
                 width: 84,
-                // 可编辑 + numeric
+                // 可编辑 + numeric：**「97+」这种非预设值也落在 value 上**，
+                // Select 的 labelOf 在选项里找不到就原样显示（见 controls/Select.svelte）。
                 editable: true,
                 numeric: true,
-                value: String(tv('fontSize') ?? 0),
+                value: fontSizeText,
                 disabled: !hasText,
                 options: FONT_SIZES.map((s) => ({ value: String(s), label: String(s) })),
                 onchange: (v) => a.setTextStyle('fontSize', Number(v)),
@@ -335,11 +358,8 @@ export function buildTypographyTabs(
                 icon: 'a-arrow-down',
                 size: 'icon',
                 testid: 'ribbon-font-size-dec',
-                disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, -1) === null,
-                onselect: () => {
-                  const n = fontSizeStep(tv('fontSize') ?? 0, -1);
-                  if (n !== null) a.setTextStyle('fontSize', n);
-                },
+                disabled: !hasText || !a.canScaleFontSize(-1),
+                onselect: () => a.scaleFontSize(1 / FONT_SCALE_STEP),
               },
               {
                 kind: 'button',
@@ -348,11 +368,8 @@ export function buildTypographyTabs(
                 icon: 'a-arrow-up',
                 size: 'icon',
                 testid: 'ribbon-font-size-inc',
-                disabled: !hasText || fontSizeStep(tv('fontSize') ?? 0, 1) === null,
-                onselect: () => {
-                  const n = fontSizeStep(tv('fontSize') ?? 0, 1);
-                  if (n !== null) a.setTextStyle('fontSize', n);
-                },
+                disabled: !hasText || !a.canScaleFontSize(1),
+                onselect: () => a.scaleFontSize(FONT_SCALE_STEP),
               },
               {
                 kind: 'button',
@@ -995,6 +1012,20 @@ export function buildTypographyTabs(
               icon: 'image-plus',
               testid: 'typo-add-image',
               onselect: () => a.addImage(),
+            },
+            {
+              /*
+               * 媒体池的开合，与 Rail 上那个图标是同一个状态。放这里是因为
+               * 「从池子里拖一张图到画布上」是插入图片的另一条路 —— 用户找
+               * 图片时会先看这个组，而不会想到去窄侧栏找。
+               */
+              kind: 'toggle',
+              id: 'media-pool',
+              label: tr('rib.mediaPool'),
+              icon: 'images',
+              active: input.mediaPoolOpen,
+              testid: 'typo-media-pool',
+              onchange: () => input.onToggleMediaPool(),
             },
           ],
         },

@@ -226,7 +226,15 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
     '这次不再继续淘汰（会删掉正在显示的画面）；',
     '素材规格与机器能力不匹配，可在 artmatic.capacity.json 里调大 videoTextureMB。',
   ],
-  'ui/app-state.svelte.ts': ['[tempo] 估计失败：'],
+  'ui/app-state.svelte.ts': [
+    '[tempo] 估计失败：',
+    /*
+     * WebGL 上下文丢失的诊断。用户出口是**画面停更**这件事本身，而这行是给
+     * 排查的人看「为什么停」—— 它只进 console.warn，没有任何 UI 出口。
+     * 上下文恢复后画面会自己回来（`webglcontextrestored` → 重建渲染服务）。
+     */
+    '[preview] WebGL 上下文丢失（多为显存不足 / 驱动重置），等待浏览器恢复',
+  ],
 
   /* ── 二、按 error.name 判定的哨兵；或测试替身内部 ─────────────────
    * 判据在 `name` 上，文案不参与逻辑 —— 本地化它们不会让任何东西变好，
@@ -274,6 +282,12 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
     '[typo] 字体 ${face.id} 的 FontFace 加载失败',
   ],
   'typography/runtime.ts': ['[typo] 光栅化失败', '[typo] 预热失败'],
+  /*
+   * 预览 rAF 循环的异常兜底（见 Preview.svelte 的「偶发黑屏」审查结论）。
+   * 用户看到的是**画面停在这一帧**，这行是给排查的人看的（还带了计数，用来
+   * 判断是一次性错误还是每帧都在抛）。抽成 key 只会给一段永不渲染的文字做翻译。
+   */
+  'ui/Preview.svelte': ['[preview] 渲染循环抛错（已兜住，不会停循环；第 ${tickErrors} 次）'],
   // 字体导入的逐项失败：其余字体照常导入，只 console.warn 这一条。
   'ui/typography/actions.ts': ['[typo] 字体 ${f.name} 导入失败'],
   /*

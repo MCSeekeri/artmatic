@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * 跨剪切点两帧预览（达芬奇式交互）。
@@ -20,6 +21,7 @@ import { expect, test, type Page } from '@playwright/test';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 interface CutStage {

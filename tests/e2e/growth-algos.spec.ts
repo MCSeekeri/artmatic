@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildStage, gridL1, gridStats, waitForSourceReady } from './_stage';
+import { openDemo, buildStage, gridL1, gridStats, waitForSourceReady } from './_stage';
 
 /**
  * Wave 4 批次 3 的 E2E：Buddhabrot（sim）+ 混沌游戏 / DLA（bake）。
@@ -26,6 +26,7 @@ async function shootBake(
 ) {
   await page.goto('/');
   await page.waitForFunction(() => Boolean((window as never as { __artmatic?: unknown }).__artmatic));
+  await openDemo(page);
   await buildStage(page, {
     id: `m-${gen}`,
     source: { type: 'algo', generator: gen, params },

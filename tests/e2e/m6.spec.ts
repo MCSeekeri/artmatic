@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildStage, meanAt, renderTwiceDiff, setTrackEnabled, settle } from './_stage';
+import { openDemo, buildStage, meanAt, renderTwiceDiff, setTrackEnabled, settle } from './_stage';
 
 /**
  * M6 收尾这批功能的 E2E：视频素材、image 片段、工程设置、预览降质、rail 一致性。
@@ -22,6 +22,7 @@ import { buildStage, meanAt, renderTwiceDiff, setTrackEnabled, settle } from './
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /** 清空舞台并建一条空的视觉轨，返回 trackId。 */
@@ -58,6 +59,7 @@ async function waitForClip(page: Page, timeout = 60_000): Promise<void> {
     undefined,
     { timeout },
   );
+  await openDemo(page);
 }
 
 type Rgb = [number, number, number];

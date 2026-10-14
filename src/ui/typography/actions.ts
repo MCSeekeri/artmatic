@@ -13,9 +13,11 @@ import { browserPlatform } from '../../platform/browser';
 import { appState } from '../app-state.svelte';
 import { editorState } from './editor-state.svelte';
 import { newId } from '../../core/schema';
+import { imageSourceFor, registerImageBytes } from '../../engine/media-assets';
 import {
   DEFAULT_PAINT_A,
   applyPaintPatch,
+  centeredImageFrame,
   createImageElement,
   createShapeElement,
   createTextElement,
@@ -47,7 +49,7 @@ import {
   type AnimPreset,
   type AnimTiming,
 } from '../../typography/animation';
-import { putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
+import { hasImageAsset, putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
 import {
   cloneFragment,
   expandToGroups,
@@ -71,8 +73,10 @@ import { booleanOp, multiToShape, shapeToMultiPolygon, type BoolOp } from '../..
 import {
   applySpanStyle,
   clearSpanStyle as clearRunsSpanStyle,
+  coversWholeText,
   normalizeRuns,
   plainTextOf,
+  scaleSpanFontSize,
   SPAN_STYLE_KEYS,
   uniformSpanValue,
   type SpanStyleKey,
@@ -191,6 +195,117 @@ function targetRect(): Rect {
   return { id: 'canvas', x: 0, y: 0, w: size.w, h: size.h };
 }
 
+/**
+ * 建一个图片元素并选中（一笔撤销）。
+ *
+ * 默认框**按素材原始比例**算（`defaultImageFrame` / `centeredImageFrame`），
+ * 比例来自 `imageSourceFor` —— 那是引擎里已经解码好的那一份，插入路径上的每一个
+ * 入口（Ribbon 插入 / 剪贴板粘贴 / 媒体池拖放）都已经登记过它，所以不需要在这里
+ * 再解一次字节。解不出来（极端情况）就退回正方块：**不猜比例**。
+ *
+ * @param center 给了就按它当中心（粘贴是画布中心、拖放是鼠标落点）。
+ */
+function insertImageElement(
+  assetId: string,
+  name: string,
+  center?: { x: number; y: number },
+): string | null {
+  let elId: string | null = null;
+  const natural = imageSourceFor(assetId);
+  editorState.commit(tr('typo.undo.addImage'), (doc) => {
+    const el = createImageElement(doc.size, assetId, {
+      name,
+      ...(natural ? { natural: { w: natural.w, h: natural.h } } : {}),
+      ...(center
+        ? {
+            frame: centeredImageFrame(
+              doc.size,
+              center.x,
+              center.y,
+              natural?.w ?? 0,
+              natural?.h ?? 0,
+            ),
+          }
+        : {}),
+    });
+    doc.elements = [...doc.elements, el];
+    elId = el.id;
+    queueMicrotask(() => editorState.selectOnly(el.id));
+  });
+  return elId;
+}
+
+/**
+ * 把一份**新**图片字节登记成素材并置入文档。Ribbon 的「插入图片」与
+ * 剪贴板粘贴走它；从媒体池拖进来的（素材已在册）走 `placeImageAssetImpl`。
+ *
+ * 登记分三层，缺一不可：
+ *  ① `registerImageBytes`（engine）—— 时间轴把图片当画面源时要的那份解码结果；
+ *  ② `putImageBytes`（typography）—— 舞台渲染与 snapDOM 光栅化要的 objectURL；
+ *  ③ `assets.put` + `p.assets[]` —— 保存工程时的字节与元信息。
+ */
+async function placeImageBytesImpl(
+  name: string,
+  data: ArrayBuffer,
+  center?: { x: number; y: number },
+): Promise<string | null> {
+  const assetId = newId();
+  const mime = mimeForImageFilename(name);
+  // 解码放在最前面：解不开的字节不该在工程里留下一条永远画不出来的素材
+  //（与 media-import.ts 的 importImageBlob 同一条取舍）。
+  try {
+    await registerImageBytes(assetId, new Blob([data], { type: mime }));
+  } catch {
+    appState.flash(tr('err.image.unreadable', { name }), 'error');
+    return null;
+  }
+  // 尺寸从解码结果取（拿不到就不写，不猜）。Asset.size 只是展示用。
+  const decoded = imageSourceFor(assetId);
+
+  putImageBytes(assetId, data, mime);
+  // 字节进仓。直接持有 `data` 上的视图，不额外拷贝：这份 buffer 是刚读出来的，
+  // 没有第二个持有者（上面两步各自内部拷贝）。
+  appState.assets.put(assetId, new Uint8Array(data), {
+    kind: 'image',
+    name,
+    originName: name,
+  });
+  appState.store.commit(tr('typo.undo.registerImageAsset'), (p) => {
+    p.assets[assetId] = {
+      id: assetId,
+      kind: 'image',
+      name,
+      ...(decoded ? { size: { w: decoded.w, h: decoded.h } } : {}),
+    };
+  });
+
+  return insertImageElement(assetId, name, center);
+}
+
+/**
+ * 把**已在册**的图片素材置入文档（媒体池拖到画布）。
+ *
+ * 不再登记一遍 —— 那会给同一张图造出第二个 assetId，媒体池里立刻多出一条
+ * 一模一样的素材。这里只在 objectURL 缺席时补一条（正常路径上导入与打开工程
+ * 都已建过，见 `project-actions.ts::hydrateRenderAssets`；补这条是为了万一
+ * 拿不到 URL 时画布上不会留一个空洞）。
+ */
+function placeImageAssetImpl(
+  assetId: string,
+  name: string,
+  center?: { x: number; y: number },
+): string | null {
+  if (!hasImageAsset(assetId)) {
+    const bytes = appState.assets.get(assetId);
+    if (!bytes) {
+      appState.flash(tr('pool.missing'), 'error');
+      return null;
+    }
+    putImageBytes(assetId, bytes.slice().buffer as ArrayBuffer, mimeForImageFilename(name));
+  }
+  return insertImageElement(assetId, name, center);
+}
+
 /* ------------------------------------------------------------ 动作表 */
 
 export interface TypographyActions {
@@ -202,6 +317,23 @@ export interface TypographyActions {
    * 「现在改的是整块还是一段」等于把这个判断抄了 N 份。
    */
   setTextStyle<K extends SpanStyleKey>(key: K, value: TextStyle[K]): void;
+  /**
+   * 按比例缩放字号（「增大 / 减小字号」按钮）。`factor > 1` 变大。
+   *
+   * 为什么是缩放而不是「跳到阶梯上的相邻档」：用户按下这个按钮的意图是
+   * 「大一点点 / 小一点点」，而阶梯（12/16/20/…）会把 37 号字一步带到 40，
+   * 把他调好的相对关系弄丢。相对关系在混合选区里尤其重要 ——
+   * 24 与 48 一起放大 1.15 倍之后仍然是 1:2。
+   */
+  scaleFontSize(factor: number): void;
+  /**
+   * 还能不能继续缩放字号（「增大 / 减小字号」按钮的可用性）。
+   *
+   * 上下界在**动作这一侧**（`FONT_SIZE_LIMITS`），不放到 Ribbon 去 ——
+   * 两处各判一次的形态是「按钮还亮着，按了没反应」。
+   * 混合选区永远可用：各段各自乘，总有还能动的那一处。
+   */
+  canScaleFontSize(dir: -1 | 1): boolean;
   /** 直接写行内覆盖（`null` = 删掉这条覆盖，回到元素级）。 */
   setSpanStyle(patch: SpanStylePatch): void;
   /** 清掉选中范围的**全部**行内覆盖。 */
@@ -248,6 +380,23 @@ export interface TypographyActions {
   addText(): void;
   addShape(preset: ShapePreset): void;
   addImage(): void;
+  /**
+   * 把一份图片字节置入画布（剪贴板粘贴 / 媒体池拖放 / 文件选择器共用）。
+   *
+   * `center` 是文档坐标的落点（不给 = 画布中心）。返回新元素 id；
+   * 解不开的字节返回 null（已 flash 过原因）。
+   */
+  placeImageBytes(
+    name: string,
+    data: ArrayBuffer,
+    center?: { x: number; y: number },
+  ): Promise<string | null>;
+  /** 把已在册的图片素材置入画布（媒体池拖放）。返回新元素 id。 */
+  placeImageAsset(
+    assetId: string,
+    name: string,
+    center?: { x: number; y: number },
+  ): string | null;
   /** 插入一批图标（来自图标选择器），按给定顺序从左到右排成网格。 */
   addIcons(items: IconInsert[]): void;
 
@@ -367,6 +516,18 @@ export interface TypographyActions {
 
 const r2 = (n: number): number => Math.round(n * 100) / 100;
 
+/**
+ * 字号缩放的安全区间。
+ *
+ * 比 Ribbon 那张阶梯（12…200）宽：**缩放是相对的，不该被阶梯端点卡住** ——
+ * 一个 8 号的小注脚、一个 240 号的大标题都该还能再动一点。
+ * 上下界只是防止按着不放把字号推到 3 或 3000 那种画不出东西的量级。
+ */
+const FONT_SIZE_LIMITS = { min: 8, max: 320 } as const;
+
+const clampFontSize = (n: number): number =>
+  r2(Math.min(FONT_SIZE_LIMITS.max, Math.max(FONT_SIZE_LIMITS.min, n)));
+
 /* ------------------------------------------------------------ 剪贴板
  *
  * 状态存在 `editorState.clipboard`（响应式），不在这里的模块作用域 ——
@@ -406,16 +567,30 @@ function textSpanRange(): { elId: string; start: number; end: number } | null {
  * 返回 null = 根本没有作用对象（按钮那时本来就是禁用态）。
  */
 function currentTextValue<K extends SpanStyleKey>(key: K): TextStyle[K] | null {
+  return currentTextUniform(key)?.value ?? null;
+}
+
+/**
+ * 同 `currentTextValue`，但**带上「区间内是否一致」**。
+ *
+ * 不一致这件事本身是有意义的（PPT 的交互就建在它上面）：
+ *  - 加粗 / 斜体：「全部已生效」才整体取消，否则整体施加；
+ *  - 字号：区间内不一致时输入框显示 `97+`（模糊值），而不是硬选一个数。
+ * 把 `uniform` 吞掉的旧签名做不到这两件事 —— 而它们正是用户要的「按直觉来」。
+ */
+function currentTextUniform<K extends SpanStyleKey>(
+  key: K,
+): { uniform: boolean; value: TextStyle[K] } | null {
   const doc = editorState.doc;
   const range = textSpanRange();
   if (doc && range) {
     const el = doc.elements.find((x) => x.id === range.elId);
     if (el && el.kind === 'text') {
-      return uniformSpanValue(el.runs, range.start, range.end, el.style, key).value;
+      return uniformSpanValue(el.runs, range.start, range.end, el.style, key);
     }
   }
   const t = editorState.selected.find((e) => e.kind === 'text');
-  return t && t.kind === 'text' ? t.style[key] : null;
+  return t && t.kind === 'text' ? { uniform: true, value: t.style[key] } : null;
 }
 
 /** 把片段复制一份并落进文档（粘贴 / 复制 / Ctrl 拖曳共用）。 */
@@ -451,13 +626,75 @@ export function createTypographyActions(): TypographyActions {
     },
 
     setTextStyle(key, value) {
+      const range = textSpanRange();
+      const doc = editorState.doc;
       // 行内选区只对「可以行内覆盖」的属性有意义；行高 / 对齐这类段落属性
       // 永远写元素级（同一行里两种行高谁也画不对，见 rich-text.ts）。
-      if (this.hasSpanRange() && (SPAN_STYLE_KEYS as readonly string[]).includes(key)) {
+      if (range && doc && (SPAN_STYLE_KEYS as readonly string[]).includes(key)) {
+        const el = doc.elements.find((x) => x.id === range.elId);
+        /*
+         * **全选 = 改整块**（用户报的「全选后设样式不起效」）。
+         *
+         * 原来只要落在文本元素上就一律写行内覆盖：Ctrl+A 之后点字体 / 字号 /
+         * 加粗，得到的是一整段行内覆盖，元素级**一点没变**。用户看到的
+         * 「选了文本框、设了样式、没反应」就是这个 —— 内部的 span 优先级
+         * 高于文本框本身。
+         *
+         * 所以全选时落到元素级，并**同时清掉区间内该键的旧覆盖**（不清的话
+         * 那些覆盖会继续压着新设的元素级，症状一模一样）。两件事必须同一笔
+         * 撤销里做完，否则 Ctrl+Z 只回来一半。
+         */
+        if (el?.kind === 'text' && coversWholeText(el.runs, range.start, range.end)) {
+          editorState.commit(tr('typo.undo.textProp'), (d) => {
+            const t = d.elements.find((x) => x.id === range.elId);
+            if (!t || t.kind !== 'text') return;
+            t.style = { ...t.style, [key]: value } as TextStyle;
+            t.runs = clearRunsSpanStyle(t.runs, range.start, range.end, [key as SpanStyleKey]);
+          });
+          return;
+        }
         this.setSpanStyle({ [key]: value } as SpanStylePatch);
         return;
       }
       this.setTextProp(key, value);
+    },
+
+    scaleFontSize(factor) {
+      if (!(factor > 0) || factor === 1) return;
+      const range = textSpanRange();
+      const doc = editorState.doc;
+      const el = doc && range ? doc.elements.find((x) => x.id === range.elId) : undefined;
+
+      /*
+       * 有行内选区（含**全选**）一律**逐处**缩放，不走「全选 = 改整块」那条捷径。
+       *
+       * 这是与 `setTextStyle` 刻意不同的取舍：「设一个值」时用户要的是整块统一，
+       * 全选落元素级是对的；而「按比例缩放」时用户要的是**比例关系不变** ——
+       * 全选落元素级 + 清覆盖会把 24 与 48 的混排一步抹平成同一个字号，
+       * 而输入框上那个 `XX+` 刚刚才告诉他这里有大小之分。
+       */
+      if (el?.kind === 'text' && range) {
+        editorState.commit(tr('typo.undo.spanStyle'), (d) => {
+          const t = d.elements.find((x) => x.id === range.elId);
+          if (!t || t.kind !== 'text') return;
+          t.runs = scaleSpanFontSize(t.runs, range.start, range.end, t.style, factor, FONT_SIZE_LIMITS);
+        });
+        return;
+      }
+
+      // 没有行内选区：缩放全部选中文本元素的元素级字号（一笔撤销）。
+      editorState.commit(tr('typo.undo.textProp'), (doc2) => {
+        for (const t of onlyText(doc2)) {
+          t.style = { ...t.style, fontSize: clampFontSize(t.style.fontSize * factor) };
+        }
+      });
+    },
+
+    canScaleFontSize(dir) {
+      const cur = currentTextUniform('fontSize');
+      if (!cur) return false;
+      if (!cur.uniform) return true;
+      return dir < 0 ? cur.value > FONT_SIZE_LIMITS.min : cur.value < FONT_SIZE_LIMITS.max;
     },
 
     setSpanStyle(patch) {
@@ -508,17 +745,24 @@ export function createTypographyActions(): TypographyActions {
        * 开关的语义是「在**当前生效值**上取反」，不是「把元素级取反」。
        * 一段字已经被行内加粗过、而元素级不是粗体时，按钮是按下态 —— 再点一次
        * 必须取消它，而不是把元素级设成粗体（那看起来像「点了没反应，反而更粗了」）。
+       *
+       * 而且判据是「**全部**已生效」：选了一段粗一段不粗的字，按一下是
+       * 「全部加粗」，再按一下才是「全部解除」（PPT 的交互）。
+       * 只看起点的话，混合选区按一下就变成「起点那段反向、其余不动」——
+       * 用户看到的是「按了两次才统一」，第二次还反着来。
        */
       if (flag === 'bold') {
-        const v = currentTextValue('fontWeight');
-        if (v === null) return;
-        this.setTextStyle('fontWeight', v >= 600 ? 400 : 700);
+        const cur = currentTextUniform('fontWeight');
+        if (!cur) return;
+        const allBold = cur.uniform && cur.value >= 600;
+        this.setTextStyle('fontWeight', allBold ? 400 : 700);
         return;
       }
       if (flag === 'italic') {
-        const v = currentTextValue('fontStyle');
-        if (v === null) return;
-        this.setTextStyle('fontStyle', v === 'italic' ? 'normal' : 'italic');
+        const cur = currentTextUniform('fontStyle');
+        if (!cur) return;
+        const allItalic = cur.uniform && cur.value === 'italic';
+        this.setTextStyle('fontStyle', allItalic ? 'normal' : 'italic');
         return;
       }
       const v = currentTextValue('textDecoration');
@@ -653,27 +897,13 @@ export function createTypographyActions(): TypographyActions {
       void (async () => {
         const picked = await browserPlatform.pickImageFile();
         if (!picked) return;
-        const assetId = newId();
-        // ① 渲染期解引用：snapDOM 要能把 <img> 取下来内联进快照。
-        putImageBytes(assetId, picked.data, mimeForImageFilename(picked.name));
-        // ② 持久化：字节进素材仓，并在工程的素材表里登记一条。
-        //    两个都要 —— 只有 ① 保存时找不到字节（重开丢图），
-        //    只有 ② 当时画面上就是空的。
-        appState.assets.put(assetId, new Uint8Array(picked.data.slice(0)), {
-          kind: 'image',
-          name: picked.name,
-          originName: picked.name,
-        });
-        appState.store.commit(tr('typo.undo.registerImageAsset'), (p) => {
-          p.assets[assetId] = { id: assetId, kind: 'image', name: picked.name };
-        });
-        editorState.commit(tr('typo.undo.addImage'), (doc) => {
-          const el = createImageElement(doc.size, assetId, { name: picked.name });
-          doc.elements = [...doc.elements, el];
-          queueMicrotask(() => editorState.selectOnly(el.id));
-        });
+        await placeImageBytesImpl(picked.name, picked.data);
       })();
     },
+
+    placeImageBytes: placeImageBytesImpl,
+
+    placeImageAsset: placeImageAssetImpl,
 
     /* ---------------------------------------------------- 通用属性 */
 

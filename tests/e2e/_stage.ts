@@ -88,6 +88,30 @@ export interface Stage {
  * 这个坑踩过一次：抽出去一个 `api()` 助手，运行期报 `api is not defined`。
  */
 
+/* ------------------------------------------------------------ 启动 / 打开示例 */
+
+/**
+ * 首屏是**零选项卡的欢迎界面**（`main.ts` 不再自动开 demo），而几乎所有用例
+ * 都要求「有一份工程在上面」。这个助手就是那一步：停在欢迎界面时点一下
+ * 「打开示例工程」，否则什么都不做。
+ *
+ * 为什么要做成一个**每个等待点都要调**的助手，而不是塞进某个 `boot()`：
+ * 各 spec 的启动形态不统一（有的在 `boot()` 里、有的在用例中途、有的在
+ * `page.reload()` 之后），而 `waitForFunction(__artmatic)` 是它们唯一的公共点。
+ *
+ * 幂等：已经有工程时 `empty-demo` 不在 DOM 里（空界面是 `{#if !hasProject}`）。
+ */
+export async function openDemo(page: Page): Promise<void> {
+  const demo = page.getByTestId('empty-demo');
+  if ((await demo.count()) === 0) return;
+  await demo.click();
+  // 打开是异步的（生成音频 + 解码 + 波形）。等到工程真的在上面再放手，
+  // 否则调用方的第一个断言会撞上欢迎界面 —— 那种失败看起来像「界面坏了」。
+  await page.waitForFunction(
+    () => Boolean((window as never as { __artmatic?: { appState?: { hasProject: boolean } } }).__artmatic?.appState?.hasProject),
+  );
+}
+
 /* ------------------------------------------------------------------ API */
 
 /**
@@ -789,6 +813,7 @@ export async function shootAlgo(
 ): Promise<GridStats> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   await buildStage(page, { id: `m-${gen}`, source: { type: 'algo', generator: gen, params }, end: 8 });
   return gridStats(page, t);
 }

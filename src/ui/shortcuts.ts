@@ -43,6 +43,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keysKey: 'sc.key.shiftClickClip', labelKey: 'sc.addRemoveClip' },
       { keysKey: 'sc.key.dragSelection', labelKey: 'sc.moveClips' },
       { keysKey: 'sc.key.dblClick', labelKey: 'sc.openClipEditor' },
+      { keysKey: 'sc.key.renameClip', labelKey: 'sc.renameClip' },
       { keysKey: 'sc.key.s', labelKey: 'sc.splitAtPlayhead' },
       { keysKey: 'sc.key.altArrows', labelKey: 'sc.shiftTrack' },
       { keysKey: 'sc.key.delete', labelKey: 'sc.deleteClip' },

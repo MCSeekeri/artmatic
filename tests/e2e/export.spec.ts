@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openDemo } from './_stage';
 import { unzipSync } from 'fflate';
 import { readFile } from 'node:fs/promises';
 
@@ -11,6 +12,7 @@ import { readFile } from 'node:fs/promises';
 test('导出 PNG 序列：帧数正确，且与预览同帧差在噪声级', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   // demo 含 bake 型生成器：被动等烘焙落地再比帧（见 determinism.spec 的注释）
   await page.waitForTimeout(2500);
 
@@ -95,6 +97,7 @@ test('导出 PNG 序列：帧数正确，且与预览同帧差在噪声级', asy
 test('导出按钮触发浏览器下载（真实下载路径）', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   await page.evaluate(() => {
     const A = (window as never as {
       __artmatic: { store: { setDuration: (s: number) => void } };

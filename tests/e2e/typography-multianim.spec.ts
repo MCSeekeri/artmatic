@@ -10,10 +10,12 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 async function addTextClip(page: Page): Promise<string> {

@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   applySpanStyle,
   clearSpanStyle,
+  coversWholeText,
   hasSpanOverrides,
+  minSpanValue,
   normalizeRuns,
   plainTextOf,
   runsEquivalent,
   runsFromText,
   runsSignature,
+  scaleSpanFontSize,
   spanValueAt,
   SPAN_STYLE_KEYS,
   uniformSpanValue,
@@ -255,5 +258,84 @@ describe('白名单', () => {
     for (const k of ['fontSize', 'letterSpacing', 'fontWeight', 'fontFamily', 'color']) {
       expect(SPAN_STYLE_KEYS as readonly string[]).toContain(k);
     }
+  });
+});
+
+/* --------------------------------------- 全选 / 模糊值 / 整体缩放（PPT 那套） */
+
+describe('coversWholeText', () => {
+  const runs = runsFromText('标题文字'); // 4 个字
+
+  it('从 0 到末尾 = 全选', () => {
+    expect(coversWholeText(runs, 0, 4)).toBe(true);
+    // 末尾多出的那一点（DOM 的 Range 可能给到 4）也算全选
+    expect(coversWholeText(runs, 0, 999)).toBe(true);
+  });
+
+  it('差一个字就不算 —— 「差一个字也当全选」会让用户永远猜不到改的是整块还是一段', () => {
+    expect(coversWholeText(runs, 1, 4)).toBe(false);
+    expect(coversWholeText(runs, 0, 3)).toBe(false);
+  });
+
+  it('空文本 / 空区间不算', () => {
+    expect(coversWholeText(runsFromText(''), 0, 0)).toBe(false);
+    expect(coversWholeText(runs, 2, 2)).toBe(false);
+  });
+});
+
+describe('minSpanValue', () => {
+  it('取区间内的最小值（字号「XX+」的基准）', () => {
+    const runs: TextRun[] = [
+      { text: 'ab', style: { fontSize: 48 } },
+      { text: 'cd', style: { fontSize: 24 } },
+      { text: 'ef' },
+    ];
+    const base = { ...BASE, fontSize: 30 };
+    expect(minSpanValue(runs, 0, 6, base, 'fontSize')).toBe(24);
+    // 只覆盖后半段时，继承元素级的那一段参与比较
+    expect(minSpanValue(runs, 4, 6, base, 'fontSize')).toBe(30);
+  });
+});
+
+describe('scaleSpanFontSize', () => {
+  const base = { ...BASE, fontSize: 20 };
+
+  it('逐段各乘：相对大小保持不变（24 与 48 缩放后仍是 1:2）', () => {
+    const runs: TextRun[] = [
+      { text: 'ab', style: { fontSize: 24 } },
+      { text: 'cd', style: { fontSize: 48 } },
+    ];
+    const out = scaleSpanFontSize(runs, 0, 4, base, 2, { min: 8, max: 320 });
+    expect(show(out)).toBe('[ab]{fontSize=48}[cd]{fontSize=96}');
+  });
+
+  it('继承元素级的那一段也跟着放大（写出来的是一条覆盖值）', () => {
+    const out = scaleSpanFontSize(runsFromText('abcd'), 0, 4, base, 1.5, { min: 8, max: 320 });
+    expect(show(out)).toBe('[abcd]{fontSize=30}');
+  });
+
+  it('只缩放区间内那一段，区间外原样不动', () => {
+    const runs: TextRun[] = [
+      { text: 'ab', style: { fontSize: 24 } },
+      { text: 'cd' },
+    ];
+    const out = scaleSpanFontSize(runs, 0, 2, base, 2, { min: 8, max: 320 });
+    expect(show(out)).toBe('[ab]{fontSize=48}[cd]');
+  });
+
+  it('夹到上下界；已经在界上时不写多余的覆盖', () => {
+    const hi: TextRun[] = [{ text: 'a', style: { fontSize: 300 } }];
+    expect(show(scaleSpanFontSize(hi, 0, 1, base, 2, { min: 8, max: 320 }))).toBe('[a]{fontSize=320}');
+    const atMax: TextRun[] = [{ text: 'a', style: { fontSize: 320 } }];
+    expect(show(scaleSpanFontSize(atMax, 0, 1, base, 2, { min: 8, max: 320 }))).toBe('[a]{fontSize=320}');
+  });
+
+  it('空区间退化成「光标所在的那一段」（先设字号再打字也成立）', () => {
+    const runs: TextRun[] = [
+      { text: 'ab' },
+      { text: 'cd', style: { fontSize: 40 } },
+    ];
+    const out = scaleSpanFontSize(runs, 2, 2, base, 2, { min: 8, max: 320 });
+    expect(show(out)).toBe('[ab][cd]{fontSize=80}');
   });
 });

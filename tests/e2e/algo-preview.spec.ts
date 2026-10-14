@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildStage } from './_stage';
+import { openDemo, buildStage } from './_stage';
 import { ALGO_CATALOG } from '../../src/algos/catalog';
 import { LOCALES } from '../../src/i18n/locales';
 
@@ -23,6 +23,7 @@ const zh = LOCALES['zh-CN'] as Record<string, string>;
 async function openAlgoMenu(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => Boolean((window as never as { __artmatic?: unknown }).__artmatic));
+  await openDemo(page);
   await buildStage(page, { id: 'preview', source: { type: 'solid', color: '#404040' }, end: 8 });
   await page.locator('[data-testid=track-side-row]').first().getByTestId('track-menu').click();
   await page.getByTestId('add-algo').click();

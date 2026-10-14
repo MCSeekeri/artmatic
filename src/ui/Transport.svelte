@@ -62,17 +62,41 @@
   ]);
 
   /**
-   * 导出**当前预览帧**为 PNG。
+   * 把**当前预览帧**送出去：默认进系统剪贴板，不支持 / 被拒时回退成下载。
+   *
+   * 为什么默认剪贴板：截图是「拿去用」的动作（贴进聊天 / 文档 / 当参考图），
+   * 而下载会在下载文件夹里堆一串 `xxx-frame-00042.png`。
+   * 逃生通道保留：**按住 Alt 点击 = 强制下载**（要文件名、要归档时用）。
    *
    * 渲染那段收在 `appState.snapshotFrame()`（它要碰 renderer 与工程分辨率，
-   * 属于状态层的活）；这里只管「拿到 Blob → 交给平台的下载通道 → 报一句结果」。
-   * 走 `browserPlatform.download` 而不是自己拼 anchor：objectURL 的创建与
-   * 延迟 revoke 只有那一处实现。
+   * 属于状态层的活）；这里只管「拿到 Blob → 挑通道 → 报一句结果」。
+   * 两条通道都走平台层，不在这里自己拼 anchor / ClipboardItem。
+   *
+   * ⚠️ **剪贴板写入必须在手势里**（`clipboard.write` 要求瞬时激活）：
+   * 这条链路上不能插 `setTimeout` / 二次事件循环，否则会被判成 `denied`。
    */
-  async function saveCurrentFrame(): Promise<void> {
+  async function saveCurrentFrame(forceDownload = false): Promise<void> {
     const shot = await appState.snapshotFrame();
     if (!shot) {
       appState.flash(tr('tp.snapshotFailed'), 'error');
+      return;
+    }
+    if (!forceDownload) {
+      const res = await browserPlatform.writeImageToClipboard(shot.blob);
+      if (res === 'ok') {
+        appState.flash(
+          tr(shot.truncated ? 'tp.snapshotCopiedPartial' : 'tp.snapshotCopied', { frame: shot.frame }),
+          'success',
+        );
+        return;
+      }
+      await browserPlatform.download(shot.blob, shot.filename);
+      appState.flash(
+        tr(res === 'denied' ? 'tp.snapshotClipDenied' : 'tp.snapshotClipUnsupported', {
+          frame: shot.frame,
+        }),
+        'info',
+      );
       return;
     }
     await browserPlatform.download(shot.blob, shot.filename);
@@ -110,7 +134,7 @@
     tipPlacement="top"
     testid="preview-snapshot"
     disabled={appState.snapshotting}
-    onclick={() => void saveCurrentFrame()}
+    onclick={(e) => void saveCurrentFrame(e.altKey)}
   />
 
   <span class="sep"></span>

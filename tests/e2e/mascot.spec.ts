@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 import { NOISE_MODE_CLICKS, NOISE_MODE_STRESS } from '../../src/ui/mascot/squeak-plan';
 
 /**
@@ -39,6 +40,7 @@ type MascotApi = {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /**

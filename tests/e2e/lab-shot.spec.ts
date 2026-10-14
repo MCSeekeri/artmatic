@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test, type Download, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 import { unzipSync } from 'fflate';
 
 /**

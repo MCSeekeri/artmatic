@@ -116,22 +116,17 @@
       媒体池：与「工程 / 插件」同组 —— 它回答的也是「这份工程里有什么」，
       只是范围收窄到已导入的素材。点它开的是**左边**那条抽屉（检查器在右边，
       两个开关互不相干）。
+
+      两个视图共用同一个开关：时间轴那边是「拖素材建片段」的来源，排版页那边
+      是「拖图片进画布」的来源 —— 同一份素材清单，两处各渲染一份抽屉。
     -->
     <IconButton
       icon="images"
       label={tr('pool.title')}
-      tipText={tr(appState.editorOpen ? 'pool.timelineOnly' : 'pool.openTip')}
+      tipText={tr('pool.openTip')}
       testid="rail-media"
       active={appState.mediaPoolOpen}
-      onclick={() => {
-        // 排版编辑页是一整页（`.body` 被 display:none），那边抽屉不参与布局。
-        // 与其静默失灵，不如说清楚为什么 —— 与检查器同一条边界。
-        if (appState.editorOpen) {
-          appState.flash(tr('pool.timelineOnly'));
-          return;
-        }
-        appState.toggleMediaPool();
-      }}
+      onclick={() => appState.toggleMediaPool()}
     />
     <IconButton
       icon="save"

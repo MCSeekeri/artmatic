@@ -32,6 +32,20 @@ export function hasImageAsset(assetId: string): boolean {
   return urls.has(assetId);
 }
 
+/**
+ * 丢掉一条素材的 URL（媒体池移除素材时调）。
+ *
+ * **必须 revoke**：objectURL 不释放就一直钉着那份字节（一张 4K 图片是十几 MB），
+ * 而「删掉的素材还在内存里躺着」这种事没人会去查。
+ * 幂等：没有这条素材时什么都不做。
+ */
+export function forgetImageAsset(assetId: string): void {
+  const url = urls.get(assetId);
+  if (!url) return;
+  URL.revokeObjectURL(url);
+  urls.delete(assetId);
+}
+
 /** 由文件名猜图片 MIME。猜错只影响 Blob 的类型标注，不影响渲染。 */
 export function mimeForImageFilename(name: string): string {
   const ext = name.toLowerCase().slice(name.lastIndexOf('.'));

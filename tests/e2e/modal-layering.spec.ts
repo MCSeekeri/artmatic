@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildStage } from './_stage';
+import { openDemo, buildStage } from './_stage';
 
 /**
  * modal 必须真的在**最上面**。
@@ -34,6 +34,7 @@ interface LayerApi {
 async function openPicker(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   await buildStage(
     page,
     { id: 'layer', source: { type: 'algo', generator: 'mandelbrot', params: { intRes: '480' } }, end: 8 },

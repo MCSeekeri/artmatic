@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * 排版 → 插入图标（Lucide 全量选择器）。
@@ -33,6 +34,7 @@ async function boot(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /** 与 typography-ribbon.spec.ts 同一套助手（那边是局部函数，这里按需复制）。 */

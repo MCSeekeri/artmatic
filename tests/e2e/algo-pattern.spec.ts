@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { buildStage, hashAt, meanAt, renderTwiceStats, settle, waitForSourceReady } from './_stage';
+import { openDemo, buildStage, hashAt, meanAt, renderTwiceStats, settle, waitForSourceReady } from './_stage';
 import { decodePattern, liveCount } from '../../src/algos/pattern-codec';
 import { presetParamValue } from '../../src/algos/pattern-presets';
 
@@ -14,6 +14,7 @@ import { presetParamValue } from '../../src/algos/pattern-presets';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /** 选中某个片段，让检查器渲染出它的参数。 */

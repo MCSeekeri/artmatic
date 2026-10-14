@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { rgbaAt, setTrackEnabled, settle } from './_stage';
+import { openDemo, rgbaAt, setTrackEnabled, settle } from './_stage';
 
 /**
  * transform-3d（「3D 变换」）与下层 blend 的回归守卫。
@@ -185,6 +185,7 @@ const CORNER: [number, number] = [0.02, 0.02];
 test('transform-3d 不抹掉下层 blend；中心分通道一致，screen/normal 仍可分', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 
   const stage = await buildBlendStage(page, 'screen');
   await settle(page, 1);

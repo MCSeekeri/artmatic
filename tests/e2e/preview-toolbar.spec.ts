@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { buildStage } from './_stage';
+import { openDemo, buildStage } from './_stage';
 import { zhCN } from '../../src/i18n/locales/zh-CN';
 
 /**
@@ -14,6 +14,7 @@ import { zhCN } from '../../src/i18n/locales/zh-CN';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /* ------------------------------------------------- 工具栏贴画面右下角 */
@@ -61,6 +62,7 @@ test('吸附档位跨会话保持，非法值回落 beat', async ({ page }) => {
   // 重开页面（新会话）后仍是「小节」
   await page.reload();
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapBar']);
 
   // 手改 localStorage 成一个不存在的档位 → 读回时回落「拍」，而不是整条偏好作废
@@ -72,17 +74,77 @@ test('吸附档位跨会话保持，非法值回落 beat', async ({ page }) => {
   });
   await page.reload();
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapBeat']);
 });
 
-/* --------------------------------------------------- 当前帧截图落盘 */
+/* --------------------------------------------------- 当前帧截图 */
 
-test('导出当前帧：触发 PNG 下载，尺寸是工程分辨率', async ({ page }) => {
+/*
+ * 默认出口是**系统剪贴板**（截图是「拿去用」的动作，下载会在下载文件夹里堆一串
+ * 带帧号的文件），下载保留为两条逃生通道：按住 Alt 点击、剪贴板不可用时自动回退。
+ * 三条路径都要有用例 —— 「剪贴板写不进去就静默什么都不发生」是这类改动最容易
+ * 漏掉的回归形态，而它在界面上只表现为「点了没反应」。
+ */
+
+test('复制当前帧（默认）：PNG 进系统剪贴板，尺寸是工程分辨率', async ({ page }) => {
+  await boot(page);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await buildStage(page, { id: 'pv-copy', source: { type: 'solid', color: '#cc3366' } });
+
+  await page.getByTestId('preview-snapshot').click();
+
+  // 渲染 + 编码是异步的，等剪贴板里真的出现图片
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        try {
+          const items = await navigator.clipboard.read();
+          return items.some((i) => i.types.includes('image/png'));
+        } catch {
+          return false;
+        }
+      }),
+    )
+    .toBe(true);
+
+  const shot = await page.evaluate(async () => {
+    const items = await navigator.clipboard.read();
+    const item = items.find((i) => i.types.includes('image/png'))!;
+    const blob = await item.getType('image/png');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    // 解一次图，证明进去的是**画面**而不是一张空 PNG
+    const bmp = await createImageBitmap(blob);
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = c.getContext('2d')!;
+    ctx.drawImage(bmp, 0, 0);
+    const px = ctx.getImageData(bmp.width >> 1, bmp.height >> 1, 1, 1).data;
+    return {
+      magic: [...bytes.slice(0, 8)],
+      w: view.getUint32(16),
+      h: view.getUint32(20),
+      px: [px[0]!, px[1]!, px[2]!],
+    };
+  });
+
+  // PNG 幻数
+  expect(shot.magic).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  // IHDR 的宽 / 高（大端，偏移 16 / 20）= 工程分辨率，证明走的是工程分辨率而非预览缓冲
+  expect(shot.w).toBe(1920);
+  expect(shot.h).toBe(1080);
+  // 画面内容：纯色源 #cc3366 = (204, 51, 102)（留 10 的容差给色彩管理）
+  expect(Math.abs(shot.px[0] - 204)).toBeLessThanOrEqual(10);
+  expect(Math.abs(shot.px[1] - 51)).toBeLessThanOrEqual(10);
+  expect(Math.abs(shot.px[2] - 102)).toBeLessThanOrEqual(10);
+});
+
+test('导出当前帧（Alt 点击）：触发 PNG 下载，尺寸是工程分辨率', async ({ page }) => {
   await boot(page);
   await buildStage(page, { id: 'pv-snap', source: { type: 'solid', color: '#cc3366' } });
 
   const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('preview-snapshot').click();
+  await page.getByTestId('preview-snapshot').click({ modifiers: ['Alt'] });
   const download = await downloadPromise;
 
   // 文件名含帧号（开机播放头为 0 → frame-00000）
@@ -96,6 +158,91 @@ test('导出当前帧：触发 PNG 下载，尺寸是工程分辨率', async ({ 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   expect(view.getUint32(16)).toBe(1920);
   expect(view.getUint32(20)).toBe(1080);
+});
+
+test('反馈类特效：截图按帧顺序重放，超出上限退回单帧并报出 truncated', async ({ page }) => {
+  await boot(page);
+  // echo 是反馈型（跨帧历史）：单帧取材在数学上不可能复现「顺序播放到该帧」的画面
+  await buildStage(
+    page,
+    { id: 'pv-replay', source: { type: 'solid', color: '#ff8800' } },
+    { id: 'pv-replay-fx', defId: 'echo', values: {} },
+  );
+
+  // 播放头拉到 2.5 s：目标帧号（fps 的 2.5 倍）必然高过下面压到 60 的重放上限
+  const shot = await page.evaluate(async () => {
+    const A = (window as never as { __artmatic: { appState: { playT: number; snapshotFrame: () => Promise<{ replayed: number; truncated: boolean; frame: number } | null> }; store: { project: { fps: number } } } }).__artmatic;
+    A.appState.playT = 2.5;
+    const first = await A.appState.snapshotFrame();
+    // 把重放上限压到目标帧号以下 → 必须退回单帧并如实报出来
+    (window as never as { __artmatic: { capacity: { set: (p: object) => void } } }).__artmatic.capacity.set({
+      snapshotReplayMaxFrames: 60,
+    });
+    const capped = await A.appState.snapshotFrame();
+    return {
+      fps: A.store.project.fps,
+      first: first && { replayed: first.replayed, truncated: first.truncated, frame: first.frame },
+      capped: capped && { replayed: capped.replayed, truncated: capped.truncated },
+    };
+  });
+
+  const target = Math.floor(2.5 * shot.fps + 1e-6);
+  expect(target).toBeGreaterThan(60);
+  expect(shot.first?.frame).toBe(target);
+  expect(shot.first?.replayed).toBe(target + 1);
+  expect(shot.first?.truncated).toBe(false);
+  expect(shot.capped?.replayed).toBe(0);
+  expect(shot.capped?.truncated).toBe(true);
+});
+
+/* --------------------------------------------- 预览服务的 canvas 身份 */
+
+/*
+ * 「偶发黑屏」查实的一条：`Kit` 把 canvas 存死，而 Preview 卸载重挂（dev 的组件级
+ * hot-update）会带来一块新 canvas —— 旧服务继续画在已经脱离 DOM 的那块上，
+ * 屏幕上永久空白且没有任何报错。判据是「服务绑到了新 canvas + 新 canvas 上真的
+ * 画出了东西」，不是「没抛异常」。
+ */
+test('换掉预览 canvas：渲染服务整体重建，新画布上照常出画面', async ({ page }) => {
+  await boot(page);
+  await buildStage(page, { id: 'pv-swap', source: { type: 'solid', color: '#336699' } });
+
+  const info = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        appState: {
+          renderer: { kit: { canvas: HTMLCanvasElement; gl: WebGL2RenderingContext } };
+          attachPreview: (c: HTMLCanvasElement, h: Element) => void;
+        };
+        renderFrame: (t: number) => void;
+        readPixels: () => { data: number[]; w: number; h: number };
+      };
+    }).__artmatic;
+
+    const old = A.appState.renderer.kit.canvas;
+    const host = old.parentElement!;
+    const fresh = document.createElement('canvas');
+    host.appendChild(fresh);
+
+    A.appState.attachPreview(fresh, host);
+    A.renderFrame(0);
+    const d = A.readPixels().data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i]! + d[i + 1]! + d[i + 2]!;
+    return {
+      bound: A.appState.renderer.kit.canvas === fresh,
+      lost: A.appState.renderer.kit.gl.isContextLost(),
+      oldLost: (old.getContext('webgl2') as WebGL2RenderingContext | null)?.isContextLost() ?? null,
+      meanRgb: sum / (d.length / 4) / 3,
+    };
+  });
+
+  expect(info.bound).toBe(true);
+  expect(info.lost).toBe(false);
+  // 旧上下文被显式释放（否则每重建一次就多占一份显存）
+  expect(info.oldLost).toBe(true);
+  // #336699 → 均值 102；判据只要求「不是黑屏」
+  expect(info.meanRgb).toBeGreaterThan(20);
 });
 
 /* ------------------------------------------------- tooltip 超长换行 */

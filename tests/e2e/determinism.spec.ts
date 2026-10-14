@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { SETTLE_FRAMES } from './_stage';
+import { openDemo, SETTLE_FRAMES } from './_stage';
 
 /**
  * 确定性测试——本项目最有价值的一类测试（AGENTS.md §6.1 / §6.2）。
@@ -9,6 +9,7 @@ import { SETTLE_FRAMES } from './_stage';
 test('同一工程同一 t，连续求值 100 次逐像素一致（M0 验收）', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
   // demo 含 bake 型生成器（Rule 110）：被动等烘焙落地，否则中途从「缺席」
   // 切到「在场」会被误判成非确定（这不是非确定，是异步就绪）。
   await page.waitForTimeout(2500);
@@ -98,6 +99,7 @@ test('同一工程同一 t，连续求值 100 次逐像素一致（M0 验收）'
 test('不同 t 画面确实不同（防止断言在比两张黑图）', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 
   const diff = await page.evaluate(() => {
     const A = (window as never as {

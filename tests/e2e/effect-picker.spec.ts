@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * 特效选择器（`EffectPickerModal`）的端到端验证。
@@ -22,6 +23,7 @@ interface AnyA {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 /** 打开选择器（点检查器里的「添加特效」）。 */

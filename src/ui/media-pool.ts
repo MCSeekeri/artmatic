@@ -27,6 +27,7 @@ import {
   type AnyClip,
   type Asset,
   type AudioClip,
+  type Project,
   type SourceClip,
   type Track,
 } from '../core/schema';
@@ -142,7 +143,38 @@ export function poolItemById(
   return buildPoolItems(declared, store).find((i) => i.id === id) ?? null;
 }
 
-/* ------------------------------------------------------------------ 建片段 */
+/* -------------------------------------------------------------- 引用检查 */
+
+/** 一条素材被哪几个片段引用。 */
+export interface AssetUsage {
+  trackId: string;
+  trackName: string;
+  clipId: string;
+  label: string;
+}
+
+/**
+ * 这条素材被哪些片段引用（媒体池删除前的那次询问要用的计数与文案）。
+ *
+ * **必须是唯一的判据**：UI 里另算一遍（比如只扫 `source.type === 'image'`）
+ * 的 bug 形态是「提示说没人用，删掉之后画面空了」—— 音频片段（`AudioClip.assetId`）
+ * 与视频片段用的是同一个台账，漏掉哪一类都不会报错。
+ */
+export function clipsUsingAsset(project: Project, assetId: string): AssetUsage[] {
+  const out: AssetUsage[] = [];
+  for (const track of project.tracks) {
+    for (const clip of track.clips) {
+      const used =
+        clip.kind === 'audio'
+          ? clip.assetId === assetId
+          : clip.kind === 'source' &&
+            (clip.source.type === 'image' || clip.source.type === 'video') &&
+            clip.source.assetId === assetId;
+      if (used) out.push({ trackId: track.id, trackName: track.name, clipId: clip.id, label: clip.label });
+    }
+  }
+  return out;
+}
 
 /* --------------------------------------------------- 认文件（拖进来的） */
 

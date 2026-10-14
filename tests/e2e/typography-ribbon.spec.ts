@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 import { parsePathNodes } from '../../src/typography/path-nodes';
 
 /**
@@ -20,6 +21,7 @@ import { parsePathNodes } from '../../src/typography/path-nodes';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 interface DocShape {
@@ -1274,6 +1276,111 @@ test('富文本：字号只作用于选中那一段，且「清除格式」能�
   await clear.click();
   const restored = (await readDoc(page)).elements[0]!;
   expect(restored.runs!.every((r) => !r.style?.fontSize)).toBe(true);
+});
+
+/*
+ * PPT 式的三条直觉（来自用户：「全选文本 → 设文本框样式 → 不起效」）。
+ *
+ *  ① 全选后设样式 = 改**整块**（元素级变，且区间内该键的旧覆盖被清掉 ——
+ *     不清的话覆盖会继续压着元素级，症状与「设了没反应」一模一样）
+ *  ② 加粗按「是否**全部**已生效」整体开关（混合选区按一下 = 全部加粗）
+ *  ③ 字号不一致时输入框显示 `XX+`；增减按钮是**按比例整体缩放**，
+ *     不是跳到阶梯上的固定档，也不能把混排抹平
+ */
+test('富文本：全选后设样式作用于整块（元素级）并清掉区间内的旧覆盖', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  // 先在一段字上留一条覆盖
+  await enterTextEditing(page);
+  await selectLeadingChars(page, 2);
+  const size = page.getByTestId('ribbon-font-size-input');
+  await size.fill('200');
+  await size.press('Enter');
+  expect((await readDoc(page)).elements[0]!.runs![0]!.style?.fontSize).toBe(200);
+
+  // 全选 → 改成 120：落在**元素级**，那条 200 的覆盖被清掉
+  await enterTextEditing(page);
+  await page.keyboard.press('Control+a');
+  await size.fill('120');
+  await size.press('Enter');
+
+  const after = (await readDoc(page)).elements[0]!;
+  expect(after.style!.fontSize).toBe(120);
+  expect(
+    after.runs!.some((r) => r.style?.fontSize !== undefined),
+    '全选改整块时必须清掉区间内的同名覆盖',
+  ).toBe(false);
+});
+
+test('富文本：加粗按「全部已生效」整体开关（混合选区按一下 = 全部加粗）', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  // 默认元素级 700 → 全选按一下 = 整体取消
+  await enterTextEditing(page);
+  await page.keyboard.press('Control+a');
+  await page.getByTestId('ribbon-bold').click();
+  const off = (await readDoc(page)).elements[0]!;
+  expect(off.style!.fontWeight).toBe(400);
+  expect(off.runs!.some((r) => r.style?.fontWeight !== undefined)).toBe(false);
+
+  // 再按一下 = 整体加粗
+  await page.getByTestId('ribbon-bold').click();
+  expect((await readDoc(page)).elements[0]!.style!.fontWeight).toBe(700);
+
+  // 制造混排：前两个字单独改成不加粗
+  await enterTextEditing(page);
+  await selectLeadingChars(page, 2);
+  await page.getByTestId('ribbon-bold').click();
+  const mixed = (await readDoc(page)).elements[0]!;
+  expect(mixed.runs![0]!.style?.fontWeight).toBe(400);
+  expect(mixed.style!.fontWeight).toBe(700);
+
+  // 全选（此时状态是「一部分粗」）→ 按一下必须是**全部加粗**，
+  // 而不是「起点那段反向、其余不动」（那是按两次才统一，第二次还反着来）
+  await enterTextEditing(page);
+  await page.keyboard.press('Control+a');
+  await page.getByTestId('ribbon-bold').click();
+  const all = (await readDoc(page)).elements[0]!;
+  expect(all.style!.fontWeight).toBe(700);
+  expect(all.runs!.some((r) => r.style?.fontWeight !== undefined)).toBe(false);
+});
+
+test('富文本：字号不一致显示「XX+」，增减按钮按比例整体缩放（不抹平混排）', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  // 混排：前两个字 200，其余继承元素级 97
+  await enterTextEditing(page);
+  await selectLeadingChars(page, 2);
+  const size = page.getByTestId('ribbon-font-size-input');
+  await size.fill('200');
+  await size.press('Enter');
+  expect((await readDoc(page)).elements[0]!.style!.fontSize).toBe(97);
+
+  // 全选：字号不一致 → 显示模糊值「97+」（97 是区间里的最小值，读作「至少 97」）
+  await enterTextEditing(page);
+  await page.keyboard.press('Control+a');
+  await expect(size).toHaveValue('97+');
+
+  // 增大 = 每一处各乘 1.15（不是跳到阶梯上的 96/128 这种固定档）
+  await page.getByTestId('ribbon-font-size-inc').click();
+  const scaled = (await readDoc(page)).elements[0]!;
+  const sizes = scaled.runs!.map((r) => r.style?.fontSize).filter((v): v is number => v !== undefined);
+  expect(sizes.length).toBeGreaterThanOrEqual(2);
+  expect(Math.min(...sizes)).toBeCloseTo(97 * 1.15, 1);
+  expect(Math.max(...sizes)).toBeCloseTo(200 * 1.15, 1);
+
+  // 元素级**没被改**：整体缩放是「逐处各乘」，不会顺手把整块钉成一个值
+  //（那会把用户刚看到的那份混排抹平 —— 输入框上的「97+」正是在说这里有大小之分）
+  expect(scaled.style!.fontSize).toBe(97);
 });
 
 test('富文本：等长替换不会被当成「没变化」丢进垃圾桶', async ({ page }) => {

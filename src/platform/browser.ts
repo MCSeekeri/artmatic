@@ -7,7 +7,7 @@
 
 import { tr } from '../i18n/index.svelte';
 import type { MachineCapacity } from '../core/capacity';
-import type { PickedFile, PickedVideo, Platform, SaveStream } from './types';
+import type { ClipboardWriteResult, PickedFile, PickedVideo, Platform, SaveStream } from './types';
 
 /**
  * `showSaveFilePicker` 的最小类型。
@@ -29,6 +29,26 @@ type SavePicker = (opts: unknown) => Promise<SaveHandleLike>;
 function savePicker(): SavePicker | null {
   const p = (window as unknown as Record<string, unknown>).showSaveFilePicker as SavePicker | undefined;
   return typeof p === 'function' ? p : null;
+}
+
+/**
+ * `ClipboardItem` 的最小类型。
+ *
+ * 与 `showSaveFilePicker` 那份同样的理由：`lib.dom` 里这个类在不同 TS 版本里
+ * 时有时无，而这里只用得到一个构造签名（`{ 'image/png': blob }`）。
+ * 运行期还必须是**函数**才算数 —— Firefox 早期版本是有的、但只认文本。
+ */
+interface ClipboardItemCtor {
+  new (items: Record<string, Blob>): unknown;
+}
+
+interface ClipboardLike {
+  write?(items: unknown[]): Promise<void>;
+}
+
+function clipboardItemCtor(): ClipboardItemCtor | null {
+  const c = (window as unknown as Record<string, unknown>).ClipboardItem as ClipboardItemCtor | undefined;
+  return typeof c === 'function' ? c : null;
 }
 
 /** 选一个文件，**保留 `File` 句柄**（不读字节）。视频那条路要用它。 */
@@ -96,6 +116,30 @@ export const browserPlatform: Platform = {
     a.download = filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  },
+
+  /**
+   * 写一张 PNG 到系统剪贴板。
+   *
+   * 三条边界都要分得清（返回值见 `ClipboardWriteResult`）：
+   *  - 没有 `ClipboardItem` / 没有 `clipboard.write`（非安全上下文、老浏览器）
+   *    → `unsupported`，调用方回退下载；
+   *  - `NotAllowedError`（权限被拒、或不在用户手势里）→ `denied`；
+   *  - 其余异常（例如 Chromium 对不支持的图片类型抛 TypeError）→ `failed`。
+   *
+   * **不在这里回退下载**：平台层只报事实，「回退成什么」是 UI 的决定
+   * （它还要跟着报一句为什么）。
+   */
+  async writeImageToClipboard(blob: Blob): Promise<ClipboardWriteResult> {
+    const Ctor = clipboardItemCtor();
+    const clip = navigator.clipboard as ClipboardLike | undefined;
+    if (!Ctor || typeof clip?.write !== 'function') return 'unsupported';
+    try {
+      await clip.write([new Ctor({ 'image/png': blob })]);
+      return 'ok';
+    } catch (e) {
+      return (e as { name?: string } | null)?.name === 'NotAllowedError' ? 'denied' : 'failed';
+    }
   },
 
   async saveProject(json: string, suggestedName: string): Promise<void> {

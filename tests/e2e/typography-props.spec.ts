@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * M4 排版：右侧「元素属性」面板 + 填充的多色标 / 停靠位置 + 文本框背景。
@@ -15,6 +16,7 @@ import { expect, test, type Page } from '@playwright/test';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 interface DocShape {

@@ -101,6 +101,23 @@
     appState.selectedClipId = clip.id;
     appState.openClipEditor(clip);
   }
+
+  /** 正在就地改名的那一行（见 appState.renamingClipId）。 */
+  const renaming = $derived(appState.renamingClipId === clip.id);
+
+  /**
+   * 就地改名的输入框只在 `appState.renamingClipId === clip.id` 时渲染。
+   *
+   * **入口是 F2（选中片段后），不是双击**：片段本体的双击已经是「打开它的
+   * 编辑器」，而片段很矮（行高 ~24px）—— 名字那条带子几乎盖住整个片段，
+   * 「双击名字改名」实测会把所有「双击片段开编辑器」的路径抢走
+   * （typography 那一批 spec 一起红）。所以改名只用不与既有手势冲突的入口：
+   * F2、以及检查器里那个 `clip-label` 输入框。
+   */
+  function commitRename(value: string): void {
+    appState.store.renameClip(clip.id, value);
+    appState.endClipRename();
+  }
 </script>
 
 <div
@@ -118,7 +135,38 @@
   onpointerdown={(e) => down(e, 'move')}
   ondblclick={dblclick}
 >
-  <span class="label">{clip.label || clip.kind}</span>
+  {#if renaming}
+    <!--
+      svelte-ignore a11y_autofocus
+      输入框盖住标签那一块（同名区域，见 CSS 的 `.label, .rename`）。
+      `onpointerdown` 停冒泡是**必须的**：不停的话按下去就开始拖片段，
+      指针一移输入框就被拖走了（与轨道名就地改名同一套）。
+    -->
+    <input
+      class="rename"
+      data-testid="clip-rename-input"
+      value={clip.label || clip.kind}
+      autofocus
+      onblur={(e) => commitRename(e.currentTarget.value)}
+      onkeydown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commitRename(e.currentTarget.value);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          appState.endClipRename();
+        }
+      }}
+      onpointerdown={(e) => e.stopPropagation()}
+      ondblclick={(e) => e.stopPropagation()}
+    />
+  {:else}
+    <!--
+      名字**不吃指针事件**（见 CSS 的 `.label`）：双击必须原样落到片段本体上
+      —— 那是「打开编辑器」，是这里被点得最多的那一下。改名的入口是 F2。
+    -->
+    <span class="label" data-testid="clip-name">{clip.label || clip.kind}</span>
+  {/if}
   {#if affectDepth > 0}
     <!-- 影响深度角标：不写出来就没人知道这条特效被限过范围（画面差别还很隐蔽） -->
     <span class="fx-depth" data-testid="clip-effect-depth" title={tr('insp.affectDepth')}>↓{affectDepth}</span>
@@ -174,17 +222,37 @@
     border-color: var(--clip-audio-border);
     color: var(--clip-audio-text);
   }
-  .label {
+  /*
+   * 名字区与改名输入框盖的是同一块地方。名字**必须** `pointer-events: none`：
+   * 它占着片段顶部那条带子（行高只有 20 多像素，这条带子几乎就是整个片段），
+   * 吃掉事件等于把「双击片段 = 打开编辑器」这条主手势改掉
+   * （实测：typography 那一批按双击开编辑器的 spec 全红）。
+   */
+  .label,
+  .rename {
     position: absolute;
     left: 5px;
     top: 1px;
     right: 12px;
+    height: 14px;
     font-size: var(--fs-xs);
     line-height: 14px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .label {
     pointer-events: none;
+  }
+  .rename {
+    min-width: 24px;
+    padding: 0 1px;
+    /* 底色用片段自己的，免得输入框在三种片段色上各显各的 */
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    color: inherit;
+    font-family: inherit;
   }
   .fade {
     position: absolute;

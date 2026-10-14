@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { buildDepthStage, rgbaAt, setEffectDepth, setTrackEnabled, settle } from './_stage';
+import { openDemo, buildDepthStage, rgbaAt, setEffectDepth, setTrackEnabled, settle } from './_stage';
 
 /**
  * 影响深度（`EffectClip.affectDepth`）的两条守卫。
@@ -26,6 +26,7 @@ const CENTER: [number, number] = [0.5, 0.5];
 test('影响深度 1：作用域之外的轨道逐像素不变；深度 0 时它也会被改', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 
   const stage = await buildDepthStage(page, {
     effect: { id: 'fx', defId: 'bleach', values: { amount: 1 }, depth: 1 },
@@ -63,6 +64,7 @@ test('影响深度 1：作用域之外的轨道逐像素不变；深度 0 时它
 test('检查器：影响深度可改，提示跟着轨道走，时间轴上有角标', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 
   const stage = await buildDepthStage(page, {
     effect: { id: 'fx', defId: 'bleach', values: { amount: 1 }, depth: 0 },

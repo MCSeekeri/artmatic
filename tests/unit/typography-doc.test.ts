@@ -91,7 +91,8 @@ describe('元素工厂', () => {
     const d = createTypographyDocument({ w: 1000, h: 500 });
     const img = createImageElement(d.size, 'asset-1');
     expect(img.assetId).toBe('asset-1');
-    expect(img.fit).toBe('cover');
+    // 默认不裁切（用户报的「图片置入默认被裁切」）—— 见 image-frame.test.ts
+    expect(img.fit).toBe('contain');
   });
 });
 

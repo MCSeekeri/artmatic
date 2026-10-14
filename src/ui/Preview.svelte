@@ -41,6 +41,23 @@
     appState.setSplitDrag(false);
   }
 
+  /*
+   * 「偶发黑屏」的审查结论（2026-10-14）：
+   *
+   * 查过并**排除**的怀疑项：exportSize 泄漏（7 处 setExportSize 全都有配对的
+   * clearExportSize）、缓冲尺寸被置 0/NaN（三条入口都把分辨率钳到 ≥16）、
+   * 切排版页卸载 canvas（`.body.is-hidden` 只是 display:none，canvas 不离开 DOM）、
+   * 切工程 / 开关抽屉 / 改分辨率（都只改 CSS 变量与 view，尺寸靠 syncSize + RO 重算）。
+   *
+   * **查实的两条**（都已修）：
+   *  1. 这个 rAF 循环没有异常保护 —— `tick()` 抛出就跳过下一帧调度，循环**永久死亡**
+   *     （表现：画面冻住或全黑，而播放头/底栏这些不依赖 WebGL 的东西照常动）。
+   *     下面 try/catch 兜住它。
+   *  2. `attachPreview` 不校验 canvas 身份，而 `Kit` 把 canvas 存死 —— 组件卸载重挂
+   *     （dev 的组件级 HMR）会带来新 canvas，旧服务继续画在脱离 DOM 的那块上。
+   *     修在 `app-state.svelte.ts::attachPreview`（比对身份 → 整块重建），
+   *     顺带补上 `webglcontextlost / restored` 的处理。
+   */
   onMount(() => {
     appState.attachPreview(canvas, host);
     appState.attachSplit(splitLeft, splitRight, host);
@@ -48,8 +65,25 @@
     // 永远渲染让「版本变化→画面更新」不需要额外订阅）。
     // 降帧率节流在 appState.tick() 里，只作用于播放中。
     let raf = 0;
+    /** 累计抛错次数。同一个错误只报头一次与每 300 次一次，避免每帧刷屏。 */
+    let tickErrors = 0;
     const loop = () => {
-      appState.tick();
+      /*
+       * 渲染失败是「这一帧没画成」，不是「预览关机」。
+       *
+       * `tick()` 里跑的是整条渲染链：惰性编译着色器（特效 / 生成器 / 插件的语法
+       * 错误就在这一刻抛）、GL 调用（上下文丢失后必抛）、排版位图上传。
+       * 不兜住的话异常会跳过下面那行调度 —— 循环死掉且**没有任何入口能重启它**
+       * （唯一的重启是刷新页面），这与「偶发黑屏、刷新才好」的形态完全一致。
+       */
+      try {
+        appState.tick();
+      } catch (e) {
+        tickErrors += 1;
+        if (tickErrors === 1 || tickErrors % 300 === 0) {
+          console.error(`[preview] 渲染循环抛错（已兜住，不会停循环；第 ${tickErrors} 次）`, e);
+        }
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);

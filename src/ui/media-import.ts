@@ -34,8 +34,14 @@ import { tr } from '../i18n/index.svelte';
 export interface ImportTarget {
   /** 片段落点（秒，**已吸附**）。只有给了 `trackId` 才有意义。 */
   start?: number;
-  /** 给了就顺手在它上面建一条片段；不给 = 只进素材池（从系统拖到媒体池那条路）。 */
-  trackId?: string;
+  /**
+   * 建不建片段、落在哪条轨：
+   *  · `undefined`（不给）= **只进素材池**（从系统拖到媒体池、剪贴板的「仅加入媒体池」）；
+   *  · 字符串 = 建片段，优先这条轨；
+   *  · `null` = 建片段，轨由 `insertAssetClip` 自己挑（找不到装得下的会补一条）——
+   *    「粘贴到播放头」这条路没有天然的落轨，用它。
+   */
+  trackId?: string | null;
 }
 
 export interface ImportedFile {
@@ -53,7 +59,7 @@ function finish(
   meta: { durationSec?: number; size?: { w: number; h: number } },
   target: ImportTarget,
 ): ImportedFile {
-  if (!target.trackId) return { assetId, kind, end: null };
+  if (target.trackId === undefined) return { assetId, kind, end: null };
 
   const item: PoolItem = {
     id: assetId,

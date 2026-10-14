@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /**
  * M4 排版：编辑器页宿主的生命周期与交互。
@@ -10,6 +11,7 @@ import { expect, test, type Page } from '@playwright/test';
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 interface Hooks {

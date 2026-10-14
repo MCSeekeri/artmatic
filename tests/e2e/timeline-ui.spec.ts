@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { addEffectViaPicker } from './_stage';
+import { openDemo, addEffectViaPicker } from './_stage';
 
 /**
  * 时间轴交互回归：覆盖 2026-09-27 那批 MVP 反馈。
@@ -41,6 +41,7 @@ type AnyA = {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
 }
 
 const MK = `(id, start, end) => ({ kind:'source', id, start, end, label:id, fadeSec:0, curves:{},
@@ -626,4 +627,111 @@ test('长音频：缩放与改拍网格后可见区仍然正确重画', async ({
   await page.evaluate(() => (window as never as { __artmatic: AnyA }).__artmatic.store.setBeatGrid({ beatsPerBar: 7 }));
   await page.waitForTimeout(250);
   expect(await rulerHash()).not.toBe(r1);
+});
+
+/* ------------------------------------------------------ 竖直滚动合一 */
+
+/*
+ * 用户报的形态：超过十来条轨之后，轨道头列与画布各挂了一条竖直滚动条，
+ * 虽然事件「连着」，但可以各滚各的 —— 拖其中一条，另一列纹丝不动。
+ *
+ * 判据用**两侧 scrollTop 相等**而不是「有没有滚动条」：滚动条由内容高度决定
+ * （那本来就对），错的是两者的同步。
+ */
+test('轨道头列与画布竖直滚动合一：拖任一侧另一侧跟随', async ({ page }) => {
+  await boot(page);
+  // 叠到足够多：demo 本身若干轨，再加 14 条必然溢出轨道区
+  await page.evaluate(() => {
+    const a = (window as never as { __artmatic: AnyA }).__artmatic;
+    for (let i = 0; i < 14; i++) a.store.addTrack('visual');
+    // 从顶部出发，保证两侧都还有下滚空间
+    document.querySelector('[data-testid=tl-scroll]')!.scrollTop = 0;
+    document.querySelector('.side')!.scrollTop = 0;
+  });
+  await page.waitForTimeout(150);
+
+  const geom = await page.evaluate(() => {
+    const side = document.querySelector('.side') as HTMLElement;
+    const scroll = document.querySelector('[data-testid=tl-scroll]') as HTMLElement;
+    return {
+      sideContent: side.scrollHeight,
+      canvasContent: scroll.scrollHeight,
+      canvasMax: scroll.scrollHeight - scroll.clientHeight,
+      // 轨道头列的滚动条必须是隐藏的（竖直方向只留画布那一条）
+      sideScrollbar: getComputedStyle(side).scrollbarWidth,
+    };
+  });
+  // 两侧滚动内容等高 —— 加轨按钮是固定页脚，不参与滚动
+  expect(geom.sideContent).toBe(geom.canvasContent);
+  expect(geom.canvasMax).toBeGreaterThan(0);
+  expect(geom.sideScrollbar).toBe('none');
+
+  const tops = () =>
+    page.evaluate(() => ({
+      side: (document.querySelector('.side') as HTMLElement).scrollTop,
+      canvas: (document.querySelector('[data-testid=tl-scroll]') as HTMLElement).scrollTop,
+    }));
+
+  // 画布那一条 → 轨道头列跟随
+  await page.evaluate(() => {
+    (document.querySelector('[data-testid=tl-scroll]') as HTMLElement).scrollTop = 120;
+  });
+  await expect.poll(async () => (await tops()).side).toBe(120);
+
+  // 反向：滚轨道头列（滚轮悬在那一列上就是这么滚的）→ 画布跟随
+  await page.evaluate(() => {
+    (document.querySelector('.side') as HTMLElement).scrollTop = 40;
+  });
+  await expect.poll(async () => (await tops()).canvas).toBe(40);
+
+  // 不会来回弹：停下之后两侧都稳定在同一个值上
+  await page.waitForTimeout(200);
+  const settled = await tops();
+  expect(settled.side).toBe(settled.canvas);
+});
+
+/* -------------------------------------------------------- 片段就地改名 */
+
+/*
+ * 「更方便的片段改名」：选中片段后按 F2 就地改（Enter/blur 提交、Esc 取消、一笔撤销）。
+ *
+ * ⚠️ 这里同时钉住一条**不许改回去**的边界：双击片段仍然是「打开编辑器」，
+ * 名字那条带子**不能**吃指针事件。片段行高只有 20 多像素，名字几乎盖满整个片段 ——
+ * 让名字接管双击会把所有「双击片段开编辑器」的路径抢走（实测 typography 那一批
+ * spec 一起红）。所以第二条断言是「双击片段本体不会进改名」。
+ */
+test('片段就地改名：F2 → 输入框 → Enter 提交，一笔撤销；双击片段仍是打开编辑器', async ({ page }) => {
+  await boot(page);
+  await seed(page);
+  const clipA = page.locator('[data-clip-id="A"]');
+  const input = page.getByTestId('clip-rename-input');
+
+  // F2 之前没选中片段：没有作用对象，不进编辑态
+  await page.keyboard.press('F2');
+  await expect(input).toHaveCount(0);
+
+  await clipA.click();
+  await page.keyboard.press('F2');
+  await expect(input).toBeVisible();
+  await input.fill('重命名 A');
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
+  await expect(clipA).toContainText('重命名 A');
+
+  // 改名是一笔撤销
+  await page.keyboard.press('Control+z');
+  await expect(clipA).toContainText('A');
+  await expect(clipA).not.toContainText('重命名 A');
+
+  // Esc 取消：不改名，也不留下输入框
+  await page.keyboard.press('F2');
+  await expect(input).toBeVisible();
+  await input.fill('不该留下');
+  await input.press('Escape');
+  await expect(input).toHaveCount(0);
+  await expect(clipA).not.toContainText('不该留下');
+
+  // 边界：双击片段（打的正是名字那条带子的位置）**不进改名**
+  await clipA.dblclick();
+  await expect(input).toHaveCount(0);
 });

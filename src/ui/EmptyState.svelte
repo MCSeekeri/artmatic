@@ -57,6 +57,21 @@
         testid="empty-import"
         onclick={() => void openProjectPicker()}
       />
+      <!--
+        示例工程曾经是**启动就开**的，那条路已经取消（它每次都留一个要关掉的选项卡）。
+        但它本身是有用的：24 秒样片把六条通路都走了一遍，是「这东西能做什么」最快
+        的答案，所以改成这里的一个入口。E2E 也靠它把「开一份 demo」这件事重放出来。
+      -->
+      <Button
+        label={tr('app.emptyDemo')}
+        icon="sparkles"
+        variant="outline"
+        size="lg"
+        disabled={appState.projectBusy}
+        testid="empty-demo"
+        tipText={tr('app.emptyDemoTip')}
+        onclick={() => void newProject(true)}
+      />
     </div>
 
     <div class="recent" data-testid="empty-recent">

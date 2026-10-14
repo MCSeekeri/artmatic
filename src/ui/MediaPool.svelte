@@ -11,22 +11,39 @@
    */
   import Icon from './Icon.svelte';
   import IconButton from './controls/IconButton.svelte';
+  import Menu from './controls/Menu.svelte';
+  import ConfirmDialog from './ConfirmDialog.svelte';
   import { appState } from './app-state.svelte';
   import {
     ASSET_DRAG_MIME,
     buildPoolItems,
+    clipsUsingAsset,
     groupPool,
     insertAssetClip,
     type PoolItem,
     type PoolKind,
   } from './media-pool';
   import { resolveImageAsset } from '../typography/image-assets';
-  import { ensureVideoThumb, videoThumb } from './media-thumbs.svelte';
+  import { ensureVideoThumb, forgetVideoThumb, videoThumb } from './media-thumbs.svelte';
   import { fmtSize } from './export';
   import { snapTime } from '../core/time';
   import type { IconName } from './icons';
   import type { MessageKey } from '../i18n/locales';
   import { tr } from '../i18n/index.svelte';
+
+  interface Props {
+    /**
+     * 条目的落点由宿主决定：不传 = 时间轴（插到播放头，媒体池抽屉那条路）；
+     * 排版编辑页传自己的实现（图片置入画布，视频/音频给一句说明）。
+     * 「双击」与右侧的 + 按钮共用它。
+     */
+    oninsert?: (item: PoolItem) => void;
+  }
+  const { oninsert }: Props = $props();
+
+  /* 落点不同，提示语跟着换：在排版页说「插入到时间轴」是错的。 */
+  const insertLabel = $derived(oninsert ? tr('pool.placeOnCanvas') : tr('pool.insert'));
+  const hint = $derived(oninsert ? tr('pool.hintTypo') : tr('pool.hint'));
 
   const GROUP_LABEL: Record<PoolKind, MessageKey> = {
     video: 'pool.groupVideo',
@@ -74,6 +91,11 @@
   }
 
   function insert(it: PoolItem): void {
+    // 宿主接管了落点（排版页）：交给它，这一层不认识那种落点的规则。
+    if (oninsert) {
+      oninsert(it);
+      return;
+    }
     const grid = appState.store.project.beatGrid;
     const selected = appState.selectedClipId;
     const clipId = insertAssetClip(appState.store, it, {
@@ -103,7 +125,38 @@
     // 兜底：拖到文本框、别的应用里至少留下名字
     dt.setData('text/plain', it.name);
   }
-</script>
+
+  /* ------------------------------------------------------------ 移除素材 */
+
+  /** ⋯ 菜单开在哪个条目上（非 null 时渲染菜单）。只用于**渲染**。 */
+  let menuFor = $state<{ item: PoolItem; anchor: HTMLElement } | null>(null);
+  /**
+   * 菜单当前作用的条目。**普通变量，不是 $state** —— 这是刻意的：
+   * `Menu.activate()` 是「先 `onclose()` 再跑 `onselect()`」（见 controls/Menu.svelte），
+   * 那时 `menuFor` 已经是 null。闭包里读 `menuFor.item`（或模板里用 `{@const}`
+   * 从它派生）都会在那一刻抛 TypeError —— 表现是「点菜单项什么都不发生」。
+   */
+  let menuTarget: PoolItem | null = null;
+  /**
+   * 待确认的移除。**引用数在按下那一刻算一次**并存在这里 ——
+   * 弹窗期间工程还能被改（另一只手在拖片段），实时重算会让文案在用户眼皮底下跳。
+   */
+  let pendingDelete = $state<{ item: PoolItem; used: number } | null>(null);
+
+  function askDelete(it: PoolItem): void {
+    pendingDelete = { item: it, used: clipsUsingAsset(appState.store.project, it.id).length };
+  }
+
+  function confirmDelete(): void {
+    const p = pendingDelete;
+    pendingDelete = null;
+    if (!p) return;
+    appState.removeAsset(p.item.id);
+    // 缩略图缓存是 UI 层的（`media-thumbs`），跟着这一行一起丢掉 ——
+    // objectURL 不 revoke 就一直钉着那份字节。
+    forgetVideoThumb(p.item.id);
+    appState.flash(tr('pool.deleted', { name: p.item.name }), 'success');
+  }</script>
 
 <div class="pool">
   {#if !items.length}
@@ -168,20 +221,68 @@
 
             <IconButton
               icon="plus"
-              label={tr('pool.insert')}
+              label={insertLabel}
               size="sm"
               testid="pool-insert"
               disabled={it.missing}
               onclick={() => insert(it)}
+            />
+
+            <!--
+              ⋯ 与轨道行、时间轴片段用同一套菜单位置与图标：这一列的动作都是
+              「对这条东西做点什么」，放在行的右端、图标一致，用户不用重新找。
+            -->
+            <IconButton
+              icon="ellipsis-vertical"
+              label={tr('pool.menu')}
+              size="sm"
+              testid="pool-menu"
+              onclick={(e) => {
+                menuTarget = it;
+                menuFor = { item: it, anchor: e.currentTarget as HTMLElement };
+              }}
             />
           </div>
         {/each}
       </section>
     {/each}
 
-    <p class="foot">{tr('pool.hint')}</p>
+    <p class="foot">{hint}</p>
   {/if}
 </div>
+
+{#if menuFor}
+  <Menu
+    items={[
+      {
+        id: 'delete',
+        label: tr('pool.delete'),
+        icon: 'trash',
+        danger: true,
+        testid: 'pool-menu-delete',
+        // 读 `menuTarget`（普通变量），**不是** `menuFor`：理由见它的声明。
+        onselect: () => menuTarget && askDelete(menuTarget),
+      },
+    ]}
+    anchorEl={menuFor.anchor}
+    onclose={() => (menuFor = null)}
+    testid="pool-menu-panel"
+  />
+{/if}
+
+{#if pendingDelete}
+  <ConfirmDialog
+    title={tr('pool.deleteTitle')}
+    message={pendingDelete.used > 0
+      ? tr('pool.deleteUsedMessage', { name: pendingDelete.item.name, n: pendingDelete.used })
+      : tr('pool.deleteMessage', { name: pendingDelete.item.name })}
+    confirmLabel={tr('pool.deleteConfirm')}
+    danger
+    testid="confirm-delete-asset"
+    onconfirm={confirmDelete}
+    oncancel={() => (pendingDelete = null)}
+  />
+{/if}
 
 <style>
   .pool {

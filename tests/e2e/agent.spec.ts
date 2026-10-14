@@ -13,6 +13,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import { openDemo } from './_stage';
 
 /** `window.__artmatic.control` 在本 spec 用到的部分。 */
 interface ControlApi {
@@ -55,10 +56,12 @@ interface Err {
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(() => Boolean((window as never as { __artmatic?: unknown }).__artmatic));
+  await openDemo(page);
   // `control` 是控制平面挂上去的那个键（方案 §2.3：与 `__artmatic` 同源演进）。
   await page.waitForFunction(
     () => Boolean((window as never as { __artmatic?: { control?: unknown } }).__artmatic?.control),
   );
+  await openDemo(page);
 }
 
 /** 把一份**极小**的工程直接灌进去：deterministic 舞台，几百毫秒就能导完。 */

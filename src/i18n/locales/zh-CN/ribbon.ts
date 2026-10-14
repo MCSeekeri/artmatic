@@ -173,6 +173,8 @@ export const ribbon = {
   'rib.pickShape': '选择形状…',
   'rib.addImage': '插入图片',
   'rib.addIcon': '插入图标',
+  /* 「插入」页里的媒体池开合（与 Rail 上那个图标同一个状态）。 */
+  'rib.mediaPool': '媒体池',
 
   /* ------------------------------------------------ 动画 → 预设 */
   'rib.pickAnim': '选择预设…',

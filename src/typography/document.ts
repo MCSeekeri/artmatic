@@ -500,9 +500,53 @@ function defaultTextFrame(size: Size): TextureFrame {
 }
 
 /** 形状默认居中、边长取短边的 30%。 */
-function defaultShapeFrame(size: Size): TextureFrame {
+export function defaultShapeFrame(size: Size): TextureFrame {
   const d = Math.round(Math.min(size.w, size.h) * 0.3);
   return { x: Math.round((size.w - d) / 2), y: Math.round((size.h - d) / 2), w: d, h: d, rot: 0 };
+}
+
+/**
+ * 尺寸同 `defaultShapeFrame`，但以文档坐标的 `(cx, cy)` 为中心。
+ *
+ * 给「有落点的插入」用（剪贴板粘贴是画布中心、媒体池拖放是鼠标落点）——
+ * 尺寸只有一处定义，两个入口的元素大小不可能对不上。
+ */
+export function centeredShapeFrame(size: Size, cx: number, cy: number): TextureFrame {
+  const f = defaultShapeFrame(size);
+  return { ...f, x: Math.round(cx - f.w / 2), y: Math.round(cy - f.h / 2) };
+}
+
+/**
+ * 图片的默认框：**按素材原始比例**，长边仍是短边的 30%（与形状同一个基准），居中。
+ *
+ * 为什么必须按比例：原来一律给正方的 `defaultShapeFrame`，配上默认的
+ * `fit: 'cover'`，一张 16:9 的图放进 1080×1080 的方块里**一置入就被裁掉两侧** ——
+ * 用户报的就是这一条（「图片置入：默认情况下会被裁切」）。
+ * 改成「按比例 + `contain`」之后，置入的含义变成**原图完整可见**，要铺满自己去改。
+ *
+ * 素材尺寸未知（还没解码 / 0 / 负数）时**退回正方块，不猜比例** ——
+ * 猜错的表现是「第一眼看到的构图是错的」，比统一的正方块更难理解。
+ */
+export function defaultImageFrame(size: Size, imgW: number, imgH: number): TextureFrame {
+  const box = defaultShapeFrame(size);
+  if (!(imgW > 0) || !(imgH > 0)) return box;
+  const long = box.w;
+  const ratio = imgW / imgH;
+  const w = ratio >= 1 ? long : Math.max(1, Math.round(long * ratio));
+  const h = ratio >= 1 ? Math.max(1, Math.round(long / ratio)) : long;
+  return { x: Math.round((size.w - w) / 2), y: Math.round((size.h - h) / 2), w, h, rot: 0 };
+}
+
+/** 尺寸同 `defaultImageFrame`，但以文档坐标的 `(cx, cy)` 为中心（粘贴 / 拖放落点用）。 */
+export function centeredImageFrame(
+  size: Size,
+  cx: number,
+  cy: number,
+  imgW: number,
+  imgH: number,
+): TextureFrame {
+  const f = defaultImageFrame(size, imgW, imgH);
+  return { ...f, x: Math.round(cx - f.w / 2), y: Math.round(cy - f.h / 2) };
 }
 
 function baseDefaults(size: Size, over: Partial<ElementBase>): Omit<ElementBase, 'id'> & { id: string } {
@@ -754,10 +798,16 @@ export function createShapeElement(  size: Size,
   };
 }
 
+/** `createImageElement` 的入参：元素字段 + 「素材多大」（只用于定默认框）。 */
+export interface ImageElementOptions extends Partial<ImageElement> {
+  /** 素材的原始像素尺寸。给了就按它的比例定默认框（见 `defaultImageFrame`）。 */
+  natural?: Size;
+}
+
 export function createImageElement(
   size: Size,
   assetId: string,
-  over: Partial<ImageElement> = {},
+  over: ImageElementOptions = {},
 ): ImageElement {
   const base = baseDefaults(size, over);
   return {
@@ -765,9 +815,16 @@ export function createImageElement(
     name: over.name ?? tr('typo.defaultImageName'),
     kind: 'image',
     assetId,
-    fit: over.fit ?? 'cover',
+    /*
+     * 默认 `contain`：宽高比不符时**留边**而不是裁掉一部分。
+     * 与 `defaultImageFrame` 是同一件事的两半 —— 只按比例给框、fit 仍是 cover 的话，
+     * 用户稍微拖一下框就又裁上了。
+     */
+    fit: over.fit ?? 'contain',
     radius: over.radius,
     crop: over.crop,
+    // frame 放最后：`baseDefaults` 已经按形状的方块填过默认值，这里按比例覆盖它。
+    frame: over.frame ?? defaultImageFrame(size, over.natural?.w ?? 0, over.natural?.h ?? 0),
   };
 }
 
