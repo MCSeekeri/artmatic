@@ -38,6 +38,7 @@
     icon={item.icon}
     label={item.label}
     size={item.size}
+    width={item.width}
     disabled={item.disabled}
     testid={item.testid}
     onactivate={item.onselect}

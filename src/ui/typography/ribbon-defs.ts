@@ -126,6 +126,9 @@ const CASE_OPTIONS: { value: TextStyle['textTransform']; labelKey: MessageKey }[
 
 const LINE_STYLES = ['solid', 'dashed', 'dotted'] as const;
 
+/** 「设计」页两个配色方案动作按钮的宽度（默认 50px 装不下它们的标签）。 */
+const THEME_BTN_W = 84;
+
 function firstText(sel: TypographyElement[]): TextElement | null {
   return (sel.find((e) => e.kind === 'text') as TextElement | undefined) ?? null;
 }
@@ -976,6 +979,9 @@ export function buildTypographyTabs(
               label: tr('rib.themeApplyProject'),
               icon: 'layers',
               size: 'large',
+              // 7 个字的标签在默认 50px 里会被截成「应用到整…」——显式要宽度。
+              // 同一份 width 既进组宽预算又下发成按钮宽度（见 RibbonButton 的注释）。
+              width: THEME_BTN_W,
               testid: 'ribbon-theme-apply-project',
               onselect: () => a.setTheme(theme.id, 'project'),
             },
@@ -989,6 +995,7 @@ export function buildTypographyTabs(
               label: tr('rib.themeEdit'),
               icon: 'paintbrush',
               size: 'large',
+              width: THEME_BTN_W,
               testid: 'ribbon-theme-edit',
               onselect: () => input.onOpenThemeEditor(),
             },

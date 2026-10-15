@@ -44,7 +44,13 @@ export interface RibbonItemBase {
   disabled?: boolean;
   /** 按钮尺寸档。不传则按 kind 推断（select / number 偏 large）。 */
   size?: RibbonItemSize;
-  /** 布局宽度（px）。不传则按 kind 与 size 推断。 */
+  /**
+   * 布局宽度（px）。不传则按 kind 与 size 推断。
+   *
+   * 对 `button` 也生效（下发成 `--ribbon-btn-w`）：长标签在默认 50px 里会被
+   * `text-overflow: ellipsis` 截断，给一个显式宽度是唯一的出路。
+   * **预算与渲染同源**：这个值既进 `itemWidth()` 又进按钮自己的 CSS。
+   */
   width?: number;
 }
 

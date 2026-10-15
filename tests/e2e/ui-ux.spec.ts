@@ -468,3 +468,33 @@ test('全屏预览：宿主是全屏元素，缓冲允许放大（并能在退�
   );
   await expect(page.getByTestId('preview-fullscreen')).toBeVisible();
 });
+
+/* ------------------------------------------------- 工具条窄窗口横向滚动 */
+
+test('窄窗口下工具条改横向滚动（不折行），两端渐层只在可滚时出现', async ({ page }) => {
+  await boot(page);
+  await page.setViewportSize({ width: 900, height: 600 });
+
+  const metrics = await page.evaluate(() => {
+    const t = document.querySelector('.transport') as HTMLElement;
+    return { sw: t.scrollWidth, cw: t.clientWidth, h: Math.round(t.getBoundingClientRect().height) };
+  });
+  // 装不下 ⇒ 内容比容器宽（折行的实现里 scrollWidth 会等于 clientWidth、高度翻倍）
+  expect(metrics.sw).toBeGreaterThan(metrics.cw);
+  expect(metrics.h).toBeLessThan(40);
+
+  // 未滚动：右侧有淡出（后面还有内容），左侧没有
+  await expect(page.getByTestId('transport-fade-right')).toBeVisible();
+  const opacity = (id: string) =>
+    page.getByTestId(id).evaluate((el) => getComputedStyle(el).opacity);
+  expect(await opacity('transport-fade-left')).toBe('0');
+  expect(await opacity('transport-fade-right')).toBe('1');
+
+  // 滚到中间：两侧都出现
+  await page.evaluate(() => {
+    const t = document.querySelector('.transport') as HTMLElement;
+    t.scrollLeft = 120;
+  });
+  await expect.poll(() => opacity('transport-fade-left')).toBe('1');
+  expect(await opacity('transport-fade-right')).toBe('1');
+});

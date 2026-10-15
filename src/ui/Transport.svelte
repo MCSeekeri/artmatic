@@ -294,8 +294,8 @@
     </div>
   </div>
   <!-- 两侧渐层：绝对定位、不随内容滚动、不吃指针事件。可见性见 updateFades。 -->
-  <div class="fade fade-l" class:on={fadeL} aria-hidden="true"></div>
-  <div class="fade fade-r" class:on={fadeR} aria-hidden="true"></div>
+  <div class="fade fade-l" class:on={fadeL} aria-hidden="true" data-testid="transport-fade-left"></div>
+  <div class="fade fade-r" class:on={fadeR} aria-hidden="true" data-testid="transport-fade-right"></div>
 </div>
 
 <style>

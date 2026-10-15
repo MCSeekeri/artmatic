@@ -16,9 +16,17 @@
     active?: boolean;
     disabled?: boolean;
     testid?: string;
+    /**
+     * 显式宽度（px）。长标签（如「应用到整个项目」）在默认 50px 里会被截断成
+     * 「应用到整…」—— 这一档就是给它用的。**预算与渲染必须同源**：同一份
+     * `item.width` 既进 `itemWidth()`（组宽预算）又下发成 `--ribbon-btn-w`
+     * （按钮实际宽度），两处各写一遍会让整条 Ribbon 的排布慢慢错位。
+     * 不给则用 `DENSITY.ribbonBtnW`（根上下发的默认值）。
+     */
+    width?: number;
     onactivate: () => void;
   }
-  const { icon, label, size = 'large', active = false, disabled = false, testid, onactivate }: Props =
+  const { icon, label, size = 'large', active = false, disabled = false, testid, width, onactivate }: Props =
     $props();
 
   /** 图标边长按档位：大按钮 18、紧凑 13、纯图标 15（没有文字，可以稍微大一点）。 */
@@ -33,6 +41,7 @@
   class:active
   data-testid={testid}
   title={label}
+  style:--ribbon-btn-w={width !== undefined ? `${width}px` : undefined}
   {disabled}
   aria-pressed={active}
   onclick={onactivate}
