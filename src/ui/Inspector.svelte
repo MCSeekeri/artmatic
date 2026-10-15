@@ -10,6 +10,7 @@
   import PatternField from './controls/PatternField.svelte';
   import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
+  import ColorField from './controls/ColorField.svelte';
   import {
     BLEND_MODES,
     newId,
@@ -32,6 +33,16 @@
   import { visibleParams, type RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
   import { resolveLabel } from '../i18n/label';
+  import { themeById } from '../typography/theme';
+
+  /**
+   * 取色入口用的配色方案：**工程级**（`Project.typographyTheme`），含工程
+   * 自定义方案。检查器不属于某个排版文档，所以取工程默认而不是 `doc.theme`。
+   */
+  const inspectorTheme = $derived.by(() => {
+    void appState.version;
+    return themeById(appState.project.typographyTheme, appState.project.customThemes);
+  });
 
   const blendOptions = BLEND_MODES.map((m) => ({ value: m.id, label: tr(m.labelKey) }));
   const fitOptions = [
@@ -395,14 +406,14 @@
 
       {#if clip.source.type === 'solid'}
         <Field label={tr('insp.color')}>
-          <input
-            class="color"
-            type="color"
-            data-testid="clip-color"
+          <ColorField
+            label={tr('insp.color')}
             value={clip.source.color}
-            oninput={(e) =>
+            theme={inspectorTheme}
+            testid="clip-color"
+            onchange={(v) =>
               upd(clip, tr('insp.changeColor'), (c) => {
-                if (c.kind === 'source' && c.source.type === 'solid') c.source.color = e.currentTarget.value;
+                if (c.kind === 'source' && c.source.type === 'solid') c.source.color = v;
               })}
           />
           <span class="dim mono">{clip.source.color}</span>
@@ -468,11 +479,12 @@
               </Field>
             {:else if p.type === 'color'}
               <Field label={resolveLabel(p.labelKey, tr)}>
-                <input
-                  class="color"
-                  type="color"
+                <ColorField
+                  label={resolveLabel(p.labelKey, tr)}
                   value={String(clip.source.params[p.key] ?? p.defaultValue)}
-                  oninput={(e) => setAlgoParam(clip, p.key, e.currentTarget.value)}
+                  theme={inspectorTheme}
+                  testid={`algo-param-${p.key}`}
+                  onchange={(v) => setAlgoParam(clip, p.key, v)}
                 />
               </Field>
             {:else if p.type === 'bitmask'}
@@ -519,7 +531,14 @@
           />
         {/if}
       {:else if clip.source.type === 'image'}
-        <p class="note">{tr('insp.imageAsset', { name: appState.project.assets[clip.source.assetId]?.name ?? clip.source.assetId })}</p>
+        <!-- 素材没了（被移除 / 打开工程时读不到）时显示「脱机媒体」而不是
+             一串 assetId —— 与画面上的占位符同一个说法。 -->
+        {@const imgAsset = appState.project.assets[clip.source.assetId]}
+        <p class="note">
+          {tr('insp.imageAsset', {
+            name: imgAsset?.name ?? (appState.isAssetOffline(clip.source.assetId) ? tr('pool.offline') : clip.source.assetId),
+          })}
+        </p>
       {/if}
 
       <!--
@@ -781,11 +800,12 @@
                 </Field>
               {:else if p.type === 'color'}
                 <Field label={resolveLabel(p.labelKey, tr)}>
-                  <input
-                    class="color"
-                    type="color"
+                  <ColorField
+                    label={resolveLabel(p.labelKey, tr)}
                     value={String(inst.values[p.key] ?? p.defaultValue)}
-                    oninput={(e) => setEffectParam(clip, inst, p.key, e.currentTarget.value)}
+                    theme={inspectorTheme}
+                    testid={`effect-param-${p.key}`}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
                   />
                 </Field>
               {:else if p.type === 'bitmask'}
@@ -996,12 +1016,6 @@
     flex: 1;
     min-width: 0;
     height: var(--control-h);
-  }
-  .color {
-    width: 32px;
-    height: var(--control-h);
-    padding: 1px;
-    cursor: pointer;
   }
   .fx {
     border: 1px solid var(--border);

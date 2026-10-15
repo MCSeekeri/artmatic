@@ -33,6 +33,9 @@ export const shortcuts = {
   'sc.key.s': 'S',
   'sc.key.altArrows': 'Alt+↑ / Alt+↓',
   'sc.key.delete': 'Delete',
+  'sc.key.ctrlC': 'Ctrl+C',
+  'sc.key.ctrlX': 'Ctrl+X',
+  'sc.key.ctrlV': 'Ctrl+V',
   'sc.key.rightClick': '右键',
   'sc.key.clickShiftClick': '单击 / Shift+单击',
   'sc.key.shiftClickClip': 'Shift+单击片段',
@@ -64,6 +67,11 @@ export const shortcuts = {
   'sc.splitAtPlayhead': '在播放头处切分选中片段',
   'sc.shiftTrack': '把选中片段上移 / 下移一轨',
   'sc.deleteClip': '删除选中片段',
+  /* 片段剪贴板：复制/剪切进系统剪贴板（自有 JSON），粘贴认这个格式。
+     跨工程粘贴时缺失的素材按「脱机媒体」占位符表现。 */
+  'sc.copyClips': '复制选中片段',
+  'sc.cutClips': '剪切选中片段',
+  'sc.pasteClips': '在播放头处粘贴片段',
   'sc.marqueeClips': '拖动空白处框选多个片段',
   'sc.addRemoveClip': '加选 / 减选片段',
   'sc.moveClips': '整组移动选中片段（含音频则只能水平移动）',

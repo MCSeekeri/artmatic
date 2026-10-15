@@ -35,11 +35,25 @@ import {
   type TextBackendRegistry,
 } from '../typography/rasterizer';
 import { forgetImageAsset, resolveImageAsset } from '../typography/image-assets';
-import { forgetMedia, setMediaAssetsListener } from '../engine/media-assets';
+import {
+  forgetMedia,
+  imageSourceFor,
+  setMediaAssetsListener,
+  videoMediaFor,
+} from '../engine/media-assets';
 import type { VideoSourceManager } from '../engine/video-source';
 import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
+import { browserPlatform } from '../platform/browser';
 import { SNAP_MODES, snapTime, timeAtFrame, frameAtTime, type SnapMode } from '../core/time';
+import {
+  parseClipboard,
+  planPaste,
+  serializeClips,
+  type ClipboardEntry,
+  type ClipboardPayload,
+  type PastePlanItem,
+} from '../core/clipboard';
 import type { ShortcutScheme } from './shortcuts';
 import type { FsDirHandle } from '../project/fs';
 import type { AssetIssue } from '../project/ledger';
@@ -97,6 +111,11 @@ interface UiPrefs {
   typoGrid: TypoGridPrefs;
   /** 右侧「图层 / 动画」面板宽度。 */
   typoPanelWidth: number;
+  /**
+   * 时间轴（轨道区）高度。可拖（工具条下缘 + 与抽屉的夹角），存 UI 偏好：
+   * 它描述的是「这次剪辑想给预览留多大地方」，与工程内容无关。
+   */
+  timelineHeight: number;
 }
 
 /** 排版右栏宽度档位。与检查器抽屉同一套上下限口径。 */
@@ -105,6 +124,14 @@ export const TYPO_PANEL_W = { min: 140, max: 420, default: 208 } as const;
 export function clampTypoPanelWidth(w: number): number {
   if (!Number.isFinite(w)) return TYPO_PANEL_W.default;
   return Math.min(TYPO_PANEL_W.max, Math.max(TYPO_PANEL_W.min, Math.round(w)));
+}
+
+/** 轨道区高度档位（px）。下限保证轨道头与片段仍可读，上限给预览留活路。 */
+export const TRACKS_H = { min: 120, max: 560, default: 320 } as const;
+
+export function clampTimelineHeight(h: number): number {
+  if (!Number.isFinite(h)) return TRACKS_H.default;
+  return Math.min(TRACKS_H.max, Math.max(TRACKS_H.min, Math.round(h)));
 }
 
 /** 预览帧率档位（分母）。 */
@@ -155,6 +182,7 @@ function loadUiPrefs(): UiPrefs {
     mascotEnabled: false,
     typoGrid: { ...DEFAULT_TYPO_GRID },
     typoPanelWidth: TYPO_PANEL_W.default,
+    timelineHeight: TRACKS_H.default,
   };
   try {
     const raw = localStorage.getItem(UI_KEY);
@@ -182,6 +210,7 @@ function loadUiPrefs(): UiPrefs {
         typeof p.mascotEnabled === 'boolean' ? p.mascotEnabled : fallback.mascotEnabled,
       typoGrid: normalizeTypoGrid(p.typoGrid, fallback.typoGrid),
       typoPanelWidth: clampTypoPanelWidth(Number(p.typoPanelWidth) || fallback.typoPanelWidth),
+      timelineHeight: clampTimelineHeight(Number(p.timelineHeight) || fallback.timelineHeight),
     };
   } catch {
     return fallback;
@@ -410,6 +439,8 @@ class AppState {
   typoGrid = $state<TypoGridPrefs>({ ...DEFAULT_TYPO_GRID });
   /** 右侧「图层 / 动画」面板宽度（可拖）。 */
   typoPanelWidth = $state<number>(TYPO_PANEL_W.default);
+  /** 轨道区高度（可拖；与两个抽屉宽度同一套「实例值 + setter」纪律）。 */
+  timelineHeight = $state<number>(TRACKS_H.default);
   /**
    * 已注册的字体族（Ribbon 的字体下拉读它）。
    * 做成响应式而不是每次读 registry：注册发生在异步导入之后，
@@ -609,6 +640,118 @@ class AppState {
     if (!ids.length) return;
     this.store.removeClips(ids);
     this.activeProject.selectedClipIds = [];
+  }
+
+  /* -------------------------------------------------- 片段剪贴板（复制 / 剪切 / 粘贴）
+   *
+   * 写系统剪贴板（keydown 手势里，`clipboard.writeText` 要瞬时激活）**之外**
+   * 还留一份内存副本：权限被拒 / 非安全上下文时本应用内照样能粘贴。
+   * 内存副本是模块私有字段而不是 $state —— 没有任何 UI 读它（ Ctrl+V 的
+   * 兜底分支读的是 `clipClipboardFallbackActive()`，那是个方法）。
+   */
+  private clipClipboard: ClipboardPayload | null = null;
+  /** 上次复制/剪切有没有写进系统剪贴板（决定 Ctrl+V 走哪条路）。 */
+  private clipClipboardSystemOk = false;
+
+  /** 复制选中片段。没有选中片段时什么都不做（快捷键不该弹一句错）。 */
+  copySelectedClips(): void {
+    const entries = this.selectedClipEntries();
+    if (!entries.length) return;
+    const text = serializeClips(entries, this.store.project.name);
+    this.clipClipboard = parseClipboard(text);
+    void browserPlatform.writeTextToClipboard(text).then((res) => {
+      this.clipClipboardSystemOk = res === 'ok';
+      this.flash(
+        res === 'ok' ? tr('tl.copied', { n: entries.length }) : tr('tl.copyLocalOnly'),
+        res === 'ok' ? 'success' : 'info',
+      );
+    });
+  }
+
+  /** 剪切 = 复制 + 删除（删除本身是一笔撤销，见 removeSelectedClips）。 */
+  cutSelectedClips(): void {
+    const entries = this.selectedClipEntries();
+    if (!entries.length) return;
+    const text = serializeClips(entries, this.store.project.name);
+    this.clipClipboard = parseClipboard(text);
+    this.removeSelectedClips();
+    void browserPlatform.writeTextToClipboard(text).then((res) => {
+      this.clipClipboardSystemOk = res === 'ok';
+      this.flash(
+        tr(res === 'ok' ? 'tl.cut' : 'tl.cutLocalOnly', { n: entries.length }),
+        res === 'ok' ? 'success' : 'info',
+      );
+    });
+  }
+
+  /**
+   * Ctrl+V 的兜底激活判据：内存里有片段、且**上次没写进去**系统剪贴板。
+   *
+   * 写得进去时返回 false —— 那时 Ctrl+V 不拦截，让 `paste` 事件读系统剪贴板
+   * （最新内容，包括从别的窗口复制进来的片段 JSON）。不这么分的话，应用内
+   * 的旧副本会一直盖住系统剪贴板里的新内容。
+   */
+  clipClipboardFallbackActive(): boolean {
+    return this.clipClipboard !== null && !this.clipClipboardSystemOk;
+  }
+
+  /** 选中片段 + 它们所在的轨（剪贴板载荷的一半）。 */
+  private selectedClipEntries(): ClipboardEntry[] {
+    const ids = new Set(this.activeProject.selectedClipIds);
+    if (!ids.size) return [];
+    const out: ClipboardEntry[] = [];
+    for (const t of this.store.project.tracks) {
+      for (const c of t.clips) {
+        if (ids.has(c.id)) out.push({ trackId: t.id, clip: c });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 粘贴片段。两条入口共用：`onPaste` 从系统剪贴板解析出载荷时传进来，
+   * Ctrl+V 兜底分支不传（用内存副本）。
+   *
+   * 落点：吸附后的播放头 + 各片段相对偏移；轨道优先级见 `planPaste`
+   * （原轨位 → 选中轨 → 第一条能装的轨）。片段一律换**新 id** ——
+   * 同工程粘贴留下原 id 会让 `findClip` 找到源片段。
+   *
+   * 跨工程 / 素材被删时 assetId 在目标工程里不存在：照常粘贴，画面按
+   * 「脱机媒体」占位符表现（`core/offline-media.ts`），并提示一句。
+   */
+  pasteClipsFromClipboard(payload?: ClipboardPayload | null): void {
+    const p = payload ?? this.clipClipboard;
+    if (!p) {
+      this.flash(tr('tl.pasteEmpty'), 'info');
+      return;
+    }
+    const grid = this.store.project.beatGrid;
+    const anchor = snapTime(this.playT, this.snap, grid);
+    const plans = planPaste(p, {
+      tracks: this.store.project.tracks.map((t) => ({ id: t.id, kind: t.kind })),
+      preferredTrackId: this.selectedClipId
+        ? (this.store.findClip(this.selectedClipId)?.track.id ?? null)
+        : null,
+      knownAssetIds: new Set(Object.keys(this.store.project.assets)),
+      grid,
+    });
+    const items = plans
+      .filter((pl): pl is PastePlanItem & { trackId: string } => pl.trackId !== null)
+      .map((pl) => ({
+        trackId: pl.trackId,
+        clip: { ...pl.clip, id: newId(), start: pl.clip.start + anchor, end: pl.clip.end + anchor },
+      }));
+    if (!items.length) {
+      this.flash(tr('tl.pasteNoTrack'), 'error');
+      return;
+    }
+    const placed = this.store.pasteClips(items, tr('tl.pasteClips', { n: items.length }));
+    this.setClipSelection(items.slice(0, placed).map((i) => i.clip.id));
+    const missing = plans.some((pl) => pl.assetMissing);
+    this.flash(
+      missing ? tr('tl.pasteMissingMedia') : tr('tl.pasted', { n: placed }),
+      missing ? 'info' : 'success',
+    );
   }
 
   /* ---- 会话属性：原来是单例上的字段，现在转发到激活工程 ---- */
@@ -1285,6 +1428,7 @@ class AppState {
     this.mascotEnabled = prefs.mascotEnabled;
     this.typoGrid = prefs.typoGrid;
     this.typoPanelWidth = prefs.typoPanelWidth;
+    this.timelineHeight = prefs.timelineHeight;
   }
 
   /**
@@ -1384,6 +1528,32 @@ class AppState {
     this.persistUi();
   }
 
+  /**
+   * 轨道区高度。走 setter 而不是直赋 —— 与 `setDrawerWidth` 同口径：
+   * 只有一处写才能保证「拖完就落盘」，且钳制不会出现两套上下限。
+   */
+  setTimelineHeight(h: number): void {
+    const next = clampTimelineHeight(h);
+    if (this.timelineHeight === next) return;
+    this.timelineHeight = next;
+    this.persistUi();
+  }
+
+  /**
+   * 全屏预览时允许预览缓冲**放大**到显示尺寸（默认只缩不放，见
+   * `preview-size.ts` 的 `k = Math.min(1, scale)`）。
+   *
+   * 只被全屏那条路打开：1080p 的工程在全屏铺满一块 1440p 的屏幕时，
+   * 不放大就是「拿 1080 个像素去填 1440 个格子」，画面是糊的。
+   * **绝不能**走 `setExportSize` —— 那会让 `syncSize` 永久短路，
+   * 退出全屏后再也不会重新适配（AGENTS §5.9 那条纪律）。
+   */
+  setPreviewUpscale(on: boolean): void {
+    if (!this.servicesReady) return;
+    this.renderer.setAllowUpscale(on);
+    this.renderer.syncSize(this.store.project.resolution);
+  }
+
   private persistUi(): void {
     saveUiPrefs({
       drawerOpen: this.drawerOpen,
@@ -1399,6 +1569,7 @@ class AppState {
       mascotEnabled: this.mascotEnabled,
       typoGrid: this.typoGrid,
       typoPanelWidth: this.typoPanelWidth,
+      timelineHeight: this.timelineHeight,
     });
   }
 
@@ -1545,11 +1716,21 @@ class AppState {
       // 那时是静音的，解码完成后的首次请求会触发一次离线分析（之后按 t 查表）。
       spectrum: this.audio,
       features: this.audio,
+      /*
+       * 「脱机媒体」判据：仓里没有这个素材的字节、运行期也没登记过。
+       * （两个都查 —— 只查仓子会把「导入中」误判成不存在，只查登记表会把
+       * 「打开工程时文件读不到」漏掉。）片段引用这种 assetId 时画面给
+       * 暗红占位符，而不是静默跳过（那一层什么都不画）。
+       * 判据的唯一实现是 `isAssetOffline`（排版编辑器共用同一份）。
+       */
+      isAssetOffline: (id) => this.isAssetOffline(id),
     });
     this.renderer = core.renderer;
     this.algos = core.algos;
     this.sources = core.sources;
     this.video = core.video;
+    // 占位图上的文字走 i18n（engine 不 import i18n，由宿主注入）。
+    core.sources.setOfflineLabel(tr('pool.offline'));
 
     /*
      * 插件着色器的编译校验需要真 GL，而 Kit 是这一刻才有的。
@@ -1567,6 +1748,12 @@ class AppState {
     this.sources.setTextResolver(this.textRaster.resolve);
     // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。
     this.textRaster.resolveImage = resolveImageAsset;
+    // 「脱机媒体」判据与占位文字：与合成路径（sources 的探针）同一口径。
+    // 文案从 i18n 取（typography 不 import i18n）。
+    this.textRaster.isImageOffline = (id) => this.isAssetOffline(id);
+    this.textRaster.offlineLabel = tr('pool.offline');
+    // 自定义配色方案同理（函数式：切工程后读到的是新工程那份）
+    this.textRaster.customThemes = () => this.project.customThemes ?? [];
 
     /*
      * 导出预热是**两个来源共用同一个槽位**（`Renderer.setPrewarm` 只有一个）。
@@ -1628,6 +1815,26 @@ class AppState {
 
   get project() {
     return this.store.project;
+  }
+
+  /**
+   * 这个 assetId 引用的媒体是不是**不存在**（「脱机媒体」判据的唯一实现）。
+   *
+   * 仓里没有字节、运行期也没登记过 —— **两个都查**：只查仓子会把「导入中」
+   * （字节已进仓、还没解码完）误判成不存在，只查登记表会把「打开工程时
+   * 文件在磁盘上读不到」漏掉（那种素材永远登记不上）。
+   *
+   * 三个消费方共用它：合成路径的占位图（render-core 的探针）、排版光栅化
+   * （textRaster）、排版编辑器舞台（TypographyEditor）。各判一次的形态是
+   * 「时间轴上显示脱机、画布上却空白」。
+   */
+  isAssetOffline(assetId: string): boolean {
+    if (!this.hasProject) return false;
+    return (
+      !this.assets.has(assetId) &&
+      imageSourceFor(assetId) === null &&
+      videoMediaFor(assetId) === null
+    );
   }
 
   /** 显示一条短提示（自动消失）。 */

@@ -62,6 +62,15 @@ export interface RenderCoreOpts {
    * 不传也能跑：声明了这些 uniform 的场景会读到静音特征（画面偏暗、不脉动）。
    */
   features?: AudioFeatureSource | null;
+  /**
+   * 「这个 assetId 引用的媒体是不是**不存在**」的判据（「脱机媒体」占位符）。
+   *
+   * 与「素材还没加载好」必须分开：后者是每帧都在发生的正常状态（异步解码），
+   * 给它画占位符会让正常加载满屏闪暗红。判据需要知道「仓里有没有这个素材」，
+   * 那是宿主的知识（`engine` 不认识 `project/asset-store`），所以注入。
+   * 不传 = 不画占位符（lab 的素材全是程序化生成，没有这个概念）。
+   */
+  isAssetOffline?: ((assetId: string) => boolean) | null;
 }
 
 export interface RenderCore {
@@ -84,6 +93,7 @@ export function createRenderCore(
   // 真正的实现在下面几行装配完才有（renderFrame 之前必须装完）。
   const renderer = new Renderer(canvas, () => null, () => {});
   const sources = new SourceManager(renderer.kit);
+  sources.setAssetOfflineProbe(opts.isAssetOffline ?? null);
   const bake = new BakeClient(renderer.kit, opts.onAlgoReady);
   const algos = new AlgoRuntime(renderer.kit, bake);
   // 音频特征：与频谱同一条注入路径（见 RenderCoreOpts 的两条注释）。

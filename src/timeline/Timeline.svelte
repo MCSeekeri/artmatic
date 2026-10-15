@@ -412,6 +412,11 @@
     const start = startFor(at);
     const doc = createTypographyDocument(appState.store.project.resolution);
     doc.elements = [createTextElement(doc.size)];
+    // 新文档继承**工程级**配色方案（「应用到整个项目」设的那个）。没设过就不写这个键
+    // —— 显式写 undefined 会在文档上留一个幽灵属性（JSON 往返会把它丢掉，
+    // 于是「存过没存过」在比较里表现不一致）。
+    const projectTheme = appState.project.typographyTheme;
+    if (projectTheme) doc.theme = projectTheme;
     const clip: SourceClip = {
       kind: 'source',
       id: newId(),

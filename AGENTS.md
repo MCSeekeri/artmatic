@@ -318,6 +318,19 @@ function buildStack(project: Project, t: number): Stack {
 | `pointermove` | 只做**自由移动**（`liveMoveClip` / `liveResizeClip`）：片段跟着鼠标走、可压在邻居身上、跨轨也实时生效。**策略一律不动。** |
 | `pointerup` | 调 `settlePlacement` / `settleResize` **结算一次**：push 挤开、trim 吃掉、reject 拒绝（非法则 `cancelTx` 整次手势作废） |
 
+**片段剪贴板**（`core/clipboard.ts`，纯逻辑）：
+
+- 载荷是自有 JSON：`{ kind: 'artmatic/clips', version: 1, clips: [{ trackId, clip }] }`。
+  `start` **与 `end` 一起**归一成「相对第一个片段」（只搬 start 会把片段拉到另一个长度）。
+- `parseClipboard` **永不抛**：非 JSON / 外来 JSON / 版本不对 / 片段形状不对一律 null
+  （调用方必须整段放行，见 §6.7 的粘贴纪律）。
+- 落点优先级：**复制时的原轨位** → 选中片段所在轨 → 第一条装得下的轨；一条都不行就
+  跳过那个片段并说明（不静默丢弃）。同轨重叠的顺延/裁切**复用 `ProjectStore.placeInto`**
+  （`addClip` 与 `pasteClips` 的唯一实现）—— 各写一份的形态是「从池里插会压邻居、
+  粘贴却不会」。粘贴是**一笔撤销**，片段一律换新 id（留原 id 会让 `findClip` 找到源片段）。
+- 跨工程 / 素材被删：`planPaste` 只打 `assetMissing` 标记，画面按「脱机媒体」占位符
+  表现（§5.7）。**静默丢弃是更难查的坏法**（用户看到「粘贴了但什么都没有」）。
+
 理由：策略若在 `pointermove` 里生效，trim 会在拖过去的瞬间毁掉邻居，拖回来也回不来。
 拖动期间允许视觉重叠，落点非法时给红框预告（`appState.dragIllegal`）。
 
@@ -1304,8 +1317,19 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
   1. **一切颜色的渲染出口都要过 `resolveThemeColor()`** —— 全项目只有两个出口
      （`css.ts` 的 CSS 声明表 + `render-dom.ts` 的 `<defs>`）。漏一处的表现是
      「舞台上变了、导出没变」，而且不报错。
-  2. `doc.theme` 是**可选字段**（缺省 = 默认方案），所以**不抬 `SCHEMA_VERSION`** ——
-     与 `groups` / `Paint.opacity` 同一条约定。
+  2. `doc.theme` 是**可选字段**（缺省 = 默认方案），所以**它本身不抬 `SCHEMA_VERSION`**
+     —— 与 `groups` / `Paint.opacity` 同一条约定。但**工程级**的两项抬过一次（见下）。
+  2b. **`Project.typographyTheme` / `Project.customThemes` ⇒ `SCHEMA_VERSION = 6`**
+     （5→6 恒等迁移）。自定义方案是**用户内容**：旧版静默忽略 `customThemes` 再保存
+     等于把用户调好的那套颜色抹掉。解析顺序「自定义 → 内置 → 默认」，
+     `sanitizeCustomThemes` 逐条校验、坏条目整条丢（缺槽 / 坏 hex / 撞内置 id），
+     `validateProject` 里**绝不抛** —— 工程必须打得开。
+     ⚠️ **凡是从 `doc.theme`（id）出发的解析，都要把 `Project.customThemes` 一起带上**
+     （`themeById(id, custom)` / `resolveThemeColor(color, theme, custom)`）：漏一处
+     的表现是「用了自定义方案的颜色回落成默认方案」，只在自定义方案上看得出来。
+     调用点：`render-dom` 顶层两次（build / sync）、`ribbon-defs`、三个面板、
+     `TypographyEditor`（舞台 + `textRaster.customThemes`，后者是**函数**式字段，
+     切工程不能留上一份）。
   3. **明暗变体是实测标定的，不是「凭印象调亮度」**：三支规则（常规色走 OOXML 的
      `lumMod/lumOff`、纯黑纯白走固定灰阶、极亮色走亮度乘系数）的实测依据写在
      `theme.ts` 的文件头。改算法前先 `node scripts/extract-theme-colors.mjs analyze <取色卡截图>`
@@ -1336,6 +1360,28 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
   活在取色卡的弹层里，而提交动作会关掉弹层 ⇒ input 被销毁 ⇒ **原生取色器被连坐关闭**，
   颜色根本拖不动（用户报过）。拖动中的实时预览要用手势事务（`live`/`endGesture`）做，
   不能「每次 `input` 都提交」—— 那还会往撤销栈里塞几十笔。
+- **面板里的一切取色入口走 `ui/controls/ColorField.svelte`（色块按钮 + 取色卡）**，
+  裸 `<input type="color">` 只允许存在于 `ColorPickerPanel` 内部的「其他颜色」一格
+  （它是逃生舱，不是入口）。原来散落的 6 处（检查器 3 + 属性面板 1 + 填充面板 2，
+  另加 lab 2 处）都换过了 —— 原生控件给不出**主题色引用**，所以「换配色方案 ⇒
+  颜色跟着走」在那些入口上根本不可能发生。两条口径不变：**显示的是解析后的 hex，
+  写回的仍是裸 hex**（精细调整区，改完就该钉死）；`theme` 传**对象**（调用方解析好，
+  含 `customThemes`），`allowNone` 控制要不要「无颜色」那一项。
+- **「脱机媒体」占位符**：片段引用的素材**不存在**时，画面给一块暗红占位
+  （`file-x-corner` 图标 + 「脱机媒体」），而不是静默跳过那一层（无声空白）。
+  - 判据的**唯一实现**是 `appState.isAssetOffline(assetId)`：仓里没有字节**且**
+    运行期没登记过 —— 两个条件都要查，只查仓子会把「导入中」误判成不存在，
+    只查登记表会把「打开工程时文件读不到」漏掉。**「不存在」与「还没加载好」是
+    两件事**：给后者也画占位符的话，正常加载会满屏闪暗红。
+  - 三个消费方共用它：合成路径（`render-core` 注入 `sources.setAssetOfflineProbe`）、
+    排版光栅化（`textRaster.isImageOffline`）、排版舞台（`TypographyEditor` 的
+    `BuildDocOptions.isImageOffline`）。各判一次的形态是「时间轴上显示脱机、
+    画布上却空白」。
+  - 占位文字由宿主注入（`setOfflineLabel` / `offlineLabel`）—— `engine` 与
+    `typography` 都不 import i18n。字形与颜色常量在 `core/offline-media.ts`
+    （canvas 与 DOM 两个出口共用，各画各的会出现「时间轴上是暗红、排版里是玫红」）。
+  - DOM 侧（`render-dom`）状态迁移**不走 `docSignature`**（素材就绪/消失不改文档
+    结构签名），所以 `syncElement` 里用 `data-typo-offline` 标记就地换节点。
 
 ### 5.8 导出
 
@@ -1408,6 +1454,16 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
   直接 return，窗口缩放 / 切工程 / 改分辨率全都不会再适配。而且**不动 CSS 盒**：
   canvas 不设 CSS 尺寸时，显示尺寸等于缓冲像素数，只缩后备缓冲画面会跟着变小。
 - 帧率节流只在**播放中**生效：暂停时永远渲，那是「改一个参数立刻看到结果」的路径。
+- **全屏预览**：宿主是 `.preview` 容器（不是 canvas —— 悬浮工具条与两帧浮层要跟着
+  铺满），`requestFullscreen` 后由 `fullscreenchange` 同步状态（浏览器给的退出通道
+  不走我们的按钮）。它打开的**唯一开关**是 `renderer.setAllowUpscale(true)`
+  （`fitPreviewSize` 松开 `k = Math.min(1, scale)` 那个帽子，上限 `UPSCALE_CAP = 2×`）——
+  **绝不能改用 `setExportSize`**（`syncSize` 永久短路）。退出全屏必须关回去，
+  否则窗口模式下也按屏幕尺寸分配缓冲。
+  - 预览缓冲**由显示区域决定**，所以「工程分辨率变小」不会让 `kit.w` 变小到分辨率以下 ——
+    量它之前先想清楚是哪个量在限制（`tests/e2e/ui-ux.spec.ts` 的全屏用例记着这一条）。
+  - **headless 里 `Esc` 不触发浏览器级退出全屏**（键盘是 CDP 合成的），E2E 的退出
+    走我们自己的按钮（`document.exitFullscreen()`，不需要手势）。
 
 ### 5.10 插件（`plugins/`）
 
@@ -1850,6 +1906,19 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   ⚠️ **每一列都必须显式写 `grid-column`**：抽屉都是条件渲染的，靠自动排布会在缺一个的
   时候把主体填进 0 宽那一列 —— 表现是整块画面凭空消失（`.body` 与排版页的 `.main`
   各踩过一次，后者是「关掉媒体池，舞台整个不见」）。
+- **时间轴高度也是实例值**（`appState.timelineHeight`，`TRACKS_H` 钳 120–560，走
+  `UiPrefs` 落 localStorage；`.stage` 上内联下发 `--tracks-h`）。两个热区：
+  工具条下缘那条 4px 横带（只调高度）、轨道区底角与抽屉的夹角的两个方块（一次手势
+  同时调高度与该侧抽屉宽度）。**方向都是「边界跟随光标」，因此两条热区的竖直符号相反**
+  —— 上沿那条是 `startH - deltaY`，下沿那条是 `startH + deltaY`。写反的形态是
+  「拖动手感是反的」，用一次就知道不对，但没有任何报错。
+- **工具条（`Transport`）窄窗口下横向滚动，不折行**：`overflow-x: auto` + 隐藏滚动条 +
+  纵向滚轮转横向（与 Ribbon 面板同源），内容 `width: max-content`（否则控件被压扁
+  而不是滚动）。两侧渐变遮罩只在**可滚且没到端**时显示（按 `scrollLeft / clientWidth /
+  scrollWidth` 算，容器尺寸变化靠 RO 重算）。
+  ⚠️ **绝不加「刷新时把 scrollLeft 归零」的 effect** —— 那句话 Ribbon 的
+  `lastScrollResetTab` 注释里记着：挂在 `version` 上的重算会把用户正在点的按钮永远
+  打回视口外。
 - **媒体池在两个视图各有一份渲染位，同一时刻只有一个实例在 DOM 里**：排版编辑页打开时
   `.body` 里那份靠 `{#if mediaPoolOpen && !editorOpen}` 卸载（主界面只是 `display:none`、
   **不卸载**，少了 `!editorOpen` 就会有两份列表 + 两份视频缩略图队列）。开关是**同一个**
@@ -1874,6 +1943,12 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   落点（播放头 / 仅入池），排版视图按类型直接落地（图片进画布、视频音频进池子）——
   那边只有一种合理解释，不值得再问。类型判定在 `ui/clipboard-assets.ts`（纯函数，
   **认不出的静默跳过**：粘一段文字不该弹「不支持的文件」）。
+- **文本通道里先试片段 JSON**（`core/clipboard.ts` 的 `parseClipboard`），命中才接管；
+  没命中**照旧整段放行**。剪贴板里不可能同时是片段 JSON 又是素材文件，两条路互斥；
+  排版页不接片段 JSON（那边有自己的元素剪贴板，时间轴片段粘进去没有意义）。
+  Ctrl+C/X 写系统剪贴板**之外**还留一份内存副本：写不进去（权限 / 非安全上下文）时
+  Ctrl+V 才拦截并粘内存里那份（`clipClipboardFallbackActive()`）—— 写得进去时一律
+  不拦截，让 `paste` 事件读系统剪贴板里**最新**的内容（包括从别的窗口粘进来的）。
 - **拖动期间只读得到 `dataTransfer.types`，读不到 `getData`**：所以「认不认得这个拖拽」
   必须靠类型判定 —— 媒体池的条目用自定义 MIME `application/x-artmatic-asset`，
   系统文件用浏览器的 `Files`。落点提示（行底色 + 竖线）只在两者之一时才亮。

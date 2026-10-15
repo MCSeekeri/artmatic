@@ -53,8 +53,11 @@
   import { animationSpecs, seekAnimations } from '../../typography/bake-animation';
   import { keyframeBodyOf } from '../../typography/animation';
   import CustomCssModal from './CustomCssModal.svelte';
+  import ThemeEditorModal from './ThemeEditorModal.svelte';
   import IconPickerModal from './IconPickerModal.svelte';
   import type { IconInsert } from '../../typography/icon-shapes';
+  import { cloneAsCustomTheme, themeById } from '../../typography/theme';
+  import { newId } from '../../core/schema';
   import { SNAP_PX, hitTest, hitTestAll, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
   import { gridSpacing } from '../../typography/grid';
   import { groupById } from '../../typography/groups';
@@ -76,6 +79,22 @@
   let marquee = $state<Rect | null>(null);
   let activeRibbonTab = $state('home');
   let customCssOpen = $state(false);
+  let themeEditorOpen = $state(false);
+
+  /**
+   * 「配色方案编辑器」的初值：当前文档的方案（内置或自定义）。
+   *
+   * 内置方案 → 弹窗打开即复制成自定义方案（`cloneAsCustomTheme` 在弹窗里做），
+   * 标题也随之换成「新建」。判据是「在不在工程的 customThemes 里」。
+   */
+  const themeEditorDraft = $derived.by(() => {
+    void appState.version;
+    const d = doc;
+    if (!d) return null;
+    const custom = appState.project.customThemes ?? [];
+    const cur = themeById(d.theme, custom);
+    return { theme: cur, isCustom: custom.some((t) => t.id === cur.id) };
+  });
   let iconPickerOpen = $state(false);
   /** 中键拖拽平移中（只为光标形态）。 */
   let panning = $state(false);
@@ -249,6 +268,8 @@
         // 失焦但选区仍该是作用对象），失效由 setSelection / clearSelection 负责清。
         spanRange: editorState.textRange,
         nodeEditing: !!editorState.nodeEditId,
+        customThemes: appState.project.customThemes ?? [],
+        onOpenThemeEditor: () => (themeEditorOpen = true),
       },
       actions,
     );
@@ -324,7 +345,16 @@
     // resolveImage 必须传：文档里图片元素只存 assetId，舞台要靠它解引用成
     // 对象 URL。漏传的表现是「插入图片后舞台一片空白，但片段预览正常」
     // —— 光栅化那条路（runtime.ts）自己带了 resolver，所以只有舞台缺。
-    paperEl.replaceChildren(buildDocDom(d, { resolveImage: resolveImageAsset }));
+    // isImageOffline + offlineLabel：素材不存在时画「脱机媒体」占位符
+    // （与时间轴上的图片 / 视频片段同一形态，判据唯一实现在 appState）。
+    paperEl.replaceChildren(
+      buildDocDom(d, {
+        resolveImage: resolveImageAsset,
+        isImageOffline: (id) => appState.isAssetOffline(id),
+        offlineLabel: tr('pool.offline'),
+        customThemes: appState.project.customThemes ?? [],
+      }),
+    );
   });
 
   // 版本或播放头变了就就地刷新样式，并把动画 seek 到当前时刻。
@@ -335,7 +365,13 @@
     const root = paperEl;
     if (!d || !root) return;
     // 注意传的是 `.paper` 这个**外层容器**：syncDocDom 自己会往下找文档根。
-    syncDocDom(root, d, { editingId: editorState.editingTextId, resolveImage: resolveImageAsset });
+    syncDocDom(root, d, {
+      editingId: editorState.editingTextId,
+      resolveImage: resolveImageAsset,
+      isImageOffline: (id) => appState.isAssetOffline(id),
+      offlineLabel: tr('pool.offline'),
+      customThemes: appState.project.customThemes ?? [],
+    });
     restoreCaretIfNeeded();
     seekAnimations(root, animationSpecs(d), ls);
   });
@@ -1444,6 +1480,21 @@
     initialOf={() => currentKeyframes}
     onclose={() => (customCssOpen = false)}
     onsave={(css: string) => actions.applyCustomCss(css)}
+  />
+{/if}
+
+{#if themeEditorOpen && themeEditorDraft}
+  <ThemeEditorModal
+    initialOf={() => {
+      const { theme: cur, isCustom } = themeEditorDraft;
+      // 内置方案打开即复制成自定义方案（内置数据表只读；id 新建、名字加「副本」）
+      return isCustom
+        ? { ...cur, colors: { ...cur.colors } }
+        : cloneAsCustomTheme(cur, newId(), `${tr(cur.labelKey!)}${tr('rib.themeCopySuffix')}`);
+    }}
+    title={themeEditorDraft.isCustom ? tr('rib.themeEditTitle') : tr('rib.themeNewTitle')}
+    onclose={() => (themeEditorOpen = false)}
+    onsave={(t) => actions.saveCustomTheme(t)}
   />
 {/if}
 

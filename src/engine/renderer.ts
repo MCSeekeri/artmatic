@@ -60,7 +60,9 @@ export class Renderer {
     const display = this.displayEl
       ? measureDisplaySize(this.displayEl)
       : { width: 0, height: 0 };
-    const fit = fitPreviewSize(resolution.w, resolution.h, display.width, display.height);
+    const fit = fitPreviewSize(resolution.w, resolution.h, display.width, display.height, {
+      allowUpscale: this.allowUpscale,
+    });
     if (!fit) return;
 
     /*
@@ -114,6 +116,23 @@ export class Renderer {
 
   getPreviewScale(): number {
     return this.previewScale;
+  }
+
+  /**
+   * 全屏预览的放大开关。默认 false（`fitPreviewSize` 只缩不放）。
+   *
+   * 只被全屏路径打开、退出时关回：屏幕比输出分辨率大时，不放大就是拿
+   * 输出分辨率的像素去填满屏幕（糊）。上限在 `preview-size.ts` 的
+   * `UPSCALE_CAP`（2×）—— 显存是导出的预算，不是预览的。
+   *
+   * ⚠️ 与 `setExportSize` 是两条路：那个会让 `syncSize` 永久短路
+   * （窗口缩放、切工程、改分辨率全都不再适配），这个不会。
+   */
+  private allowUpscale = false;
+
+  setAllowUpscale(on: boolean): void {
+    if (this.allowUpscale === on) return;
+    this.allowUpscale = on;
   }
 
   setExportSize(w: number, h: number): void {

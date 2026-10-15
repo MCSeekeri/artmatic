@@ -76,6 +76,8 @@ import LockOpen from '@lucide/svelte/icons/lock-open';
 import Magnet from '@lucide/svelte/icons/magnet';
 import Megaphone from '@lucide/svelte/icons/megaphone';
 import MegaphoneOff from '@lucide/svelte/icons/megaphone-off';
+import Maximize from '@lucide/svelte/icons/maximize';
+import Minimize from '@lucide/svelte/icons/minimize';
 import Minimize2 from '@lucide/svelte/icons/minimize-2';
 import Minus from '@lucide/svelte/icons/minus';
 import Monitor from '@lucide/svelte/icons/monitor';
@@ -209,6 +211,8 @@ export const ICONS = {
   magnet: Magnet,
   megaphone: Megaphone,
   'megaphone-off': MegaphoneOff,
+  maximize: Maximize,
+  minimize: Minimize,
   'minimize-2': Minimize2,
   minus: Minus,
   monitor: Monitor,

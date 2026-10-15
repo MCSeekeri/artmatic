@@ -23,6 +23,7 @@
   import { activeElementOwnsSpace, isExempt } from './focus';
   import { saveProjectAs, saveProjectNow } from './project-actions';
   import { isSplitKey } from './shortcuts';
+  import { parseClipboard } from '../core/clipboard';
   import { clipboardAssets, type ClipboardAsset } from './clipboard-assets';
   import { addAssetsToPool, pasteAssetsIntoTypography, placeAssetsAtPlayhead } from './paste-assets';
   import { tr } from '../i18n/index.svelte';
@@ -51,6 +52,75 @@
     installTheme(theme.spec);
     applyFontScale(theme.fontScale);
   });
+
+  /* ------------------------------------------------ 面板调校（拖拽热区）
+   *
+   * 两个入口：工具条下缘的一条横带（只调轨道区高度）、轨道区与抽屉夹角的
+   * 两个方块（一次手势同时调高度与对应抽屉的宽度）。都走 appState 的 setter
+   * —— 钳制与持久化各只有一处实现。指针捕获的形态照抄
+   * `InspectorDrawer.startResize`（那是同一件事的既有做法）。
+   */
+  let resizingH = $state(false);
+
+  function startHeightResize(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    resizingH = true;
+    const startY = e.clientY;
+    const startH = appState.timelineHeight;
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+
+    const mv = (ev: PointerEvent): void => {
+      /*
+       * **边界跟随光标**：热区贴在轨道区的**上沿**，往下拖 = 上沿下移 =
+       * 轨道区变矮。写反了的形态是「拖动手感是反的」—— 不报错，但用一次就知道
+       * 不对劲。夹角的那个热区在下沿，方向与之相反（那边是 +deltaY）。
+       */
+      appState.setTimelineHeight(startH - (ev.clientY - startY));
+    };
+    const up = (ev: PointerEvent): void => {
+      el.removeEventListener('pointermove', mv);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (el.hasPointerCapture(ev.pointerId)) el.releasePointerCapture(ev.pointerId);
+      resizingH = false;
+    };
+    el.addEventListener('pointermove', mv);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+
+  /** 夹角热区：`side` 是「这一次连哪个抽屉的宽度一起调」。 */
+  function startCornerResize(e: PointerEvent, side: 'pool' | 'drawer'): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startH = appState.timelineHeight;
+    const startW = side === 'pool' ? appState.mediaPoolWidth : appState.drawerWidth;
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+
+    const mv = (ev: PointerEvent): void => {
+      // 夹角热区贴在轨道区**下沿**（与抽屉的夹角处）：往上拖 = 变矮，
+      // 与工具条下缘那条热区正好相反（那条是上沿，边界跟随光标）。
+      appState.setTimelineHeight(startH + (ev.clientY - startY));
+      const dx = ev.clientX - startX;
+      // 媒体池在左：往右拖变宽；检查器在右：往左拖变宽（与各自独立的热区同向）。
+      if (side === 'pool') appState.setMediaPoolWidth(startW + dx);
+      else appState.setDrawerWidth(startW - dx);
+    };
+    const up = (ev: PointerEvent): void => {
+      el.removeEventListener('pointermove', mv);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (el.hasPointerCapture(ev.pointerId)) el.releasePointerCapture(ev.pointerId);
+    };
+    el.addEventListener('pointermove', mv);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
 
   onMount(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -106,6 +176,35 @@
       }
 
       /*
+       * Ctrl+C / Ctrl+X / Ctrl+V：**时间轴视图专用**。
+       *
+       * 刻意放在 `editorOpen` 分流**之后**：排版编辑页有自己的 keys.ts
+       * （元素级复制/剪切/粘贴），放在分流前面会让那边整个失灵。
+       *
+       * V 的兜底分支只在「上次复制写不进去系统剪贴板」时拦截 —— 写得进去时
+       * 走 `onPaste` 的系统剪贴板通道（那里读的是最新内容，包括从别的窗口
+       * 复制进来的片段 JSON）。
+       */
+      if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+        const k = e.key.toLowerCase();
+        if (k === 'c' && appState.selectedClipIds.length) {
+          e.preventDefault();
+          appState.copySelectedClips();
+          return;
+        }
+        if (k === 'x' && appState.selectedClipIds.length) {
+          e.preventDefault();
+          appState.cutSelectedClips();
+          return;
+        }
+        if (k === 'v' && appState.clipClipboardFallbackActive()) {
+          e.preventDefault();
+          appState.pasteClipsFromClipboard();
+          return;
+        }
+      }
+
+      /*
        * F2 = 给选中的片段就地改名（双击片段名是同一个入口）。
        * 放在时间轴这一侧：排版页有自己的 keys.ts 分流，那边没有「片段」这个概念。
        */
@@ -154,10 +253,11 @@
     };
 
     /**
-     * 粘贴素材。
+     * 粘贴素材 / 片段。
      *
-     * 只在剪贴板里**真的有素材**（图片 / 视频 / 音频）时才接管：粘贴一段文字
-     * 必须原样走浏览器的默认行为，否则输入类控件的粘贴会整个失灵。
+     * **片段 JSON 优先**（自有格式，命中才接管）：剪贴板里不可能同时是
+     * 片段 JSON 又是可识别的素材文件，两条路互斥。没命中必须整段放行 ——
+     * 粘贴一段文字要原样走浏览器默认行为，否则输入类控件的粘贴会整个失灵。
      * `isExempt` 放最前面 —— 输入框与自研控件（data-exempt）的粘贴归它们自己；
      * 文本编辑区的粘贴守卫也会 `preventDefault`，由 defaultPrevented 让路。
      *
@@ -169,6 +269,16 @@
       if (isExempt(e.target)) return;
       // 没有工程时整段放行：素材仓属于「当前工程」，粘进 placeholder 等于无声丢弃。
       if (!appState.hasProject) return;
+      // 片段 JSON：只认文本通道里那份（系统剪贴板）。排版页不接 —— 那边有
+      // 自己的元素剪贴板，粘时间轴片段进去没有意义。
+      if (!appState.editorOpen) {
+        const payload = parseClipboard(e.clipboardData?.getData('text/plain') ?? '');
+        if (payload) {
+          e.preventDefault();
+          appState.pasteClipsFromClipboard(payload);
+          return;
+        }
+      }
       const assets = clipboardAssets(Array.from(e.clipboardData?.items ?? []));
       if (!assets.length) return;
       e.preventDefault();
@@ -261,7 +371,7 @@
           <MediaPoolDrawer />
         {/if}
 
-        <div class="stage">
+        <div class="stage" style:--tracks-h={`${appState.timelineHeight}px`}>
           <Preview />
           <!--
             缺失插件提示条：绝对定位浮在预览上方，**不参与网格** ——
@@ -283,6 +393,41 @@
               />
             </span>
           </div>
+          <!--
+            高度热区：工具条与轨道区交界的一条 4px 横带（贴在轨道区上沿）。
+            位置用 `--tracks-h` 算，不写死像素 —— 高度是可拖的。
+          -->
+          <div
+            class="h-resize"
+            class:active={resizingH}
+            role="separator"
+            aria-label={tr('app.resizeTimeline')}
+            aria-orientation="horizontal"
+            data-testid="tracks-resize"
+            onpointerdown={startHeightResize}
+          ></div>
+          <!--
+            夹角热区：轨道区与抽屉的交界。只在对应抽屉开着时出现
+            （关着时没有第二件事可做，一个只能调高度的方块只会让人以为坏了）。
+          -->
+          {#if appState.mediaPoolOpen && !appState.editorOpen}
+            <div
+              class="corner-resize left"
+              role="separator"
+              aria-label={tr('app.resizeTimelineCorner')}
+              data-testid="tracks-corner-pool"
+              onpointerdown={(e) => startCornerResize(e, 'pool')}
+            ></div>
+          {/if}
+          {#if appState.drawerOpen}
+            <div
+              class="corner-resize right"
+              role="separator"
+              aria-label={tr('app.resizeTimelineCorner')}
+              data-testid="tracks-corner-drawer"
+              onpointerdown={(e) => startCornerResize(e, 'drawer')}
+            ></div>
+          {/if}
           <div class="tracks">
             <Timeline />
           </div>
@@ -413,6 +558,9 @@
     gap: var(--sp-4);
     flex-shrink: 0;
     min-width: 0;
+    /* 兜底：工具条内部自己横向滚动（见 Transport.svelte），这一层再夹一次，
+       保证没有任何子内容能把 stage 的列撑宽（那条历史 bug 见 .stage 注释）。 */
+    overflow: hidden;
     padding: 3px var(--sp-4);
     background: var(--surface-2);
     border-top: 1px solid var(--tl-border);
@@ -425,9 +573,48 @@
     gap: var(--sp-2);
   }
   .tracks {
-    height: 320px;
+    /* 高度是可拖的实例值（appState.timelineHeight，localStorage 持久化）。
+       变量在 .stage 上内联下发；回退值给「JS 还没跑起来」那一瞬兜底。 */
+    height: var(--tracks-h, 320px);
     min-height: 0;
     min-width: 0;
     border-top: none;
+  }
+  /* 工具条 / 轨道区交界的高度热区。hover 才显形 —— 平时它不该被看见。 */
+  .h-resize {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: var(--tracks-h, 320px);
+    height: 4px;
+    cursor: ns-resize;
+    z-index: 6;
+  }
+  .h-resize:hover,
+  .h-resize.active {
+    background: var(--accent);
+  }
+  /* 夹角热区：轨道区底角与抽屉的交界，一次手势同时调高与宽。 */
+  .corner-resize {
+    position: absolute;
+    bottom: 0;
+    width: 12px;
+    height: 12px;
+    z-index: 6;
+  }
+  .corner-resize.left {
+    left: 0;
+    cursor: nesw-resize;
+  }
+  .corner-resize.right {
+    right: 0;
+    cursor: nwse-resize;
+  }
+  .corner-resize:hover {
+    background: var(--accent);
+  }
+  /* 拖动中禁止选中文本，否则整页会变蓝（与 InspectorDrawer 同一处理）。 */
+  :global(body:has(.h-resize.active)) {
+    user-select: none;
   }
 </style>

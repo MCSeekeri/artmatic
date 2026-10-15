@@ -6,13 +6,17 @@ import {
   SHADE_IDS,
   STANDARD_COLORS,
   THEME_SLOTS,
+  cloneAsCustomTheme,
+  isKnownTheme,
   isThemeRef,
   paletteGrid,
   parseThemeRef,
   resolveThemeColor,
+  sanitizeCustomThemes,
   shadeColor,
   themeById,
   themeRef,
+  withSlotColor,
   type ThemeSlot,
 } from '../../src/typography/theme';
 
@@ -201,5 +205,109 @@ describe('标准色', () => {
       '#002060',
       '#7030a0',
     ]);
+  });
+});
+
+/* -------------------------------------------------- 自定义配色方案（工程级） */
+
+describe('自定义配色方案', () => {
+  const custom = [
+    {
+      id: 'my-theme',
+      name: '我的方案',
+      colors: {
+        lt1: '#ffffff',
+        dk1: '#000000',
+        lt2: '#eee8dd',
+        dk2: '#33261c',
+        accent1: '#b5541e',
+        accent2: '#d9a441',
+        accent3: '#6d8f66',
+        accent4: '#3f5e78',
+        accent5: '#8d5b8c',
+        accent6: '#c7bfa4',
+      },
+    },
+  ];
+
+  it('themeById 认自定义方案；查表顺序「自定义 → 内置 → 默认」', () => {
+    expect(themeById('my-theme', custom).name).toBe('我的方案');
+    expect(themeById('my-theme').id).toBe(DEFAULT_THEME_ID); // 不给 custom 就查不到
+    expect(themeById('office', custom).id).toBe('office'); // 内置仍然在
+    expect(themeById('nope', custom).id).toBe(DEFAULT_THEME_ID);
+  });
+
+  it('isKnownTheme 覆盖自定义', () => {
+    expect(isKnownTheme('my-theme', custom)).toBe(true);
+    expect(isKnownTheme('my-theme')).toBe(false);
+    expect(isKnownTheme('office', custom)).toBe(true);
+    expect(isKnownTheme('nope', custom)).toBe(false);
+  });
+
+  it('resolveThemeColor 用自定义方案的槽位色', () => {
+    expect(resolveThemeColor('@accent1', 'my-theme', custom)).toBe('#b5541e');
+    expect(resolveThemeColor('@accent1.d50', 'my-theme', custom)).toBe(shadeColor('#b5541e', 'd50'));
+    // 非引用原样返回
+    expect(resolveThemeColor('#123456', 'my-theme', custom)).toBe('#123456');
+  });
+
+  it('withSlotColor 返回新对象（就地改会绕过撤销栈）', () => {
+    const next = withSlotColor(custom[0]!, 'accent1', '#0000ff');
+    expect(next.colors.accent1).toBe('#0000ff');
+    expect(custom[0]!.colors.accent1).toBe('#b5541e'); // 原对象没动
+    expect(next.id).toBe(custom[0]!.id); // 其它字段带着走
+  });
+
+  it('cloneAsCustomTheme：只复制 8 个可变槽，端点恒为纯白 / 纯黑', () => {
+    const odd = { ...custom[0]!, colors: { ...custom[0]!.colors, lt1: '#f0f0f0', dk1: '#101010' } };
+    const copy = cloneAsCustomTheme(odd, 'copy-1', '副本');
+    expect(copy.id).toBe('copy-1');
+    expect(copy.name).toBe('副本');
+    expect(copy.colors.lt1).toBe('#ffffff');
+    expect(copy.colors.dk1).toBe('#000000');
+    expect(copy.colors.accent1).toBe(odd.colors.accent1);
+    expect(copy.colors.dk2).toBe(odd.colors.dk2);
+    // 自定义方案没有 labelKey（名字是用户文本）
+    expect(copy.labelKey).toBeUndefined();
+  });
+});
+
+describe('sanitizeCustomThemes：坏数据整条丢，绝不抛', () => {
+  const good = {
+    id: 'g',
+    name: '好的',
+    colors: {
+      lt1: '#ffffff', dk1: '#000000', lt2: '#eeeeee', dk2: '#222222',
+      accent1: '#111111', accent2: '#222222', accent3: '#333333',
+      accent4: '#444444', accent5: '#555555', accent6: '#666666',
+    },
+  };
+
+  it('非数组 / 空数组 → 空', () => {
+    expect(sanitizeCustomThemes(undefined)).toEqual([]);
+    expect(sanitizeCustomThemes('x')).toEqual([]);
+    expect(sanitizeCustomThemes([])).toEqual([]);
+  });
+
+  it('好条目原样通过', () => {
+    expect(sanitizeCustomThemes([good])).toEqual([good]);
+  });
+
+  it('坏条目整条丢：缺槽 / 坏 hex / 撞内置 id / 缺 id', () => {
+    const bad = [
+      { ...good, id: 'office' },                                   // 撞内置 id
+      { ...good, id: '', },                                        // 空 id
+      { ...good, colors: { ...good.colors, accent3: 'red' } },     // 非法 hex
+      { ...good, colors: { ...good.colors, accent6: undefined } }, // 缺槽
+      null,
+      'x',
+      { name: '没 id' },
+    ];
+    expect(sanitizeCustomThemes(bad)).toEqual([]);
+  });
+
+  it('坏条目不影响好条目（逐个独立判定）', () => {
+    const out = sanitizeCustomThemes([{ ...good, id: 'bad', colors: {} }, good]);
+    expect(out.map((t) => t.id)).toEqual(['g']);
   });
 });

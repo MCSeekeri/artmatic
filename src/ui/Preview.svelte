@@ -10,6 +10,35 @@
   let splitRight: HTMLCanvasElement;
 
   /**
+   * 全屏预览。宿主是 `.preview` 这个容器（不是 canvas）—— 全屏时悬浮工具条
+   * 与两帧并排浮层都该跟着铺满，只把 canvas 放大它们会被挤出视口。
+   *
+   * 退出全屏必须**关回** `setPreviewUpscale(false)`：那是「允许预览缓冲放大
+   * 到显示尺寸」的开关（见 renderer.setAllowUpscale），忘了关的后果是窗口
+   * 模式下预览也按屏幕尺寸分配缓冲 —— 小窗口里白烧一份全屏的显存。
+   */
+  let fullscreen = $state(false);
+
+  function toggleFullscreen(): void {
+    const el = host;
+    if (!el) return;
+    if (document.fullscreenElement === el) {
+      void document.exitFullscreen().catch(() => {});
+    } else {
+      // 老浏览器没有这个 API 时静默不做（按钮根本不该出现，见 supportsFullscreen）
+      void el.requestFullscreen?.().catch(() => {});
+    }
+  }
+
+  /**
+   * 不支持 Fullscreen API 的宿主（旧浏览器 / 被嵌进没有 allowfullscreen 的
+   * iframe）不显示按钮 —— `fullscreenEnabled` 对这两种情况都是 false。
+   */
+  const supportsFullscreen = $derived(
+    typeof document !== 'undefined' && document.fullscreenEnabled === true,
+  );
+
+  /**
    * 「跨剪切点两帧预览」的**拖拽入口**。
    *
    * 播放头停在剪切点时，在预览画面上横向轻拖（越过这个阈值、且方向不限）就临时
@@ -67,6 +96,17 @@
     let raf = 0;
     /** 累计抛错次数。同一个错误只报头一次与每 300 次一次，避免每帧刷屏。 */
     let tickErrors = 0;
+    /*
+     * 全屏状态同步。浏览器给的退出通道（Esc / F11）不走我们的按钮，
+     * 所以必须听 `fullscreenchange`：只信按钮的那份状态会在用户按 Esc 之后
+     * 一直停在「全屏中」，而预览缓冲还开着放大 —— 退出全屏画面反而更糊。
+     */
+    const onFullscreenChange = (): void => {
+      const on = document.fullscreenElement === host;
+      fullscreen = on;
+      appState.setPreviewUpscale(on);
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
     const loop = () => {
       /*
        * 渲染失败是「这一帧没画成」，不是「预览关机」。
@@ -93,6 +133,7 @@
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
     };
   });
 </script>
@@ -126,7 +167,7 @@
     <canvas class="pv-split-panel" data-testid="split-left" bind:this={splitLeft}></canvas>
     <canvas class="pv-split-panel" data-testid="split-right" bind:this={splitRight}></canvas>
   </div>
-  <PreviewToolbar />
+  <PreviewToolbar {fullscreen} {supportsFullscreen} ontoggleFullscreen={toggleFullscreen} />
 </div>
 
 <style>

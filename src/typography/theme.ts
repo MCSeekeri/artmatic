@@ -173,7 +173,13 @@ export function shadeColor(hex: string, shade: ShadeId): string {
 
 export interface TypographyTheme {
   id: string;
-  labelKey: MessageKey;
+  /**
+   * 内置方案的文案键（`rib.theme.*`）。**自定义方案没有这个键** ——
+   * 它们的名字是用户输入的自由文本，见 `name`。
+   */
+  labelKey?: MessageKey;
+  /** 自定义方案的用户命名（显示时优先于 labelKey）。 */
+  name?: string;
   colors: Record<ThemeSlot, string>;
 }
 
@@ -229,14 +235,114 @@ export const DEFAULT_THEME_ID = 'office';
 
 const THEME_BY_ID = new Map(BUILTIN_THEMES.map((t) => [t.id, t]));
 
-/** 按 id 取方案。未知 / 缺省一律回落默认方案 —— **绝不抛错**（老工程、坏数据都要能打开）。 */
-export function themeById(id: string | null | undefined): TypographyTheme {
-  return (id ? THEME_BY_ID.get(id) : undefined) ?? THEME_BY_ID.get(DEFAULT_THEME_ID)!;
+/**
+ * 按 id 取方案。未知 / 缺省一律回落默认方案 —— **绝不抛错**（老工程、坏数据都要能打开）。
+ *
+ * `custom` 是工程里的自定义方案（`Project.customThemes`，随工程保存）。查表顺序
+ * 「自定义 → 内置 → 默认」：自定义 id 由 UI 保证不与内置冲突（新建时校验），
+ * 真冲突了也是用户内容优先 —— 那是他明确选的那个。
+ */
+export function themeById(
+  id: string | null | undefined,
+  custom?: readonly TypographyTheme[] | null,
+): TypographyTheme {
+  if (id) {
+    const own = custom?.find((t) => t.id === id);
+    if (own) return own;
+    const builtin = THEME_BY_ID.get(id);
+    if (builtin) return builtin;
+  }
+  return THEME_BY_ID.get(DEFAULT_THEME_ID)!;
 }
 
-/** 方案是否内置（数据表里没有的 id 是坏数据，检查器会据此提示）。 */
-export function isKnownTheme(id: string): boolean {
-  return THEME_BY_ID.has(id);
+/** 方案是否已定义（内置或工程自定义）。检查器据此提示「工程里存着一个本版本没有的方案 id」。 */
+export function isKnownTheme(id: string, custom?: readonly TypographyTheme[] | null): boolean {
+  return custom?.some((t) => t.id === id) === true || THEME_BY_ID.has(id);
+}
+
+/** 全部可选方案的 id（「设计」面板的图库数据源；自定义方案排在内置后面）。 */
+export function themeIds(custom?: readonly TypographyTheme[] | null): string[] {
+  return [...BUILTIN_THEMES.map((t) => t.id), ...(custom ?? []).map((t) => t.id)];
+}
+
+/** 方案的显示名（内置走文案键，自定义走用户文本；两者都没有就退回 id）。 */
+export function themeDisplayName(t: TypographyTheme): string {
+  return t.name ?? t.id;
+}
+
+/**
+ * 把某一份方案**复制**成一份自定义方案（「编辑方案」从内置方案起步时用）。
+ *
+ * 只复制 8 个可变槽：两个端点（lt1 白 / dk1 黑）是所有内置方案共有的约定，
+ * 自定义方案照样是纯白 / 纯黑 —— 放开了只会得到「黑色不是纯黑」的怪方案，
+ * 而取色卡的第一列永远画的是这两个端点。
+ *
+ * @param id 新方案的 id（调用方生成，保证不与内置冲突）
+ */
+export function cloneAsCustomTheme(
+  base: TypographyTheme,
+  id: string,
+  name: string,
+): TypographyTheme {
+  return {
+    id,
+    name,
+    colors: {
+      lt1: LT1,
+      dk1: DK1,
+      lt2: base.colors.lt2,
+      dk2: base.colors.dk2,
+      accent1: base.colors.accent1,
+      accent2: base.colors.accent2,
+      accent3: base.colors.accent3,
+      accent4: base.colors.accent4,
+      accent5: base.colors.accent5,
+      accent6: base.colors.accent6,
+    },
+  };
+}
+
+/** 改一个槽位的色值（返回新对象；方案是工程内容，就地改会绕过撤销栈）。 */
+export function withSlotColor(theme: TypographyTheme, slot: ThemeSlot, hex: string): TypographyTheme {
+  return { ...theme, colors: { ...theme.colors, [slot]: hex } };
+}
+
+/**
+ * 校验 / 归一化一份**来历不明**的自定义方案数组（`validateProject` 用）。
+ *
+ * 坏条目**整条丢掉**而不是修：颜色字段缺一个槽的方案的渲染行为没人定义得清，
+ * 而「打开工程时悄悄少一个强调色」比「这个方案没进来」更难查。
+ * 与内置 id 冲突的条目同样丢掉（那种工程是被手改坏的）。
+ */
+export function sanitizeCustomThemes(raw: unknown): TypographyTheme[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TypographyTheme[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const t = item as { id?: unknown; name?: unknown; labelKey?: unknown; colors?: unknown };
+    if (typeof t.id !== 'string' || !t.id || THEME_BY_ID.has(t.id)) continue;
+    if (!t.colors || typeof t.colors !== 'object') continue;
+    const colors = t.colors as Record<string, unknown>;
+    const hexOk = (v: unknown): v is string => typeof v === 'string' && hexToRgb(v) !== null;
+    if (!hexOk(colors.lt1) || !hexOk(colors.dk1)) continue;
+    let complete = true;
+    const next = { lt1: colors.lt1, dk1: colors.dk1 } as Record<ThemeSlot, string>;
+    for (const slot of THEME_SLOTS) {
+      if (slot === 'lt1' || slot === 'dk1') continue;
+      if (!hexOk(colors[slot])) {
+        complete = false;
+        break;
+      }
+      next[slot] = colors[slot];
+    }
+    if (!complete) continue;
+    out.push({
+      id: t.id,
+      ...(typeof t.name === 'string' && t.name ? { name: t.name } : {}),
+      colors: next,
+    });
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------ 颜色引用 */
@@ -276,14 +382,16 @@ export function isThemeRef(color: string): boolean {
  * 不是引用就原样返回（可能是 `rgb()` / 命名色 / 已有 hex），所以这个函数
  * 可以无脑包在任何颜色外面。`theme` 可以给 id、给方案对象、或什么都不给
  * （缺省 = 默认方案），后两种写法让 css.ts 的调用点不必每次都查表。
+ * `custom` 只在给 id 时有用：工程自定义方案（`Project.customThemes`）。
  */
 export function resolveThemeColor(
   color: string,
   theme?: TypographyTheme | string | null,
+  custom?: readonly TypographyTheme[] | null,
 ): string {
   const ref = parseThemeRef(color);
   if (!ref) return color;
-  const t = typeof theme === 'object' && theme !== null ? theme : themeById(theme);
+  const t = typeof theme === 'object' && theme !== null ? theme : themeById(theme, custom);
   const base = t.colors[ref.slot];
   return ref.shade ? shadeColor(base, ref.shade) : base;
 }
@@ -333,8 +441,3 @@ export const STANDARD_COLORS: readonly string[] = [
   '#002060',
   '#7030a0',
 ];
-
-/** 文档里用到的方案 id 列表（「设计」面板的图库按它高亮当前项）。 */
-export function themeIds(): string[] {
-  return BUILTIN_THEMES.map((t) => t.id);
-}

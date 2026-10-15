@@ -122,3 +122,39 @@ test('切分 + 撤销回到切分前', async ({ page }) => {
   await page.keyboard.press('Control+z');
   expect(await clipCount(page, demoTracks)).toBe(1);
 });
+
+/* ---------------------------------------- 检查器取色卡（原生 input 已全量替换） */
+
+test('检查器的纯色片段取色走取色卡：选标准色落库', async ({ page }) => {
+  await boot(page);
+  const demo = await demoShape(page);
+  await page.getByTestId('add-visual-track').click();
+  await addClipViaMenu(page, demo.tracks, 'add-solid');
+
+  // 选中它 → 检查器自动展开，显示「颜色」字段（现在是取色卡入口）
+  await page.locator('.clip').last().click();
+  const field = page.getByTestId('clip-color');
+  await expect(field).toBeVisible();
+
+  // 点色块开面板 → 标准色里的纯红
+  await field.click();
+  await page.getByTestId('clip-color-palette-std-ff0000').click();
+
+  expect(
+    await page.evaluate(() => {
+      const A = (window as never as {
+        __artmatic: {
+          store: {
+            project: {
+              tracks: {
+                clips: { kind: string; source?: { type?: string; color?: string } }[];
+              }[];
+            };
+          };
+        };
+      }).__artmatic;
+      const clips = A.store.project.tracks.flatMap((t) => t.clips);
+      return clips[clips.length - 1]!.source?.color;
+    }),
+  ).toBe('#ff0000');
+});

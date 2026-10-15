@@ -100,6 +100,13 @@ export interface Platform {
    * 由调用方回退到下载 —— 截图这件事在那些环境里**必须仍然可用**。
    */
   writeImageToClipboard(blob: Blob): Promise<ClipboardWriteResult>;
+  /**
+   * 写一段文本进系统剪贴板（片段复制 / 剪切）。
+   *
+   * 同在用户手势里调用。失败时调用方有内存副本兜底（本应用内可粘），
+   * 所以返回值只用于「要不要提示一句」。
+   */
+  writeTextToClipboard(text: string): Promise<ClipboardWriteResult>;
   saveProject(json: string, suggestedName: string): Promise<void>;
   openProject(): Promise<{ name: string; json: string } | null>;
 

@@ -61,6 +61,7 @@ import {
   type GroupedFragment,
 } from '../../typography/groups';
 import { shapeGeometry, type ShapePreset } from '../../typography/shapes';
+import { cloneAsCustomTheme, type TypographyTheme } from '../../typography/theme';
 import { ICON_STROKE_WIDTH, iconGridFrames, type IconInsert } from '../../typography/icon-shapes';
 import {
   insertNodeOnSegment,
@@ -166,12 +167,24 @@ function anyElement(doc: TypographyDocument): TypographyElement[] {
 /**
  * 写一个文本属性。**唯一实现** —— 提交路径与「拖动实时预览」路径共用，
  * 两处各写一份的话，「提交生效、预览不变」这类不一致迟早出现。
+ *
+ * ## 可被行内覆盖的键：同时清掉整段里该键的旧覆盖
+ *
+ * 不清的后果就是用户报的那个：「给部分文字单独设了字号 / 颜色 / 加粗，
+ * 之后选整个文本框改同一个属性，那部分文字纹丝不动」—— 行内覆盖的优先级
+ * 高于元素级，旧覆盖会一直钉着旧值，观感是「设置了却没生效」。
+ * 行内选区那条路（`setTextStyle` 的 `coversWholeText` 分支）早就这么做了；
+ * 这里是「点选文本框」（无行内选区）的同一件事：**整块级操作必须对整块
+ * 一致生效**，不管是设值（这里）还是按比例缩放（`scaleFontSize`）。
  */
 function writeTextProp<K extends keyof TextStyle>(
   doc: TypographyDocument,
   key: K,
   value: TextStyle[K],
 ): void {
+  const spanKey = (SPAN_STYLE_KEYS as readonly string[]).includes(key)
+    ? (key as SpanStyleKey)
+    : null;
   for (const el of onlyText(doc)) {
     const next: TextStyle = { ...el.style, [key]: value };
     /*
@@ -182,6 +195,9 @@ function writeTextProp<K extends keyof TextStyle>(
      */
     if (value === undefined) delete (next as unknown as Record<string, unknown>)[key as string];
     el.style = next;
+    if (spanKey) {
+      el.runs = clearRunsSpanStyle(el.runs, 0, plainTextOf(el.runs).length, [spanKey]);
+    }
   }
 }
 
@@ -315,6 +331,10 @@ export interface TypographyActions {
    * 文本属性的**统一写入口**：编辑中且选中了一段字 ⇒ 写行内覆盖；
    * 否则写元素级。Ribbon 上的文本控件一律走它 —— 让每个控件自己判断
    * 「现在改的是整块还是一段」等于把这个判断抄了 N 份。
+   *
+   * 走元素级时（含「全选文本」与「点选文本框」两种形态）会**同时清掉整段里
+   * 该键的旧行内覆盖** —— 不清的话旧覆盖继续压着新设的值，症状是
+   * 「选了文本框、设了样式、被单独改过的那部分没反应」。
    */
   setTextStyle<K extends SpanStyleKey>(key: K, value: TextStyle[K]): void;
   /**
@@ -324,6 +344,9 @@ export interface TypographyActions {
    * 「大一点点 / 小一点点」，而阶梯（12/16/20/…）会把 37 号字一步带到 40，
    * 把他调好的相对关系弄丢。相对关系在混合选区里尤其重要 ——
    * 24 与 48 一起放大 1.15 倍之后仍然是 1:2。
+   *
+   * 点选文本框（无行内选区）时同样保持这个语义：元素级字号与**行内覆盖过的
+   * 字号一起按比例缩放**，没有行内选区的片段与有行内选区的片段行为一致。
    */
   scaleFontSize(factor: number): void;
   /**
@@ -373,8 +396,18 @@ export interface TypographyActions {
   clearTextFormatting(): void;
 
   /* 配色方案 */
-  /** 切换文档的配色方案（用了主题色的元素会跟着变）。 */
-  setTheme(id: string): void;
+  /**
+   * 切换文档的配色方案（用了主题色的元素会跟着变）。
+   *
+   * `scope: 'clip'`（默认）只改当前文档；`'project'` 应用到工程里所有文本
+   * 片段，并设为新片段的默认（一笔撤销，见实现）。
+   */
+  setTheme(id: string, scope?: 'clip' | 'project'): void;
+  /**
+   * 保存一份自定义配色方案（新建或改槽位），并设为当前文档的方案。
+   * 一笔撤销；内置方案是只读数据表，要改先 `cloneAsCustomTheme` 复制。
+   */
+  saveCustomTheme(theme: TypographyTheme): void;
 
   /* 插入 */
   addText(): void;
@@ -686,6 +719,26 @@ export function createTypographyActions(): TypographyActions {
       editorState.commit(tr('typo.undo.textProp'), (doc2) => {
         for (const t of onlyText(doc2)) {
           t.style = { ...t.style, fontSize: clampFontSize(t.style.fontSize * factor) };
+          /*
+           * 行内覆盖过的字号**按同一比例**缩放 —— 不是清掉、也不是不动。
+           *
+           * 不动就是用户报的「部分文字的字号不跟着变」；清掉则会把 24/48 的
+           * 混排一步抹平成同一个字号，而输入框上的 `XX+` 刚刚才告诉他这里
+           * 有大小之分。与有行内选区时走 `scaleSpanFontSize` 的行为保持一致
+           * （那边也是逐处按比例乘，保留相对关系）。
+           */
+          if (t.runs.some((r) => r.style?.fontSize !== undefined)) {
+            t.runs = normalizeRuns(
+              t.runs.map((r) =>
+                r.style?.fontSize === undefined
+                  ? r
+                  : {
+                      ...r,
+                      style: { ...r.style, fontSize: clampFontSize(r.style.fontSize * factor) },
+                    },
+              ),
+            );
+          }
         }
       });
     },
@@ -802,6 +855,10 @@ export function createTypographyActions(): TypographyActions {
           if (color) next.highlight = color;
           else delete next.highlight;
           el.style = next;
+          // 与 writeTextProp 同一件事：highlight 也是可行内覆盖的键，
+          // 元素级改高亮必须清掉整段里该键的旧覆盖，否则被单独设过的那几段
+          // 仍旧钉在旧颜色上（「选了文本框改高亮，部分文字没反应」）。
+          el.runs = clearRunsSpanStyle(el.runs, 0, plainTextOf(el.runs).length, ['highlight']);
         }
       });
     },
@@ -837,9 +894,55 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
-    setTheme(id) {
+    setTheme(id, scope = 'clip') {
+      if (scope === 'project') {
+        /*
+         * 「应用到整个项目」：**一次 commit** 遍历写所有文本片段的 doc.theme，
+         * 并写 `Project.typographyTheme`（新片段 / 新文档的默认）。
+         *
+         * 正在编辑的这份文档也在遍历里（`editorState.doc` 就是 store 里那个
+         * 对象），所以一笔撤销覆盖全部 —— 分两笔的话 Ctrl+Z 只回来一半。
+         */
+        appState.store.commit(tr('typo.undo.themeProject'), (p) => {
+          p.typographyTheme = id;
+          for (const t of p.tracks) {
+            for (const c of t.clips) {
+              if (c.kind === 'source' && c.source.type === 'text') c.source.doc.theme = id;
+            }
+          }
+        });
+        return;
+      }
       editorState.commit(tr('typo.undo.theme'), (doc) => {
         doc.theme = id;
+      });
+    },
+
+    /**
+     * 保存一份自定义配色方案（新建或改槽位）：**一笔撤销**。
+     *
+     * 自定义方案存在 `Project.customThemes`（随工程保存）。内置方案是只读的
+     * 数据表 —— 「编辑内置方案」的路径是先复制成自定义方案再存（见
+     * `cloneAsCustomTheme`），保存后它立即成为当前文档的方案。
+     */
+    saveCustomTheme(theme) {
+      const clipId = editorState.clipId;
+      appState.store.commit(tr('typo.undo.themeSave'), (p) => {
+        const list = Array.isArray(p.customThemes) ? [...p.customThemes] : [];
+        const i = list.findIndex((t) => t.id === theme.id);
+        if (i >= 0) list[i] = theme;
+        else list.push(theme);
+        p.customThemes = list;
+        // 刚保存的那个方案立即成为当前方案（用户调完看的就是它）。
+        if (clipId) {
+          for (const t of p.tracks) {
+            for (const c of t.clips) {
+              if (c.id === clipId && c.kind === 'source' && c.source.type === 'text') {
+                c.source.doc.theme = theme.id;
+              }
+            }
+          }
+        }
       });
     },
 

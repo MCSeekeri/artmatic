@@ -254,6 +254,9 @@ test('超长 tooltip 换行显示，且钳在视口内不横向溢出', async ({
   const bubble = page.getByTestId('tip-bubble');
   // durationTip 是一句长文案（工程时长那段），换行前它会溢出 280px 的盒子。
   const durationCtl = page.locator('.transport .ctl').filter({ has: page.getByTestId('duration-input') });
+  // 900px 宽下工具条改为横向滚动（见 Transport.svelte），这个控件可能在视口外。
+  // hover 前先滚进来 —— 不滚的话 hover 落在滚动容器里的错误位置上，tooltip 不出现。
+  await durationCtl.scrollIntoViewIfNeeded();
   await durationCtl.hover();
   await expect(bubble).toBeVisible();
 

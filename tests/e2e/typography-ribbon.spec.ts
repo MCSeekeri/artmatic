@@ -1798,7 +1798,12 @@ test('本机字体：授权后把系统字体并进下拉', async ({ page, conte
   await expect(page.getByTestId('typo-font-import')).toBeEnabled();
 
   await btn.click();
-  await expect(page.getByTestId('notice')).toContainText('本机字体');
+  /*
+   * 显式给 30s：`window.queryLocalFonts()` 要枚举**本机全部字体**（本机实测
+   * 上千个），整套并跑时机器一忙，默认 10s 会表现成「超时失败」而不是真违规
+   * —— 与 AGENTS §7「遍历全目录的用例要显式给超时」同一类。
+   */
+  await expect(page.getByTestId('notice')).toContainText('本机字体', { timeout: 30_000 });
 
   // 系统字体**真的**进了下拉。Arial 是 Windows 必装的，挑它最稳。
   // 字体下拉要求**先选中文本元素**（`disabled: !hasText`）—— 新建片段时
@@ -2234,4 +2239,125 @@ test('「其他颜色」的原生取色器：拖动（input）不关弹层，确
   });
   await expect(pop).toHaveCount(0);
   expect((await readDoc(page)).elements[0]!.style!.color).toBe('#123456');
+});
+
+/* ---------------------------------------- 配色方案：工程级 + 自定义（v6） */
+
+/** 工程里全部文本片段的 theme（「应用到整个项目」的判据）。 */
+async function allTextThemes(page: Page): Promise<(string | undefined)[]> {
+  return page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        appState: {
+          store: {
+            project: {
+              typographyTheme?: string;
+              customThemes?: unknown[];
+              tracks: { clips: { kind: string; source?: { type?: string; doc?: { theme?: string } } }[] }[];
+            };
+          };
+        };
+      };
+    }).__artmatic;
+    const p = A.appState.store.project;
+    const out: (string | undefined)[] = [];
+    for (const t of p.tracks) {
+      for (const c of t.clips) {
+        if (c.kind === 'source' && c.source?.type === 'text') out.push(c.source.doc?.theme);
+      }
+    }
+    return out;
+  });
+}
+
+test('「应用到整个项目」：一次写所有文本片段 + 新片段默认（一笔撤销）', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  // 工程里另有文本片段（demo 的标题排版）—— 它们也要跟着变
+  const before = await allTextThemes(page);
+  expect(before.length).toBeGreaterThan(1);
+
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-themes').click();
+  await page.getByTestId('ribbon-themes-opt-office-2007').click();
+  // 图库只改当前文档
+  expect((await readDoc(page)).theme).toBe('office-2007');
+  expect(await allTextThemes(page)).toContain(undefined);
+
+  await page.getByTestId('ribbon-theme-apply-project').click();
+  expect(await allTextThemes(page)).toEqual(before.map(() => 'office-2007'));
+  const project = await page.evaluate(
+    () =>
+      (window as never as { __artmatic: { appState: { store: { project: { typographyTheme?: string } } } } })
+        .__artmatic.appState.store.project.typographyTheme,
+  );
+  expect(project).toBe('office-2007');
+
+  // 逐笔撤销：第一笔回「图库那次」（只改当前文档），第二笔才回到全都没设过
+  await page.keyboard.press('Control+z');
+  expect(await allTextThemes(page)).toEqual(before.map((_, i) => (i === 0 ? 'office-2007' : before[i])));
+  await page.keyboard.press('Control+z');
+  expect(await allTextThemes(page)).toEqual(before);
+});
+
+test('自定义配色方案：内置方案打开即复制，改槽位保存后成为当前方案', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-theme-edit').click();
+
+  // 当前是内置方案 → 标题是「新建」，名字预填「Office 副本」
+  await expect(page.getByTestId('theme-editor-modal')).toBeVisible();
+  const name = page.getByTestId('theme-editor-name');
+  await expect(name).toHaveValue('Office 副本');
+
+  // 改一个槽位（accent1 → 标准色里的纯红），保存
+  await page.getByTestId('theme-editor-color-accent1').click();
+  await page.getByTestId('theme-editor-color-accent1-palette-std-ff0000').click();
+  await page.getByTestId('theme-editor-save').click();
+  await expect(page.getByTestId('theme-editor-modal')).toHaveCount(0);
+
+  // 落库：customThemes 多了一条，当前文档的方案指向它
+  const saved = await page.evaluate(
+    () =>
+      (window as never as {
+        __artmatic: {
+          appState: {
+            store: {
+              project: {
+                customThemes?: { id: string; name: string; colors: Record<string, string> }[];
+                tracks: { clips: { kind: string; source?: { type?: string; doc?: { theme?: string } } }[] }[];
+              };
+            };
+          };
+        };
+      }).__artmatic.appState.store.project,
+  );
+  expect(saved.customThemes).toHaveLength(1);
+  expect(saved.customThemes![0]!.name).toBe('Office 副本');
+  expect(saved.customThemes![0]!.colors.accent1).toBe('#ff0000');
+  const themes = await allTextThemes(page);
+  expect(themes).toContain(saved.customThemes![0]!.id);
+  expect((await readDoc(page)).theme).toBe(saved.customThemes![0]!.id);
+
+  // 再打开 → 标题变成「编辑」，改的是同一条（不是又复制一份）
+  await page.getByTestId('ribbon-theme-edit').click();
+  await expect(page.getByTestId('theme-editor-modal')).toBeVisible();
+  await page.getByTestId('theme-editor-cancel').click();
+  const after = await page.evaluate(
+    () =>
+      (window as never as { __artmatic: { appState: { store: { project: { customThemes?: unknown[] } } } } })
+        .__artmatic.appState.store.project.customThemes?.length,
+  );
+  expect(after).toBe(1);
+
+  // 图库里出现了这一条（名字是用户文本）
+  await page.getByTestId('ribbon-themes').click();
+  await expect(page.getByTestId('ribbon-themes-pop')).toContainText('Office 副本');
 });

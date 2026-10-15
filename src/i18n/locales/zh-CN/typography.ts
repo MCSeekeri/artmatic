@@ -28,6 +28,8 @@ export const typography = {
   'typo.undo.textShadow': '修改文字阴影',
   'typo.undo.highlight': '修改突出显示颜色',
   'typo.undo.theme': '更换配色方案',
+  'typo.undo.themeProject': '配色方案应用到整个工程',
+  'typo.undo.themeSave': '保存配色方案',
   'typo.undo.clearFormat': '清除格式',
   'typo.clearFormat': '清除格式',
   'typo.localFontsLoaded': '已载入 {n} 个本机字体',

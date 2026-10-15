@@ -71,6 +71,19 @@ export const timeline = {
   'tl.fitDuration': '时长贴合内容',
   'tl.setResolution': '修改分辨率',
   'tl.splitClip': '切分片段',
+  /* 片段复制 / 剪切 / 粘贴（core/clipboard.ts 的载荷 + appState 的三个动作）。
+     撤销标签与提示分开：前者进撤销栈（一笔），后者是 flash。 */
+  'tl.pasteClips': '粘贴 {n} 个片段',
+  'tl.copied': '已复制 {n} 个片段',
+  'tl.cut': '已剪切 {n} 个片段',
+  /* 系统剪贴板写不进去（权限 / 非安全上下文）：内存副本还在，本应用内照常可粘。 */
+  'tl.copyLocalOnly': '浏览器不允许写系统剪贴板，已复制到应用内（可在本应用粘贴）',
+  'tl.cutLocalOnly': '浏览器不允许写系统剪贴板，已剪切到应用内（可在本应用粘贴）',
+  'tl.pasteEmpty': '剪贴板里没有可粘贴的片段',
+  'tl.pasteNoTrack': '没有能放下这些片段的轨道',
+  'tl.pasted': '已粘贴 {n} 个片段',
+  /* 跨工程 / 素材被删：assetId 在目标工程里不存在，画面按「脱机媒体」占位符表现。 */
+  'tl.pasteMissingMedia': '已粘贴 {n} 个片段；其中引用的素材不在本工程，画面显示为脱机媒体',
   'tl.setOverlapBehavior': '切换重叠策略',
   'tl.setBeatGrid': '修改拍网格',
   'tl.loadProject': '载入工程',

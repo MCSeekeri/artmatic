@@ -171,7 +171,9 @@ test('填充色标：可加色标、改颜色与位置，SVG <defs> 同步', asy
   expect(offsets).toEqual(['0', '0.8', '1']);
 
   // 改颜色（第一个色标）→ 文档与 SVG 都要变。
-  await page.getByTestId('prop-fill-stop-color-0').fill('#ff0000');
+  // 取色卡入口：点色块开面板，再从标准色里挑（纯红在标准色板里）。
+  await page.getByTestId('prop-fill-stop-color-0').click();
+  await page.getByTestId('prop-fill-stop-color-0-palette-std-ff0000').click();
   expect((await readDoc(page)).elements[1]!.fill!.stops![0]!.color).toBe('#ff0000');
   const first = await page
     .locator(`[data-el-id="${shapeId}"] svg defs linearGradient stop`)
@@ -191,7 +193,9 @@ test('文本框背景：画在外壳上，字形色与裁切不受影响', async
   // 默认是「无」→ 切到纯色（类型下拉的 none 也在选项里）。
   await page.getByTestId('prop-box-kind').click();
   await page.getByTestId('prop-box-kind-option-solid').click();
-  await page.getByTestId('prop-box-color').fill('#ff0000');
+  // 取色卡入口：点色块 → 标准色里的纯红。
+  await page.getByTestId('prop-box-color').click();
+  await page.getByTestId('prop-box-color-palette-std-ff0000').click();
 
   const shell = await page.locator('.paper .typo-el').first().evaluate((el) => {
     const s = (el as HTMLElement).style;

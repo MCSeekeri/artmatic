@@ -361,3 +361,110 @@ test('导出面板：MP4 / PNG / GIF 三个入口在同一行且水平居中', a
   const hintBox = (await page.getByTestId('export-mp4-hint').boundingBox())!;
   expect(hintBox.y).toBeGreaterThanOrEqual(mp4.y + mp4.height - 1);
 });
+
+/* ------------------------------------------------ 轨道区高度 + 全屏预览 */
+
+test('轨道区高度可拖（工具条下缘热区），且拖完刷新还在', async ({ page }) => {
+  await boot(page);
+
+  const tracks = page.locator('.tracks');
+  const before = (await tracks.boundingBox())!.height;
+  // 默认 320（UiPrefs 的 fallback）
+  expect(Math.round(before)).toBe(320);
+
+  // 热区贴在轨道区**上沿**（工具条下缘）：往下拖 80 → 上沿下移 → 变矮 80
+  // （边界跟随光标，与夹角那条方向相反）。
+  const hot = (await page.getByTestId('tracks-resize').boundingBox())!;
+  const cx = hot.x + hot.width / 2;
+  const cy = hot.y + hot.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx, cy + 80, { steps: 6 });
+  await page.mouse.up();
+
+  const after = (await tracks.boundingBox())!.height;
+  expect(Math.round(after)).toBe(240);
+
+  // 落盘的是 localStorage（UI 偏好），刷新后读回来
+  await page.reload();
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  expect(Math.round((await tracks.boundingBox())!.height)).toBe(240);
+});
+
+test('夹角热区一次手势同时调轨道区高度与抽屉宽度', async ({ page }) => {
+  await boot(page);
+
+  // 打开媒体池（左）与检查器（右）：两个夹角热区都在
+  await page.getByTestId('rail-media').click();
+  await expect(page.getByTestId('tracks-corner-pool')).toBeVisible();
+  await expect(page.getByTestId('tracks-corner-drawer')).toBeVisible();
+
+  const tracks = page.locator('.tracks');
+  const drawer = page.locator('aside.drawer');
+  const h0 = (await tracks.boundingBox())!.height;
+  const w0 = (await drawer.boundingBox())!.width;
+
+  // 拖右夹角（贴在轨道区**下沿**）：往左上 60×50 → 轨道区变矮（下沿上移）、检查器变宽
+  const hot = (await page.getByTestId('tracks-corner-drawer').boundingBox())!;
+  const cx = hot.x + hot.width / 2;
+  const cy = hot.y + hot.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx - 60, cy - 50, { steps: 6 });
+  await page.mouse.up();
+
+  const h1 = (await tracks.boundingBox())!.height;
+  const w1 = (await drawer.boundingBox())!.width;
+  expect(Math.round(h1 - h0)).toBe(-50);
+  expect(Math.round(w1 - w0)).toBe(60);
+});
+
+test('全屏预览：宿主是全屏元素，缓冲允许放大（并能在退出后收回）', async ({ page }) => {
+  await boot(page);
+  const kitW = () =>
+    page.evaluate(
+      () => (window as never as { __artmatic: { renderer: { kit: { w: number } } } }).__artmatic.renderer.kit.w,
+    );
+
+  /*
+   * 窗口模式下的缓冲由**显示区域**决定（预览只缩不放）：视口 1280×720 里
+   * 预览宿主只有 936×314，所以 1920×1080 的工程出 558×314。
+   * 工程改成 640×360 也一样受这个高度限制（约 558）—— 这正是「全屏要允许
+   * 放大」的理由：屏幕比输出分辨率大时，不放大会糊。
+   */
+  const windowed = await kitW();
+  expect(windowed).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    const A = (window as never as { __artmatic: { store: { setResolution: (w: number, h: number) => void } } }).__artmatic;
+    A.store.setResolution(640, 360);
+  });
+
+  // 全屏宿主必须存在（不支持 Fullscreen API 的宿主上按钮不渲染）
+  const btn = page.getByTestId('preview-fullscreen');
+  await expect(btn).toBeVisible();
+  await btn.click();
+  await page.waitForFunction(() => document.fullscreenElement !== null);
+  // 宿主就是预览容器（不是 canvas —— 悬浮工具条要跟着铺满）
+  expect(
+    await page.evaluate(() => document.fullscreenElement?.classList.contains('preview') ?? false),
+  ).toBe(true);
+
+  // 全屏显示 = 整个视口 1280×720 > 输出 640×360 → 允许放大到 2×（UPSCALE_CAP）
+  await page.waitForFunction(
+    () => (window as never as { __artmatic: { renderer: { kit: { w: number } } } }).__artmatic.renderer.kit.w >= 1200,
+  );
+  expect(await kitW()).toBeGreaterThan(640);
+
+  // 退出走**我们的按钮**（`document.exitFullscreen()` 不需要手势，按钮里就是这么写的）。
+  // 键盘 Esc 是浏览器级行为，headless 里不触发 —— 别用它当退出通道。
+  // `fullscreenchange` 监听把状态同步回来（按钮图标、allowUpscale 都靠它）。
+  await btn.click();
+  await page.waitForFunction(() => document.fullscreenElement === null);
+  // 退出全屏必须**关回**「只缩不放」——忘了关的话窗口模式下也按屏幕尺寸分配缓冲
+  await page.waitForFunction(
+    ({ w }) => (window as never as { __artmatic: { renderer: { kit: { w: number } } } }).__artmatic.renderer.kit.w === w,
+    { w: windowed },
+  );
+  await expect(page.getByTestId('preview-fullscreen')).toBeVisible();
+});

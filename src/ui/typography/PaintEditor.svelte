@@ -24,7 +24,8 @@
     type ShapePaintPatch,
     type TexturePattern,
   } from '../../typography/document';
-  import { resolveThemeColor } from '../../typography/theme';
+  import { resolveThemeColor, themeById, type TypographyTheme } from '../../typography/theme';
+  import ColorField from '../controls/ColorField.svelte';
   import { tr } from '../../i18n/index.svelte';
 
   interface Props {
@@ -38,21 +39,30 @@
     onpatch: (patch: ShapePaintPatch) => void;
     /** testid 前缀：`${prefix}-kind` / `${prefix}-color` / `${prefix}-stop-pos-0` … */
     prefix: string;
-    /** 当前文档的配色方案 id：颜色可能是 `@accent1` 这样的引用，显示前要解析。 */
-    themeId?: string;
+    /**
+     * 当前配色方案（对象 / id / 不传 = 默认）。颜色可能是 `@accent1` 这样的
+     * 引用，显示前要解析成真实 hex。由调用方从文档上取（本组件不认识文档）。
+     */
+    theme?: TypographyTheme | string | null;
+    /** 工程自定义方案（`theme` 给 id 时，id 可能是自定义的）。 */
+    customThemes?: readonly TypographyTheme[] | null;
   }
-  const { paint, kindOptions, onkind, onpatch, prefix, themeId }: Props = $props();
+  const { paint, kindOptions, onkind, onpatch, prefix, theme = null, customThemes = null }: Props = $props();
+
+  const palette = $derived(
+    typeof theme === 'object' && theme !== null ? theme : themeById(theme, customThemes),
+  );
 
   /**
    * 颜色 → 可显示的值（把配色方案引用解析成真实 hex）。
    *
-   * 原生 `<input type="color">` 不认 `@accent1`，不解析的话色块会显示成黑色 ——
-   * 而「看到黑色」正是用户会去改它的理由，这个误导很难被察觉。
+   * 取色卡不认 `@accent1`，不解析的话色块会显示成黑色 —— 而「看到黑色」
+   * 正是用户会去改它的理由，这个误导很难被察觉。
    * 反过来：面板里改色写回的是**裸色**（引用只在取色卡里产生）—— 这是有意的，
    * 这里是精细调整区，改完就该钉死。
    */
   function dc(color: string | undefined, fallback: string): string {
-    return color ? resolveThemeColor(color, themeId) : fallback;
+    return color ? resolveThemeColor(color, palette) : fallback;
   }
 
   const kind = $derived(paint?.kind ?? 'none');
@@ -103,12 +113,12 @@
 {#snippet colorRow(label: string, value: string, testid: string, oninput: (v: string) => void)}
   <Field {label} labelWidth={74}>
     <span class="prop-swatch">
-      <input
-        type="color"
+      <ColorField
+        {label}
         {value}
-        aria-label={label}
-        data-testid={testid}
-        oninput={(e) => oninput(e.currentTarget.value)}
+        theme={palette}
+        testid={testid}
+        onchange={oninput}
       />
     </span>
   </Field>
@@ -147,13 +157,13 @@
       {#each stops as s, i (i)}
         <div class="prop-stop" data-testid={`${prefix}-stop-${i}`}>
           <span class="prop-swatch prop-swatch-sm">
-            <input
-              type="color"
+            <ColorField
+              label={tr('typo.propStops')}
               value={dc(s.color, '#ffffff')}
-              aria-label={tr('typo.propStops')}
-              data-testid={`${prefix}-stop-color-${i}`}
-              oninput={(e) =>
-                writeStops(stops.map((x, j) => (j === i ? { ...x, color: e.currentTarget.value } : x)))}
+              theme={palette}
+              testid={`${prefix}-stop-color-${i}`}
+              onchange={(v) =>
+                writeStops(stops.map((x, j) => (j === i ? { ...x, color: v } : x)))}
             />
           </span>
           <NumberInput
@@ -260,16 +270,6 @@
   }
   .prop-swatch-sm {
     width: 18px;
-  }
-  .prop-swatch input {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    padding: 0;
-    border: none;
-    background: transparent;
-    cursor: pointer;
   }
   /* 与上面的字段行对齐：标签列 74px（色标列表是「填充方式」那一行的子项）。 */
   .prop-stops {

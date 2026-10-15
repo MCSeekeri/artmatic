@@ -70,7 +70,13 @@ export class DomSnapRasterizer implements TextRasterizer {
     // ADR-003 规则 ③：字体没就绪就截图，首帧会用回落字体量度。
     await this.fonts.ensure(req.doc);
 
-    const root = buildDocDom(req.doc, { forRaster: true, resolveImage: req.resolveImage });
+    const root = buildDocDom(req.doc, {
+      forRaster: true,
+      resolveImage: req.resolveImage,
+      isImageOffline: req.isImageOffline,
+      offlineLabel: req.offlineLabel,
+      customThemes: req.customThemes,
+    });
     this.host.replaceChildren(root);
     try {
       // 必须挂进文档之后才能 seek（脱离文档的元素拿不到 CSSAnimation）。

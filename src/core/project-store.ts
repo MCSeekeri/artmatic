@@ -215,28 +215,61 @@ export class ProjectStore {
   addClip(trackId: string, clip: AnyClip): void {
     this.commit(tr('tl.addClip'), (p) => {
       const track = p.tracks.find((t) => t.id === trackId);
-      if (!track) return;
-      // 落点被占时先尝试裁进所在空档；起点本身压在片段上时顺延到它的
-      // 末尾再找空档（否则「新建」在占用区静默失败，用户会以为按钮坏了）。
-      // 注意上界传 Infinity：工程时长不是片段的天花板（见 setDuration 注释），
-      // 新片段超出当前时长就把工程撑长。
-      let start = clip.start;
-      let free = freeRangeAt(track.clips as Span[], start, Number.POSITIVE_INFINITY);
-      if (!free) {
-        const covering = spanAt(track.clips as Span[], start);
-        if (covering) {
-          start = covering.end + 1e-6;
-          free = freeRangeAt(track.clips, start, Number.POSITIVE_INFINITY);
-        }
-      }
-      if (!free) return;
-      const s = Math.max(start, free.start);
-      const e = Math.min(clip.end + (s - clip.start), free.end);
-      if (e - s < MIN_CLIP_LENGTH) return;
-      (track.clips as AnyClip[]).push({ ...clip, start: s, end: e });
-      track.clips.sort((a, b) => a.start - b.start);
-      if (e > p.duration) p.duration = e;
+      if (track) this.placeInto(track, clip, p);
     });
+  }
+
+  /**
+   * 把一段片段落进某条轨。**落点几何的唯一实现** —— `addClip` 与
+   * `pasteClips` 共用：两处各写一份的形态是「从池里插会压邻居、粘贴却不会」。
+   *
+   * 规则：落点被占时先尝试裁进所在空档；起点本身压在片段上时顺延到它的
+   * 末尾再找空档（否则「新建」在占用区静默失败，用户会以为按钮坏了）。
+   * 上界传 Infinity：工程时长不是片段的天花板，新片段超出当前时长就把工程撑长。
+   * 返回 false = 放不下（调用方静默跳过或说明）。
+   */
+  private placeInto(track: Track, clip: AnyClip, p: Project): boolean {
+    let start = clip.start;
+    let free = freeRangeAt(track.clips as Span[], start, Number.POSITIVE_INFINITY);
+    if (!free) {
+      const covering = spanAt(track.clips as Span[], start);
+      if (covering) {
+        start = covering.end + 1e-6;
+        free = freeRangeAt(track.clips, start, Number.POSITIVE_INFINITY);
+      }
+    }
+    if (!free) return false;
+    const s = Math.max(start, free.start);
+    const e = Math.min(clip.end + (s - clip.start), free.end);
+    if (e - s < MIN_CLIP_LENGTH) return false;
+    (track.clips as AnyClip[]).push({ ...clip, start: s, end: e });
+    track.clips.sort((a, b) => a.start - b.start);
+    if (e > p.duration) p.duration = e;
+    return true;
+  }
+
+  /**
+   * 粘贴一批片段（复制 / 剪切 / 跨工程）：**一笔撤销**，不是 N 笔。
+   *
+   * 逐个 `addClip` 也能粘对，但撤销栈里会多出 N 条记录 —— 用户按一次
+   * Ctrl+Z 只回来一个，看起来就是「撤销坏了」（与 `removeClips` 同一理由）。
+   * 落点几何走 `placeInto`（与 `addClip` 同一份实现），同轨重叠时后粘的
+   * 片段绕着先粘的走。
+   *
+   * @param items 每个片段的目标轨。clip.id 应由调用方换成**新 id**
+   *              （同工程粘贴留下原 id 会让 findClip 找到源片段）。
+   */
+  pasteClips(items: readonly { trackId: string; clip: AnyClip }[], label: string): number {
+    if (!items.length) return 0;
+    let placed = 0;
+    this.commit(label, (p) => {
+      for (const it of items) {
+        const track = p.tracks.find((t) => t.id === it.trackId);
+        if (!track) continue;
+        if (this.placeInto(track, it.clip, p)) placed += 1;
+      }
+    });
+    return placed;
   }
 
   /**

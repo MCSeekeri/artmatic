@@ -2,11 +2,13 @@
  * sources.ts — SourceClip → 纹理的解析器。
  *
  * solid → 1×1 色纹理（按颜色缓存）
- * image → 已解码的 ImageBitmap（`engine/media-assets.ts`），首次用到时上传成纹理
+ * image → 已解码的 ImageBitmap（`engine/media-assets.ts`），首次用到时上传成纹理；
+ *         素材**不存在**（不是没解码好）时给「脱机媒体」占位图
  * algo  → 委托给注入的 algo 运行时（B7 装配）；未装配或没烘好返回 null
  * text  → 委托给注入的排版运行时（M4 装配）；缓存未命中时返回 null，
  *         由它异步光栅化后经 onReady → store.touch() → 下一帧重绘
- * video → 委托给注入的视频运行时（M6 装配）；帧没解码好返回 null，同上
+ * video → 委托给注入的视频运行时（M6 装配）；帧没解码好返回 null，同上；
+ *         素材**不存在**时同 image 给占位图
  *
  * ## 为什么 image / video 都走「注入 resolver」而不是直连
  *
@@ -24,6 +26,10 @@ import type { SourceClip } from '../core/schema';
 import type { Kit } from './kit';
 import type { SourceResolver, SourceTexture } from './compositor';
 import { imageSourceFor, type ImageEntry } from './media-assets';
+import {
+  OFFLINE_PLACEHOLDER_SIZE,
+  drawOfflinePlaceholder,
+} from './offline-placeholder';
 
 export type AlgoResolver = (clip: SourceClip, t: number, frame: number) => SourceTexture | null;
 
@@ -65,8 +71,57 @@ export class SourceManager {
   private textResolver: TextResolver | null = null;
   private videoResolver: VideoResolver | null = null;
   private imageResolver: ImageResolver | null = imageSourceFor;
+  /**
+   * 「这个 assetId 是不是**真的不存在**」的探针（由装配层注入）。
+   *
+   * 与「还没加载好」是两件事：图片 / 视频都是异步就绪的，加载窗口里
+   * resolver 同样返回 null。占位符只画给**不存在**的素材 —— 否则正常加载
+   * 会满屏闪暗红（那是比空白更糟的形态）。
+   */
+  private assetOffline: ((assetId: string) => boolean) | null = null;
+  /** 占位图上的文字（宿主从 i18n 注入；空 = 只画图标）。 */
+  private offlineLabel = '';
+  /** 占位图纹理（全进程共用一张；文字变了才重画）。 */
+  private offlineTex: SourceTexture | null = null;
 
   constructor(private readonly kit: Kit) {}
+
+  /** 注入「素材是否不存在」的判据。不注入 = 从不画占位符（lab 等无素材场景）。 */
+  setAssetOfflineProbe(fn: ((assetId: string) => boolean) | null): void {
+    this.assetOffline = fn;
+  }
+
+  /** 占位图文字。变化时丢掉旧纹理重画（语言切换的唯一致效路径）。 */
+  setOfflineLabel(label: string): void {
+    if (this.offlineLabel === label) return;
+    this.offlineLabel = label;
+    if (this.offlineTex) {
+      this.kit.gl.deleteTexture(this.offlineTex.tex);
+      this.offlineTex = null;
+    }
+  }
+
+  /**
+   * 「脱机媒体」占位图（Canvas2D → 纹理，懒建 + 缓存）。
+   *
+   * 走 `uploadImage` 而不是自己建纹理：`UNPACK_FLIP_Y_WEBGL` 的翻转纪律
+   * 只有那一处实现（canvas 源 + 翻一次 = 正确朝向，见那里的两轮实测注释）。
+   */
+  private offlineTexture(): SourceTexture | null {
+    if (this.offlineTex) return this.offlineTex;
+    const { w, h } = OFFLINE_PLACEHOLDER_SIZE;
+    const canvas =
+      typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(w, h)
+        : document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    drawOfflinePlaceholder(ctx, w, h, this.offlineLabel);
+    this.offlineTex = this.uploadImage(canvas, w, h);
+    return this.offlineTex;
+  }
 
   setAlgoResolver(r: AlgoResolver | null): void {
     this.algoResolver = r;
@@ -91,12 +146,17 @@ export class SourceManager {
         return this.solid(clip.source.color);
       case 'image': {
         const entry = this.imageResolver?.(clip.source.assetId);
-        return entry ? this.imageTexture(clip.source.assetId, entry) : null;
+        if (entry) return this.imageTexture(clip.source.assetId, entry);
+        // 素材不存在（不是「还没解码好」）→ 脱机媒体占位图。
+        return this.assetOffline?.(clip.source.assetId) ? this.offlineTexture() : null;
       }
       case 'algo':
         return this.algoResolver?.(clip, t, frame) ?? null;
-      case 'video':
-        return this.videoResolver?.(clip, t, frame) ?? null;
+      case 'video': {
+        const st = this.videoResolver?.(clip, t, frame);
+        if (st) return st;
+        return this.assetOffline?.(clip.source.assetId) ? this.offlineTexture() : null;
+      }
       case 'text':
         // 多传 kit.w / kit.h：光栅化要照着「这一层会被画多大」出图，
         // 而渲染尺寸是 renderer 的状态（预览 ≈960、导出 1920）。

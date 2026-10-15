@@ -18,6 +18,7 @@
   import BitmaskField from '../src/ui/controls/BitmaskField.svelte';
   import PatternField from '../src/ui/controls/PatternField.svelte';
   import IconButton from '../src/ui/controls/IconButton.svelte';
+  import ColorField from '../src/ui/controls/ColorField.svelte';
   import { labState, itemFor, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
   import { tr } from '../src/i18n/index.svelte';
   import { resolveLabel } from '../src/i18n/label';
@@ -119,12 +120,11 @@
               </Field>
             {:else if p.type === 'color'}
               <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
-                <input
-                  class="lab-color"
-                  type="color"
+                <ColorField
+                  label={resolveLabel(p.labelKey, tr)}
                   value={String(valueOf('source', p))}
-                  data-testid={`lab-source-color-${p.key}`}
-                  oninput={(e) => labState.setParam('source', p.key, e.currentTarget.value)}
+                  testid={`lab-source-color-${p.key}`}
+                  onchange={(v) => labState.setParam('source', p.key, v)}
                 />
               </Field>
             {:else if p.type === 'bitmask'}
@@ -239,12 +239,11 @@
               </Field>
             {:else if p.type === 'color'}
               <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
-                <input
-                  class="lab-color"
-                  type="color"
+                <ColorField
+                  label={resolveLabel(p.labelKey, tr)}
                   value={String(valueOf('effect', p))}
-                  data-testid={`lab-effect-color-${p.key}`}
-                  oninput={(e) => labState.setParam('effect', p.key, e.currentTarget.value)}
+                  testid={`lab-effect-color-${p.key}`}
+                  onchange={(v) => labState.setParam('effect', p.key, v)}
                 />
               </Field>
             {:else if p.type === 'bitmask'}
@@ -345,14 +344,6 @@
     margin: 0 var(--sp-3) var(--sp-3);
     font-size: var(--fs-sm);
     color: var(--text-muted);
-  }
-  .lab-color {
-    width: 32px;
-    height: var(--control-h, 22px);
-    padding: 0;
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
   }
   .lab-errors {
     max-height: 40%;

@@ -25,8 +25,19 @@
   import Icon from './Icon.svelte';
   import Select from './controls/Select.svelte';
   import Checkbox from './controls/Checkbox.svelte';
+  import IconButton from './controls/IconButton.svelte';
   import { appState, PREVIEW_FPS_DIVS, PREVIEW_SCALES } from './app-state.svelte';
   import { tr } from '../i18n/index.svelte';
+
+  interface Props {
+    /** 是否正处于全屏（图标在 maximize / minimize 之间换）。 */
+    fullscreen: boolean;
+    /** 宿主不支持 Fullscreen API 时为 false —— 按钮不出现。 */
+    supportsFullscreen: boolean;
+    /** 切换全屏。宿主与状态同步在 Preview.svelte（它持有 `.preview`）。 */
+    ontoggleFullscreen: () => void;
+  }
+  const { fullscreen, supportsFullscreen, ontoggleFullscreen }: Props = $props();
 
   const fpsOptions = PREVIEW_FPS_DIVS.map((d) => ({
     value: String(d),
@@ -85,6 +96,20 @@
       />
       <span class="pv-lbl">{tr('app.previewRestore')}</span>
     </span>
+
+    <!-- 全屏：放在收起按钮左边（同一族「工具栏自身的开关」）。
+         宿主不支持时整个按钮不渲染 —— 点下去只会弹一句「浏览器不行」。 -->
+    {#if supportsFullscreen}
+      <IconButton
+        icon={fullscreen ? 'minimize' : 'maximize'}
+        label={fullscreen ? tr('app.previewExitFullscreen') : tr('app.previewFullscreen')}
+        tipText={tr('app.previewFullscreenTip')}
+        tipPlacement="top"
+        size="sm"
+        testid="preview-fullscreen"
+        onclick={ontoggleFullscreen}
+      />
+    {/if}
 
     <!-- 收起：留在条子最右侧，与三个开关同一行，不与它们抢注意力。 -->
     <button

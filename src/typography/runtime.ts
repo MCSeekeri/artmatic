@@ -33,6 +33,7 @@ import type { TextResolver } from '../engine/sources';
 import type { Project, SourceClip } from '../core/schema';
 import { frameKeyFor, rasterKeyForDoc } from './cache-key';
 import type { TypographyDocument } from './document';
+import type { TypographyTheme } from './theme';
 import type { FontProvider } from './font-provider';
 import type { TextBackendRegistry } from './rasterizer';
 
@@ -215,7 +216,16 @@ export class TypographyRuntime {
     this.inflight.add(key);
     const backend = this.backends.pick();
     void backend
-      .rasterize({ doc, width: w, height: h, localSec, resolveImage: this.resolveImage })
+      .rasterize({
+        doc,
+        width: w,
+        height: h,
+        localSec,
+        resolveImage: this.resolveImage,
+        isImageOffline: this.isImageOffline,
+        offlineLabel: this.offlineLabel,
+        customThemes: this.customThemes(),
+      })
       .then((canvas) => {
         this.upload(key, canvas, w, h);
         this.inflight.delete(key);
@@ -229,6 +239,19 @@ export class TypographyRuntime {
 
   /** 图片素材的 URL 解析。M4 由编辑器注册；未注册时该元素这帧缺席。 */
   resolveImage: (assetId: string) => string | null = () => null;
+  /**
+   * 图片素材「脱机」判据（引用不存在 → 画面给暗红占位符）。
+   * 与 `resolveImage` 返回 null 是两件事，见 `BuildDocOptions.isImageOffline`。
+   */
+  isImageOffline: (assetId: string) => boolean = () => false;
+  /** 占位符文字（「脱机媒体」，宿主从 i18n 注入；空 = 只画图标）。 */
+  offlineLabel = '';
+  /**
+   * 工程自定义配色方案。**函数而不是数组**：宿主会在切换工程后换掉返回内容
+   * （数组是值，切了工程这里还留着上一份 —— 「A 工程的自定义配色跑进 B 工程」）。
+   * 每次光栅化请求时才读，见 `RasterRequest.customThemes`。
+   */
+  customThemes: () => TypographyTheme[] = () => [];
 
   /* ------------------------------------------------------------ 导出预热 */
 
@@ -289,7 +312,16 @@ export class TypographyRuntime {
     try {
       const canvas = await this.backends
         .pick()
-        .rasterize({ doc, width: w, height: h, localSec, resolveImage: this.resolveImage });
+        .rasterize({
+        doc,
+        width: w,
+        height: h,
+        localSec,
+        resolveImage: this.resolveImage,
+        isImageOffline: this.isImageOffline,
+        offlineLabel: this.offlineLabel,
+        customThemes: this.customThemes(),
+      });
       this.upload(key, canvas, w, h);
     } catch (err) {
       console.error('[typo] 预热失败', err);
@@ -319,7 +351,16 @@ export class TypographyRuntime {
   ): Promise<HTMLCanvasElement> {
     return this.backends
       .pick()
-      .rasterize({ doc, width, height, localSec, resolveImage: this.resolveImage });
+      .rasterize({
+        doc,
+        width,
+        height,
+        localSec,
+        resolveImage: this.resolveImage,
+        isImageOffline: this.isImageOffline,
+        offlineLabel: this.offlineLabel,
+        customThemes: this.customThemes(),
+      });
   }
 
   enterExportMode(): void {

@@ -142,6 +142,24 @@ export const browserPlatform: Platform = {
     }
   },
 
+  /**
+   * 写一段文本进系统剪贴板（片段复制 / 剪切）。
+   *
+   * 与 `writeImageToClipboard` 同一条约束（必须在用户手势里）与同一套返回值，
+   * 但**失败不是终点**：调用方同时留了一份内存副本，写不进去也照样能在本
+   * 应用内粘贴（跨标签页不行，那本来也做不到）。
+   */
+  async writeTextToClipboard(text: string): Promise<ClipboardWriteResult> {
+    const clip = navigator.clipboard as ({ writeText?: (t: string) => Promise<void> }) | undefined;
+    if (typeof clip?.writeText !== 'function') return 'unsupported';
+    try {
+      await clip.writeText(text);
+      return 'ok';
+    } catch (e) {
+      return (e as { name?: string } | null)?.name === 'NotAllowedError' ? 'denied' : 'failed';
+    }
+  },
+
   async saveProject(json: string, suggestedName: string): Promise<void> {
     const blob = new Blob([json], { type: 'application/json' });
     const picker = savePicker();

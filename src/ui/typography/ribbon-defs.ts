@@ -25,7 +25,7 @@ import {
   type TypographyElement,
   type TypographyGroup,
 } from '../../typography/document';
-import { BUILTIN_THEMES, themeById } from '../../typography/theme';
+import { BUILTIN_THEMES, themeById, type TypographyTheme } from '../../typography/theme';
 import type { MessageKey } from '../../i18n/locales';
 import { ANIM_PRESETS, type AnimTiming } from '../../typography/animation';
 import { GRID_LIMITS, type TypoGridPrefs } from '../../typography/grid';
@@ -93,6 +93,13 @@ export interface TypographyRibbonInput {
    * （能直接单测，也不必知道状态住在哪）。
    */
   nodeEditing: boolean;
+  /**
+   * 工程里的自定义配色方案（`Project.customThemes`）。「设计」选项卡的图库
+   * 与一切 `@slot` 解析都要带上它们 —— 文档里的引用可能指向自定义方案。
+   */
+  customThemes: readonly TypographyTheme[];
+  /** 打开「配色方案编辑器」（界面状态，所以由编辑器提供）。 */
+  onOpenThemeEditor: () => void;
 }
 
 const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
@@ -283,8 +290,11 @@ export function buildTypographyTabs(
    * 走 `themeById` 而不是直接读 `doc.theme`：未设、或工程里存着一个本版本
    * 没有的方案 id 时，界面必须显示**渲染时真正用的那个方案** ——
    * 两处各判一次的话，会出现「面板显示 A、画面用的是 B」。
+   * 自定义方案（`Project.customThemes`）也在查表范围内。
    */
-  const theme = themeById(input.doc.theme);
+  const theme = themeById(input.doc.theme, input.customThemes);
+  /** 图库的全部方案：内置 + 工程自定义（自定义排后面，id 不冲突）。 */
+  const allThemes = [...BUILTIN_THEMES, ...input.customThemes];
 
   const tabs: RibbonTabDef[] = [
     /* ------------------------------------------------------------ 开始 */
@@ -933,9 +943,10 @@ export function buildTypographyTabs(
               label: tr('rib.themeGallery'),
               testid: 'ribbon-themes',
               value: theme.id,
-              options: BUILTIN_THEMES.map((t) => ({
+              options: allThemes.map((t) => ({
                 id: t.id,
-                label: tr(t.labelKey),
+                // 内置方案走文案键；自定义方案是用户文本（TypographyTheme.name）
+                label: t.name ?? tr(t.labelKey!),
                 /*
                  * 缩略图的色带顺序与 Office 一致：深色 2 / 浅色 2 / 六个强调色。
                  * 不给「白色 + 黑色」两个端点 —— 所有内置方案的这两个槽都是纯白
@@ -953,6 +964,33 @@ export function buildTypographyTabs(
                 ],
               })),
               onselect: (id) => a.setTheme(id),
+            },
+            /*
+             * 「应用到整个项目」：一次 commit 写所有文本片段 + 新片段默认
+             * （`Project.typographyTheme`）。与图库的区别：图库改的是
+             * **当前文档**（scope: 'clip'）。
+             */
+            {
+              kind: 'button',
+              id: 'theme-apply-project',
+              label: tr('rib.themeApplyProject'),
+              icon: 'layers',
+              size: 'large',
+              testid: 'ribbon-theme-apply-project',
+              onselect: () => a.setTheme(theme.id, 'project'),
+            },
+            /*
+             * 「编辑方案」：改当前方案的槽位色。当前是内置方案时，保存即复制成
+             * 自定义方案（内置数据表只读）—— 这条分叉在弹窗内部处理。
+             */
+            {
+              kind: 'button',
+              id: 'theme-edit',
+              label: tr('rib.themeEdit'),
+              icon: 'paintbrush',
+              size: 'large',
+              testid: 'ribbon-theme-edit',
+              onselect: () => input.onOpenThemeEditor(),
             },
           ],
         },

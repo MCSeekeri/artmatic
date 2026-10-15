@@ -51,6 +51,15 @@ export const app = {
   'app.previewRestoreTip': '播放时用上面的档位，暂停时自动回到全质（停住时看到的必须是准的）',
   'app.previewOptions': '预览选项',
   'app.previewCollapse': '收起为悬浮球',
+  /* 全屏预览：放大到铺满屏幕（受 2× 上限约束，见 preview-size.ts）。 */
+  'app.previewFullscreen': '全屏预览',
+  'app.previewFullscreenTip': '放大到铺满整个屏幕（Esc 退出）',
+  'app.previewExitFullscreen': '退出全屏',
+
+  /* ------------------------------------------------ 面板调校（拖拽热区） */
+  /* 轨道区高度可拖：工具条下缘一条横带只调高度；轨道区与抽屉的夹角一次调两样。 */
+  'app.resizeTimeline': '调整时间轴高度',
+  'app.resizeTimelineCorner': '同时调整时间轴高度与面板宽度',
 
   /* ------------------------------------------------ 导出面板 */
   'app.exportFileName': '文件名',

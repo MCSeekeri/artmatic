@@ -2,8 +2,14 @@
  * preview-size.ts — 预览分辨率与输出分辨率的解耦。
  *
  * 移植自 openmosh gl/preview-size.ts（MIT，见 CREDITS.md）。
- * 预览画布按输出宽高比适配到显示区域（设备像素），永不超过输出尺寸；
+ * 预览画布按输出宽高比适配到显示区域（设备像素），**默认**永不超过输出尺寸
+ * （`k = Math.min(1, scale)` —— 放得再大也只是插值，白烧显存）；
  * 导出时渲染器切到真实输出分辨率，导完切回。
+ *
+ * 唯一的例外是**全屏预览**（`allowUpscale`）：屏幕比输出分辨率还大时，
+ * 允许放大到显示尺寸，否则「全屏」看到的是一张被放大过的小图。
+ * 仍受 `UPSCALE_CAP` 约束 —— 4K 屏上放 1080p 工程不会去分一块 8 兆像素
+ * 的缓冲（那正是导出才舍得花的钱）。
  *
  * UNMEASURED_MAX_PIXELS：显示尺寸还量不到时（元素隐藏也算 0），
  * 绝不能退回输出分辨率——4K 输出会在此刻按 8 兆像素分配画布、
@@ -18,11 +24,20 @@ export interface PreviewSize {
 
 const UNMEASURED_MAX_PIXELS = 1280 * 720;
 
+/** 全屏放大的上限（相对输出尺寸）。2× 已经是「屏幕比工程大一圈」的极限。 */
+const UPSCALE_CAP = 2;
+
+export interface FitPreviewOptions {
+  /** true = 允许放大到显示尺寸（仍受 UPSCALE_CAP 约束）。默认 false = 只缩不放。 */
+  allowUpscale?: boolean;
+}
+
 export function fitPreviewSize(
   outputWidth: number | undefined,
   outputHeight: number | undefined,
   displayWidth: number,
   displayHeight: number,
+  opts: FitPreviewOptions = {},
 ): PreviewSize | null {
   if (!outputWidth || !outputHeight || outputWidth <= 0 || outputHeight <= 0) {
     return null;
@@ -31,7 +46,7 @@ export function fitPreviewSize(
     displayWidth <= 0 || displayHeight <= 0
       ? Math.sqrt(UNMEASURED_MAX_PIXELS / (outputWidth * outputHeight))
       : Math.min(displayWidth / outputWidth, displayHeight / outputHeight);
-  const k = Math.min(1, scale);
+  const k = opts.allowUpscale ? Math.min(scale, UPSCALE_CAP) : Math.min(1, scale);
   return {
     width: Math.max(2, Math.round(outputWidth * k)),
     height: Math.max(2, Math.round(outputHeight * k)),

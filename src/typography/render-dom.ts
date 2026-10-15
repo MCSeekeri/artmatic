@@ -46,6 +46,7 @@ import {
   RUNS_WRAP_ATTR,
   SPAN_ATTR,
   normalizeStops,
+  type ImageElement,
   type Paint,
   type PaintStop,
   type ShapeElement,
@@ -56,12 +57,30 @@ import {
   type TypographyGroup,
 } from './document';
 import { shapeGeometry } from './shapes';
+import { OFFLINE_BG, OFFLINE_ICON_PATHS, OFFLINE_INK } from '../core/offline-media';
 
 export interface BuildDocOptions {
   /** true = 产出给光栅化的静态副本（不做 contenteditable）。 */
   forRaster?: boolean;
   /** 图片素材 → URL。返回 null 表示素材还没准备好，该元素这帧缺席。 */
   resolveImage?: (assetId: string) => string | null;
+  /**
+   * 图片素材是不是「脱机」的（引用了但不存在的媒体）。
+   *
+   * 与 `resolveImage` 返回 null 是两件事：那个是「还没准备好」（异步加载中的
+   * 正常状态，这一帧缺席）；这个是「不存在」（打开工程时文件读不到、素材被
+   * 移除、跨工程粘贴带来的悬空 assetId）—— 画面给暗红占位符而不是空白。
+   * 不传 = 没有脱机这回事（老行为）。
+   */
+  isImageOffline?: (assetId: string) => boolean;
+  /** 占位符上的文字（「脱机媒体」，由调用方从 i18n 注入；空 = 只画图标）。 */
+  offlineLabel?: string;
+  /**
+   * 工程自定义配色方案（`Project.customThemes`）。文档里的 `@slot` 引用
+   * 可能指向自定义方案 —— 不给的话那些颜色会静默回落默认方案
+   * （「换了方案画面没变」的另一种形态）。
+   */
+  customThemes?: readonly TypographyTheme[];
   /**
    * 正在编辑文本的元素 id。编辑期间**不覆写 textContent**（否则每帧同步都会
    * 把用户刚打的字抹掉并把光标弹到开头），并给它开 pointer-events 与
@@ -71,6 +90,14 @@ export interface BuildDocOptions {
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * 占位态标记（图片元素正在显示「脱机媒体」时挂在内容节点上）。
+ *
+ * sync 路径靠它判断「要不要换节点」—— 素材就绪 / 消失不改 `docSignature`
+ * （那只看文档结构），所以状态迁移必须在这里就地完成。
+ */
+const OFFLINE_ATTR = 'data-typo-offline';
 
 /**
  * 结构签名：元素 id / 种类 / 顺序 / 动画 id 的组合。
@@ -100,7 +127,7 @@ export function buildDocDom(doc: TypographyDocument, opts: BuildDocOptions = {})
    * 同一进程里可以同时存在多个文档（舞台 + 光栅化 host + lab），
    * 缓存住会造成「A 文档的颜色跑进 B 文档」这种极难查的串味。
    */
-  const theme = themeById(doc.theme);
+  const theme = themeById(doc.theme, opts.customThemes);
   const root = document.createElement('div');
   root.className = 'typo-doc';
   root.setAttribute(DOC_ROOT_ATTR, '1');
@@ -238,8 +265,20 @@ function buildContent(
 
   // image
   const url = opts.resolveImage?.(el.assetId) ?? null;
-  if (!url) return null; // 素材没准备好：这帧缺席，与 algo 未烘好时同语义
+  if (!url) {
+    /*
+     * 素材**不存在** → 脱机媒体占位图（PR / 达芬奇式暗红块）。
+     * 只是还没准备好 → 这一帧缺席，与 algo 未烘好时同语义（异步就绪后重绘）。
+     * 两者必须分开：给「还没准备好」也画占位符的话，正常加载会满屏闪暗红。
+     */
+    if (opts.isImageOffline?.(el.assetId)) return buildOfflineImage(el, opts.offlineLabel ?? '');
+    return null;
+  }
+  return buildImageNode(el, url);
+}
 
+/** 图片元素的内容节点（`<img>` + 外壳）。build 与 sync 共用。 */
+function buildImageNode(el: ImageElement, url: string): HTMLElement {
   const { wrapper, img: imgDecls } = imageStyle(el);
   const wrap = document.createElement('div');
   wrap.className = 'typo-image';
@@ -251,6 +290,72 @@ function buildContent(
   img.draggable = false;
   applyDecls(img, imgDecls);
   wrap.appendChild(img);
+  return wrap;
+}
+
+/**
+ * 「脱机媒体」占位节点：暗红底 + `file-x-corner` 图标 + 一行文字。
+ *
+ * 样式走**内联**而不是 class + 样式表：snapDOM 光栅化只拷计算样式，而排版
+ * 文档的样式表不在光栅宿主里 —— 内联是「舞台」与「光栅」两条路都保证一致的
+ * 唯一写法（与 `imageStyle` 同一理由）。
+ *
+ * 尺寸用容器查询单位（cqw）：占位符要跟着元素框缩放，而框的像素尺寸到渲染期
+ * 才知道（doc 单位 × 缩放 × dpr）—— 用 px 就得在每次同步时重算内联值。
+ * 颜色与字形与引擎侧（视频 / 图片片段）共用 `core/offline-media.ts`。
+ */
+function buildOfflineImage(el: ImageElement, label: string): HTMLElement {
+  const { wrapper } = imageStyle(el);
+  const wrap = document.createElement('div');
+  wrap.className = 'typo-image';
+  wrap.setAttribute(OFFLINE_ATTR, '1');
+  applyDecls(wrap, wrapper);
+
+  const box = document.createElement('div');
+  box.setAttribute(
+    'style',
+    [
+      'position:absolute',
+      'left:0',
+      'top:0',
+      'width:100%',
+      'height:100%',
+      'box-sizing:border-box',
+      // 容器查询：下面的 cqw 以这个盒为容器。
+      'container-type:size',
+      'display:flex',
+      'flex-direction:column',
+      'align-items:center',
+      'justify-content:center',
+      'gap:4cqw',
+      `background:${OFFLINE_BG}`,
+      `color:${OFFLINE_INK}`,
+    ].join(';'),
+  );
+
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('style', 'width:22cqw;height:22cqw;flex:none');
+  for (const d of OFFLINE_ICON_PATHS) {
+    const p = document.createElementNS(SVG_NS, 'path');
+    p.setAttribute('d', d);
+    svg.appendChild(p);
+  }
+  box.appendChild(svg);
+
+  if (label) {
+    const text = document.createElement('span');
+    text.setAttribute('style', 'font-size:7cqw;line-height:1.2;white-space:nowrap');
+    text.textContent = label;
+    box.appendChild(text);
+  }
+
+  wrap.appendChild(box);
   return wrap;
 }
 
@@ -276,7 +381,7 @@ export function syncDocDom(host: HTMLElement, doc: TypographyDocument, opts: Bui
     : host.querySelector<HTMLElement>(`[${DOC_ROOT_ATTR}]`);
   if (!root) return;
 
-  const theme = themeById(doc.theme);
+  const theme = themeById(doc.theme, opts.customThemes);
   applyDecls(root, docStyle(doc));
   syncStyleSheet(root, doc);
   syncGroupShells(root, doc, theme);
@@ -386,13 +491,38 @@ function syncElement(
     return;
   }
 
-  // image：素材 URL 变了要重整（这里只处理声明，src 由调用方保证）
+  /*
+   * image：三种状态 —— 有 URL（`<img>`）/ 脱机（占位节点）/ 都没准备好
+   * （保留现状等异步就绪）。状态迁移不走 `docSignature`（素材就绪 / 消失
+   * 不改文档结构签名），所以必须在这里就地换节点。
+   */
+  const url = opts.resolveImage?.(el.assetId) ?? null;
+  const offline = !url && opts.isImageOffline?.(el.assetId) === true;
+  const wasOffline = content.hasAttribute(OFFLINE_ATTR);
+
+  if (offline && !wasOffline) {
+    content.replaceChildren(buildOfflineImage(el, opts.offlineLabel ?? ''));
+    content.setAttribute(OFFLINE_ATTR, '1');
+    return;
+  }
+  if (wasOffline) {
+    if (!offline && url) {
+      // 媒体回来了：换回真图（几何声明下面统一刷）。
+      content.replaceChildren(buildImageNode(el, url));
+      content.removeAttribute(OFFLINE_ATTR);
+    } else {
+      // 仍在占位态（含「既没就绪也没脱机」的加载中间态 —— 那时继续显示
+      // 占位符比闪一下空节点好）：只更新几何。
+      applyDecls(content, imageStyle(el).wrapper);
+      return;
+    }
+  }
+
   const img = content.querySelector('img');
   if (!img) return;
   const { wrapper, img: imgDecls } = imageStyle(el);
   applyDecls(content, wrapper);
   applyDecls(img, imgDecls);
-  const url = opts.resolveImage?.(el.assetId) ?? null;
   if (url && img.getAttribute('src') !== url) img.setAttribute('src', url);
 }
 

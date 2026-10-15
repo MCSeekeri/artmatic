@@ -18,6 +18,45 @@
   import { tip } from './tip';
   import { tr } from '../i18n/index.svelte';
 
+  /**
+   * 横向滚动容器（窄窗口下不拆行、改滚动）。
+   *
+   * 做法与 Ribbon 面板同源：`overflow-x: auto` + 隐藏滚动条 + 把纵向滚轮转成
+   * 横向。**绝不加任何「刷新时把 scrollLeft 归零」的效果** —— Ribbon 的
+   * `lastScrollResetTab` 注释记着这个教训：挂在 version 上的重算会把用户
+   * 正在点的按钮永远打回到视口外。
+   */
+  let scrollEl = $state<HTMLDivElement | null>(null);
+  /** 两侧渐变的可见性：**可滚且没到边**才显示（两端留着假的淡出比没有更糟）。 */
+  let fadeL = $state(false);
+  let fadeR = $state(false);
+
+  function updateFades(): void {
+    const el = scrollEl;
+    if (!el) return;
+    const scrollable = el.scrollWidth > el.clientWidth + 1;
+    fadeL = scrollable && el.scrollLeft > 1;
+    fadeR = scrollable && el.scrollLeft < el.scrollWidth - el.clientWidth - 1;
+  }
+
+  /** 纵向滚轮改为横向滚动 —— 工具条没有纵向内容，不接管就完全没反应。 */
+  function onWheel(e: WheelEvent): void {
+    const el = scrollEl;
+    if (!el) return;
+    if (el.scrollWidth <= el.clientWidth) return;
+    if (e.deltaY !== 0) el.scrollLeft += e.deltaY;
+    if (e.deltaX !== 0) el.scrollLeft += e.deltaX;
+  }
+
+  // 容器尺寸变（窗口缩放）→ 重算渐变可见性。只读 scrollLeft 相关量，不写它。
+  $effect(() => {
+    const el = scrollEl;
+    if (!el) return;
+    const ro = new ResizeObserver(() => updateFades());
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
   const grid = $derived.by(() => {
     void appState.version;
     return { ...appState.store.project.beatGrid };
@@ -104,164 +143,208 @@
   }
 </script>
 
-<div class="transport">
-  <IconButton
-    icon={appState.playing ? 'pause' : 'play'}
-    label={appState.playing ? tr('tp.pause') : tr('tp.play')}
-    shortcut="Space"
-    size="lg"
-    tipPlacement="top"
-    testid="play-toggle"
-    onclick={() => appState.togglePlay()}
-  />
-  <IconButton
-    icon="square"
-    label={tr('tp.stop')}
-    tipPlacement="top"
-    testid="stop"
-    onclick={() => appState.stop()}
-  />
-
-  <span class="time" use:tip={{ placement: 'top', text: tr('tp.timeTip') }}>
-    {fmt(playT)}<em>{barBeat}</em>
-  </span>
-
-  <!-- 当前帧截图：与时间读数同一簇（都是「此刻这一帧」的事）。 -->
-  <IconButton
-    icon="image"
-    label={tr('tp.snapshot')}
-    tipText={tr('tp.snapshotTip')}
-    tipPlacement="top"
-    testid="preview-snapshot"
-    disabled={appState.snapshotting}
-    onclick={(e) => void saveCurrentFrame(e.altKey)}
-  />
-
-  <span class="sep"></span>
-
-  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.bpmTip') }}>
-    <span class="lbl">BPM</span>
-    <NumberInput
-      value={grid.bpm}
-      min={20}
-      max={300}
-      step={0.1}
-      width={58}
-      ariaLabel="BPM"
-      testid="bpm-input"
-      onchange={(v) => appState.store.setBeatGrid({ bpm: Math.max(20, Math.min(300, v || 120)) })}
-    />
-    <!--
-      自动估计（ADR-002）。放在 BPM 右边而不是设置面板里：它是「对着这首曲子
-      调拍网格」这个动作的一部分，离 BPM/offset 越近越顺手。
-    -->
+<div class="transport-wrap">
+  <div class="transport" bind:this={scrollEl} onscroll={updateFades} onwheel={onWheel}>
+    <div class="transport-inner">
     <IconButton
-      icon="wand-sparkles"
-      label={tr('tp.estimate')}
-      tipText={appState.beatBusy ? tr('tp.estimateBusy') : tr('tp.estimateTip')}
-      size="sm"
-      disabled={appState.beatBusy}
-      testid="estimate-bpm"
-      onclick={() => void appState.estimateBeatGrid()}
-    />
-  </span>
-
-  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.offsetTip') }}>
-    <span class="lbl">offset</span>
-    <NumberInput
-      value={grid.offset}
-      step={0.01}
-      width={58}
-      ariaLabel="offset"
-      testid="offset-input"
-      onchange={(v) => appState.store.setBeatGrid({ offset: v })}
-    />
-  </span>
-
-  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.beatsPerBarTip') }}>
-    <span class="lbl">{tr('tp.beatsPerBar')}</span>
-    <Select
-      value={grid.beatsPerBar}
-      options={barOptions}
-      onchange={(v) => appState.store.setBeatGrid({ beatsPerBar: v })}
-      testid="beats-per-bar"
-      optionTestidPrefix="beats-per-bar-opt"
-      minWidth={56}
-    />
-  </span>
-
-  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.snapTip') }}>
-    <span class="lbl">{tr('tp.snap')}</span>
-    <Select
-      value={appState.snap}
-      options={snapOptions}
-      onchange={(v) => appState.setSnap(v)}
-      testid="snap-mode"
-      optionTestidPrefix="snap-mode-opt"
-      minWidth={88}
-    />
-  </span>
-
-  <span class="sep"></span>
-
-  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.durationTip') }}>
-    <span class="lbl">{tr('tp.duration')}</span>
-    <NumberInput
-      value={+duration.toFixed(2)}
-      min={0.1}
-      step={0.5}
-      width={62}
-      suffix="s"
-      ariaLabel={tr('tp.projectDuration')}
-      testid="duration-input"
-      onchange={(v) => appState.store.setDuration(v || 0.1)}
-    />
-    <IconButton
-      icon="minimize-2"
-      label={tr('tp.fitDuration')}
-      size="sm"
+      icon={appState.playing ? 'pause' : 'play'}
+      label={appState.playing ? tr('tp.pause') : tr('tp.play')}
+      shortcut="Space"
+      size="lg"
       tipPlacement="top"
-      testid="fit-duration"
-      onclick={() => appState.store.fitDurationToContent()}
+      testid="play-toggle"
+      onclick={() => appState.togglePlay()}
     />
-  </span>
+    <IconButton
+      icon="square"
+      label={tr('tp.stop')}
+      tipPlacement="top"
+      testid="stop"
+      onclick={() => appState.stop()}
+    />
 
-  <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.overlapTip') }}>
-    <span class="lbl">{tr('tp.overlap')}</span>
-    <Select
-      value={overlapBehavior}
-      options={overlapOptions}
-      onchange={(v) => appState.store.setOverlapBehavior(v)}
-      testid="overlap-behavior"
-      optionTestidPrefix="overlap-behavior-opt"
-      minWidth={96}
-    />
-  </span>
+    <span class="time" use:tip={{ placement: 'top', text: tr('tp.timeTip') }}>
+      {fmt(playT)}<em>{barBeat}</em>
+    </span>
 
-  <span class="ctl zoom" use:tip={{ placement: 'top', text: tr('tp.zoomTip') }}>
-    <Icon name="search" size={12} />
-    <Slider
-      value={appState.pxPerBeat}
-      min={6}
-      max={96}
-      step={1}
-      ariaLabel={tr('tp.zoom')}
-      testid="zoom-slider"
-      oninput={(v) => (appState.pxPerBeat = v)}
+    <!-- 当前帧截图：与时间读数同一簇（都是「此刻这一帧」的事）。 -->
+    <IconButton
+      icon="image"
+      label={tr('tp.snapshot')}
+      tipText={tr('tp.snapshotTip')}
+      tipPlacement="top"
+      testid="preview-snapshot"
+      disabled={appState.snapshotting}
+      onclick={(e) => void saveCurrentFrame(e.altKey)}
     />
-  </span>
+
+    <span class="sep"></span>
+
+    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.bpmTip') }}>
+      <span class="lbl">BPM</span>
+      <NumberInput
+        value={grid.bpm}
+        min={20}
+        max={300}
+        step={0.1}
+        width={58}
+        ariaLabel="BPM"
+        testid="bpm-input"
+        onchange={(v) => appState.store.setBeatGrid({ bpm: Math.max(20, Math.min(300, v || 120)) })}
+      />
+      <!--
+        自动估计（ADR-002）。放在 BPM 右边而不是设置面板里：它是「对着这首曲子
+        调拍网格」这个动作的一部分，离 BPM/offset 越近越顺手。
+      -->
+      <IconButton
+        icon="wand-sparkles"
+        label={tr('tp.estimate')}
+        tipText={appState.beatBusy ? tr('tp.estimateBusy') : tr('tp.estimateTip')}
+        size="sm"
+        disabled={appState.beatBusy}
+        testid="estimate-bpm"
+        onclick={() => void appState.estimateBeatGrid()}
+      />
+    </span>
+
+    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.offsetTip') }}>
+      <span class="lbl">offset</span>
+      <NumberInput
+        value={grid.offset}
+        step={0.01}
+        width={58}
+        ariaLabel="offset"
+        testid="offset-input"
+        onchange={(v) => appState.store.setBeatGrid({ offset: v })}
+      />
+    </span>
+
+    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.beatsPerBarTip') }}>
+      <span class="lbl">{tr('tp.beatsPerBar')}</span>
+      <Select
+        value={grid.beatsPerBar}
+        options={barOptions}
+        onchange={(v) => appState.store.setBeatGrid({ beatsPerBar: v })}
+        testid="beats-per-bar"
+        optionTestidPrefix="beats-per-bar-opt"
+        minWidth={56}
+      />
+    </span>
+
+    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.snapTip') }}>
+      <span class="lbl">{tr('tp.snap')}</span>
+      <Select
+        value={appState.snap}
+        options={snapOptions}
+        onchange={(v) => appState.setSnap(v)}
+        testid="snap-mode"
+        optionTestidPrefix="snap-mode-opt"
+        minWidth={88}
+      />
+    </span>
+
+    <span class="sep"></span>
+
+    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.durationTip') }}>
+      <span class="lbl">{tr('tp.duration')}</span>
+      <NumberInput
+        value={+duration.toFixed(2)}
+        min={0.1}
+        step={0.5}
+        width={62}
+        suffix="s"
+        ariaLabel={tr('tp.projectDuration')}
+        testid="duration-input"
+        onchange={(v) => appState.store.setDuration(v || 0.1)}
+      />
+      <IconButton
+        icon="minimize-2"
+        label={tr('tp.fitDuration')}
+        size="sm"
+        tipPlacement="top"
+        testid="fit-duration"
+        onclick={() => appState.store.fitDurationToContent()}
+      />
+    </span>
+
+    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.overlapTip') }}>
+      <span class="lbl">{tr('tp.overlap')}</span>
+      <Select
+        value={overlapBehavior}
+        options={overlapOptions}
+        onchange={(v) => appState.store.setOverlapBehavior(v)}
+        testid="overlap-behavior"
+        optionTestidPrefix="overlap-behavior-opt"
+        minWidth={96}
+      />
+    </span>
+
+    <span class="ctl zoom" use:tip={{ placement: 'top', text: tr('tp.zoomTip') }}>
+      <Icon name="search" size={12} />
+      <Slider
+        value={appState.pxPerBeat}
+        min={6}
+        max={96}
+        step={1}
+        ariaLabel={tr('tp.zoom')}
+        testid="zoom-slider"
+        oninput={(v) => (appState.pxPerBeat = v)}
+      />
+    </span>
+    </div>
+  </div>
+  <!-- 两侧渐层：绝对定位、不随内容滚动、不吃指针事件。可见性见 updateFades。 -->
+  <div class="fade fade-l" class:on={fadeL} aria-hidden="true"></div>
+  <div class="fade fade-r" class:on={fadeR} aria-hidden="true"></div>
 </div>
 
 <style>
+  .transport-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+  }
   .transport {
+    min-width: 0;
+    /* 横向滚动、纵向裁剪。装不下就滚，不再拆成两行 —— 拆行会让工具条高度
+        随窗口宽度跳变，且把 stage 的列撑宽（历史bug，见 App.svelte 的 .stage）。 */
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* 触板横滑到两端时不要链到页面滚动。 */
+    overscroll-behavior-x: contain;
+    /* 不要可见滚动条：渐层已经暗示了「这里能滚」。 */
+    scrollbar-width: none;
+  }
+  .transport::-webkit-scrollbar {
+    display: none;
+  }
+  .transport-inner {
     display: flex;
     align-items: center;
     gap: var(--sp-3);
-    /* 允许换行：窄窗口下宁可工具条高一行，也不要它把 stage 的列撑宽
-       （那会让 preview/toolbar/tracks 一起溢出到抽屉底下）。 */
-    flex-wrap: wrap;
-    row-gap: var(--sp-2);
-    min-width: 0;
+    /* max-content：控件保持自然宽度排队溢出，由外层滚动 —— 默认的 flex-shrink
+       会把它们压扁（那是另一种坏法：控件变形而不是滚动）。 */
+    width: max-content;
+  }
+  .fade {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 20px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .fade-l {
+    left: 0;
+    background: linear-gradient(to right, var(--surface-2), transparent);
+  }
+  .fade-r {
+    right: 0;
+    background: linear-gradient(to left, var(--surface-2), transparent);
+  }
+  .fade.on {
+    opacity: 1;
   }
   .time {
     display: inline-flex;

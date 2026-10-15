@@ -260,6 +260,18 @@ export const ribbon = {
   /* ------------------------------------------------ [设计] 配色方案 */
   'rib.themeGallery': '配色方案',
   'rib.themeCurrent': '当前',
+  /* 「应用到整个项目」：一次写所有文本片段 + 新片段默认（Project.typographyTheme）。
+     与图库的区别：图库只改当前文档。 */
+  'rib.themeApplyProject': '应用到整个项目',
+  /* 「编辑方案」：改当前方案的槽位色；当前是内置方案时保存即复制成自定义方案。 */
+  'rib.themeEdit': '编辑方案',
+  'rib.themeEditTitle': '编辑配色方案',
+  'rib.themeNewTitle': '新建配色方案',
+  'rib.themeName': '方案名',
+  /* 内置方案复制成自定义方案时的名字后缀。 */
+  'rib.themeCopySuffix': ' 副本',
+  /* 弹窗里的一句话：两个端点槽为什么是只读的。 */
+  'rib.themeEditHint': '只改 8 个可变槽；纯白 / 纯黑两个端点是所有方案共有的约定，不开放编辑。',
   'rib.theme.office': 'Office',
   'rib.theme.office2013': 'Office 2013 - 2022',
   'rib.theme.office2007': 'Office 2007 - 2010',

@@ -12,6 +12,7 @@
  */
 
 import type { TypographyDocument } from './document';
+import type { TypographyTheme } from './theme';
 import { DomSnapRasterizer } from './backends/dom-snap';
 import type { FontProvider } from './font-provider';
 
@@ -26,6 +27,12 @@ export interface RasterRequest {
   localSec: number;
   /** 图片素材 → URL。 */
   resolveImage?: (assetId: string) => string | null;
+  /** 图片素材是不是「脱机」的（引用不存在）→ 画面给占位符。 */
+  isImageOffline?: (assetId: string) => boolean;
+  /** 占位符文字（「脱机媒体」）。空 = 只画图标。 */
+  offlineLabel?: string;
+  /** 工程自定义配色方案（`@slot` 引用可能指向它们）。 */
+  customThemes?: readonly TypographyTheme[];
 }
 
 export interface TextRasterizer {

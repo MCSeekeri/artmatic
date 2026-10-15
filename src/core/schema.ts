@@ -15,10 +15,15 @@
 import type { BeatGrid } from './time';
 import type { Curve } from './curve';
 import type { TypographyDocument } from '../typography/document';
+import {
+  isKnownTheme,
+  sanitizeCustomThemes,
+  type TypographyTheme,
+} from '../typography/theme';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -36,6 +41,16 @@ export interface Project {
   overlapBehavior: OverlapBehavior;
   assets: Record<string, Asset>;
   tracks: Track[];
+  /**
+   * 工程默认的排版配色方案 id（新文本片段的文档默认；也供检查器里的
+   * 非排版取色入口解析主题色引用）。缺省 = `DEFAULT_THEME_ID`。
+   */
+  typographyTheme?: string;
+  /**
+   * 用户自定义配色方案（随工程保存，属工程内容）。id 不得与内置方案冲突。
+   * 缺省 = 无。坏数据由 `validateProject` 整条丢掉（详见那里的注释）。
+   */
+  customThemes?: TypographyTheme[];
 }
 
 export interface Asset {
@@ -304,6 +319,17 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * —— 旧版静默忽略 `affectDepth` 再保存，用户调好的作用域就没了。
    */
   4: (p) => ({ ...p, schemaVersion: 5 }),
+
+  /**
+   * v5 → v6：`Project` 新增可选的 `typographyTheme` / `customThemes`
+   * （工程级配色方案 + 用户自定义方案）。
+   *
+   * **恒等迁移**：两个字段都可选，v5 的工程读进来天然合法，没有任何要改写的
+   * 东西。抬版本号的唯一目的仍然是让「新版存出的工程被旧版打开」走
+   * `versionTooNew` 明确报错 —— 旧版静默忽略 `customThemes` 再保存，
+   * 用户自己调的那套配色就没了（静默数据丢失，最难查的一类）。
+   */
+  5: (p) => ({ ...p, schemaVersion: 6 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -341,6 +367,24 @@ export function validateProject(raw: unknown): Project {
   }
   if (!p.assets || typeof p.assets !== 'object') throw new SchemaError(tr('err.schema.badAssets'));
   if (!Array.isArray(p.tracks)) throw new SchemaError(tr('err.schema.badTracks'));
+  /*
+   * 工程级配色方案（v6 的两个可选字段）。**坏数据回落而不是抛错** ——
+   * 工程必须打得开，颜色这种事不值得让整份工程打不开。
+   *   - customThemes：逐条校验（`sanitizeCustomThemes`），坏条目整条丢；
+   *   - typographyTheme：引用了一个不存在的方案 id（自定义方案被手删 / 工程
+   *     来自更早的版本）→ 删掉这个键，读时自然回落默认方案。
+   */
+  const custom = sanitizeCustomThemes((p as { customThemes?: unknown }).customThemes);
+  if (custom.length) (p as { customThemes?: TypographyTheme[] }).customThemes = custom;
+  else delete (p as { customThemes?: TypographyTheme[] }).customThemes;
+  const declared = (p as { typographyTheme?: unknown }).typographyTheme;
+  if (declared !== undefined) {
+    if (typeof declared === 'string' && isKnownTheme(declared, custom)) {
+      (p as { typographyTheme?: string }).typographyTheme = declared;
+    } else {
+      delete (p as { typographyTheme?: string }).typographyTheme;
+    }
+  }
   // 循环变量刻意叫 tk 而不是 tr：`tr` 是翻译函数的专名（i18n/index.svelte.ts），
   // 同名会把下面那两次取词整成「tr is not a function」。
   for (const tk of p.tracks as { kind: string; clips: unknown }[]) {

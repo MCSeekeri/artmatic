@@ -21,27 +21,34 @@
   import NumberInput from '../controls/NumberInput.svelte';
   import Select from '../controls/Select.svelte';
   import PaintEditor from './PaintEditor.svelte';
+import ColorField from '../controls/ColorField.svelte';
   import { appState } from '../app-state.svelte';
   import { editorState } from './editor-state.svelte';
   import { createTypographyActions } from './actions';
   import { MIX_BLENDS, type MixBlend, type Paint, type Stroke } from '../../typography/document';
-  import { resolveThemeColor } from '../../typography/theme';
+  import { resolveThemeColor, themeById } from '../../typography/theme';
   import { tr } from '../../i18n/index.svelte';
 
   /** actions 只是回调的集合，无内部状态；建一次就够（与 TypographyEditor 同款）。 */
   const actions = createTypographyActions();
 
-  /** 当前配色方案 id。传下去给 PaintEditor，也用来解析这里的两处描边色。 */
-  const themeId = $derived(editorState.doc?.theme);
+  /**
+   * 当前配色方案（**对象**，含工程自定义方案）。
+   *
+   * 文档里的 `@slot` 引用可能指向自定义方案（`Project.customThemes`）——
+   * 只按 id 查内置表的话那些颜色会静默回落默认方案。传给 PaintEditor 与
+   * 这里的两处描边色共用同一份。
+   */
+  const theme = $derived(themeById(editorState.doc?.theme, appState.project.customThemes));
 
   /**
    * 颜色 → 可显示的值（配色方案引用解析成真实 hex）。
    *
-   * 原生 `<input type="color">` 不认 `@accent1`，不解析就会把色块画成黑色 ——
-   * 看起来像「颜色被改坏了」，而实际只是没解析。见 PaintEditor 的同名说明。
+   * 取色卡不认 `@accent1`，不解析就会把色块画成黑色 —— 看起来像「颜色被
+   * 改坏了」，而实际只是没解析。见 PaintEditor 的同名说明。
    */
   function dc(color: string | undefined, fallback: string): string {
-    return color ? resolveThemeColor(color, themeId) : fallback;
+    return color ? resolveThemeColor(color, theme) : fallback;
   }
 
   /** 线型选项。与 Ribbon 的同一套值，标签取自本面板的文案。 */
@@ -103,12 +110,12 @@
 {#snippet colorRow(label: string, value: string, testid: string, oninput: (v: string) => void)}
   <Field {label} labelWidth={74}>
     <span class="prop-swatch">
-      <input
-        type="color"
+      <ColorField
+        {label}
         {value}
-        aria-label={label}
-        data-testid={testid}
-        oninput={(e) => oninput(e.currentTarget.value)}
+        {theme}
+        testid={testid}
+        onchange={oninput}
       />
     </span>
   </Field>
@@ -205,7 +212,7 @@
           paint={model.fill}
           kindOptions={SHAPE_KIND_OPTIONS}
           prefix="prop-fill"
-          {themeId}
+          {theme}
           onkind={(k) => actions.setShapePaint({ kind: k })}
           onpatch={(p) => actions.setShapePaint(p)}
         />
@@ -240,7 +247,7 @@
           paint={model.boxFill}
           kindOptions={SHAPE_KIND_OPTIONS}
           prefix="prop-box"
-          {themeId}
+          {theme}
           onkind={(k) => actions.setTextBoxFill({ kind: k })}
           onpatch={(p) => actions.setTextBoxFill(p)}
         />
@@ -275,7 +282,7 @@
           paint={model.glyphFill}
           kindOptions={GLYPH_KIND_OPTIONS}
           prefix="prop-glyph"
-          {themeId}
+          {theme}
           onkind={(k) => (k === 'none' ? actions.clearTextFill() : actions.setTextFill({ kind: k }))}
           onpatch={(p) => actions.setTextFill(p)}
         />
@@ -330,15 +337,5 @@
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
     overflow: hidden;
-  }
-  .prop-swatch input {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    padding: 0;
-    border: none;
-    background: transparent;
-    cursor: pointer;
   }
 </style>
