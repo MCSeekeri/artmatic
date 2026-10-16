@@ -1,0 +1,378 @@
+# src/ui/ —— Svelte 界面层
+
+组件 + 控件库（`controls/`）+ 主题与偏好状态。
+**时间轴本体是 Canvas2D 自绘，框架只管面板。**
+
+**何时读我**：改 `ui/**`（`ui/typography/**` 与 `ui/ribbon/**` 另有三级文件，见下）；
+动抽屉 / 工具栏 / 媒体池 / 剪贴板粘贴 / 设计 token / 选择器；
+或遇到「改了 store、界面不动」这类问题时。
+
+相关：`src/ui/typography/AGENTS.md`（排版编辑器）、`src/timeline/AGENTS.md`（时间轴手势与重绘）、
+`src/i18n/AGENTS.md`（一切文案）、根 `AGENTS.md`。
+
+---
+
+## 顶栏选项卡是**工程**
+
+一个网页里可以同时开多份工程。`OpenProject` 承载所有「跟这一份工程走」的状态：
+`store` / `assets` / `view` / `dir` / `savedVersion` / `playT` / `selectedClipId`。
+**切换工程 = 换一个 `activeProjectId`**，不是把一堆散落状态逐个同步一遍（后者每加一个
+工程级状态就多一个漏同步的机会）。
+
+- `appState.store` 与 `appState.assets` 是 **getter**，永远指向当前前台那份 ——
+  所有写库代码本来就写 `appState.store.xxx`，所以调用点一行都不用改。
+  **代价是一条纪律：`const store = appState.store` 之后不能跨越工程切换**，需要跨就重新取。
+- 每份工程有自己的 `AssetStore`（`createAssetStore()`）。**任何地方都不许再 import 模块级
+  素材仓**（已经没有那个单例，编译期强制）。共用一份的后果不是「看起来不对」，是数据损坏：
+  保存 A 时会把 B 导入的素材一起写进 A 的台账。
+- **切换工程的顺序不能改**：
+  ```
+  if (playing) pause()       ← 必须最先：pause 把播放位置写回「当前工程」，
+                               而 getter 在改完 id 之后就指向新工程了
+  pendingGestureCancel?.()   ← 绝不能让 beginTx 悬空，否则撤销栈整个错乱
+  activeProjectId = id
+  subscribeActive()          ← version 是 per-工程的，必须换订阅
+  refreshPreview()           ← 两份工程分辨率可能不同，必须重同步显示尺寸
+  player?.stop()             ← 音频位置属于上一份工程
+  ```
+- **新建 / 打开 = 再开一份**（`appState.adoptProject()`），不是替换。装配顺序是
+  「**先把素材读进来，再登记**」—— 读盘失败时不会在顶栏留下一个半成品 tab。
+  因此加号**不需要脏检查**（它不覆盖任何东西）。
+- **关闭**：`closeProject(id, { force })` 返回 `'ok' | 'dirty' | 'missing'`。脏的返回 `'dirty'`
+  由 UI 弹 `ConfirmDialog`，确认后才带 `force` 再调一次。**不是拒绝** —— 拒绝等于死胡同
+  （关不掉，又不知道下一步干什么）。确认框要说清后果是**丢失**。
+- **工程列表允许为空**。`appState.hasProject` 是唯一判据；空集时 `activeProject` 回落到一个
+  **丢弃用的 `placeholder` 空白工程**，既不是抛错也不是「自动补一份新的」（后者正是
+  「关掉空工程看起来没反应」的根因）。空界面（`ui/EmptyState.svelte`）是 `position: fixed`
+  盖在主界面上的一层，主界面挂 `inert`。
+  > ⚠️ **主界面（尤其 `<canvas>`）绝不能在空状态下卸载** —— WebGL 上下文会永久失效。
+  > 并且 `appState.tick()` 在无工程时直接返回（否则背后那台渲染器一直按占位工程出帧）。
+- **关页面 / F5 要拦**：`beforeunload` 判据是 `anyDirty`（**任何一份**脏就拦，因为关页面会
+  把**所有**打开的工程一起丢掉）。弹**浏览器自己的**确认框 —— 页面内伪造一个会撒谎，
+  它挡不住真正的离开。
+- 排版视图是**工程内部的第二个视图**（`OpenProject.view`），不是 modal、也不是新 tab。
+  时间轴视图**常驻且永不卸载**（卸载 `Preview` 的 `<canvas>` 会丢 WebGL 上下文，且无法恢复），
+  所以切视图只是 `display:none` + `appState.tick()` 早退。
+- 工程 tab 里可能同时有「回到时间轴」与「关闭工程」两个动作，所以前者用 `arrow-left`
+  （`project-tab-timeline-N`），后者用 `x`（`project-tab-close-N`）—— 两个 `×` 会让人分不清。
+- **用词约定**：Artmatic 产出的那个目录一律叫「**工程**」，不叫「项目」。
+  「项目」只用于指代**这个软件本身**。代码标识符仍是 `project` / `Project`。
+
+---
+
+## 设计 Token 与视觉
+
+- **唯一真源是 `src/ui/tokens.ts`**（纯数据 + 纯函数，不碰 DOM），由 `theme-apply.ts` 写成
+  `:root` 的内联自定义属性，`theme.svelte.ts` 管运行时态（亮暗 + 品牌色 + 自定义 hex）。
+  **`app.css` 没有也不该有 `:root` 变量块** —— 时间轴是 Canvas2D 自绘，`ctx.fillStyle`
+  写不了 `var(--x)`，只写 CSS 必然在 TS 侧养出一份同值的影子副本（改漏就是「面板变了、
+  网格没变」这种极难定位的偏色）。Canvas 走 `canvasPalette(spec)`。
+- **四层**：primitive（`--p-*`，只描述值）→ semantic（`--surface-*`，描述用途，不含颜色词）
+  → component（`--btn-*`，值必须是 `SemanticKey`，写错层直接编译报错）
+  → **content**（`--clip-*`，数据类别色，随亮暗变但**永不随品牌变** ——
+  它编码的是「这是哪类数据」，不是界面角色）。
+- **生成器默认色（`#3a6ea5` 之类）不是 token**，那是 Project 文档内容（schema 字段）。
+  Inspector 里颜色控件的**外观**走 component 层，**值**走内容。
+- **z 刻度（`tokens.ts` 的 `z-*`）有个非显然的约束：抽屉（`z-drawer`）必须比
+  时间轴内部那一整套（`z-grid`..`z-ruler`，0..5）都大。** 抽屉是**层叠上下文**，
+  从它里面打开的 modal（特效选择器）会被困在那一层：backdrop 写的是
+  `--z-modal`（150）也没用，只要抽屉比时间轴内部刻度低，**ruler（5）与播放头（4）
+  就会盖到 modal 上面**。实际表现是「选择器开着，缩略图上横着一条白色标尺 +
+  一根播放头」—— 排查时盯着时间轴的 z 看是找不到的，问题在 modal 被关得太低。
+  规则：**根上下文里除 modal/tooltip 之外的 z 都必须 < `z-drawer`**
+  （工具栏 3、底栏 2、时间轴内部 ≤5）。守卫在 `tests/e2e/modal-layering.spec.ts`。
+- **视觉纪律**：零阴影零渐变，层次只靠 surface-0→3 的纯色深度 + 1px 实线；圆角 4/6px；
+  纯图标按钮永远 `background: transparent`，hover 只改图标颜色；主题色只出现在
+  **选中 / 激活、焦点环、播放头、底栏数字**这几处。默认**亮色**。
+- **密度**：轨道行高 28px、标尺 24px、字号阶梯只有 10/11/12。数值在 `tokens.ts` 的
+  `DENSITY`，CSS 与 Canvas 数学（`timeline/view-model.ts`）都从它取，不许各写一份。
+
+---
+
+## 选择器（特效 / 转场）
+
+### 特效选择器（`添加特效`，2026-10-04）
+
+特效到七十多个之后，检查器里用一个 `<select>` 加特效已经不能用了：搜不了、筛不了、
+看不见效果。现在换成一个 modal（`src/ui/effect-picker/`）。
+
+- **目录表在 `effects/catalog.ts`，不在各 `defs/`**：七十多条说明要**成批读一遍**
+  才能保证语气与长度一致，散在七十多个文件里做不到；而且它是**展示信息**，
+  不是 shader 协议。代价是「新增特效 = 三个地方」，由 `tests/unit/effect-catalog.test.ts`
+  断言「每个注册的特效都有条目」+「没有孤儿条目」变成明确报错。
+- **标签分两半**：`overlay` 与 `category` 是手工的；`feedback` / `multipass` /
+  `audio` / `animated` / `hdr` **从 shader def 推导**（`structuralTags`）——
+  手工维护这些必然与代码漂掉。**「是否为叠加层」在本项目里没有区分度**
+  （所有特效片段本来就是 adjustment layer），所以改成「叠加型 = 在输入之上加东西」。
+  分类名与标签名是**拼出来的键**（`fx.cat.${c}`），TS 覆盖不到 ——
+  由 `tests/unit/effect-catalog.test.ts` 的一条运行期断言兜。
+- **缩略图底图的选择规则**（`effects/thumbnails/bases.ts` 顶部有表）：
+  先问这个特效改的是**颜色 / 阶调 / 形状 / 细节 / 径向 / 运动**，再选底图。
+  两条被需求点名、且已经写进 E2E 的：
+  **去饱和度必须用高饱和彩条**（参考稿这里就是错的：一个把画面变灰的特效配一张
+  本来就灰的底图 = 缩略图上看不出任何变化），**通道错位必须用纯黑白底图**
+  （它在彩条上是一堆分不开的色块）。
+  `mandel` 底图走**注册的** `mandelbrot` 生成器，所以它的默认色改成了纯黑白
+  （顺带改正了 `colorA/colorB` **标签反了**：`t` 随迭代次数增大，`colorA` 是快逃逸端）。
+  `scroll` 底图是唯一会动的 —— `motion-mask` / `fast-mosh` / `kino-datamosh` 在
+  **静止**底图上运动量恒为 0，缩略图会是纯黑。
+- **缩略图用独立的离屏 render-core 渲染**（`ui/effect-picker/thumbnails.ts`），
+  与 lab 同款：`createRenderCore` 挂在一块 320×180 的离屏 canvas 上，`thumb:` 前缀的
+  伪 generator id 由它自己的 resolver 拦截。**不借预览那台** —— 借的话要
+  `setExportSize` 改画布尺寸再还原，一不小心就把预览留在错的尺寸上。
+  建不出上下文时卡片退化成「只有名字与说明」，功能仍可用。
+- **`readPixels` 是自下而上的，必须翻行**（GL 原点在左下，`ImageData` 第 0 行在顶部）。
+  守卫：E2E 拿 `pixelate`（底图 `ramp` 上半灰、下半彩）比上下两半的饱和度，
+  翻转之后关系会反过来。
+- **懒渲染**：IntersectionObserver 只给滚到可见的卡片排队（用 `peek` 而不是 `get`
+  读缓存，否则 `{#each}` 一渲染就把七十多张全排上队）。渲染按**时间预算**分块
+  （10 ms/帧），因为 `relief` 那类重着色器 × 12 帧会一次占住主线程一百多毫秒。
+  有历史的特效（反馈 / 用到「上一帧输入」/ 会动的底图）要**连渲 12 帧**才有内容。
+- **多选**：底部「保存并应用（N）」，按**点击顺序**追加到链尾，**只算一笔撤销**
+  （逐个 push 各自成一笔的话，按一次撤销只退掉最后一个）。
+
+---
+
+## 转场选择器（`ui/transition-picker/`）
+
+- **选择器在 `ui/transition-picker/`，与特效选择器同构但有三处不同**：**单选**
+  （一个片段只有一条出画转场）、**没有分类 / 标签筛选**（转场目录里没有这两项数据，
+  硬造就是假选项）、**带一个「无转场」磁贴**（对应旧下拉的第一项「无」）。
+- **两个选择器的列表形态都是 `repeat(auto-fill, minmax(340px, 1fr))`**：
+  模态宽 `min(920px, 94vw)`，一排到底只用掉左半幅。窄屏（窗口 < 约 720px）自然退回
+  一列 —— 所以 E2E 断的是「前两张同一行、左右并排」，**不是**某个固定列数。
+
+---
+
+## 菜单浮层：缩略图预览
+
+**菜单浮层的实现**（`ui/controls/Menu.svelte`）：`MenuItem.thumb` / `.desc`
+有值就渲染浮层，贴在**当前高亮项**右侧 —— 复用 `computePopoverPosition`
+（含贴边翻转），位置在同一个 `$effect` 里算，与子菜单面板同一套 `data-menu-index`
+量 rect 的手法。**不引入额外的 hover 状态**：`menu.levels` 就是唯一真源，
+鼠标划过与方向键都会更新它，于是浮层自动跟着键盘导航走。三条踩过的：
+
+1. `submenu()` 不接 `testid` —— 二级菜单父项原本没有 testid，测试点不到它。
+   在 `clipItems` 里展开时补一个。
+2. 浮层的 testid 用**固定**的 `menu-preview`，不跟 `testid` 拼：拼出来的名字
+   （`track-menu-panel-preview`）会让测试绑死「从哪个入口打开的菜单」。
+3. `bind:this` 挂可变 `let` 会被 svelte-check 报 `non_reactive_update` →
+   用**单元素数组**（与同文件的 `panels` 同一手法）。
+
+---
+
+## 界面实时性（本项目最容易反复踩的一类 bug）
+
+症状统一是「store 改了、界面没改，退出重进才更新」，控制台一片安静、不抛任何错。
+**测试抓不到这类问题，除非你按下面的纪律写断言。**
+
+**根因一：Svelte 5 的 `$derived` / `{#each}` 靠 `===` 判断传播。**
+元素是**原地改**的普通对象（`clip.frame.x = ...`），引用不变 ⇒ 派生重跑了但「值没变」
+⇒ 依赖它的模板 effect 静默断更。
+
+> **规则：模板里凡是读嵌套对象字段的地方，来源派生必须换引用。**
+> 写法是 `$derived.by(() => { void appState.version; return xs.map(e => ({ ...e, ...e.frame })); })`
+> —— `map` / `filter` / 显式字面量都会产生新引用，`return xs` 不会。
+> 判据：**模板里凡是 `{@const}` 取的嵌套对象，来源派生就必须让它换引用。**
+
+**根因二：改了文档，但没改 DOM。** 排版编辑器里文档是数据、舞台是 DOM，中间靠
+`syncDocDom()` 同步。两次踩坑：传错根节点（函数只看**直接子节点**，外层容器传进去就
+全部 `continue`，表现是「拖了半天画面纹丝不动」且不报错）；容器与选择层坐标系不一致
+（`toBeVisible()` 抓不到，它只要求元素在 DOM 里有尺寸）。
+**能让错误不可能发生，就别指望调用方记得传对。**
+
+**根因三：读的是「类实例」的字段 —— 那个读取压根不可追踪。**
+`$state` 只深代理**普通对象与数组**；类实例（`ProjectStore`、`AssetStore`）原样留着，
+于是 `p.store.version` 是一次普普通通的属性访问，**不产生任何依赖**。
+
+> **规则：派生里凡是要读类实例的字段，必须同时 `void` 一个可追踪的信号。**
+> 本项目的标准信号是 `void appState.version`（「当前工程 version 的镜像」，每次 commit 都变）。
+> 判据：问一句「这个字段变的时候，**谁会通知 Svelte**？」答不上来就是漏了。
+
+**配套的测试纪律（比上面三条更重要）**：
+
+> **E2E 只负责「操作」，不看「UI 表现」—— 所以上面这一整类 bug 它一条都抓不到。**
+> 断言 store 是必要的，但**不等于验证了功能**：文档改了 ≠ 用户看得见。
+
+- **凡是用户能看见的状态，就断言 DOM**：内联样式、`getBoundingClientRect()`、
+  子节点类型 / 顺序、`innerHTML`（图标是否换了）。`tests/e2e/typography-ribbon.spec.ts` 里那几条
+  「实时跟随」用例是模板。
+- **图标切换必须真的换图标**，不要只改颜色 —— 只改颜色的话 DOM 里什么都看不出来。
+
+---
+
+## 前端实现坑
+
+1. **别把变量命名成 `state` / `props` / `derived` / `effect`** —— svelte2tsx 会把
+   `$state` 当成「订阅名为 `state` 的 store」，报一堆看不懂的错。
+2. **`use:` action 的 `destroy` 与 `pointerleave` 都可能跑在卸载流程里**：组件被移除时
+   浏览器会**被动触发** `pointerleave`，那一刻仍在 Svelte 的 flush 内，同步写 rune 会抛
+   `state_unsafe_mutation`。状态写入要挪进 `queueMicrotask`，并用代际号防止迟到的
+   clear 抹掉新 hint。
+3. **grid 子项要显式约束列**：隐式列默认是 `auto`，会被子项的**最小内容宽度**撑开
+   （工具条里几乎全是 `flex-shrink: 0` 的控件）。修法是
+   `grid-template-columns: minmax(0, 1fr)`。
+4. **自研控件必须带 `data-exempt`**：全局快捷键原来只对 `INPUT/SELECT/TEXTAREA` 放行，
+   而自研下拉 / 滑杆 / 数字框都不是原生元素 —— 在它们上面按 Space 会「打开下拉 + 开始播放」
+   同时发生。判据统一在 `ui/focus.ts` 的 `isExempt()`。
+5. **`NumberInput` 键入的值不要做 step 量化**：`min=0.1 step=0.5` 时键入 30 会被吸附成 30.1。
+   量化只留给拖动 / 方向键（`commitValue(raw, cfg, { quantize: false })`）。
+6. **删掉组件再新建同名文件，Vite dev server 会继续提供旧模块**（HMR 不报错，表现为
+   「改了半天界面纹丝不动」）。验证方法：`curl` 那个模块 URL 搜新代码里的字符串。
+   **修法是重启 dev server**（必要时连 `node_modules/.vite` 一起删）。正常编辑不会这样。
+7. **样式没热更新时，别急着改选择器**。判据是**同一个元素上「JS 驱动的部分变了、CSS 驱动的
+   部分没变」**（图标更新 = 组件逻辑是新的；颜色没更新 = 样式表是旧的）。验证要
+   **dev 与 prod 各跑一遍**：Vite dev 把 `<style>` 注入成标签、prod 走独立 CSS 文件，
+   两条路径的 scoping 类名都不一样，**只验一边等于没验**。
+8. **浮层里不要用 `transform` / `filter` / `backdrop-filter`**：它们会让祖先成为 `position:
+   fixed` 后代的**包含块**，于是 `Select` 弹层按视口算出的坐标被当成「相对祖先」解释 ——
+   表现是弹层整体偏到一边。居中请用 `left/right: 0 + margin-inline: auto + width: fit-content`。
+
+## CSS 命名空间：组件类名会被全局样式命中
+
+`src/app.css` 与 `src/ui/controls/controls.css` 是**全局**样式表（`main.ts` 直接 import）。
+Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **但反过来成立：
+组件里用的类名会被全局规则命中。**（真事：排版选中框用了 `class="sel"`，而编译器里
+`.sel` 是 Select 控件类名，于是选中框变成一个不透明白块把图形整个盖住。）
+
+- **跨组件的复用类名加前缀**（`typo-sel` / `rcolor-swatch`），别用
+  `sel` / `swatch` / `box` / `row` / `item` 这种通用词。
+- **有守卫**：`tests/unit/css-namespace.test.ts` 解析那两张全局表，再扫 `SCANNED_DIRS`
+  （`src/ui/typography` + `src/ui/ribbon` + `src/ui/effect-picker` + `src/ui/mascot` +
+  `src/ui/pattern` + `lab`）里所有 `.svelte` 的 `class=` / `class:xxx`，
+  撞车即失败。加新目录时要把它加进 `SCANNED_DIRS`。
+- 这类 bug 只在「那个元素正好被选中」时才出现，控制台没有任何提示 —— 所以必须靠守卫。
+
+---
+
+## 界面约定
+
+- **操作按「逐帧/逐拍」与「对整份工程」分工**：播放、拍网格、吸附、重叠策略、工程时长、
+  缩放这些**时间轴操作**一律放在轨道正上方的工具条里（不要挪回窗口顶部）；保存、导出这类
+  **工程级动作**放在最左侧的窄图标栏。新增入口时先想清楚它属于哪一边。
+- **菜单不要无谓地加层级**：一级平铺能放下的就平铺，只有**会变长**的列表才收进子菜单。
+- **窄侧栏的入口用全屏 modal，不是 flyout**：flyout 只有两百多像素宽，快捷键清单或导出
+  信息塞进去就成了带滚动条的小盒子。（**例外是媒体池**：它是一条贴着左侧栏的抽屉，
+  与检查器镜像 —— 内容是一列素材，不需要宽度。）
+- **两个抽屉分居两侧**：检查器在右（`.body` 最后一列，选中片段时自动展开），媒体池在左
+  （第一列，Rail 上的 `images` 图标或排版页 Ribbon 的「媒体池」开合，默认收起）。宽度是
+  **实例值**（`--pool-w` / `--drawer-w` 内联在容器上，不进 token），关掉时是 `0px`。
+  ⚠️ **每一列都必须显式写 `grid-column`**：抽屉都是条件渲染的，靠自动排布会在缺一个的
+  时候把主体填进 0 宽那一列 —— 表现是整块画面凭空消失（`.body` 与排版页的 `.main`
+  各踩过一次，后者是「关掉媒体池，舞台整个不见」）。
+- **时间轴高度也是实例值**（`appState.timelineHeight`，`TRACKS_H` 钳 120–560，走
+  `UiPrefs` 落 localStorage；`.stage` 上内联下发 `--tracks-h`）。两个热区：
+  工具条下缘那条 4px 横带（只调高度）、轨道区底角与抽屉的夹角的两个方块（一次手势
+  同时调高度与该侧抽屉宽度）。**方向都是「边界跟随光标」，因此两条热区的竖直符号相反**
+  —— 上沿那条是 `startH - deltaY`，下沿那条是 `startH + deltaY`。写反的形态是
+  「拖动手感是反的」，用一次就知道不对，但没有任何报错。
+- **工具条（`Transport`）窄窗口下横向滚动，不折行**：`overflow-x: auto` + 隐藏滚动条 +
+  纵向滚轮转横向（与 Ribbon 面板同源），内容 `width: max-content`（否则控件被压扁
+  而不是滚动）。两侧渐变遮罩只在**可滚且没到端**时显示（按 `scrollLeft / clientWidth /
+  scrollWidth` 算，容器尺寸变化靠 RO 重算）。
+  ⚠️ **绝不加「刷新时把 scrollLeft 归零」的 effect** —— 那句话 Ribbon 的
+  `lastScrollResetTab` 注释里记着：挂在 `version` 上的重算会把用户正在点的按钮永远
+  打回视口外。
+- **媒体池在两个视图各有一份渲染位，同一时刻只有一个实例在 DOM 里**：排版编辑页打开时
+  `.body` 里那份靠 `{#if mediaPoolOpen && !editorOpen}` 卸载（主界面只是 `display:none`、
+  **不卸载**，少了 `!editorOpen` 就会有两份列表 + 两份视频缩略图队列）。开关是**同一个**
+  `appState.mediaPoolOpen`（切视图不重置），条目落点由 `MediaPool` 的 `oninsert` 注入：
+  不传 = 插入时间轴，排版页传「图片置入画布」（视频/音频给一句说明）。
+- **媒体池的列表是「合成」出来的**：`Project.assets`（kind / 名字 / 时长 / 尺寸）与
+  `AssetStore`（字节）各说一半，合成规则与「素材 → 片段」的默认值都在 `ui/media-pool.ts`
+  （纯函数，有单测）；面板只管把 `appState` 喂进去。想改「图片默认几拍 / 什么 fit」时
+  改那一处 —— 抄进组件就意味「导入」与「从池里插入」两条路会给出两个结果。
+- **素材进来有五个入口，一份实现**：时间轴菜单（文件选择器）、从系统拖文件到时间轴
+  （落成片段）、从系统拖到媒体池（只登记素材）、从池子里拖条目到时间轴、**剪贴板粘贴**。
+  全部走 `ui/media-import.ts`（素材那一半）+ `ui/media-pool.ts::insertAssetClip`（片段
+  那一半）；`ImportTarget.trackId` 的三种取值就是三种落点：**`undefined` = 只登记素材、
+  字符串 = 建片段且优先这条轨、`null` = 建片段但由 `insertAssetClip` 自选**（没有装得下的
+  会补一条轨）。**不许在组件里另写一份 probe / 进仓 / 建片段** —— 那样「拖进来的视频」与
+  「菜单导入的」迟早会在默认 `fit`、默认长度、落点上分叉，而这种偏差没人会去查。
+- **粘贴走 window 上的 `paste` 事件，不是 Ctrl+V 的 keydown**：`clipboardData` 只在事件
+  派发期间可读（同步、零权限），keydown 里够不到它（只能去要授权的
+  `navigator.clipboard.read()`）。三条纪律：剪贴板里**没有素材时必须整段放行**
+  （不 preventDefault，否则输入类控件的文本粘贴整个失灵）；`isExempt(e.target)` 放最前
+  面；文本编辑区的守卫用 `e.defaultPrevented` 让路。时间轴视图弹 `PasteAssetsModal` 问
+  落点（播放头 / 仅入池），排版视图按类型直接落地（图片进画布、视频音频进池子）——
+  那边只有一种合理解释，不值得再问。类型判定在 `ui/clipboard-assets.ts`（纯函数，
+  **认不出的静默跳过**：粘一段文字不该弹「不支持的文件」）。
+- **文本通道里先试片段 JSON**（`core/clipboard.ts` 的 `parseClipboard`），命中才接管；
+  没命中**照旧整段放行**。剪贴板里不可能同时是片段 JSON 又是素材文件，两条路互斥；
+  排版页不接片段 JSON（那边有自己的元素剪贴板，时间轴片段粘进去没有意义）。
+  Ctrl+C/X 写系统剪贴板**之外**还留一份内存副本：写不进去（权限 / 非安全上下文）时
+  Ctrl+V 才拦截并粘内存里那份（`clipClipboardFallbackActive()`）—— 写得进去时一律
+  不拦截，让 `paste` 事件读系统剪贴板里**最新**的内容（包括从别的窗口粘进来的）。
+- **拖动期间只读得到 `dataTransfer.types`，读不到 `getData`**：所以「认不认得这个拖拽」
+  必须靠类型判定 —— 媒体池的条目用自定义 MIME `application/x-artmatic-asset`，
+  系统文件用浏览器的 `Files`。落点提示（行底色 + 竖线）只在两者之一时才亮。
+- **落点判定挂在 `.rows` 上，不是每一行**：行下标由 `clientY` 算（拖到行区下方的空白
+  处算最后一行），时刻由 `timeAtClientX` 算 —— 与右键菜单同一套换算，竖线画在**吸附后**
+  的位置上，看见的就是会落下的位置。
+- **视频的缩略图是惰性的**（`ui/media-thumbs.svelte.ts`）：列到某一条视频时才解一帧
+  （`engine/video-source.ts::videoThumbnail`，一次性 Input、用完 dispose），**串行**、
+  失败不重试。导入时不预热 —— 十个视频就是十次解码，而用户可能根本不打开媒体池。
+  图片不需要这一套：导入时 `registerImageBytes` 已经解出一张 canvas 了。
+- **工具条的 tooltip 朝上**（`tipPlacement="top"`）：工具条紧贴轨道区，下方没空间。
+  `tip.ts` 在 `pointerdown` 时会收起气泡 —— 否则点开的下拉会被悬停气泡挡住第一项。
+- **UI 文本一律 `user-select: none`**（`app.css` 在 `html,body` 上设，输入类元素单独放行）。
+- **drag-to-tweak 撞到视口边缘时上 Pointer Lock**：检查器在屏幕右侧，往右拖几下就撞边、
+  位移不再增加。只在 `clientX` 贴边（3px 内）时才启用，所以普通拖动的手感完全不变；
+  锁定被解除（Esc / 失焦）＝取消这次拖动。
+- **音频片段的底色必须半透明**：波形画在 `canvas.grid` 上，而那张画布在片段 DOM **下面**；
+  填充不透明就会把波形整个盖住，看起来是纯色块。
+- **列表拖曳排序只有一份实现**（`ui/drag-reorder.ts`）：顶栏选项卡（横向）、时间轴轨道行、
+  排版图层面板（纵向）都用它。两条硬约定：位移超 4px 才算拖（否则按钮点按被 1~2px 抖动吃掉）；
+  拖完那一次 `click` 必须吞掉（否则「拖一下选项卡」会顺带切一次工程）。图层列表是**倒序**
+  渲染的，视觉下标 → 数组下标要 `len - 1 - i`，换算只在调用处做一次。
+- **设置面板 = 草稿 + 保存并应用**（`ui/SettingsModal.svelte`）：工程参数与界面偏好只在
+  Apply 时写回，取消 = 什么都不做。标签前的 `*` 表示「与**打开面板时**的值不同」。
+  那份基准快照是**普通 const，不是 `$derived`** —— 做成派生的话 `version` 一动基准就变，
+  星号会在自己刚亮起时又熄掉。
+- **`.editor` 这类 grid 的行数必须与子项数一一对应**。条件渲染的子项一律先包一层再进 grid，
+  否则缺席时后面的子项会落到错误的行上（表现为某条 bar 被拉高或被挤出屏幕）。
+- **`$derived` 返回新对象时，读它的 `$effect` 会每轮重跑**。需要「只在 X 真的变化时做一次」
+  的动作（如 Ribbon 归零）必须用普通 `let` 记住上一次的值，不能靠 effect 依赖。
+- **禁用必须同时是功能上的与视觉上的**：看着能点、点了没反应只会被判定成卡死。
+- **操作提示分三级**：`appState.flash(text, level)`，`level ∈ info | success | error`，
+  默认中性，颜色与图标都跟着 level 走。不要只有红色 —— 「已保存」也是红的会让人以为失败。
+
+### 底栏提示（`ui/hints.ts` + `ui/status-hint.svelte.ts` + `StatusBar`）
+
+「现在能做什么」，**不是**「这个控件叫什么」。后者是悬浮气泡（`use:tip`）的活；
+底栏原来抄气泡的文字，于是屏幕上同一句话出现两次（而且气泡能换行、底栏不能，
+抄过去还得被截断）。三层，优先级从高到低：
+
+1. **手势**（`statusHint.gesture`）：拖片段 / 框选进行中，报「松开会怎样、Esc 会怎样」。
+   写在手势代码里（`timeline/drag.ts`、`timeline/marquee.ts`），**结束必须清**。
+2. **悬停**（`statusHint.hover`）：片段 / 轨道行空白 / 标尺 / 轨道头。这些目标
+   **没有气泡**，是底栏唯一无可替代的一类。判定走 `Timeline.svelte` 里**一个**委托的
+   `pointerover`（`data-clip-id` 压过 `data-hint="rows|ruler|track"`）——
+   用冒泡的 `pointerover` 而不是 `pointerenter`，否则在行内滑动时判定不会更新。
+3. **场景**（`sceneHint`）：空时间轴 → 右键新建片段（Blender 报 Shift+A 的位置）；
+   选中集 → 切分 / 改名 / 删除；播放中 → 最前面压一个「空格 暂停」。
+
+- 构图全在 `ui/hints.ts`（**纯函数**，不 import appState，快照由 StatusBar 组装成
+  `HintContext` 传进去 ⇒ 可单测；`timeline/` 也要用它，不能把 appState 拖进手势代码的模块图）。
+  文案键集中在 `i18n/locales/zh-CN/hint.ts`（`hint.*`），角标复用 `sc.*` 的
+  「按键 + 说明」对（`shortcutOf` 按描述键回查，查不到就抛）。
+- **一条提示最多四件事**（含播放中那个暂停角标），`tests/unit/hints.test.ts` 按上限
+  守着全矩阵；`tests/e2e/status-hint.spec.ts` 守接线（`data-hint` 写错就是一片空白）。
+- **不能报假的快捷键**：F2 / S / Del 只作用于选中集，悬停一个**没选中**的片段时不许出现；
+  切分键随「操作习惯」变（`splitKeysKeyOf`），说错键比不说更坏。
+- 场景快照里 `void appState.version` 不能省（片段增删是原地改）——否则删光片段后底栏
+  不会切回「右键新建片段」。
+
+---
+
+## 品牌资源
+
+`ui/Brand.svelte` 内联 SVG（不用 `<img src>` —— 那是独立文档，页面 CSS 进不去），
+按 `variant` + 当前主题取用，把资源里写死的品牌紫换成 `var(--accent)`，**墨色保持资源原值**。
+标记在 `size >= 44px` 时换成 3×3 版（20px 的位子放 3×3 会糊成一团）。
+
+> ⚠️ **文件名说的是「墨色」，不是「目标模式」** —— 这里极容易搞反：
+> `-dark` 里的墨是深灰，配**亮背景**（亮色主题）；`-light` 里是近白，配**暗背景**。
+> 也就是 `mode === 'light'` 取 `-dark` 文件，反之亦然。
+> 搞反的后果不是「颜色不太对」而是 **logo 整块隐形**，肉眼验收很容易放过 ——
+> 所以有 `tests/e2e/brand.spec.ts` 钉着（查墨色取值 + 与底色的对比度）。

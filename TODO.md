@@ -1,3 +1,27 @@
+# 本轮已完成（2026-10-16）
+
+- **AGENTS.md 拆成多级**：原来单文件 2156 行 / 170 KB，每次任务全量进上下文，
+  怎么压缩都只能压掉几行。现在按「改哪一块就读哪一份」拆成 **19 份**：
+  根 `AGENTS.md`（364 行，只留产品判据 / 硬约束 / 技术栈 / 分层与依赖方向 / 命令 /
+  未决问题 / 外部参考 / 协作约定）+ **根里那张「子系统规则地图」**（目录 → 规则文件 →
+  什么时候必须先读）。二级 16 份（`src/core` `src/engine` `src/effects` `src/algos`
+  `src/render` `src/audio` `src/typography` `src/timeline` `src/exporters` `src/project`
+  `src/plugins` `src/i18n` `src/assets` `src/ui` `lab` `tests`）+ 三级 2 份
+  （`src/ui/typography`（兼管 `ui/ribbon`）、`tests/e2e`）。每份的开头都写了
+  「何时读我」与相关文件，根地图是唯一入口。
+- **正文逐字搬运、零丢失**：拆分是脚本按行号机械切的（`.codebuddy/tmp/2026-10-16/split-agents.mjs`，
+  原文备份在同目录 `AGENTS.orig.md`），只有三类改动 —— 标题降级（`### 5.6 …` → `## …`）、
+  交叉引用 `§x.y` 改写成路径（26 处）、**裸测试文件名补全路径**（如 `lab.spec.ts` →
+  `tests/e2e/lab.spec.ts`，39 处）。校验脚本按行比对：原文 1895 条非空行全部落在新文件里，
+  差异只剩上述三类 + 手写标题/地图。
+- 顺带补齐根目录树的欠账：补 `assets/` `agent/` `tests/` `docs/` `mcp/`·`cli/` 五行
+  （`src/agent/` 旧文件从未提过，指向 `docs/agent-control-plane.md`）。
+- ⚠️ **未实测的一点**：CodeBuddy 官方文档只保证子目录的 `CODEBUDDY.md` 会被动态加载，
+  子目录 `AGENTS.md` 是否自动进上下文没验证出来（本次会话内加探针文件没有任何反应，
+  疑似规则在会话启动时就缓存了）。所以**不要假设子目录那份已经在上下文里** ——
+  根地图上写了「按表主动读」。下次重启后可以用 `/memory` 或再放一次探针确认；
+  若确实不自动加载，可以把每份规则文件复制/软链成 `CODEBUDDY.md`（同名规则优先）。
+
 # 本轮已完成（2026-10-15 第二批）
 
 - **取色卡全量替换 + 工程级配色方案**：新增 `ui/controls/ColorField.svelte`（色块按钮 +
