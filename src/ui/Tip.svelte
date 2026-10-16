@@ -3,8 +3,9 @@
    * Tip — 悬浮提示气泡（根级单例）。
    *
    * 只在 App 根部渲染一次；任何元素用 `use:tip={{ text, shortcut }}` 挂上即可。
-   * 与底栏共用同一个 tooltip store，所以「气泡显示的文字」与「底栏显示的文字」
-   * 天然一致，不会出现两处说法不同。
+   * 与底栏（StatusBar 的提示段）**不是同一件事**：气泡说的是「这个控件是什么」，
+   * 底栏说的是「现在能做什么」。底栏原来抄气泡的文字，现在两边各管各的
+   * —— 见 `tooltip.svelte.ts` 与 `hints.ts` 的注释。
    *
    * 位置：默认在锚点正下方居中，贴边时钳进视口（复用 popover 的边距常量）。
    */
@@ -35,7 +36,7 @@
   });
 </script>
 
-{#if tooltip.bubble && tooltip.text}
+{#if tooltip.bubble}
   <div
     class="tip"
     bind:this={el}

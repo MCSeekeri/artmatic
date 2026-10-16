@@ -2,14 +2,25 @@
   /**
    * StatusBar — 底栏（高 22px）。
    *
-   * 四段：工程名 · 工具提示 · 快捷键 · FPS。
-   * 「工具提示」这一段就是自研 tooltip 取代原生 title 的第二个理由：原生
-   * 气泡只能悬浮在指针旁，鼠标一移开就没了；底栏能在指针停在任何控件上时
-   * 持续显示「这是什么、按什么键」，与 Photoshop / Blender 的状态栏同构。
+   * 四段：工程名 · 提示 · 快捷键 · FPS。
+   *
+   * 「提示」这一段回答的是**「我现在能做什么」**，不是「这个控件叫什么」：
+   *
+   * - 控件叫什么在它自己的悬浮气泡里（`use:tip`），底栏抄一遍只会得到两处一模一样的
+   *   字 —— 而且气泡能换行、底栏不能，同一句话在底栏里还得被截断。
+   * - 底栏真正无可替代的是另外两件：**没气泡的东西**（片段、标尺、轨道行空白这些
+   *   自绘/委托区域），以及**「下一步做什么」**（空时间轴该说「右键新建片段」、
+   *   框选完该说「整组移动 / 批量删除」）。判定在 `hints.ts`，状态在 `status-hint`。
+   *
+   * 优先级：一次性提示（保存结果等）> 导出进度 > 模拟追赶 > 三层提示。
+   * 前三条都是「画面为什么不对 / 刚才发生了什么」的解释，比提示重要。
    */
   import Icon from './Icon.svelte';
   import { appState } from './app-state.svelte';
-  import { tooltip } from './tooltip.svelte';
+  import { statusHint } from './status-hint.svelte';
+  import { hoverHint, pickHint, sceneHint, type Hint, type HintContext } from './hints';
+  import { splitKeysKeyOf } from './shortcuts';
+  import { editorState } from './typography/editor-state.svelte';
   import { tr } from '../i18n/index.svelte';
 
   const project = $derived.by(() => {
@@ -19,6 +30,32 @@
 
   const exporting = $derived(appState.exportProgress !== null);
   const pct = $derived(exporting ? Math.round((appState.exportProgress ?? 0) * 100) : 0);
+
+  /**
+   * 场景快照。
+   *
+   * `void appState.version` 不能省：片段的增删是**原地改**（见 Timeline 的响应式
+   * 纪律），不订阅版本的话「删光片段」不会让提示切回「右键新建片段」。
+   */
+  const ctx = $derived.by((): HintContext => {
+    void appState.version;
+    let clipCount = 0;
+    for (const track of project.tracks) clipCount += track.clips.length;
+    return {
+      view: appState.editorOpen ? 'typography' : 'timeline',
+      clipCount,
+      selectedIds: appState.selectedClipIds,
+      typoSelectedCount: editorState.selectedIds.length,
+      playing: appState.playing,
+      splitKey: splitKeysKeyOf(appState.shortcutScheme),
+    };
+  });
+
+  const hint = $derived.by((): Hint | null => {
+    // 手势层最先短路：拖动期间每帧都在改 version，没必要陪着重算后面两层。
+    if (statusHint.gesture) return statusHint.gesture;
+    return pickHint([hoverHint(statusHint.hover, ctx), sceneHint(ctx)]);
+  });
 </script>
 
 <footer class="statusbar" data-testid="statusbar">
@@ -28,7 +65,7 @@
   </span>
 
   {#if appState.notice}
-    <!-- 一次性提示（保存结果、Alt+↑↓ 被策略挡住…）：优先级最高，压过工具提示。
+    <!-- 一次性提示（保存结果、Alt+↑↓ 被策略挡住…）：优先级最高，压过提示。
          三级颜色：中性 / 成功（绿）/ 失败（红）—— 见下面 .notice 的注释。 -->
     <span class="seg notice" data-testid="notice" data-level={appState.noticeLevel}>
       <Icon
@@ -48,18 +85,26 @@
     </span>
   {:else if appState.simLag > 0}
     <!-- 拖动播放头时模拟会落在播放头后面（见 app-state.syncSimBudget）。
-         排在导出之后、工具提示之前：它是「画面为什么不对」的解释，比提示重要。 -->
+         排在导出之后、提示之前：它是「画面为什么不对」的解释，比提示重要。 -->
     <span class="seg accent" data-testid="statusbar-simlag">
       <Icon name="clock" size={11} />
       {tr('app.simCatchUp')}
     </span>
-  {:else if tooltip.text}
-    <span class="seg hint" data-testid="statusbar-hint">{tooltip.text}</span>
-    {#if tooltip.shortcut}
-      <span class="seg keys" data-testid="statusbar-keys"><kbd class="kbd">{tooltip.shortcut}</kbd></span>
+  {:else if hint}
+    <!--
+      说明句 + 键位角标。**没有内容时这一段是整个消失的**：原来是常驻的
+      「悬停任意控件获取说明」——一句恒为真、又从不改变的话，占着底栏最显眼的
+      位置而零信息量。
+    -->
+    {#if hint.text}
+      <span class="seg hint" data-testid="statusbar-hint">{tr(hint.text, hint.vars)}</span>
     {/if}
-  {:else}
-    <span class="seg hint muted">{tr('app.hoverHint')}</span>
+    {#each hint.actions ?? [] as a (a.keysKey + a.labelKey)}
+      <span class="seg keys" data-testid="statusbar-keys">
+        <kbd class="kbd">{tr(a.keysKey)}</kbd>
+        <span class="klabel">{tr(a.labelKey)}</span>
+      </span>
+    {/each}
   {/if}
 
   <span class="seg spacer"></span>
@@ -126,10 +171,18 @@
   .hint {
     color: var(--bar-fg);
   }
+  /*
+   * 键位角标：`<kbd>` 说明「按什么」，紧跟的标签说明「按下去做什么」。
+   * 标签比键位淡一档（它是解释，键位才是要记住的东西）；整段可收缩
+   * ——底栏一行放不下时被截断的是最后一条提示，而不是 fps。
+   */
+  .keys {
+    flex-shrink: 1;
+    color: var(--text-muted);
+  }
   .accent {
     color: var(--bar-accent);
   }
-  .muted,
   .dim {
     color: var(--text-muted);
   }
@@ -139,5 +192,6 @@
   }
   kbd.kbd {
     border-color: var(--bar-border);
+    flex-shrink: 0;
   }
 </style>

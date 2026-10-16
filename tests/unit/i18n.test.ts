@@ -17,6 +17,7 @@ import { transitions } from '../../src/i18n/locales/zh-CN/transitions';
 import { typography } from '../../src/i18n/locales/zh-CN/typography';
 import { ribbon } from '../../src/i18n/locales/zh-CN/ribbon';
 import { shortcuts } from '../../src/i18n/locales/zh-CN/shortcuts';
+import { hint } from '../../src/i18n/locales/zh-CN/hint';
 import { errors } from '../../src/i18n/locales/zh-CN/errors';
 import { lab } from '../../src/i18n/locales/zh-CN/lab';
 import { agent } from '../../src/i18n/locales/zh-CN/agent';
@@ -96,6 +97,7 @@ describe('文案表结构', () => {
     typography,
     ribbon,
     shortcuts,
+    hint,
     errors,
     lab,
     agent,
@@ -179,6 +181,10 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   // Map，所以这条分支实际不可达 —— 它是注册表被改坏时的诊断，
   // 只会出现在 lab 右栏的编译日志里，没有任何出口通向用户界面。
   'effects/compile-all.ts': ['注册表里没有 ${id}'],
+  // 底栏提示里引用的快捷键必须在 SHORTCUT_GROUPS 里登记过（见 hints.ts 的
+  // `shortcutOf`）。它是**加载期**不变量：调用点全是字面量，正常路径上这条分支
+  // 不可达，而 `tests/unit/hints.test.ts` 的全矩阵会先一步变红。
+  'ui/shortcuts.ts': ['shortcutOf: 「${labelKey}」没有登记在 SHORTCUT_GROUPS 里'],
   /*
    * 转场目录的准入拒绝理由。它们只进 `CATALOG_ISSUES` —— 一个**开发期台账**：
    * 单测断言它、CREDITS.md 记录它、E2E 失败时把它打进断言消息。

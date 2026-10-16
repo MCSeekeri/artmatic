@@ -28,6 +28,8 @@
   import { theme } from '../ui/theme.svelte';
   import { appState } from '../ui/app-state.svelte';
   import { registryRevision } from '../ui/registry-revision.svelte';
+  import { statusHint } from '../ui/status-hint.svelte';
+  import type { HintTarget } from '../ui/hints';
   import { tr } from '../i18n/index.svelte';
   import { resolveLabel } from '../i18n/label';
 
@@ -698,6 +700,27 @@
     });
   }
 
+  /* ------------------------------------------------------------ 底栏提示 */
+
+  /**
+   * 指针落在了哪一类目标上（底栏提示的悬停层）。
+   *
+   * **一个委托处理器**，不是每个元素各挂一份 —— 判定顺序本身就是优先级：
+   * 片段（`data-clip-id`）压过它所在的行，行 / 标尺 / 轨道头由 `data-hint` 标记
+   * （在模板上就近写着「这里是什么」，比在这里列一串选择器更难漂移）。
+   *
+   * 用 `pointerover`（会冒泡）而不是 `pointerenter`（不会）：在行内从一个元素滑到
+   * 另一个（片段 ↔ 行背景 ↔ 转场标记）时，只有冒泡的那个能重新判定「现在指着谁」。
+   * 底栏说明的是**上下文**，不是「上一次指针进到哪里」。
+   */
+  function hintTargetAt(target: EventTarget | null): HintTarget | null {
+    if (!(target instanceof HTMLElement)) return null;
+    const id = target.closest('[data-clip-id]')?.getAttribute('data-clip-id');
+    if (id) return { kind: 'clip', id };
+    const named = target.closest('[data-hint]')?.getAttribute('data-hint');
+    return named === 'rows' || named === 'ruler' || named === 'track' ? { kind: named } : null;
+  }
+
   /** 鼠标 x → 工程时间（吸附）。右键菜单与拖拽落点共用同一套换算。 */
   function timeAtClientX(clientX: number): number {
     const rect = scrollEl.getBoundingClientRect();
@@ -808,10 +831,19 @@
   }
 </script>
 
-<div class="tl">
+<!--
+  底栏提示的悬停判定挂在整个时间轴上（而不是每个片段 / 每行各挂一份）：
+  见 `hintTargetAt` 的注释。
+-->
+<div
+  class="tl"
+  role="presentation"
+  onpointerover={(e) => statusHint.setHover(hintTargetAt(e.target))}
+  onpointerleave={() => statusHint.clearHover()}
+>
   <!--
     轨道行可拖曳排序。挂在整个 .side 上而不是每行上：拖动时要把它**兄弟**
-    的 transform 一起算，只有容器才拿得到全量。
+   的 transform 一起算，只有容器才拿得到全量。
     行菜单 / 重命名输入框都在行内，所以拖曳是「位移超过阈值才算」——
     4px 以内的移动仍然是一次正常的点击。
   -->
@@ -836,6 +868,7 @@
           style:height={`${ROW_HEIGHT}px`}
           class:muted={!track.enabled}
           data-track-id={track.id}
+          data-hint="track"
           data-testid="track-side-row"
           role="presentation"
           oncontextmenu={(e) => openCtx(e, track)}
@@ -939,9 +972,10 @@
     }}
   >
     <div class="canvas-wrap" data-testid="tl-canvas-wrap" style:width={`${drawWidth}px`}>
-      <canvas class="ruler" bind:this={rulerCanvas} onpointerdown={scrub}></canvas>
+      <canvas class="ruler" data-hint="ruler" bind:this={rulerCanvas} onpointerdown={scrub}></canvas>
       <div
         class="rows"
+        data-hint="rows"
         role="presentation"
         bind:this={rowsEl}
         onpointerdown={onRowsPointerDown}

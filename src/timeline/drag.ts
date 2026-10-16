@@ -33,6 +33,8 @@ import { snapTime, beatDur, type BeatGrid, type SnapMode } from '../core/time';
 import type { ProjectStore } from '../core/project-store';
 import type { AnyClip, Track } from '../core/schema';
 import { tr } from '../i18n/index.svelte';
+import { statusHint } from '../ui/status-hint.svelte';
+import { dragHint, ILLEGAL_DROP_HINT } from '../ui/hints';
 
 export type DragMode = 'move' | 'resize-l' | 'resize-r';
 
@@ -157,8 +159,20 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
   /** 只有 `resize` 还在用它（缩放不换轨）；`move` 一律从工程里查片段的实际轨道。 */
   const curTrackId = opts.track.id;
 
+  /*
+   * 底栏提示（手势层）：手没松开时，底栏说的是「松开会发生什么」。
+   *
+   * 只在**真的动过之后**才出现 —— 按一下就松开的一次单击不该闪过一条「松开放置」。
+   * 落点被拒收时换成「为什么不能放」（见 `ILLEGAL_DROP_HINT`）。
+   */
+  const gestureHint = dragHint(mode === 'move');
+  const setIllegal = (illegal: boolean): void => {
+    opts.onHint?.(illegal);
+    if (moved) statusHint.setGesture(illegal ? ILLEGAL_DROP_HINT : gestureHint);
+  };
+
   store.beginTx();
-  opts.onHint?.(false);
+  setIllegal(false);
 
   /** 水平位移换算成秒；pxPerBeat 是按下那一刻的缩放（拖动中不缩放）。 */
   const dtSec = (clientX: number): number =>
@@ -168,6 +182,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
     if (ev.pointerId !== pointerId) return;
     if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > DRAG_SLOP_PX) {
       moved = true;
+      statusHint.setGesture(gestureHint);
     }
     const p = store.project;
     const g: BeatGrid = p.beatGrid;
@@ -192,7 +207,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
         if (c.target) store.liveMoveClip(c.target.id, c.id, c.start);
       }
       // 探针用鼠标下的轨道（可能是装不下的轨道）；整组**全部**能落才算合法。
-      opts.onHint?.(
+      setIllegal(
         cands.some((c) => !c.target || !store.placementAccepted(c.target.id, c.id, c.start)),
       );
       store.touch();
@@ -214,6 +229,8 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
     window.removeEventListener('pointercancel', onCancel);
     window.removeEventListener('keydown', onKey);
     opts.onHint?.(false);
+    // 手势提示必须跟着手势一起结束（忘了清 = 底栏永远停在「松开放置」上）。
+    statusHint.clearGesture();
   };
 
   const onUp = (ev: PointerEvent): void => {

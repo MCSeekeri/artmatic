@@ -36,14 +36,17 @@ export function tip(node: HTMLElement, options: TipOptions) {
   node.addEventListener('pointerdown', press);
 
   return {
+    /**
+     * 只换掉以后要用的参数，**不去动已经挂出的气泡**。
+     *
+     * 内容变了而指针还在上面时「就地刷新」曾经是必要的 —— 那时底栏在读这份文字，
+     * 不刷新底栏就会停在旧文案上。现在气泡是唯一消费者，而它的字取自进入那一刻
+     * （指针没离开，说的就还是同一个控件），点击又会 `hideBubble` ——
+     * 为了「动态文案」多写一条同步写 `$state` 的路径，风险大于收益
+     * （Svelte 的 `state_unsafe_mutation` 就是这么踩到的，见 tooltip.svelte.ts 的 clear）。
+     */
     update(next: TipOptions) {
-      const textChanged = next.text !== opts.text;
       opts = next;
-      // 内容变了而指针还在上面：刷新底栏文字，气泡不重开（避免跳动）。
-      if (textChanged && tooltip.owner === node) {
-        tooltip.text = opts.disabled ? null : opts.text;
-        tooltip.shortcut = opts.shortcut ?? null;
-      }
     },
     destroy() {
       node.removeEventListener('pointerenter', enter);

@@ -52,6 +52,14 @@ export const shortcuts = {
   'sc.key.upDown': '↑ / ↓',
   'sc.key.ctrlS': 'Ctrl+S',
   'sc.key.ctrlShiftS': 'Ctrl+Shift+S',
+  /*
+   * 另外三个方案的切分键（「操作习惯」）。它们与 Artmatic 默认的 `sc.key.s`
+   * 是同一条数据的四种取值 —— 底栏提示要说**当前生效**的那个键，
+   * 而写死字面量的那份副本迟早会与方案表漂移。
+   */
+  'sc.key.ctrlK': 'Ctrl+K',
+  'sc.key.ctrlShiftD': 'Ctrl+Shift+D',
+  'sc.key.ctrlB': 'Ctrl+B',
   'sc.key.ctrlZ': 'Ctrl+Z',
   'sc.key.ctrlShiftZ': 'Ctrl+Shift+Z / Ctrl+Y',
 

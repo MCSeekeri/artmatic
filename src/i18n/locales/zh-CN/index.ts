@@ -21,6 +21,7 @@ import { transitions } from './transitions';
 import { typography } from './typography';
 import { ribbon } from './ribbon';
 import { shortcuts } from './shortcuts';
+import { hint } from './hint';
 import { errors } from './errors';
 import { lab } from './lab';
 import { agent } from './agent';
@@ -39,6 +40,7 @@ export const zhCN = {
   ...typography,
   ...ribbon,
   ...shortcuts,
+  ...hint,
   ...errors,
   ...lab,
   ...agent,

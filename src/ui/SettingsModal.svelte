@@ -524,7 +524,7 @@
         <!-- 只列**真的有差异**的那一项：其余按键各方案一致，编出差异就是假说明书。 -->
         <div class="set-table" data-testid="settings-scheme-table">
           <span class="set-td muted">{tr('app.shortcutSplit')}</span>
-          <span class="set-td mono">{currentScheme.splitKeys}</span>
+          <span class="set-td mono">{tr(currentScheme.splitKeysKey)}</span>
         </div>
         <p class="set-note">{tr('app.shortcutSchemeHint')}</p>
       {:else}

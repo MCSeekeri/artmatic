@@ -19,6 +19,8 @@
  * 在 pointerdown 就生效（按下去就要有响应，等松手才清是另一种手感），
  * 框选只是把同一件事继续做下去 —— 差别只在有没有画出那个框。
  */
+import { statusHint } from '../ui/status-hint.svelte';
+import { marqueeHint } from '../ui/hints';
 
 export interface MarqueeBox {
   /** 相对容器的局部坐标（时间轴的内容坐标）。 */
@@ -96,7 +98,13 @@ export function startMarquee(e: PointerEvent, opts: MarqueeOptions): void {
       w: Math.abs(b.x - a.x),
       h: Math.abs(b.y - a.y),
     });
-    opts.onSelect([...new Set([...base, ...hitsIn(box)])]);
+    const ids = [...new Set([...base, ...hitsIn(box)])];
+    opts.onSelect(ids);
+    /*
+     * 底栏报「框里已经有多少个」：框选唯一看不清的就是「松手会选中几个」
+     * （框住的和碰到的不是一回事）。松手后这一层清掉，底栏接着报选中集。
+     */
+    statusHint.setGesture(marqueeHint(ids.length));
   };
 
   const cleanup = (): void => {
@@ -105,6 +113,7 @@ export function startMarquee(e: PointerEvent, opts: MarqueeOptions): void {
     window.removeEventListener('pointercancel', onCancel);
     window.removeEventListener('keydown', onKey);
     opts.onBox(null);
+    statusHint.clearGesture();
   };
 
   /*

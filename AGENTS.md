@@ -1983,6 +1983,32 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
 - **操作提示分三级**：`appState.flash(text, level)`，`level ∈ info | success | error`，
   默认中性，颜色与图标都跟着 level 走。不要只有红色 —— 「已保存」也是红的会让人以为失败。
 
+#### 底栏提示（`ui/hints.ts` + `ui/status-hint.svelte.ts` + `StatusBar`）
+
+「现在能做什么」，**不是**「这个控件叫什么」。后者是悬浮气泡（`use:tip`）的活；
+底栏原来抄气泡的文字，于是屏幕上同一句话出现两次（而且气泡能换行、底栏不能，
+抄过去还得被截断）。三层，优先级从高到低：
+
+1. **手势**（`statusHint.gesture`）：拖片段 / 框选进行中，报「松开会怎样、Esc 会怎样」。
+   写在手势代码里（`timeline/drag.ts`、`timeline/marquee.ts`），**结束必须清**。
+2. **悬停**（`statusHint.hover`）：片段 / 轨道行空白 / 标尺 / 轨道头。这些目标
+   **没有气泡**，是底栏唯一无可替代的一类。判定走 `Timeline.svelte` 里**一个**委托的
+   `pointerover`（`data-clip-id` 压过 `data-hint="rows|ruler|track"`）——
+   用冒泡的 `pointerover` 而不是 `pointerenter`，否则在行内滑动时判定不会更新。
+3. **场景**（`sceneHint`）：空时间轴 → 右键新建片段（Blender 报 Shift+A 的位置）；
+   选中集 → 切分 / 改名 / 删除；播放中 → 最前面压一个「空格 暂停」。
+
+- 构图全在 `ui/hints.ts`（**纯函数**，不 import appState，快照由 StatusBar 组装成
+  `HintContext` 传进去 ⇒ 可单测；`timeline/` 也要用它，不能把 appState 拖进手势代码的模块图）。
+  文案键集中在 `i18n/locales/zh-CN/hint.ts`（`hint.*`），角标复用 `sc.*` 的
+  「按键 + 说明」对（`shortcutOf` 按描述键回查，查不到就抛）。
+- **一条提示最多四件事**（含播放中那个暂停角标），`tests/unit/hints.test.ts` 按上限
+  守着全矩阵；`tests/e2e/status-hint.spec.ts` 守接线（`data-hint` 写错就是一片空白）。
+- **不能报假的快捷键**：F2 / S / Del 只作用于选中集，悬停一个**没选中**的片段时不许出现；
+  切分键随「操作习惯」变（`splitKeysKeyOf`），说错键比不说更坏。
+- 场景快照里 `void appState.version` 不能省（片段增删是原地改）——否则删光片段后底栏
+  不会切回「右键新建片段」。
+
 ### 6.8 品牌资源
 
 `ui/Brand.svelte` 内联 SVG（不用 `<img src>` —— 那是独立文档，页面 CSS 进不去），

@@ -104,6 +104,20 @@ export const SHORTCUT_BY_LABEL: Partial<Record<MessageKey, MessageKey>> = Object
   SHORTCUT_GROUPS.flatMap((g) => g.items.map((i) => [i.labelKey, i.keysKey] as const)),
 );
 
+/**
+ * 按描述键取回一整条快捷键（底栏提示用）。
+ *
+ * 查不到就**抛**：提示里的每一对「键 + 它做什么」都必须是这张表里真的登记过的
+ * 那一条，否则底栏会显示成一条没有按键的说明 —— 那种失败看起来像「设计如此」。
+ * 调用点全是字面量，所以这是开发期不变量，不是运行期分支
+ * （同 `effects/registry.ts` 缺一半就启动报错的口径）。
+ */
+export function shortcutOf(labelKey: MessageKey): Shortcut {
+  const keysKey = SHORTCUT_BY_LABEL[labelKey];
+  if (!keysKey) throw new Error(`shortcutOf: 「${labelKey}」没有登记在 SHORTCUT_GROUPS 里`);
+  return { keysKey, labelKey };
+}
+
 /* ------------------------------------------------------------ 快捷键方案
  *
  * 「操作习惯」面板里唯一**真的会改变行为**的一项。
@@ -124,18 +138,29 @@ export interface SchemeDef {
   id: ShortcutScheme;
   /** 展示名（Adobe / Blackmagic 的产品名是专名，不进语言表）。 */
   label: string;
-  /** 切分键的展示写法。 */
-  splitKeys: string;
+  /**
+   * 切分键的展示写法。
+   *
+   * 是 **MessageKey** 而不是字面量：底栏提示也要说这个键，而提示里的按键列
+   * 一律走语言表（`HintAction.keysKey`）。写死字面量就成了同一件事的第二份副本
+   * —— 改一处忘一处的时候，界面与行为会各说各的，且不会报错。
+   */
+  splitKeysKey: MessageKey;
   /** 是否与默认方案不同（"默认"那一项用它来做标记，不必翻语言表）。 */
   changesSplit: boolean;
 }
 
 export const SHORTCUT_SCHEMES: SchemeDef[] = [
-  { id: 'artmatic', label: 'Artmatic', splitKeys: 'S', changesSplit: false },
-  { id: 'premiere', label: 'Premiere Pro', splitKeys: 'Ctrl+K', changesSplit: true },
-  { id: 'aftereffects', label: 'After Effects', splitKeys: 'Ctrl+Shift+D', changesSplit: true },
-  { id: 'davinci', label: 'DaVinci Resolve', splitKeys: 'Ctrl+B', changesSplit: true },
+  { id: 'artmatic', label: 'Artmatic', splitKeysKey: 'sc.key.s', changesSplit: false },
+  { id: 'premiere', label: 'Premiere Pro', splitKeysKey: 'sc.key.ctrlK', changesSplit: true },
+  { id: 'aftereffects', label: 'After Effects', splitKeysKey: 'sc.key.ctrlShiftD', changesSplit: true },
+  { id: 'davinci', label: 'DaVinci Resolve', splitKeysKey: 'sc.key.ctrlB', changesSplit: true },
 ];
+
+/** 某个方案下切分键的展示键。提示与设置面板都从这里取，不各自查表。 */
+export function splitKeysKeyOf(scheme: ShortcutScheme): MessageKey {
+  return (SHORTCUT_SCHEMES.find((s) => s.id === scheme) ?? SHORTCUT_SCHEMES[0]!).splitKeysKey;
+}
 
 /**
  * 某个方案下的切分键是否被按下。
