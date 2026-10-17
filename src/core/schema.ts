@@ -14,6 +14,7 @@
 
 import type { BeatGrid } from './time';
 import type { Curve } from './curve';
+import type { KeySettings, QuadCorners } from './image-fx';
 import type { TypographyDocument } from '../typography/document';
 import {
   isKnownTheme,
@@ -23,7 +24,7 @@ import {
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -143,6 +144,14 @@ export interface TransitionRef {
   values: Record<string, number>;
 }
 
+/*
+ * 抠图 / 四角的类型与出厂值住在 `core/image-fx.ts`（纯数学、零运行时依赖）：
+ * 排版文档的 `ImageElement` 也要用同一组字段，而那个模块反过来被本文件 import。
+ * 定义放在叶子模块里才不会形成运行时循环。
+ */
+export type { KeySettings, QuadCorners } from './image-fx';
+export { defaultKeySettings, identityQuad } from './image-fx';
+
 /** 有画面来源，参与合成。被特效影响的就是它。 */
 export interface SourceClip extends ClipBase {
   kind: 'source';
@@ -157,6 +166,16 @@ export interface SourceClip extends ClipBase {
   opacity: number;
   transform: { x: number; y: number; sx: number; sy: number; rot: number };
   fit: 'contain' | 'cover' | 'stretch';
+  /**
+   * 简易抠图（色键）。缺省 = 不抠；作用于**本层** alpha（渲染在 placement pass）。
+   * 抠掉之后露出来的是什么由普通合成决定（z 序下面的轨道），与特效片段无关。
+   */
+  key?: KeySettings;
+  /**
+   * 四角调整（透视变形）。缺省 = 恒等（不调整）；坐标在**层空间**，见 `QuadCorners`。
+   * 与 `transform` 复合：变换先摆好图层矩形，四角再把这个矩形透视变形。
+   */
+  quad?: QuadCorners;
   /** 出画转场。缺失 = 不设转场。语义与钳制规则见 core/transitions.ts。 */
   transitionOut?: TransitionRef;
 }
@@ -330,6 +349,16 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 用户自己调的那套配色就没了（静默数据丢失，最难查的一类）。
    */
   5: (p) => ({ ...p, schemaVersion: 6 }),
+
+  /**
+   * v6 → v7：`SourceClip` 新增可选的 `key`（简易抠图）/ `quad`（四角调整）。
+   *
+   * **恒等迁移**：两个字段都可选（缺省语义分别是「不抠」与「不调整」），v6 的
+   * 工程读进来天然合法，没有任何要改写的东西。抬版本号的唯一目的仍然是让
+   * 「新版存出的工程被旧版打开」走 `versionTooNew` 明确报错 —— 旧版静默忽略这两个
+   * 字段再保存，用户调好的抠图与四角就没了（静默数据丢失，最难查的一类）。
+   */
+  6: (p) => ({ ...p, schemaVersion: 7 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -459,8 +488,58 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
           throw new SchemaError(tr('err.schema.transitionBadValues', { id: c.id }));
         }
       }
+      /*
+       * 抠图 / 四角的形状校验。它们是「形状不对就穿透到渲染期」的那一类：
+       * 渲染侧拿到坏颜色只会静默画成品红、拿到 NaN 容差会画出全透明或全不透明，
+       * 没有报错、也很难定位。所以手改 JSON 的坏形状必须在打开时就挡住。
+       */
+      const key = (c as SourceClip).key;
+      if (key !== undefined && !isValidKeySettings(key)) {
+        throw new SchemaError(tr('err.schema.badKeySettings', { id: c.id }));
+      }
+      const quad = (c as SourceClip).quad;
+      if (quad !== undefined && !isValidQuad(quad)) {
+        throw new SchemaError(tr('err.schema.badQuad', { id: c.id }));
+      }
     }
   }
+}
+
+/** 与 UI 取色器 / CSS 的产物一致：必须带 `#`，六位十六进制（大小写不限）。 */
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+/** 0..1 的有限数。`typeof NaN === 'number'` 但 `NaN >= 0` 为假，所以下界判断一并挡掉。 */
+function isUnitNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+}
+
+/** 形状不对一律 false —— 调用点只关心「能不能进渲染期」，不关心具体哪里错。 */
+function isValidKeySettings(k: unknown): k is KeySettings {
+  if (!k || typeof k !== 'object' || Array.isArray(k)) return false;
+  const s = k as Partial<KeySettings>;
+  return (
+    typeof s.color === 'string' &&
+    HEX_COLOR.test(s.color) &&
+    isUnitNumber(s.tolerance) &&
+    isUnitNumber(s.softness) &&
+    isUnitNumber(s.spill)
+  );
+}
+
+/** 一个角：长度 2 的数组 + 两个有限数（`Infinity` / `NaN` 都不能进单应）。 */
+function isCorner(v: unknown): v is [number, number] {
+  return (
+    Array.isArray(v) &&
+    v.length === 2 &&
+    Number.isFinite(v[0]) &&
+    Number.isFinite(v[1])
+  );
+}
+
+function isValidQuad(q: unknown): q is QuadCorners {
+  if (!q || typeof q !== 'object' || Array.isArray(q)) return false;
+  const c = q as Partial<QuadCorners>;
+  return isCorner(c.tl) && isCorner(c.tr) && isCorner(c.br) && isCorner(c.bl);
 }
 
 /** 深拷贝（工程是纯 JSON，structuredClone 足够）。 */

@@ -21,6 +21,7 @@
   import { createTypographyActions } from './actions';
   import { buildTypographyTabs } from './ribbon-defs';
   import SelectionLayer from './SelectionLayer.svelte';
+  import QuadEditLayer from './QuadEditLayer.svelte';
   import NodeEditor from './NodeEditor.svelte';
   import SidePanel from './SidePanel.svelte';
   import BackgroundLayer from './BackgroundLayer.svelte';
@@ -154,6 +155,18 @@
     }
     const r = editorState.selectionRect;
     return r ? { x: r.x, y: r.y, w: r.w, h: r.h, rot: 0 } : null;
+  });
+
+  /**
+   * 正在做四角调整的图片元素（null = 不显示四角手柄）。
+   *
+   * 包一层 `$derived` 并读 version：`editorState.quadEdit` 返回的是元素本身
+   * （原地改），直接读它不会在 `el.quad` 变化时更新 —— 与 `nodeEdit` 同一套
+   * 理由，见 AGENTS §7「界面实时性」。
+   */
+  const quadEditEl = $derived.by(() => {
+    void appState.version;
+    return editorState.quadEdit;
   });
 
   /**
@@ -356,6 +369,10 @@
         isImageOffline: (id) => appState.isAssetOffline(id),
         offlineLabel: tr('pool.offline'),
         customThemes: appState.project.customThemes ?? [],
+        // 图片的抠图 / 四角是 CPU 异步处理的（typography/image-fx.ts）：
+        // 就绪后 bump 一次 version，下面的 syncDocDom effect 会把 `<img>`
+        // 换成处理好的 `<canvas>`。
+        onImageFxReady: () => appState.store.touch(),
       }),
     );
   });
@@ -374,6 +391,7 @@
       isImageOffline: (id) => appState.isAssetOffline(id),
       offlineLabel: tr('pool.offline'),
       customThemes: appState.project.customThemes ?? [],
+      onImageFxReady: () => appState.store.touch(),
     });
     restoreCaretIfNeeded();
     seekAnimations(root, animationSpecs(d), ls);
@@ -1346,9 +1364,23 @@
             editing={!!editorState.editingTextId &&
               selection.length === 1 &&
               selection[0]!.id === editorState.editingTextId}
+            quadEdit={!!quadEditEl}
             onMove={(e) => onSelectionBoxDown(e)}
             onHandle={(h: HandleId, e: PointerEvent) => startResizeGesture(makeEnv(), h, toDoc(e))}
             onRotate={(e) => startRotateGesture(makeEnv(), toDoc(e))}
+          />
+        {/if}
+
+        <!--
+          四角调整手柄：只在「元素确实开着四角」时出现（`el.quad` 存在）。
+          开关关着却画手柄的话，拖完不知道该往哪存 —— 面板的开关与这里是一对。
+        -->
+        {#if quadEditEl && quadEditEl.quad}
+          <QuadEditLayer
+            el={quadEditEl}
+            {zoom}
+            toDoc={toDoc}
+            onExit={() => editorState.setQuadEdit(null)}
           />
         {/if}
 

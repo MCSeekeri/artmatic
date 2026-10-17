@@ -50,6 +50,7 @@ import {
   type AnimTiming,
 } from '../../typography/animation';
 import { hasImageAsset, putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
+import { defaultKeySettings, identityQuad, type KeySettings } from '../../core/image-fx';
 import {
   cloneFragment,
   expandToGroups,
@@ -534,6 +535,17 @@ export interface TypographyActions {
    * 面板在多选时禁用它们，这里再兜一道，非单选直接忽略。
    */
   setFrame(patch: Partial<TextureFrame>): void;
+
+  /* 图片元素的抠图 / 四角（元素级，只作用于图片） */
+  /** 打开 / 关闭抠图。打开时若还没有参数，写一份默认绿幕。 */
+  setImageKey(enable: boolean): void;
+  /** 改抠图参数（任一字段）。没有参数时会先补一份默认值。 */
+  patchImageKey(patch: Partial<KeySettings>): void;
+  /** 打开 / 关闭四角调整。打开时写恒等四角（= 开但不变形）。 */
+  setImageQuad(enable: boolean): void;
+  /** 四角复位成恒等（保留开关）。 */
+  resetImageQuad(): void;
+
   toggleFlag(key: 'locked' | 'visible'): void;
   duplicateSelection(): void;
   deleteSelection(): void;
@@ -1186,6 +1198,45 @@ export function createTypographyActions(): TypographyActions {
     setOpacity(value) {
       editorState.commit(tr('typo.undo.opacity'), (doc) => {
         for (const el of anyElement(doc)) el.opacity = Math.max(0, Math.min(1, value));
+      });
+    },
+
+    setImageKey(enable) {
+      editorState.commit(tr(enable ? 'typo.undo.keyOn' : 'typo.undo.keyOff'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          // 关闭 = 删字段（缺省语义就是「不抠」），与片段的键盘语义一致。
+          if (enable) {
+            if (!el.key) el.key = defaultKeySettings();
+          } else {
+            delete el.key;
+          }
+        }
+      });
+    },
+
+    patchImageKey(patch) {
+      editorState.commit(tr('typo.undo.key'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          if (!el.key) el.key = defaultKeySettings();
+          Object.assign(el.key, patch);
+        }
+      });
+    },
+
+    setImageQuad(enable) {
+      editorState.commit(tr(enable ? 'typo.undo.quadOn' : 'typo.undo.quadOff'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          if (enable) el.quad = el.quad ?? identityQuad();
+          else delete el.quad;
+        }
+      });
+    },
+
+    resetImageQuad() {
+      editorState.commit(tr('typo.undo.quadReset'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          if (el.quad) el.quad = identityQuad();
+        }
       });
     },
 

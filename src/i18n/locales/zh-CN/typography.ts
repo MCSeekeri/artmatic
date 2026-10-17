@@ -75,6 +75,13 @@ export const typography = {
   'typo.undo.animTiming': '修改动画时序',
   'typo.undo.customAnim': '设置自定义动画',
   'typo.undo.flatten': '排版转为图片',
+  'typo.undo.keyOn': '开启抠图',
+  'typo.undo.keyOff': '关闭抠图',
+  'typo.undo.key': '修改抠图参数',
+  'typo.undo.quadOn': '开启四角调整',
+  'typo.undo.quadOff': '关闭四角调整',
+  'typo.undo.quadReset': '四角复位',
+  'typo.undo.quad': '调整四角',
 
   /* ------------------------------------------------ 字体导入反馈 */
   'typo.fontsImported': '已导入 {ok} 个字体',
@@ -165,6 +172,20 @@ export const typography = {
   'typo.propLineSolid': '实线',
   'typo.propLineDashed': '虚线',
   'typo.propLineDotted': '点线',
+  /* 图片元素：抠图 / 四角（元素级，与时间轴片段上的同名能力同一套语义） */
+  'typo.propKeying': '抠图',
+  'typo.propKeyEnable': '启用色键抠图',
+  'typo.propKeyColor': '键色',
+  'typo.propKeyTolerance': '容差',
+  'typo.propKeySoftness': '柔边',
+  'typo.propKeySpill': '溢色抑制',
+  'typo.propQuad': '四角调整',
+  'typo.propQuadEnable': '启用四角调整',
+  'typo.propQuadEdit': '在画布上调整',
+  'typo.propQuadReset': '复位',
+  'typo.propQuadHint': '拖动画面上的四个角或边中点改变透视；Esc 取消这次拖动。',
+  'typo.propQuadEditTip': '在画布上显示四角手柄',
+  'typo.quadEditHint': '拖动四角 / 边中点调整透视 · Esc 取消',
 
   /* ------------------------------------------------ 动画窗格（AnimationPanel） */
   'typo.animPane': '动画',

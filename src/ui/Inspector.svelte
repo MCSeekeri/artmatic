@@ -13,6 +13,8 @@
   import ColorField from './controls/ColorField.svelte';
   import {
     BLEND_MODES,
+    defaultKeySettings,
+    identityQuad,
     newId,
     type AnyClip,
     type BlendMode,
@@ -33,7 +35,7 @@
   import { visibleParams, type RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
   import { resolveLabel } from '../i18n/label';
-  import { themeById } from '../typography/theme';
+  import { themeById, resolveThemeColor } from '../typography/theme';
 
   /**
    * 取色入口用的配色方案：**工程级**（`Project.typographyTheme`），含工程
@@ -249,6 +251,36 @@
     };
   }
 
+  /* ------------------------------------------------- 抠图 / 四角调整（片段级）
+   *
+   * 两者都是 **SourceClip 自己的属性**（不是特效片段）：抠图只作用于本层 alpha，
+   * 四角只把本层矩形做透视变形，实现全在同一次 placement pass。所以面板里把它们
+   * 放在「片段自身属性」这一侧（变换之后），而不是特效链里。
+   */
+
+  /** 抠图的三种滑杆参数。 */
+  type KeyParam = 'tolerance' | 'softness' | 'spill';
+
+  function setKeyParam(clip: AnyClip, key: KeyParam, v: number): void {
+    upd(clip, tr('insp.keyEdit'), (c) => {
+      if (c.kind === 'source' && c.key) c.key[key] = v;
+    });
+  }
+
+  /**
+   * 取色卡写回键色。
+   *
+   * 取色卡里点「主题色」写进文档的是**槽位引用**（`@accent1` 这种），而键色会被
+   * 引擎拿去和像素做色差、还要过 schema 的 `/^#[0-9a-fA-F]{6}$/` 校验 ——
+   * 所以这里必须先解析成裸 hex 再存。漏了解析的表现是「调色板选了颜色，
+   * 一保存工程就报『抠图参数不合法』」。
+   */
+  function setKeyColor(clip: AnyClip, v: string): void {
+    upd(clip, tr('insp.keyEdit'), (c) => {
+      if (c.kind === 'source' && c.key) c.key.color = resolveThemeColor(v, inspectorTheme);
+    });
+  }
+
   /* ---------------------------------------------------------------- 转场 */
 
   /** 落不了地的原因 → 文案键。`cut.reason` 是闭联合，索引结果仍是字面量键。 */
@@ -403,6 +435,164 @@
       <KeyableField label={tr('insp.scaleX')} min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sx')} />
       <KeyableField label={tr('insp.scaleY')} min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sy')} />
       <KeyableField label={tr('insp.rotate')} min={-3.1416} max={3.1416} step={0.01} {...keyableProps(clip, 'transform.rot')} />
+
+      <!--
+        抠图（色键）：引擎的 placement pass 对**任意源**生效，所以所有 source 片段
+        都显示这一块。它不是特效片段：只处理这一层自己的 alpha，抠掉之后露出什么
+        由 z 序下面的轨道决定。
+      -->
+      <div class="section" data-testid="keying-section">
+        <div class="section-head">
+          <span class="section-title">{tr('insp.keying')}</span>
+          <Checkbox
+            checked={!!clip.key}
+            label={tr('insp.keyingEnable')}
+            testid="clip-key-enable"
+            onchange={(v) =>
+              upd(clip, v ? tr('insp.keyingEnable') : tr('insp.keyingDisable'), (c) => {
+                if (c.kind !== 'source') return;
+                // 关闭 = 删字段（缺省语义就是「不抠」）；重新开启回到默认绿幕。
+                if (v) c.key = defaultKeySettings();
+                else delete c.key;
+              })}
+          />
+        </div>
+
+        {#if clip.key}
+          {@const keySetting = clip.key}
+          <Field label={tr('insp.keyColor')}>
+            <ColorField
+              label={tr('insp.keyColor')}
+              value={keySetting.color}
+              theme={inspectorTheme}
+              testid="clip-key-color"
+              onchange={(v) => setKeyColor(clip, v)}
+            />
+            <!--
+              吸管：进入「在预览画面上点一下取色」的模式。取的是**只渲染这一轨**
+              的一帧（见 appState.pickKeyColorAt），所以拿到的是这一层的原色，
+              而不是被上层盖住 / 被混合模式混过的值。
+            -->
+            <IconButton
+              icon="pipette"
+              label={tr('insp.keyPick')}
+              tipText={tr('insp.keyPickTip')}
+              size="sm"
+              active={appState.keyPickClipId === clip.id}
+              testid="clip-key-pick"
+              onclick={() => appState.beginKeyPick(clip.id)}
+            />
+            <span class="dim mono">{keySetting.color}</span>
+          </Field>
+          <Field label={tr('insp.keyTolerance')} tipText={tr('insp.keyToleranceTip')}>
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={keySetting.tolerance}
+              ariaLabel={tr('insp.keyTolerance')}
+              testid="clip-key-tolerance"
+              oninput={(v) => setKeyParam(clip, 'tolerance', v)}
+              onchange={(v) => setKeyParam(clip, 'tolerance', v)}
+            />
+            <NumberInput
+              value={keySetting.tolerance}
+              min={0}
+              max={1}
+              step={0.01}
+              width={58}
+              testid="clip-key-tolerance-num"
+              oninput={(v) => setKeyParam(clip, 'tolerance', v)}
+              onchange={(v) => setKeyParam(clip, 'tolerance', v)}
+            />
+          </Field>
+          <Field label={tr('insp.keySoftness')} tipText={tr('insp.keySoftnessTip')}>
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={keySetting.softness}
+              ariaLabel={tr('insp.keySoftness')}
+              testid="clip-key-softness"
+              oninput={(v) => setKeyParam(clip, 'softness', v)}
+              onchange={(v) => setKeyParam(clip, 'softness', v)}
+            />
+            <NumberInput
+              value={keySetting.softness}
+              min={0}
+              max={1}
+              step={0.01}
+              width={58}
+              testid="clip-key-softness-num"
+              oninput={(v) => setKeyParam(clip, 'softness', v)}
+              onchange={(v) => setKeyParam(clip, 'softness', v)}
+            />
+          </Field>
+          <Field label={tr('insp.keySpill')} tipText={tr('insp.keySpillTip')}>
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={keySetting.spill}
+              ariaLabel={tr('insp.keySpill')}
+              testid="clip-key-spill"
+              oninput={(v) => setKeyParam(clip, 'spill', v)}
+              onchange={(v) => setKeyParam(clip, 'spill', v)}
+            />
+            <NumberInput
+              value={keySetting.spill}
+              min={0}
+              max={1}
+              step={0.01}
+              width={58}
+              testid="clip-key-spill-num"
+              oninput={(v) => setKeyParam(clip, 'spill', v)}
+              onchange={(v) => setKeyParam(clip, 'spill', v)}
+            />
+          </Field>
+        {/if}
+      </div>
+
+      <!--
+        四角调整（透视变形）：引擎对任意源生效，但 UI 只在图片 / 视频上开放 ——
+        算法 / 纯色 / 文本源的「默认图层矩形」对用户不直观，需求本身也只点名图片。
+        手柄在预览画面上（QuadHandles），这一块只管开关与重置。
+      -->
+      {#if clip.source.type === 'image' || clip.source.type === 'video'}
+        <div class="section" data-testid="quad-section">
+          <div class="section-head">
+            <span class="section-title">{tr('insp.quad')}</span>
+            <Checkbox
+              checked={!!clip.quad}
+              label={tr('insp.quadEnable')}
+              testid="clip-quad-enable"
+              onchange={(v) =>
+                upd(clip, v ? tr('insp.quadEnable') : tr('insp.quadDisable'), (c) => {
+                  if (c.kind !== 'source') return;
+                  // 恒等四角 = 不调整。字段在但恒等时引擎走旧路径（不丢层）。
+                  if (v) c.quad = identityQuad();
+                  else delete c.quad;
+                })}
+            />
+          </div>
+          {#if clip.quad}
+            <p class="note">{tr('insp.quadHint')}</p>
+            <Field label={tr('insp.quadAdjust')}>
+              <Button
+                label={tr('insp.quadReset')}
+                icon="rotate-ccw"
+                variant="outline"
+                testid="clip-quad-reset"
+                tipText={tr('insp.quadResetTip')}
+                onclick={() =>
+                  upd(clip, tr('insp.quadReset'), (c) => {
+                    if (c.kind === 'source') c.quad = identityQuad();
+                  })}
+              />
+            </Field>
+          {/if}
+        </div>
+      {/if}
 
       {#if clip.source.type === 'solid'}
         <Field label={tr('insp.color')}>

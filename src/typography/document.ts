@@ -15,6 +15,7 @@
  */
 
 import { newId } from '../core/schema';
+import type { KeySettings, QuadCorners } from '../core/image-fx';
 import type { ElementAnimation } from './animation';
 import { runsFromText, type TextRun } from './rich-text';
 import { themeRef } from './theme';
@@ -377,6 +378,20 @@ export interface ImageElement extends ElementBase {
   radius?: number;
   /** 裁剪窗，相对源图 0..1。缺省即全图。 */
   crop?: { x: number; y: number; w: number; h: number };
+  /**
+   * 简易抠图（色键）。缺省 = 不抠。
+   *
+   * 字段与 `SourceClip.key` **同一个类型**（`core/image-fx.ts`），语义也一致：
+   * 只处理这一张图片自己的 alpha。差别是渲染路径 —— 片段走 GPU 的 placement
+   * pass，排版元素是 DOM，走 `typography/image-fx.ts` 的 CPU 实现（与着色器
+   * 同一份公式，见那个文件的注释）。
+   */
+  key?: KeySettings;
+  /**
+   * 四角调整（透视变形）。缺省 / 恒等 = 不调整；坐标在**元素框的层空间**
+   * （`(0,0)` = 框左上、`(1,1)` = 右下，左上原点），与 `frame.rot` 复合。
+   */
+  quad?: QuadCorners;
 }
 
 export type TypographyElement = TextElement | ShapeElement | ImageElement;
@@ -840,6 +855,9 @@ export function createImageElement(
     fit: over.fit ?? 'contain',
     radius: over.radius,
     crop: over.crop,
+    // 可选字段必须**逐项显式搬运**：不写就会静默丢弃（见 ShapeElement 的 evenOdd / gen）。
+    key: over.key,
+    quad: over.quad,
     // frame 放最后：`baseDefaults` 已经按形状的方块填过默认值，这里按比例覆盖它。
     frame: over.frame ?? defaultImageFrame(size, over.natural?.w ?? 0, over.natural?.h ?? 0),
   };

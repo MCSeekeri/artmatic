@@ -64,6 +64,30 @@ function buildStack(project: Project, t: number): Stack {
 > 写反的表现是**「特效完全无效且不报错」**。`core/demo-project.ts` 的 tracks 数组
 > 必须一起倒序，`tests/unit/stack.test.ts` 会挡住。
 
+### 片段级几何与抠图（placement pass）
+
+`SourceClip.key`（色键）与 `SourceClip.quad`（四角透视）**都只在一次 placement 里做**
+（`placement.frag.ts`），不是特效、不是额外 pass。这个选择的三个后果都要记住：
+
+- **转场两侧各自独立**：转场通路对 from / to 各调一次 placement，所以两边的抠图 / 四角
+  天然按各自片段生效，不需要转场着色器知道这件事。
+- **特效片段碰不到它们**：adjustment layer 作用在 placement 之后的整幅画面上，抠图的
+  透明区已经烘进 alpha 了；反过来「先用特效再抠图」这种顺序不存在（要那样就先把源
+  渲染成图片素材）。
+- **转场窗口里的已知近似**：gl-transitions 的着色器只读贴图 rgb、不看 alpha，所以抠掉的
+  区域在转场窗口内会按黑色参与混合（普通合成路径完全正确）。这是取舍，不是 bug；
+  别为了它去改转场协议。
+
+- `quad` 用「单位方 → 四角」单应的**逆矩阵**采样（uniform 三行 vec3），identity 时
+  `u_quadOn = 0` 走原算式 —— **关闭状态必须与历史逐位一致**（全项目确定性回归的前提）。
+  逆矩阵在 `stack.ts::resolveSource` 里算一次（CPU），compositor 只负责上传；四角退化
+  （矩阵不可逆）时按「不调整」处理，**不丢层**。
+- `key` 的数学（YCbCr 色度差 + 亮度差、容差 / 柔边 / 溢色抑制）写在 placement 的文件头。
+  它只乘 alpha（render target 是直通 alpha，乘 rgb 会得到错误结果）；普通通路里
+  `u_opacity` 仍由 blend pass 负责，两者互不干扰。
+- 坐标空间与 UI 拖角共用 `core/quad.ts`（层空间 = 默认图层矩形），改动语义时先看
+  `src/core/AGENTS.md` 的「片段级图像处理」。
+
 ---
 
 ## 预览

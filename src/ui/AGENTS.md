@@ -144,6 +144,30 @@
 
 ---
 
+## 预览画面上的叠加控件（四角手柄 / 取色吸管）
+
+`ui/QuadHandles.svelte` 是覆盖在**预览画面**上的交互层（四角调整的四角 + 四边中点手柄），
+取色吸管则是同一块画面上的「点一下取色」模式。三条纪律：
+
+- **坐标只算一次、只共一份**：手柄位置 = `core/quad.ts` 的 `layerUvToFrameUv`（层空间 →
+  画面 uv）+ canvas 的 `getBoundingClientRect()`；图层默认矩形的尺寸用
+  `engine/placement.frag.ts` 的 `drawSizeFor`（与合成同源），源尺寸取
+  `Project.assets[assetId].size`。**别在 UI 里另写一套 fit/transform 数学** —— 与渲染差
+  半像素的形态是「手柄看着对、拖出来画面偏」，没有任何报错。
+- **手柄拖动 = 一笔撤销**：`store.beginTx()` → pointermove 里原地改 `clip.quad` +
+  `store.touch()` → pointerup `store.endTx()`；pointerdown 必须
+  `stopPropagation()`（Preview 的「横向拖 = 两帧并排」会抢走手势）。
+  结束路径（pointercancel / Esc / 切工程）一律 `cancelTx()` + `registerGestureCancel(null)`
+  —— **绝不能留下悬空的 beginTx**（切工程时的 `pendingGestureCancel` 会兜底，但那是
+  事故路径）。覆盖层本体 `pointer-events:none`，只有手柄本身 `auto`。
+- **取色吸管（`appState.keyPickClipId`）读的是「只渲染这一轨」的一帧**：
+  `renderer.renderFrame(project, playT, { onlyTrackId })` → `readPixels()` → **同一次同步
+  任务内立刻** `renderFrame(project, playT)` 还原（中间没有 rAF，屏幕不闪）。
+  两条坑：`readPixels` 的行是**自下而上**（GL 原点在左下，uv.y 要翻）；绝不能借用
+  `setExportSize` 去放大画布（预览尺寸会被永久短路）。取色结束 / 切选中 / Esc 都要退出模式。
+
+---
+
 ## 菜单浮层：缩略图预览
 
 **菜单浮层的实现**（`ui/controls/Menu.svelte`）：`MenuItem.thumb` / `.desc`
@@ -188,6 +212,15 @@
 > **规则：派生里凡是要读类实例的字段，必须同时 `void` 一个可追踪的信号。**
 > 本项目的标准信号是 `void appState.version`（「当前工程 version 的镜像」，每次 commit 都变）。
 > 判据：问一句「这个字段变的时候，**谁会通知 Svelte**？」答不上来就是漏了。
+
+**根因四：`$effect` 里 `x += 1` 读写同一份 `$state` = 无限自触发。**
+`x += 1` 先**读**再写，于是这个 effect 依赖了自己写的状态，每轮 flush 重跑，
+Svelte 跑满 1000 次才抛 `effect_update_depth_exceeded` —— 主线程被占死，
+**整页掉到 1~2 FPS**，而且欢迎界面（没有工程）也一样慢，因为组件照常挂载。
+2026-10-17 在 `QuadHandles.svelte` 的 `geomTick` 上踩过。
+> **规则：effect 内只「赋值」不「读取」的计数器，计数放在普通 `let` 上。**
+> 写法是 `let seq = 0; let tick = $state(0); const bump = () => { seq += 1; tick = seq; };`
+> 同理，任何 `$state` 的 `++` / `+=` 都不许出现在会以它为依赖的 effect 体里。
 
 **配套的测试纪律（比上面三条更重要）**：
 

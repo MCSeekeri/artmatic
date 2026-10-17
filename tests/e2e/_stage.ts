@@ -817,3 +817,317 @@ export async function shootAlgo(
   await buildStage(page, { id: `m-${gen}`, source: { type: 'algo', generator: gen, params }, end: 8 });
   return gridStats(page, t);
 }
+
+/* -------------------------------------- 图片素材舞台（抠图 / 四角调整用例） */
+
+/**
+ * 抠图（`ClipKey`）与四角调整（`ClipQuad`）用例的共用舞台助手。
+ *
+ * 这三个字段与 `src/core/schema.ts` 的 `KeySettings` / `QuadCorners` 同形。这里
+ * 用**结构化类型**而不是 import：`_stage.ts` 刻意保持「只依赖 Playwright 类型」
+ * 的零运行期依赖，而类型在这里只是给 spec 作者看的文档（真正的契约由
+ * `tests/unit/schema.test.ts` 与 E2E 的渲染读回守）。
+ */
+export interface ClipKeySettings {
+  color: string;
+  tolerance: number;
+  softness: number;
+  spill: number;
+}
+
+export interface ClipQuadCorners {
+  tl: [number, number];
+  tr: [number, number];
+  br: [number, number];
+  bl: [number, number];
+}
+
+/** 页内 canvas 画什么。坐标/朝向都以**画面**为准（图像行序自上而下）。 */
+export type TestImagePattern =
+  | { kind: 'solid'; color: string }
+  /** 横向三段（左 1/3 → 右 1/3）；keying 用例用。 */
+  | { kind: 'thirds'; left: string; middle: string; right: string }
+  /** 上下两半（上 / 下）；quad 用例用。 */
+  | { kind: 'halves'; top: string; bottom: string };
+
+export interface ImageStageSpec {
+  pattern: TestImagePattern;
+  /** 素材像素尺寸（默认 640×360）。 */
+  width?: number;
+  height?: number;
+  /** 底层背景纯色。给了就多一条全幅 solid 轨（z 在图片**之下**）。 */
+  background?: string;
+  /** 初始抠图 / 四角。直接写进片段，不经 UI（UI 接线由各自的用例单独测）。 */
+  key?: ClipKeySettings;
+  quad?: ClipQuadCorners;
+  /** 片段在时间轴上的区间（默认 [0, 8)，与 buildStage 一致）。 */
+  start?: number;
+  end?: number;
+}
+
+export interface ImageStage {
+  imageTrack: string;
+  backgroundTrack: string | null;
+  imageClipId: string;
+  assetId: string;
+}
+
+interface ImageStageApi {
+  store: {
+    addTrack: (kind: 'visual', name?: string) => string;
+    addClip: (trackId: string, clip: unknown) => void;
+    commit: (
+      label: string,
+      fn: (p: {
+        tracks: { id: string; enabled: boolean; clips: { id: string }[] }[];
+        assets: Record<string, unknown>;
+      }) => void,
+    ) => void;
+  };
+  registerImageAsset: (assetId: string, blob: Blob) => Promise<void>;
+}
+
+/** 每次调用加序号：片段 id / 素材 id 在同一个页面里不能撞（见 buildTransitionStage）。 */
+let imageStageSeq = 0;
+
+/**
+ * 搭一个「图片素材（+ 可选纯色背景）」的干净舞台。
+ *
+ * 三个必须做对、且错了都不报错的点：
+ *
+ * 1. **`registerImageAsset` 是异步的，必须 await**。它先 `createImageBitmap`、
+ *    再画进 canvas 才登记 —— 不等的话第一帧读回的是「脱机媒体」占位符（暗红），
+ *    断言会随负载在不同帧上时对时错（与 sim 烘焙同一种 flake 形态）。
+ * 2. **素材台账（`p.assets[assetId]`）要手工记**：`registerImageAsset` 只登记
+ *    运行期字节，不写工程台账；而四角手柄是拿 `Asset.size` 算图层矩形尺寸的
+ *    —— 漏了这条会变成「画面全对、手柄位置错」，只测像素的用例发现不了。
+ * 3. **图片必须在背景之上**：`addTrack` 是 push（新轨 = 数组末尾 = z 最低）。
+ *    keying 要「透出下层」看背景，所以图片轨先建、背景轨后建，最后再显式排一次
+ *    轨把顺序钉死（与 `buildDepthStage` 同一条纪律）。
+ *
+ * 图片内容在 **page 内**用 canvas 画再 `toBlob`：不往仓库塞 PNG fixture，而且走的是
+ * 真实 PNG 字节 → `registerImageBytes` → SourceManager 上传这条链路。
+ */
+export async function buildImageStage(page: Page, spec: ImageStageSpec): Promise<ImageStage> {
+  imageStageSeq += 1;
+  const suffix = `-${imageStageSeq}`;
+  return page.evaluate(
+    async ({ s, suffix }) => {
+      const A = (window as never as { __artmatic: ImageStageApi }).__artmatic;
+      const w = s.width ?? 640;
+      const h = s.height ?? 360;
+      const assetId = `e2e-image${suffix}`;
+      const imageClipId = `e2e-image-clip${suffix}`;
+
+      // 1) 页面内画一张真 PNG
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      const pat = s.pattern;
+      if (pat.kind === 'solid') {
+        ctx.fillStyle = pat.color;
+        ctx.fillRect(0, 0, w, h);
+      } else if (pat.kind === 'thirds') {
+        const cuts = [0, Math.round(w / 3), Math.round((2 * w) / 3), w];
+        for (const [i, color] of [pat.left, pat.middle, pat.right].entries()) {
+          ctx.fillStyle = color;
+          ctx.fillRect(cuts[i]!, 0, cuts[i + 1]! - cuts[i]!, h);
+        }
+      } else {
+        ctx.fillStyle = pat.top;
+        ctx.fillRect(0, 0, w, Math.round(h / 2));
+        ctx.fillStyle = pat.bottom;
+        ctx.fillRect(0, Math.round(h / 2), w, h - Math.round(h / 2));
+      }
+      const blob = await new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('canvas.toBlob 返回 null'))), 'image/png'),
+      );
+      // 2) 登记运行期字节（**必须 await**，见函数头）
+      await A.registerImageAsset(assetId, blob);
+
+      // 3) 关掉 demo 全部轨道，只启用自己这两条
+      A.store.commit('e2e: 清空舞台', (p) => {
+        for (const t of p.tracks) t.enabled = false;
+      });
+
+      const base = {
+        fadeSec: 0,
+        curves: {},
+        transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+        fit: 'stretch' as const,
+      };
+      const imageTrack = A.store.addTrack('visual', `IMG${suffix}`);
+      const backgroundTrack = s.background ? A.store.addTrack('visual', `BG${suffix}`) : null;
+
+      // 4) 台账（UI 手柄靠 Asset.size；见函数头第 2 点）
+      A.store.commit('e2e: 记素材', (p) => {
+        p.assets[assetId] = { id: assetId, kind: 'image', name: `e2e-image${suffix}.png`, size: { w, h } };
+      });
+
+      // 5) 片段。key / quad 直接写进数据（A/B 的渲染判据不依赖 UI）
+      A.store.addClip(imageTrack, {
+        ...base,
+        kind: 'source',
+        id: imageClipId,
+        start: s.start ?? 0,
+        end: s.end ?? 8,
+        label: `image${suffix}`,
+        source: { type: 'image', assetId },
+        blend: 'normal',
+        opacity: 1,
+        ...(s.key ? { key: s.key } : {}),
+        ...(s.quad ? { quad: s.quad } : {}),
+      });
+      if (backgroundTrack && s.background) {
+        A.store.addClip(backgroundTrack, {
+          ...base,
+          kind: 'source',
+          id: `e2e-bg-clip${suffix}`,
+          start: s.start ?? 0,
+          end: s.end ?? 8,
+          label: `bg${suffix}`,
+          source: { type: 'solid', color: s.background },
+          blend: 'normal',
+          opacity: 1,
+        });
+      }
+
+      // 6) 显式排轨（图片 → 背景 → 其余被禁用的 demo 轨）并只启用自己这两条
+      A.store.commit('e2e: 排轨', (p) => {
+        const pick = (id: string) => p.tracks.find((t) => t.id === id)!;
+        const mine = backgroundTrack ? [imageTrack, backgroundTrack] : [imageTrack];
+        const rest = p.tracks.filter((t) => !mine.includes(t.id));
+        p.tracks = [...mine.map(pick), ...rest];
+      });
+      A.store.commit('e2e: 启用舞台', (p) => {
+        for (const t of p.tracks) {
+          t.enabled = t.id === imageTrack || t.id === backgroundTrack;
+        }
+      });
+
+      return { imageTrack, backgroundTrack, imageClipId, assetId };
+    },
+    { s: spec, suffix },
+  );
+}
+
+/** 读一个图片片段上的 `key` / `quad` 原值（缺省一律是 null，方便断言「已删除」）。 */
+export async function readClipImageState(
+  page: Page,
+  clipId: string,
+): Promise<{ key: ClipKeySettings | null; quad: ClipQuadCorners | null }> {
+  return page.evaluate((id) => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          project: {
+            tracks: { clips: { id: string; key?: ClipKeySettings; quad?: ClipQuadCorners }[] }[];
+          };
+        };
+      };
+    }).__artmatic;
+    const clip = A.store.project.tracks.flatMap((t) => t.clips).find((c) => c.id === id);
+    return { key: clip?.key ?? null, quad: clip?.quad ?? null };
+  }, clipId);
+}
+
+/** 直接改片段的 `key`（null = 删除）。走 commit = 一笔撤销，和检查器的写入等价。 */
+export async function setClipKey(
+  page: Page,
+  clipId: string,
+  key: ClipKeySettings | null,
+): Promise<void> {
+  await page.evaluate(
+    ({ id, next }) => {
+      const A = (window as never as {
+        __artmatic: {
+          store: {
+            commit: (
+              label: string,
+              fn: (p: {
+                tracks: { clips: { id: string; kind?: string; key?: unknown }[] }[];
+              }) => void,
+            ) => void;
+          };
+        };
+      }).__artmatic;
+      A.store.commit(next ? 'e2e: 设抠图' : 'e2e: 删抠图', (p) => {
+        for (const t of p.tracks) {
+          for (const c of t.clips) {
+            if (c.id !== id) continue;
+            if (next) c.key = next;
+            else delete c.key;
+          }
+        }
+      });
+    },
+    { id: clipId, next: key },
+  );
+}
+
+/** 直接改片段的 `quad`（null = 删除）。 */
+export async function setClipQuad(
+  page: Page,
+  clipId: string,
+  quad: ClipQuadCorners | null,
+): Promise<void> {
+  await page.evaluate(
+    ({ id, next }) => {
+      const A = (window as never as {
+        __artmatic: {
+          store: {
+            commit: (
+              label: string,
+              fn: (p: {
+                tracks: { clips: { id: string; kind?: string; quad?: unknown }[] }[];
+              }) => void,
+            ) => void;
+          };
+        };
+      }).__artmatic;
+      A.store.commit(next ? 'e2e: 设四角' : 'e2e: 删四角', (p) => {
+        for (const t of p.tracks) {
+          for (const c of t.clips) {
+            if (c.id !== id) continue;
+            if (next) c.quad = next;
+            else delete c.quad;
+          }
+        }
+      });
+    },
+    { id: clipId, next: quad },
+  );
+}
+
+/**
+ * 取一个像素，坐标用**画面坐标**（左上角为原点，归一化 0..1）。
+ *
+ * ⚠️ 与 `rgbaAt` 的区别：`readPixels` 是 GL 行序（原点在**左下**），`rgbaAt` 的
+ * 文档写着「左上」但实现是直接按行取 —— 对「上下两半不同色」这类判据会读反。
+ * 这里替调用方翻行，让 keying / quad 用例的 **(0.5, 0.1) = 画面靠上** 这类坐标
+ * 与人的直觉一致。
+ *
+ * 返回 `[r, g, b, a]`（0–255）。
+ */
+export async function rgbaAtTopLeft(
+  page: Page,
+  t: number,
+  fx: number,
+  fy: number,
+  clearFeedback = true,
+): Promise<[number, number, number, number]> {
+  return page.evaluate(
+    ({ t, fx, fy, clear }) => {
+      const A = (window as never as { __artmatic: StageApi }).__artmatic;
+      if (clear) A.renderer.onSeek();
+      A.renderFrame(t);
+      const { data, w, h } = A.readPixels();
+      const x = Math.min(w - 1, Math.max(0, Math.floor(fx * w)));
+      const y = Math.min(h - 1, Math.max(0, Math.floor((1 - fy) * h)));
+      const i = (y * w + x) * 4;
+      return [data[i]!, data[i + 1]!, data[i + 2]!, data[i + 3]!] as [number, number, number, number];
+    },
+    { t, fx, fy, clear: clearFeedback },
+  );
+}

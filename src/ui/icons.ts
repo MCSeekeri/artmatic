@@ -94,6 +94,7 @@ import Palette from '@lucide/svelte/icons/palette';
 import Pause from '@lucide/svelte/icons/pause';
 import Pencil from '@lucide/svelte/icons/pencil';
 import PenTool from '@lucide/svelte/icons/pen-tool';
+import Pipette from '@lucide/svelte/icons/pipette';
 import Play from '@lucide/svelte/icons/play';
 import Plus from '@lucide/svelte/icons/plus';
 import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -229,6 +230,7 @@ export const ICONS = {
   pause: Pause,
   pencil: Pencil,
   'pen-tool': PenTool,
+  pipette: Pipette,
   play: Play,
   plus: Plus,
   'rotate-cw': RotateCw,

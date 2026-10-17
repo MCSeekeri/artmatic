@@ -10,7 +10,7 @@
  */
 
 import { ProjectStore } from '../core/project-store';
-import { newId, type AnyClip, type AudioClip } from '../core/schema';
+import { defaultKeySettings, newId, type AnyClip, type AudioClip } from '../core/schema';
 import { createBlankProject } from '../core/demo-project';
 import type { Renderer } from '../engine/renderer';
 import {
@@ -164,6 +164,20 @@ function normalizeDiv(v: unknown): number {
 function normalizeScale(v: unknown): number {
   const n = Number(v);
   return (PREVIEW_SCALES as readonly number[]).includes(n) ? n : 1;
+}
+
+/**
+ * 0..255 的三通道 → `#rrggbb`。
+ *
+ * 键色在 schema 里只接受裸 hex（`validateProject` 的 `/^#[0-9a-fA-F]{6}$/`），
+ * 而 `readPixels` 给的是字节 —— 这里顺手挡掉越界 / NaN，免得把坏值写进文档。
+ */
+function rgbToHex(r: number, g: number, b: number): string {
+  const to2 = (n: number): string => {
+    const c = Number.isFinite(n) ? Math.max(0, Math.min(255, Math.round(n))) : 0;
+    return c.toString(16).padStart(2, '0');
+  };
+  return `#${to2(r)}${to2(g)}${to2(b)}`;
 }
 
 function loadUiPrefs(): UiPrefs {
@@ -428,6 +442,15 @@ class AppState {
   private splitHostEl: Element | null = null;
   /** 翻行用的临时画布，惰性建、复用。 */
   private splitScratch: HTMLCanvasElement | null = null;
+
+  /* ---- 抠图吸管（片段级取色）
+   *
+   * 吸管取的是**这一层自己的颜色**，所以取色时必须只渲染这一层所在的那条视觉轨
+   * （见 `pickKeyColorAt`）。它是「下一帧别再走普通合成」的一次性模式，不是
+   * 跟工程走的文档状态，所以放在全局 $state 段。
+   *
+   * `null` = 不在取色模式；非 null = 正在为哪个片段的键色取色。 */
+  keyPickClipId = $state<string | null>(null);
 
   /* ---- 排版编辑器（全局，不跟工程走：这是「怎么看」，不是「看什么」） ---- */
 
@@ -1341,6 +1364,111 @@ class AppState {
 
   private setSplitVisible(v: boolean): void {
     if (this.splitVisible !== v) this.splitVisible = v;
+  }
+
+  /* ------------------------------------------------------ 抠图吸管（见字段注释） */
+
+  /** 进入取色模式（检查器的吸管按钮调）。 */
+  beginKeyPick(clipId: string): void {
+    this.keyPickClipId = clipId;
+    this.flash(tr('insp.keyPickHint'));
+  }
+
+  /** 退出取色模式（取到色 / Esc / 换选中片段）。幂等。 */
+  cancelKeyPick(): void {
+    if (this.keyPickClipId !== null) this.keyPickClipId = null;
+  }
+
+  /**
+   * 取色吸管的落点处理（`Preview` 的 pointerdown 调，clientX/Y 是视口坐标）。
+   *
+   * ## 为什么是「只渲染这一轨」的一帧
+   *
+   * 用户点的是「这一层的颜色」。普通合成里这一层可能被上层盖住、或者被自己的
+   * 混合模式与背景混过色（`add` 模式下取到的就是加过背景的值）—— 都不是要抠的
+   * 那个颜色。只渲染它所在的视觉轨，拿到的才是这一层的原色。
+   *
+   * ## 为什么屏幕上不会闪
+   *
+   * `renderFrame(onlyTrackId)` → `readPixels` → `renderFrame` 还原，三件事在
+   * **同一个同步任务**里做完：中间没有 rAF、没有把控制权交回浏览器，所以那张
+   * 「只有这一轨」的画面永远不会被合成上屏。
+   *
+   * 失败一律退出取色模式 —— 留在模式里点第二次也没意义（renderer 没起 / 片段
+   * 已经不在），用户会以为按钮坏了。
+   */
+  pickKeyColorAt(clientX: number, clientY: number): void {
+    const clipId = this.keyPickClipId;
+    if (clipId === null) return;
+    const fail = (): void => {
+      this.cancelKeyPick();
+      this.flash(tr('insp.keyPickFailed'), 'error');
+    };
+
+    const renderer = this.servicesReady ? this.renderer : null;
+    const found = this.store.findClip(clipId);
+    if (!renderer || !found || found.clip.kind !== 'source') {
+      fail();
+      return;
+    }
+
+    /*
+     * client → canvas uv。用 canvas 的**显示盒**（getBoundingClientRect）而不是
+     * kit.w/h：显示尺寸是 CSS 钉住的适配尺寸，与后备缓冲像素数不是一回事
+     * （预览降质时两者相差 1/0.25…）。
+     */
+    const rect = renderer.kit.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      fail();
+      return;
+    }
+    const u = (clientX - rect.left) / rect.width;
+    const v = (clientY - rect.top) / rect.height;
+    if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) {
+      // 点在画面之外（信箱边 / 画面旁的空白）：重渲一帧正常画面把可能的残留盖掉。
+      try {
+        renderer.renderFrame(this.store.project, this.playT);
+      } catch {
+        /* 下一帧 rAF 会重试；这里只是「尽量还原」，失败不阻断提示 */
+      }
+      fail();
+      return;
+    }
+
+    const project = this.store.project;
+    let px: { data: Uint8Array; w: number; h: number } | null = null;
+    try {
+      renderer.renderFrame(project, this.playT, { onlyTrackId: found.track.id });
+      px = renderer.readPixels();
+    } catch {
+      px = null;
+    } finally {
+      // 同一同步任务内还原（见上面的注释：屏幕上不会出现「只有这一轨」的那一帧）。
+      try {
+        renderer.renderFrame(project, this.playT);
+      } catch {
+        /* 渲染失败由 Preview 的 rAF 循环兜底，这里不重复抛 */
+      }
+    }
+    if (!px || px.w <= 0 || px.h <= 0) {
+      fail();
+      return;
+    }
+
+    // readPixels 原点在**左下**，屏幕 uv 原点在左上 ⇒ 行号要翻。
+    const x = Math.min(px.w - 1, Math.max(0, Math.floor(u * px.w)));
+    const y = Math.min(px.h - 1, Math.max(0, Math.floor((1 - v) * px.h)));
+    const i = (y * px.w + x) * 4;
+    const color = rgbToHex(px.data[i] ?? 0, px.data[i + 1] ?? 0, px.data[i + 2] ?? 0);
+
+    // 一笔撤销：改了键色（必要时先补默认参数）就是一条记录。
+    this.store.updateClip(clipId, tr('insp.keyPick'), (c) => {
+      if (c.kind !== 'source') return;
+      if (!c.key) c.key = defaultKeySettings();
+      c.key.color = color;
+    });
+    this.cancelKeyPick();
+    this.flash(tr('insp.keyPickDone', { color }), 'success');
   }
 
   /**

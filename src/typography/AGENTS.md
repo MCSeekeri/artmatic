@@ -54,6 +54,22 @@
   上下颠倒（`tests/e2e/typography-export.spec.ts` 有方向断言钉着）。
   ⚠️ **`UNPACK_FLIP_Y_WEBGL` 对 `ImageBitmap` 源在 Chromium 上被忽略** ⇒
   图片 / 视频的上传源统一成 **canvas**，翻转在 `SourceManager.uploadImage` 一处定义。
+- **图片元素的抠图 / 四角是 CPU 处理的**（`typography/image-fx.ts`），不能像片段那样
+  交给 GPU：排版渲染成 DOM，没有 placement pass 那个可编程采样点。三条实测结论：
+  1. **snapDOM 会丢掉 `matrix3d`**（透视过的元素直接不出现），但**保留 `<canvas>`
+     内容与 `mask-image`**。所以有 `key` 或非恒等 `quad` 的图片元素，内容节点是
+     `<canvas>` 而不是 `<img>`（`render-dom.ts::buildImageNode`）。
+  2. **处理是异步的**（要等图片解码）。舞台未就绪时先显示**原图**、完成后靠
+     `BuildDocOptions.onImageFxReady` bump 一次 version 换节点；光栅化那条路
+     **必须 `await ensureDocImagesFx()`**（`dom-snap.ts`）—— 不等的话截图拿到原图，
+     而那张图会按正确的缓存键存下来，表现成「导出没抠图且永远不恢复」。
+  3. **缓存键 = URL | 位图尺寸 | fit | crop | key 参数 | quad**（`fxKey`）。恒等 quad
+     与「没有 quad」同键（两者都走 `<img>` + CSS，与引擎 `u_quadOn = 0` 同一判据）。
+     拖动参数时按**元素串行 + 50ms 去抖**（`pump`）：不合并的话拖一下滑杆就是几十次
+     1920×1080 的逐像素重算。
+  4. **色键公式只有一份**：`core/image-fx.ts::applyKeyToRgba`，与
+     `engine/placement.frag.ts` 逐字对齐。两套分家的形态是「排版里边缘发绿、
+     时间轴上干净」，没有任何报错。
 - **两个测试钩子**：`FontRegistry.subsetting` 可关（退回整体内联），
   `tests/e2e/typography-font.spec.ts` 用它断言**子集 vs 全量逐像素零差异** —— 这是唯一能证明
   「子集化没有改动字形或度量」的测试。光栅化另有 `typoRasterize`（不经过 GPU）。

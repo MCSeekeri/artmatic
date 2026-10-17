@@ -39,6 +39,7 @@
 
 import { frameOf } from './clock';
 import { getLimits, mbToBytes } from '../core/capacity';
+import { hexToRgba } from '../core/color';
 import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
 import { buildStack, type BuildStackOptions, type RenderOp, type ResolvedSource, type TransitionOp } from './stack';
@@ -359,6 +360,11 @@ export class Compositor {
    * 返回 false 表示源这帧没准备好（algo 烘焙中 / 图片未登记）——
    * 调用方决定这一层怎么缺席，这里不替它决定。
    *
+   * **四角调整与抠图都在 placement 里做**（见 `placement.frag.ts` 文件头），
+   * 所以转场两侧各自独立生效 —— `drawTransition` 对 from / to 各调一次本函数，
+   * 两边的 key / quad 不会串。反过来，特效片段（adjustment layer）碰不到它们：
+   * 抠图的透明区这时候已经烘进 alpha 了。
+   *
    * ## ⚠️ 源尺寸与帧尺寸成**非整数比**时，采样结果会有一对稳定态（2026-10-10）
    *
    * 这里的缩放采样（`u_drawSize` ≠ `u_frameSize`）在**非整数倍**下会读到纹素之间，
@@ -401,6 +407,29 @@ export class Compositor {
       .u('u_center', [x, y])
       .u('u_rot', rot)
       .u('u_opacity', opacityForLayer);
+
+    // 四角透视：逆单应的三行（行主序）。没有（undefined / null = 不调整 / 退化）
+    // 时传单位矩阵并把开关关掉 —— 着色器走原算式，与历史逐位一致。
+    const inv = source.quadInverse;
+    this.placeProg
+      .u('u_quadOn', inv ? 1 : 0)
+      .u('u_quadR0', inv ? [inv[0]!, inv[1]!, inv[2]!] : [1, 0, 0])
+      .u('u_quadR1', inv ? [inv[3]!, inv[4]!, inv[5]!] : [0, 1, 0])
+      .u('u_quadR2', inv ? [inv[6]!, inv[7]!, inv[8]!] : [0, 0, 1]);
+
+    // 简易抠图：键色归一化到 0..1（hexToRgba 给的是 0..255）；关闭时 alpha 位 = 0。
+    // 每次 place 都全量设置这五个 uniform：placeProg 是复用的 program，漏设一次
+    // 就会把上一层的四角/键色泄漏到下一层 —— 只在特定图层顺序下出现、不报错。
+    const key = source.key;
+    if (key) {
+      const [kr, kg, kb] = hexToRgba(key.color);
+      this.placeProg
+        .u('u_key', [kr / 255, kg / 255, kb / 255, 1])
+        .u('u_keyParams', [key.tolerance, key.softness, key.spill]);
+    } else {
+      this.placeProg.u('u_key', [0, 0, 0, 0]).u('u_keyParams', [0, 0, 0]);
+    }
+
     this.kit.pass(this.placeProg, dst);
     return true;
   }

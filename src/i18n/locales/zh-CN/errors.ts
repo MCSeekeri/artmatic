@@ -49,6 +49,9 @@ export const errors = {
   'err.schema.transitionBadDefId': '片段 {id} 的转场缺少 defId',
   'err.schema.transitionBadDuration': '片段 {id} 的转场时长非法',
   'err.schema.transitionBadValues': '片段 {id} 的转场参数非法',
+  /* v7 的片段级抠图 / 四角。手改 JSON 形状不对时在打开时就报错（不许穿透到渲染期）。 */
+  'err.schema.badKeySettings': '片段 {id} 的抠图参数不合法',
+  'err.schema.badQuad': '片段 {id} 的四角坐标不合法',
 
   /* ------------------------------------------------ 工程读写（project/io.ts） */
   /* 这些会经「打开失败：…」/「保存失败：…」进底栏，或进 SaveReport 的警告。 */

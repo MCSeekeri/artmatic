@@ -2,10 +2,18 @@
   import { onMount } from 'svelte';
   import { appState } from './app-state.svelte';
   import PreviewToolbar from './PreviewToolbar.svelte';
+  import QuadHandles from './QuadHandles.svelte';
   import { tr } from '../i18n/index.svelte';
 
   let host: HTMLDivElement;
-  let canvas: HTMLCanvasElement;
+  /*
+   * canvas 与包住它的 stage 都用 `$state`：它们会作为 prop 传给 QuadHandles
+   * （模板里的响应式读取），而 `bind:this` 给普通 `let` 赋值会让 svelte-check
+   * 报 non_reactive_update。两者在挂载时都必然已被绑定，null 只是类型上的
+   * 「还没挂上」那一瞬间。
+   */
+  let canvas = $state<HTMLCanvasElement | null>(null);
+  let stageEl = $state<HTMLDivElement | null>(null);
   let splitLeft: HTMLCanvasElement;
   let splitRight: HTMLCanvasElement;
 
@@ -53,9 +61,22 @@
 
   function armDrag(e: PointerEvent): void {
     if (e.button !== 0) return;
-    // 只接画面本体与信箱边的按下；工具栏（含其下拉弹层）不接管。
     const target = e.target as Element | null;
-    if (target !== host && target !== canvas) return;
+    /*
+     * 吸管取色模式：画面上的下一次按下就是「取这个点的颜色」，不再 arm 并排预览。
+     * 只认画面本体（canvas / stage），工具栏与它的弹层不接管 —— 否则点工具条
+     * 会被当成取色。
+     */
+    const onScreen = target === canvas || target === stageEl;
+    if (appState.keyPickClipId !== null) {
+      if (!onScreen) return;
+      e.preventDefault();
+      appState.pickKeyColorAt(e.clientX, e.clientY);
+      return;
+    }
+    // 只接画面本体与信箱边的按下；工具栏（含其下拉弹层）不接管。
+    // stage 是包住 canvas 的相对定位容器（QuadHandles 的坐标基准），它同样属于画面。
+    if (target !== host && target !== canvas && target !== stageEl) return;
     armed = true;
     startX = e.clientX;
   }
@@ -88,7 +109,7 @@
    *     顺带补上 `webglcontextlost / restored` 的处理。
    */
   onMount(() => {
-    appState.attachPreview(canvas, host);
+    if (canvas) appState.attachPreview(canvas, host);
     appState.attachSplit(splitLeft, splitRight, host);
     // 点击预览区空白不做事；播放循环永远跑（渲染成本在预览尺寸下很低，
     // 永远渲染让「版本变化→画面更新」不需要额外订阅）。
@@ -107,6 +128,18 @@
       appState.setPreviewUpscale(on);
     };
     document.addEventListener('fullscreenchange', onFullscreenChange);
+    /*
+     * 吸管取色：Esc 退出模式。用**捕获**监听：取色是一次性模式，Esc 的第一语义
+     * 就是「离开这个模式」，不该先去触发别的全局快捷键（本项目 App 的全局
+     * keydown 里没有 Escape 分支，这里也 stopPropagation 保持这个约定）。
+     */
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || appState.keyPickClipId === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      appState.cancelKeyPick();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
     const loop = () => {
       /*
        * 渲染失败是「这一帧没画成」，不是「预览关机」。
@@ -134,7 +167,20 @@
       cancelAnimationFrame(raf);
       ro.disconnect();
       document.removeEventListener('fullscreenchange', onFullscreenChange);
+      window.removeEventListener('keydown', onKeyDown, true);
     };
+  });
+
+  /*
+   * 换选中片段 = 退出吸管取色：取色对象是「某个片段的键色」，选中变了还停在
+   * 那个模式里，下一次点画面会改到用户已经不看的那条片段上。
+   * 只读 selectedClipId / keyPickClipId，两者都是响应式的。
+   */
+  $effect(() => {
+    const selected = appState.selectedClipId;
+    void selected;
+    const picking = appState.keyPickClipId;
+    if (picking !== null && picking !== selected) appState.cancelKeyPick();
   });
 </script>
 
@@ -152,7 +198,15 @@
   onpointercancel={endDrag}
   onpointerleave={endDrag}
 >
-  <canvas bind:this={canvas} id="gl"></canvas>
+  <div class="pv-stage" class:key-pick={appState.keyPickClipId !== null} bind:this={stageEl}>
+    <canvas bind:this={canvas} id="gl"></canvas>
+    <!--
+      四角调整手柄层。绝对定位铺满 stage（canvas 的显示盒由 renderer 用 CSS 钉住，
+      stage 跟着它收缩），`pointer-events` 只在手柄本身打开。
+      取色模式（keyPickClipId 非空）时 stage 显示 crosshair。
+    -->
+    <QuadHandles {canvas} stage={stageEl} />
+  </div>
   <!--
     两帧并排浮层。`#gl` 是 static、这是 absolute → 它盖在 GL 画布上；工具栏在它之后
     渲染且同样 absolute → 仍在它之上。`pointer-events: none` 让拖拽事件照常穿到 `#gl`。
@@ -184,6 +238,28 @@
   #gl {
     max-width: 100%;
     max-height: 100%;
+  }
+  /*
+   * 画面容器：canvas 与四角手柄层的共同坐标基准。
+   *
+   * 它只是把 canvas 包起来的 flex 盒（不改变 canvas 既有的 max-width/height
+   * 行为）。**不能加 transform / filter**：QuadHandles 内部按 canvas 的
+   * getBoundingClientRect 定位，祖先的这两种属性会改掉包含块（浮层坑）。
+   */
+  .pv-stage {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 100%;
+    max-height: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+  /* 吸管取色模式：画面内光标变十字，告诉用户「现在点一下就是取色」。 */
+  .pv-stage.key-pick,
+  .pv-stage.key-pick #gl {
+    cursor: crosshair;
   }
   /* 并排两帧：占满画面区域、居中、等宽。黑底先兜住「某侧没有片段」那种情况。 */
   .pv-split {

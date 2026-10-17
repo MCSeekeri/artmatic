@@ -86,6 +86,23 @@
 
 ---
 
+## 图片的四角调整模式（`QuadEditLayer.svelte`）
+
+图片元素开了「四角调整」之后，可以在画布上拖四个角 / 边中点：
+
+- **模式是显式的**（属性面板的「在画布上调整」勾选框 → `editorState.quadEditId`），
+  不是「选中就显示手柄」。原因：四角手柄与 8 个缩放把手在四个角上**完全重合**，
+  两套同时显示时用户分不清拖的是缩放还是透视。进入该模式后 `SelectionLayer`
+  只留外框（`quadEdit` prop），退出/换选中就收手柄（`setSelection` 里清）。
+- **手柄画在旋转后的框上**：`frame.rot` 是外壳的 CSS 旋转，四角在未旋转的层空间里
+  —— 画在未旋转位置上的话，转过 30° 的图片会看到手柄浮在画外。拖动的逆变换
+  用 `Rᵀ`（`docToLayer`），写反的表现是「转过的元素手柄走反方向」。
+- **拖动是一笔撤销**：`beginGesture()` → `live()`（每 move 改 `el.quad`）→
+  `endGesture(tr('typo.undo.quad'))`；纯点击（零位移）走 `cancelGesture()`，
+  不留空记录。Esc = 取消这次拖动，不在拖动时 = 退出模式。
+
+---
+
 ## 生成器（`ui/typography/SvgGenPickerModal.svelte` + 元素属性面板）
 
 - **入口只有一个按钮**（「插入」页 → 图形组 → 「插入生成器」），点开按六组分区的

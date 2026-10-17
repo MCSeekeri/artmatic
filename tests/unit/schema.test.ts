@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cloneProject,
+  defaultKeySettings,
   defaultProject,
+  identityQuad,
   migrateProject,
   newId,
   SCHEMA_VERSION,
   validateProject,
+  type QuadCorners,
 } from '../../src/core/schema';
 
 describe('validateProject', () => {
@@ -187,5 +191,116 @@ describe('影响深度（EffectClip.affectDepth）', () => {
     const clip = out.tracks[0]!.clips[0]!;
     if (clip.kind !== 'effect') throw new Error('unreachable');
     expect(clip.affectDepth).toBe(3);
+  });
+});
+
+describe('片段级抠图 / 四角（SourceClip.key / quad，v7）', () => {
+  const sourceClip = (extra: Record<string, unknown> = {}) => ({
+    kind: 'source', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+    source: { type: 'solid', color: '#000' },
+    blend: 'normal', opacity: 1,
+    transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'contain',
+    ...extra,
+  });
+
+  const withClip = (clip: unknown) => {
+    const p = defaultProject('v7');
+    p.tracks.push({ kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [clip] } as never);
+    return p;
+  };
+
+  it('工厂函数给出约定的出厂值', () => {
+    expect(defaultKeySettings()).toEqual({
+      color: '#00ff00', tolerance: 0.25, softness: 0.12, spill: 0.5,
+    });
+    expect(identityQuad()).toEqual({ tl: [0, 0], tr: [1, 0], br: [1, 1], bl: [0, 1] });
+  });
+
+  it('合法的 key / quad 通过校验；缺省字段照旧通过', () => {
+    expect(() => validateProject(withClip(sourceClip()))).not.toThrow();
+    expect(() =>
+      validateProject(withClip(sourceClip({ key: defaultKeySettings(), quad: identityQuad() }))),
+    ).not.toThrow();
+    // 边界值合法：容差 0 / 1 是闭区间端点。
+    expect(() =>
+      validateProject(withClip(sourceClip({
+        key: { ...defaultKeySettings(), tolerance: 0, softness: 1, spill: 0 },
+      }))),
+    ).not.toThrow();
+    // 四角允许拖到单位方之外（UI 就是让用户自由拉角），只要求有限数。
+    const outward: QuadCorners = {
+      tl: [-0.2, -0.1], tr: [1.1, 0.05], br: [1.05, 1.2], bl: [-0.05, 0.95],
+    };
+    expect(() => validateProject(withClip(sourceClip({ quad: outward })))).not.toThrow();
+  });
+
+  it('坏抠图参数被拒（错误文案里带片段 id）', () => {
+    const cases: [string, unknown][] = [
+      ['坏颜色（没有 #）', { ...defaultKeySettings(), color: '00ff00' }],
+      ['坏颜色（三位简写）', { ...defaultKeySettings(), color: '#0f0' }],
+      ['颜色不是字符串', { ...defaultKeySettings(), color: 255 }],
+      ['tolerance = NaN', { ...defaultKeySettings(), tolerance: NaN }],
+      ['tolerance = Infinity', { ...defaultKeySettings(), tolerance: Infinity }],
+      ['softness 越界', { ...defaultKeySettings(), softness: 1.5 }],
+      ['spill 是字符串', { ...defaultKeySettings(), spill: '0.5' }],
+      ['不是对象', null],
+      ['是数组', []],
+    ];
+    for (const [name, bad] of cases) {
+      const clip = sourceClip({ key: bad });
+      const p = withClip(clip);
+      expect(() => validateProject(p), name).toThrow((clip as { id: string }).id);
+      expect(() => validateProject(p), name).toThrow(/抠图/);
+    }
+  });
+
+  it('坏四角被拒（错误文案里带片段 id）', () => {
+    const good = identityQuad();
+    const cases: [string, unknown][] = [
+      ['少一个角', { tl: good.tl, tr: good.tr, bl: good.bl }],
+      ['角不是数组', { ...good, tl: '0,0' }],
+      ['角长度不是 2', { ...good, tl: [0, 0, 0] }],
+      ['角里有 NaN', { ...good, bl: [0, NaN] }],
+      ['角里有 Infinity', { ...good, br: [Infinity, 1] }],
+      ['不是对象', '#fff'],
+      ['是数组', [0, 0]],
+    ];
+    for (const [name, bad] of cases) {
+      const clip = sourceClip({ quad: bad });
+      const p = withClip(clip);
+      expect(() => validateProject(p), name).toThrow((clip as { id: string }).id);
+      expect(() => validateProject(p), name).toThrow(/四角/);
+    }
+  });
+
+  it('v6 → v7 是恒等迁移：key / quad 原样保留，版本抬到 7', () => {
+    const key = { ...defaultKeySettings(), color: '#123abc' };
+    // 一般透视四边形（含负坐标，验证迁移 / 校验不会顺手夹到 [0,1]）。
+    const quad: QuadCorners = {
+      tl: [-0.1, 0.15], tr: [0.9, 0.2], br: [1.05, 0.95], bl: [0, 0.8],
+    };
+    const p = withClip(sourceClip({ key, quad }));
+    p.schemaVersion = 6;
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(out.schemaVersion).toBe(7);
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'source') throw new Error('unreachable');
+    expect(clip.key).toEqual(key);
+    expect(clip.quad).toEqual(quad);
+  });
+
+  it('cloneProject 保留新字段，且是深拷贝', () => {
+    const p = withClip(sourceClip({ key: defaultKeySettings(), quad: identityQuad() }));
+    const copy = cloneProject(p);
+    const clip = copy.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'source') throw new Error('unreachable');
+    expect(clip.key).toEqual(defaultKeySettings());
+    expect(clip.quad).toEqual(identityQuad());
+    // 撤销栈按整份 JSON 深拷贝存储，改副本不能影响原工程。
+    clip.key!.color = '#000000';
+    const orig = p.tracks[0]!.clips[0]!;
+    if (orig.kind !== 'source') throw new Error('unreachable');
+    expect(orig.key!.color).toBe('#00ff00');
   });
 });

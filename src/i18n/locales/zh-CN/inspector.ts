@@ -42,6 +42,35 @@ export const inspector = {
   /* 烘焙入参不可打关键帧：`{label}` 是参数名。 */
   'insp.bakedParamTip': '{label}（烘焙入参，不可打关键帧）',
 
+  /* ------------------------------------------------ 抠图（色键） */
+  /* 片段级图像处理，不是特效片段：只处理这一层自己的 alpha（placement pass）。
+     与 `quad` 同属「片段自身的属性」，所以 0..1 的滑杆语义与画面上的结果直接对应。 */
+  'insp.keying': '抠图',
+  'insp.keyingEnable': '启用抠图',
+  'insp.keyingDisable': '关闭抠图',
+  'insp.keyColor': '键色',
+  'insp.keyPick': '吸管取色',
+  'insp.keyPickTip': '在预览画面上点击要抠掉的颜色',
+  'insp.keyPickHint': '吸管取色：在预览画面上点击要抠掉的颜色（Esc 取消）',
+  'insp.keyPickDone': '已取色 {color}',
+  'insp.keyPickFailed': '取色失败：画面尚未就绪',
+  'insp.keyTolerance': '容差',
+  'insp.keyToleranceTip': '颜色距离小于它的像素完全透明',
+  'insp.keySoftness': '柔边',
+  'insp.keySoftnessTip': '容差之外这段距离里按比例过渡到不透明',
+  'insp.keySpill': '溢色抑制',
+  'insp.keySpillTip': '把边缘上残留的键色反光往中性压',
+  'insp.keyEdit': '修改抠图参数',
+
+  /* ------------------------------------------------ 四角调整（透视变形） */
+  'insp.quad': '四角调整',
+  'insp.quadEnable': '启用四角调整',
+  'insp.quadDisable': '关闭四角调整',
+  'insp.quadAdjust': '调整四角',
+  'insp.quadHint': '在预览画面里拖动四角或四边中点；拖动期间按 Esc 取消。',
+  'insp.quadReset': '重置四角',
+  'insp.quadResetTip': '四角回到默认位置（一笔撤销）',
+
   /* ------------------------------------------------ 特效链 */
   'insp.addEffect': '添加特效',
   'insp.removeEffect': '删除特效',

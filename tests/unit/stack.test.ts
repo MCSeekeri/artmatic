@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildStack, walkOps, type RenderOp } from '../../src/engine/stack';
+import { buildStack, walkOps, type RenderOp, type ResolvedSource } from '../../src/engine/stack';
 import { createDemoProject } from '../../src/core/demo-project';
+import { quadInverseMatrix } from '../../src/core/quad';
 import {
   defaultProject,
+  identityQuad,
   newId,
   type EffectClip,
   type Project,
@@ -429,5 +431,72 @@ describe('buildStack：影响深度（作用域组）', () => {
       ['c', 0],
       ['b', 1],
     ]);
+  });
+});
+
+/* ------------------------------------------- 片段级图像处理：key / quad（v7） */
+
+/**
+ * 单个 source 片段 → 它在 t=1 求值出的 `op.source`。
+ *
+ * 这两个字段的解析只在 `resolveSource` 里做一次（不做曲线），所以单测直接看
+ * ResolvedSource 就够 —— compositor 只是把字段原样上传成 uniform。
+ */
+function sourceOf(clip: SourceClip): ResolvedSource {
+  const p = defaultProject('片段级图像处理');
+  p.duration = 10;
+  p.tracks.push({ kind: 'visual', id: 'v', name: 'V1', enabled: true, clips: [clip] });
+  const op = buildStack(p, 1)[0]!;
+  if (!op || op.type !== 'source') throw new Error('应为 source op');
+  return op.source;
+}
+
+describe('buildStack：key / quad 求值', () => {
+  it('clip.key 原样带到 op.source.key（同一引用，UI 改参数下一帧即生效）', () => {
+    const clip = srcClip('keyed');
+    clip.key = { color: '#00ff00', tolerance: 0.25, softness: 0.12, spill: 0.5 };
+    const source = sourceOf(clip);
+    expect(source.key).toBe(clip.key);
+    expect(source.key).toEqual({ color: '#00ff00', tolerance: 0.25, softness: 0.12, spill: 0.5 });
+  });
+
+  it('没有 key 时不带该字段（缺省 = 不抠）', () => {
+    expect(sourceOf(srcClip('plain')).key).toBeUndefined();
+  });
+
+  it('非恒等 quad → quadInverse = quadInverseMatrix(quad)（逐元素）', () => {
+    const clip = srcClip('warped');
+    // 梯形：上边下压。刻意选非对称的四边形，单应不是仿射。
+    clip.quad = { tl: [0.25, 0.25], tr: [0.75, 0.25], br: [1, 1], bl: [0, 1] };
+    const expected = quadInverseMatrix(clip.quad)!;
+    const got = sourceOf(clip).quadInverse;
+    expect(expected).toHaveLength(9);
+    expect(got).toHaveLength(9);
+    for (let i = 0; i < 9; i += 1) expect(got![i]!).toBeCloseTo(expected[i]!, 12);
+  });
+
+  it('identity quad → 不带 quadInverse（compositor 走 u_quadOn=0 的旧算式）', () => {
+    const clip = srcClip('identity');
+    clip.quad = identityQuad();
+    expect(sourceOf(clip).quadInverse).toBeUndefined();
+  });
+
+  it('退化 quad（三点共线）→ quadInverse 为 null（按「不调整」渲染，不丢层）', () => {
+    const clip = srcClip('degenerate');
+    // tl / tr / bl 都在 y=0.5 上 → 单应不可逆
+    clip.quad = { tl: [0, 0.5], tr: [0.5, 0.5], br: [1, 1], bl: [1, 0.5] };
+    expect(sourceOf(clip).quadInverse).toBeNull();
+  });
+
+  it('转场两侧各自带自己的 key / quad（placement 对两侧各做一次，互不串）', () => {
+    const { p, from, to } = transitionProject();
+    from.key = { color: '#00ff00', tolerance: 0.3, softness: 0.1, spill: 0.4 };
+    to.quad = { tl: [0.1, 0], tr: [0.9, 0], br: [1, 1], bl: [0, 1] };
+    const op = buildStack(p, 1.6)[0]!;
+    if (op.type !== 'transition') throw new Error('应为 transition');
+    expect(op.from.key).toBe(from.key);
+    expect(op.from.quadInverse).toBeUndefined();
+    expect(op.to.key).toBeUndefined();
+    expect(op.to.quadInverse).toHaveLength(9);
   });
 });

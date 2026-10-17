@@ -31,6 +31,7 @@ import ColorField from '../controls/ColorField.svelte';
   import { editorState } from './editor-state.svelte';
   import { createTypographyActions } from './actions';
   import { MIX_BLENDS, type MixBlend, type Paint, type Stroke } from '../../typography/document';
+  import { defaultKeySettings, type KeySettings } from '../../core/image-fx';
   import { resolveThemeColor, themeById } from '../../typography/theme';
   import { generatorById, mergeParams } from '../../typography/svg-gen';
   import { visibleParams } from '../../effects/types';
@@ -95,6 +96,8 @@ import ColorField from '../controls/ColorField.svelte';
     const el = sel[0]!;
     return {
       count: sel.length,
+      /** 当前元素 id（四角模式要按元素 id 切换）。 */
+      id: el.id,
       kind: el.kind,
       frame: { ...el.frame },
       opacity: el.opacity,
@@ -115,6 +118,26 @@ import ColorField from '../controls/ColorField.svelte';
           ? { id: el.gen.id, seed: el.gen.seed, params: { ...el.gen.params } }
           : null,
       genSpec: el.kind === 'shape' ? generatorById(el.gen?.id) : null,
+      /**
+       * 图片专有：抠图 / 四角。
+       *
+       * 深拷一份：面板只读、写入走 actions / live 手势，且模板要靠**新对象**
+       * 才更新（元素是原地改的，见文件头的多选说明）。
+       */
+      image:
+        el.kind === 'image'
+          ? {
+              key: el.key ? { ...el.key } : null,
+              quad: el.quad
+                ? {
+                    tl: [...el.quad.tl] as [number, number],
+                    tr: [...el.quad.tr] as [number, number],
+                    br: [...el.quad.br] as [number, number],
+                    bl: [...el.quad.bl] as [number, number],
+                  }
+                : null,
+            }
+          : null,
     };
   });
 
@@ -134,6 +157,30 @@ import ColorField from '../controls/ColorField.svelte';
   const multi = $derived((model?.count ?? 0) > 1);
   /** 旋转：模型存弧度，面板显示度（一位小数）。 */
   const rotDeg = $derived(Math.round((((model?.frame.rot ?? 0) * 180) / Math.PI) * 10) / 10);
+
+  /* ------------------------------------------------- 图片：抠图 / 四角 */
+
+  /**
+   * 抠图参数的两条写入路径（与文字输入的「拖动实时 / 松手一笔」同构）。
+   *
+   * 滑杆的 `oninput` 每移动一格就写文档，走 `live`（**不入撤销栈**）；
+   * `onchange`（松手）把这一段结算成一笔。整段用 `beginGesture` 打开事务，
+   * 中途不 commit —— 每次 commit 都拍一次工程快照，拖一个滑杆会塞几十条记录。
+   */
+  function keyLive(id: string, patch: Partial<KeySettings>): void {
+    if (!editorState.gestureActive) editorState.beginGesture();
+    editorState.live((doc) => {
+      const el = doc.elements.find((x) => x.id === id);
+      if (!el || el.kind !== 'image') return;
+      if (!el.key) el.key = defaultKeySettings();
+      Object.assign(el.key, patch);
+    });
+  }
+
+  function keyCommit(id: string, patch: Partial<KeySettings>): void {
+    keyLive(id, patch);
+    if (editorState.gestureActive) editorState.endGesture(tr('typo.undo.key'));
+  }
 </script>
 
 {#snippet colorRow(label: string, value: string, testid: string, oninput: (v: string) => void)}
@@ -246,6 +293,130 @@ import ColorField from '../controls/ColorField.svelte';
           onchange={(v) => actions.setBlend(v as MixBlend)}
         />
       </Field>
+
+      {#if model.kind === 'image' && model.image}
+        <!--
+          抠图 / 四角：与时间轴片段上的同名能力**同一套语义**（同一个
+          `core/image-fx.ts` 的色键公式与单应数学），差别只是这里作用在排版
+          文档里的一张图片元素上、由 CPU 处理（snapDOM 会丢掉 matrix3d，
+          见 typography/image-fx.ts 的文件头）。
+        -->
+        <h4 class="prop-sec">{tr('typo.propKeying')}</h4>
+        <Field label={tr('typo.propKeyEnable')} labelWidth={74}>
+          <Checkbox
+            checked={!!model.image.key}
+            label={tr('typo.propKeyEnable')}
+            testid="prop-key-enable"
+            onchange={(v) => actions.setImageKey(v)}
+          />
+        </Field>
+        {#if model.image.key}
+          {@const k = model.image.key}
+          <Field label={tr('typo.propKeyColor')} labelWidth={74}>
+            <ColorField
+              label={tr('typo.propKeyColor')}
+              value={k.color}
+              {theme}
+              testid="prop-key-color"
+              onchange={(v) => actions.patchImageKey({ color: resolveThemeColor(v, theme) })}
+            />
+          </Field>
+          <Field label={tr('typo.propKeyTolerance')} labelWidth={74}>
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={k.tolerance}
+              ariaLabel={tr('typo.propKeyTolerance')}
+              testid="prop-key-tolerance"
+              oninput={(v) => keyLive(model.id, { tolerance: v })}
+              onchange={(v) => keyCommit(model.id, { tolerance: v })}
+            />
+            <NumberInput
+              value={k.tolerance}
+              min={0}
+              max={1}
+              step={0.01}
+              width={58}
+              testid="prop-key-tolerance-num"
+              oninput={(v) => keyLive(model.id, { tolerance: v })}
+              onchange={(v) => keyCommit(model.id, { tolerance: v })}
+            />
+          </Field>
+          <Field label={tr('typo.propKeySoftness')} labelWidth={74}>
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={k.softness}
+              ariaLabel={tr('typo.propKeySoftness')}
+              testid="prop-key-softness"
+              oninput={(v) => keyLive(model.id, { softness: v })}
+              onchange={(v) => keyCommit(model.id, { softness: v })}
+            />
+            <NumberInput
+              value={k.softness}
+              min={0}
+              max={1}
+              step={0.01}
+              width={58}
+              testid="prop-key-softness-num"
+              oninput={(v) => keyLive(model.id, { softness: v })}
+              onchange={(v) => keyCommit(model.id, { softness: v })}
+            />
+          </Field>
+          <Field label={tr('typo.propKeySpill')} labelWidth={74}>
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={k.spill}
+              ariaLabel={tr('typo.propKeySpill')}
+              testid="prop-key-spill"
+              oninput={(v) => keyLive(model.id, { spill: v })}
+              onchange={(v) => keyCommit(model.id, { spill: v })}
+            />
+            <NumberInput
+              value={k.spill}
+              min={0}
+              max={1}
+              step={0.01}
+              width={58}
+              testid="prop-key-spill-num"
+              oninput={(v) => keyLive(model.id, { spill: v })}
+              onchange={(v) => keyCommit(model.id, { spill: v })}
+            />
+          </Field>
+        {/if}
+
+        <h4 class="prop-sec">{tr('typo.propQuad')}</h4>
+        <Field label={tr('typo.propQuadEnable')} labelWidth={74}>
+          <Checkbox
+            checked={!!model.image.quad}
+            label={tr('typo.propQuadEnable')}
+            testid="prop-quad-enable"
+            onchange={(v) => actions.setImageQuad(v)}
+          />
+        </Field>
+        {#if model.image.quad}
+          <Field label={tr('typo.propQuadEdit')} labelWidth={74}>
+            <Checkbox
+              checked={editorState.quadEditId === model.id}
+              label={tr('typo.propQuadEdit')}
+              testid="prop-quad-edit"
+              onchange={(v) => editorState.setQuadEdit(v ? model.id : null)}
+            />
+            <Button
+              label={tr('typo.propQuadReset')}
+              icon="rotate-ccw"
+              variant="outline"
+              testid="prop-quad-reset"
+              onclick={() => actions.resetImageQuad()}
+            />
+          </Field>
+          <p class="props-note">{tr('typo.propQuadHint')}</p>
+        {/if}
+      {/if}
 
       {#if model.kind === 'shape'}
         <!--

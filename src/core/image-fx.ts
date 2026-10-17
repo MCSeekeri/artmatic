@@ -1,0 +1,144 @@
+/**
+ * image-fx.ts — 图片的**元素级**图像处理：简易抠图（色键）与四角透视。
+ *
+ * 两个能力在时间轴上属于 `SourceClip`（`key` / `quad`，走 GPU 的 placement
+ * pass）；而排版文档里的图片元素是 DOM，没有那条 pass，只能自己在像素上算。
+ * 本文件就是那份**唯一的 CPU 实现**：
+ *
+ *  - 色键公式与 `engine/placement.frag.ts` 逐字对齐（YCbCr 色度差为主 +
+ *    亮度差 ×1/2，容差 / 柔边各吃「距离」的一半，溢色抑制往亮度靠）；
+ *  - 单应数学复用 `core/quad.ts`（`quadInverseMatrix` / 恒等判据），不另写一套。
+ *
+ * **本文件不得有任何运行时 import**：`QuadCorners` / `KeySettings` 在这里定义
+ * （schema 再 re-export），而 `typography/document.ts` 与 `core/quad.ts` 都要
+ * 引用它们。任何运行期依赖都会把 `schema.ts` → `i18n`（里面有 `$state`）
+ * 拖进纯数学模块，单测与 E2E 都跑不起来。
+ *
+ * 为什么类型定义从 `schema.ts` 搬到这里：`typography/document.ts` 需要给
+ * `ImageElement` 加同样两个字段，而 `schema.ts` 已经 import 了
+ * `typography/document.ts`。类型可以循环（编译期擦除），但**运行时函数**
+ * （`defaultKeySettings` / `identityQuad`）不能 —— 所以把定义与默认值放在这个
+ * 谁都不依赖的叶子里。
+ */
+
+/** 简易抠图（色键）参数。四项语义见 `engine/placement.frag.ts` 的文件头。 */
+export interface KeySettings {
+  /** 要抠掉的颜色，`#rrggbb`。 */
+  color: string;
+  /** 色度距离容差（0..1），距离小于它的像素完全透明。 */
+  tolerance: number;
+  /** 柔边宽度（0..1）。 */
+  softness: number;
+  /** 溢色抑制（0..1）。 */
+  spill: number;
+}
+
+/**
+ * 四角调整（透视变形）：把默认矩形的四个角拖到这四个位置。
+ *
+ * 坐标在**层空间**：`(0,0)` = 矩形左上、`(1,1)` = 右下（左上原点、v 向下）。
+ * 每个角是 `[x, y]`。渲染按「单位方 → 四角」单应的**逆映射**采样。
+ */
+export interface QuadCorners {
+  tl: [number, number];
+  tr: [number, number];
+  br: [number, number];
+  bl: [number, number];
+}
+
+/**
+ * 抠图参数的出厂值：纯绿幕 + 适中的容差 / 柔边 / 溢色抑制。
+ *
+ * 选绿幕而不是「黑 / 白」：算法艺术与故障艺术里大块纯绿背景最少见，
+ * 默认值误伤画面的概率最低。
+ */
+export function defaultKeySettings(): KeySettings {
+  return { color: '#00ff00', tolerance: 0.25, softness: 0.12, spill: 0.5 };
+}
+
+/** 四角调整的恒等值：四角 = 单位方四角（= 不调整）。 */
+export function identityQuad(): QuadCorners {
+  return { tl: [0, 0], tr: [1, 0], br: [1, 1], bl: [0, 1] };
+}
+
+/** `#rrggbb` → 0..1 的三通道。坏颜色回落黑（调用点已由 schema 挡过一遍）。 */
+export function hexToRgb01(hex: string): [number, number, number] {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return [0, 0, 0];
+  const n = Number.parseInt(m[1]!, 16);
+  return [((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255];
+}
+
+/** GLSL 的 `smoothstep`。`edge0 === edge1` 时退化成阶跃（GLSL 未定义，这里给可预测的行为）。 */
+export function smoothstep(edge0: number, edge1: number, x: number): number {
+  const span = edge1 - edge0;
+  if (!(span > 0)) return x < edge0 ? 0 : 1;
+  const t = Math.max(0, Math.min(1, (x - edge0) / span));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * 一个像素「保留多少」（0 = 完全抠掉，1 = 原样）。
+ *
+ * `r,g,b` 是 **0..1**。公式逐字对应 `placement.frag.ts::keyDistance` + `main`
+ * 里的 `keep`（改那里必须同步这里，否则「排版里抠得干净、时间轴上边缘发绿」）。
+ */
+export function keyKeep(r: number, g: number, b: number, key: KeySettings): number {
+  const [kr, kg, kb] = hexToRgb01(key.color);
+  // BT.601 色差分量：亮度被剥掉，阴影 / 高光下的同一背景落到同一个色度上。
+  const cr = -0.1687 * r - 0.3313 * g + 0.5 * b;
+  const cg = 0.5 * r - 0.4187 * g - 0.0813 * b;
+  const kcr = -0.1687 * kr - 0.3313 * kg + 0.5 * kb;
+  const kcg = 0.5 * kr - 0.4187 * kg - 0.0813 * kb;
+  const dcx = cr - kcr;
+  const dcy = cg - kcg;
+  const dy = 0.299 * (r - kr) + 0.587 * (g - kg) + 0.114 * (b - kb);
+  const dist = Math.sqrt(dcx * dcx + dcy * dcy + 0.25 * dy * dy);
+  // 与 GLSL 同口径：t0 = 容差/2、宽度 = 柔边/2（下限 1e-4 防除数 0）。
+  const t0 = key.tolerance * 0.5;
+  const w = Math.max(key.softness * 0.5, 1e-4);
+  return smoothstep(t0, t0 + w, dist);
+}
+
+/** 亮度（BT.601），溢色抑制用。 */
+export function luma(r: number, g: number, b: number): number {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/**
+ * 就地给一份 RGBA 字节（0..255，canvas `ImageData` 的布局）上色键。
+ *
+ * 与 GLSL 一样：`a *= keep`，rgb 按 `spill * (1 - keep)` 往亮度靠。
+ * **不预乘**：`ImageData` 是非预乘的，改 alpha 不改 rgb 才是正确的边缘色
+ * （预乘语义下边缘会朝黑/白偏，那正是「抠出来的边缘发脏」）。
+ */
+export function applyKeyToRgba(
+  data: Uint8ClampedArray,
+  key: KeySettings,
+): void {
+  const [kr, kg, kb] = hexToRgb01(key.color);
+  const kcr = -0.1687 * kr - 0.3313 * kg + 0.5 * kb;
+  const kcg = 0.5 * kr - 0.4187 * kg - 0.0813 * kb;
+  const t0 = key.tolerance * 0.5;
+  const w = Math.max(key.softness * 0.5, 1e-4);
+  const spill = key.spill;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]! / 255;
+    const g = data[i + 1]! / 255;
+    const b = data[i + 2]! / 255;
+    const dcx = -0.1687 * r - 0.3313 * g + 0.5 * b - kcr;
+    const dcy = 0.5 * r - 0.4187 * g - 0.0813 * b - kcg;
+    const dy = 0.299 * (r - kr) + 0.587 * (g - kg) + 0.114 * (b - kb);
+    const dist = Math.sqrt(dcx * dcx + dcy * dcy + 0.25 * dy * dy);
+    const keep = smoothstep(t0, t0 + w, dist);
+    if (keep >= 1) continue;
+    data[i + 3] = data[i + 3]! * keep;
+    if (spill > 0 && keep < 1) {
+      const l = luma(r, g, b) * 255;
+      const k = spill * (1 - keep);
+      data[i] = data[i]! + (l - data[i]!) * k;
+      data[i + 1] = data[i + 1]! + (l - data[i + 1]!) * k;
+      data[i + 2] = data[i + 2]! + (l - data[i + 2]!) * k;
+    }
+  }
+}

@@ -57,6 +57,7 @@ import {
   type TypographyGroup,
 } from './document';
 import { shapeGeometry } from './shapes';
+import { ensureImageFx, fxKey, imageCanvasFor, imageNeedsFx } from './image-fx';
 import { OFFLINE_BG, OFFLINE_ICON_PATHS, OFFLINE_INK } from '../core/offline-media';
 
 export interface BuildDocOptions {
@@ -87,6 +88,13 @@ export interface BuildDocOptions {
    * contenteditable（文档元素默认是 `pointer-events: none`，否则收不到焦点）。
    */
   editingId?: string | null;
+  /**
+   * 图片元素的抠图 / 四角处理**异步完成**时调用（见 `typography/image-fx.ts`）。
+   *
+   * 舞台必须传（DOM 不会自己重绘）；光栅化那条路不用它 —— 它在截图前
+   * `await ensureDocImagesFx()`，拿到的一定是处理完的结果。
+   */
+  onImageFxReady?: () => void;
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -274,15 +282,30 @@ function buildContent(
     if (opts.isImageOffline?.(el.assetId)) return buildOfflineImage(el, opts.offlineLabel ?? '');
     return null;
   }
-  return buildImageNode(el, url);
+  return buildImageNode(el, url, opts);
 }
 
-/** 图片元素的内容节点（`<img>` + 外壳）。build 与 sync 共用。 */
-function buildImageNode(el: ImageElement, url: string): HTMLElement {
+/**
+ * 图片元素的内容节点（外壳 + `<img>` 或处理后的 `<canvas>`）。build 与 sync 共用。
+ *
+ * 有抠图 / 非恒等四角时走 canvas（见 `typography/image-fx.ts` 的文件头：
+ * snapDOM 会丢 `matrix3d`，但保留 canvas）。处理是异步的：未就绪先显示**原图**，
+ * 就绪后由 `onImageFxReady` 通知宿主重绘 —— 不让用户看到空白。
+ */
+function buildImageNode(el: ImageElement, url: string, opts: BuildDocOptions): HTMLElement {
   const { wrapper, img: imgDecls } = imageStyle(el);
   const wrap = document.createElement('div');
   wrap.className = 'typo-image';
   applyDecls(wrap, wrapper);
+
+  if (imageNeedsFx(el)) {
+    const cv = fxCanvasNode(el, url);
+    if (cv) {
+      wrap.appendChild(cv);
+      return wrap;
+    }
+    void ensureImageFx(el, url, opts.onImageFxReady);
+  }
 
   const img = document.createElement('img');
   img.src = url;
@@ -291,6 +314,25 @@ function buildImageNode(el: ImageElement, url: string): HTMLElement {
   applyDecls(img, imgDecls);
   wrap.appendChild(img);
   return wrap;
+}
+
+/**
+ * 处理后的 canvas 节点；未就绪返回 null。
+ *
+ * `data-typo-fx` 记的是**产出这张位图的键**：就地同步靠它判断「参数 / 尺寸
+ * 变了没有」—— 只看键，不再单独比宽高（键里已经含 `WxH`）。
+ */
+function fxCanvasNode(el: ImageElement, url: string): HTMLCanvasElement | null {
+  const key = fxKey(el, url);
+  const cv = imageCanvasFor(el, url);
+  if (!cv) return null;
+  cv.dataset.typoFx = key;
+  /*
+   * **不能复用 `imageStyle().img`**：这张位图已经是「按 crop 裁剪 + fit 摆放」
+   * 之后的结果（尺寸就是元素框），再套一次 crop 的百分比放大 / 偏移会二次裁切。
+   */
+  applyDecls(cv, { width: '100%', height: '100%', display: 'block' });
+  return cv;
 }
 
 /**
@@ -508,7 +550,7 @@ function syncElement(
   if (wasOffline) {
     if (!offline && url) {
       // 媒体回来了：换回真图（几何声明下面统一刷）。
-      content.replaceChildren(buildImageNode(el, url));
+      content.replaceChildren(buildImageNode(el, url, opts));
       content.removeAttribute(OFFLINE_ATTR);
     } else {
       // 仍在占位态（含「既没就绪也没脱机」的加载中间态 —— 那时继续显示
@@ -518,12 +560,40 @@ function syncElement(
     }
   }
 
-  const img = content.querySelector('img');
-  if (!img) return;
   const { wrapper, img: imgDecls } = imageStyle(el);
   applyDecls(content, wrapper);
+
+  /*
+   * `<img>` ↔ `<canvas>` 的状态迁移（抠图 / 四角开关、参数变化、就绪）。
+   *
+   * 与 offline 同理：这些变化**不改 `docSignature`**（签名只看结构），所以
+   * 必须在这里就地换节点。判据是 canvas 的**位图尺寸**也要对得上 ——
+   * 元素框改了大小，旧 canvas 的位图是旧尺寸，直接留着会糊。
+   */
+  const child = content.firstElementChild as HTMLElement | null;
+  const canvasEl = child && child.tagName === 'CANVAS' ? (child as HTMLCanvasElement) : null;
+  const wantsFx = url !== null && imageNeedsFx(el);
+
+  if (wantsFx && url) {
+    if (!canvasEl || canvasEl.dataset.typoFx !== fxKey(el, url)) {
+      const cv = fxCanvasNode(el, url);
+      if (cv) {
+        content.replaceChildren(cv);
+      } else {
+        // 未就绪：保留现有节点（原图或上一次的结果），处理完成后靠回调重绘。
+        void ensureImageFx(el, url, opts.onImageFxReady);
+      }
+    }
+  } else if (canvasEl && url) {
+    // 关掉 fx（删了 key / quad 回恒等）：换回普通 `<img>` + CSS。
+    // url 为空（素材还在加载）时保留现有节点，别造一个空 src 的 img。
+    content.replaceChildren(buildImageNode(el, url, opts));
+  }
+
+  const img = content.querySelector('img');
+  if (!img || !url) return;
   applyDecls(img, imgDecls);
-  if (url && img.getAttribute('src') !== url) img.setAttribute('src', url);
+  if (img.getAttribute('src') !== url) img.setAttribute('src', url);
 }
 
 /**

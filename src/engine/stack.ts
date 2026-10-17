@@ -50,11 +50,13 @@
 
 import { evalCurve } from '../core/curve';
 import { fadeWeight } from '../core/clips';
+import { isIdentityQuad, quadInverseMatrix } from '../core/quad';
 import { transitionAt } from '../core/transitions';
 import type { BeatGrid } from '../core/time';
 import type {
   BlendMode,
   EffectClip,
+  KeySettings,
   Project,
   SourceClip,
   VisualTrack,
@@ -66,6 +68,24 @@ export interface ResolvedSource {
   opacity: number;
   transform: { x: number; y: number; sx: number; sy: number; rot: number };
   blend: BlendMode;
+  /**
+   * 简易抠图设置（`SourceClip.key` 的**原样引用**）。缺省 = 不抠。
+   *
+   * 抠图参数不支持关键帧，所以这里原样带过去、每帧重建对象只是给 GC 添活；
+   * 真正消费它的是 `compositor.placeLayer`（一次 placement pass，见
+   * `placement.frag.ts` 文件头）。
+   */
+  key?: KeySettings;
+  /**
+   * 四角调整的**逆单应**（行主序 3×3，`core/quad.ts`）。缺省 = 不调整。
+   *
+   * - identity / 缺省 → **不带**这个字段：compositor 传 `u_quadOn = 0`，走与
+   *   改动前完全相同的算式（关闭状态逐位一致是全项目回归的前提）。
+   * - 非 identity 可逆 → 9 个数（CPU 算一次，着色器只做齐次除法）。
+   * - 非 identity 但退化（三点共线 / 面积 0）→ `null`：同样按「不调整」渲染，
+   *   **不丢层**。用户把四角拖成一条线时不该让图层整个消失。
+   */
+  quadInverse?: number[] | null;
 }
 
 /**
@@ -150,11 +170,14 @@ export function paramWithCurve(
  * 转场两侧都用它——注意**两侧各自的 fadeSec 斜坡照常生效**（窗口内也一样）。
  * 出画片段的 fade-out 恰好在剪切点归零，再叠上转场就是「二次淡出」，
  * 检查器对同时设了两者的情况给提示，机制上不做特判。
+ *
+ * `key` / `quad` 也在这一步解析，于是转场窗口里 from / to 各自带着自己的抠图与
+ * 四角 —— 转场通路对两侧各调一次 placement，它们天然相互独立。
  */
 function resolveSource(clip: SourceClip, t: number, grid: BeatGrid): ResolvedSource {
   const opacity =
     paramWithCurve(clip, 'opacity', clip.opacity, t, grid) * fadeWeight(clip, clip.fadeSec, t);
-  return {
+  const out: ResolvedSource = {
     clip,
     opacity,
     transform: {
@@ -166,6 +189,11 @@ function resolveSource(clip: SourceClip, t: number, grid: BeatGrid): ResolvedSou
     },
     blend: clip.blend,
   };
+  // 只在真的有的时候才挂字段：identity / 缺省必须与旧路径**逐字节相同**
+  // （多带一个 `quadInverse: undefined` 对渲染没影响，但守卫与快照会看到差别）。
+  if (clip.key) out.key = clip.key;
+  if (clip.quad && !isIdentityQuad(clip.quad)) out.quadInverse = quadInverseMatrix(clip.quad);
+  return out;
 }
 
 export function buildStack(project: Project, t: number, opts?: BuildStackOptions): RenderOp[] {

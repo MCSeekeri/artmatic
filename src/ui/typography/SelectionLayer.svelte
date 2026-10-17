@@ -24,11 +24,20 @@
      * 行为。所以编辑态只保留一圈 6px 的边框环（+ 缩放把手）可拖。
      */
     editing?: boolean;
+    /**
+     * 四角调整模式：**只留外框**，不画 8 个缩放把手与旋转把手。
+     *
+     * 四角手柄会落在框的四个角上，与缩放把手**完全重合** —— 两套同时显示时
+     * 用户分不清拖的是「缩放」还是「透视」。模式切换是显式的（属性面板的
+     * 「在画布上调整」），所以这里不需要再猜。
+     */
+    quadEdit?: boolean;
     onMove: (e: PointerEvent) => void;
     onHandle: (handle: HandleId, e: PointerEvent) => void;
     onRotate: (e: PointerEvent) => void;
   }
-  const { rect, zoom, editing = false, onMove, onHandle, onRotate }: Props = $props();
+  const { rect, zoom, editing = false, quadEdit = false, onMove, onHandle, onRotate }: Props =
+    $props();
 
   /** 弧度 → CSS。与 elementStyle 用同一套角度约定，绕中心转（默认 transform-origin）。 */
   const rotCss = $derived(rect?.rot ? `rotate(${(rect.rot * 180) / Math.PI}deg)` : undefined);
@@ -71,30 +80,32 @@
       {/each}
     {/if}
 
-    {#each HANDLES as h (h)}
+    {#if !quadEdit}
+      {#each HANDLES as h (h)}
+        <i
+          class="handle {h}"
+          role="presentation"
+          data-testid={`typo-handle-${h}`}
+          onpointerdown={(e) => {
+            if (e.button !== 0) return;
+            e.stopPropagation();
+            onHandle(h, e);
+          }}
+        ></i>
+      {/each}
+
       <i
-        class="handle {h}"
+        class="rotate"
         role="presentation"
-        data-testid={`typo-handle-${h}`}
+        data-testid="typo-handle-rotate"
+        title={tr('typo.rotateHandle')}
         onpointerdown={(e) => {
           if (e.button !== 0) return;
           e.stopPropagation();
-          onHandle(h, e);
+          onRotate(e);
         }}
       ></i>
-    {/each}
-
-    <i
-      class="rotate"
-      role="presentation"
-      data-testid="typo-handle-rotate"
-      title={tr('typo.rotateHandle')}
-      onpointerdown={(e) => {
-        if (e.button !== 0) return;
-        e.stopPropagation();
-        onRotate(e);
-      }}
-    ></i>
+    {/if}
   </div>
 {/if}
 

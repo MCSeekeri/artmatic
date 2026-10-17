@@ -1,7 +1,8 @@
 # src/core/ —— 纯 TS 内核
 
 无 DOM / 无 WebGL，**必须可单测**。数据模型 · 曲线求值 · 命令栈 · 片段几何（clips）·
-转场钳制 · prng · 颜色 · 位掩码 · 容量预算。它是**全局关键路径** —— 它定死之前不要写时间轴 UI。
+转场钳制 · prng · 颜色 · 位掩码 · 容量预算 · 四角单应（`quad.ts`）。它是**全局关键路径**
+—— 它定死之前不要写时间轴 UI。
 
 **何时读我**：改 `core/**`；动**片段几何 / trim / 切分 / 重叠策略 / 关键帧 / 容量上限**；
 动 `Project` 结构或 `SCHEMA_VERSION` 时。
@@ -14,6 +15,9 @@
 ## 数据模型与求值
 
 音频单独成轨。视觉轨道里混放画面来源与特效。
+
+> 片段级的两个「图像处理」字段（`key` / `quad`，v7 起）见本节末尾 —— 它们**不是特效片段**，
+> 而是 SourceClip 自己的属性（只作用于本层），实现全在 placement pass。
 
 ```ts
 type Track = VisualTrack | SoundTrack        // 命名避开 WebAudio 的 AudioTrack
@@ -51,6 +55,10 @@ interface SourceClip extends ClipBase {
   opacity: number
   transform: { x: number; y: number; sx: number; sy: number; rot: number }
   fit: 'contain' | 'cover' | 'stretch'
+  /** 简易抠图（色键）。缺省 = 不抠；只作用于本层 alpha。见下面的「片段级图像处理」。 */
+  key?: KeySettings
+  /** 四角调整（透视变形）。坐标在**层空间**：默认四角 = 单位方的四个角。 */
+  quad?: QuadCorners
   /** 出画转场，见 `src/effects/AGENTS.md`。窗口以 clip.end 为中心。 */
   transitionOut?: { defId: string; duration: number; values: Record<string, number> }
 }
@@ -70,6 +78,35 @@ interface AudioClip extends ClipBase {
   gain: Curve
 }
 ```
+
+### 片段级图像处理：`key` / `quad`（`SCHEMA_VERSION` 7）
+
+**它们不是特效片段。** 特效片段（EffectClip）是 adjustment layer，作用于下方所有轨的
+合成结果；这两个字段是 SourceClip 自己的属性，只处理**这一层**，实现全在同一次
+placement pass（`src/engine/placement.frag.ts`）。
+
+- `key?: KeySettings` —— 简易抠图（色键）：`{ color, tolerance, softness, spill }`。
+  按颜色距离把**本层**像素变透明（色度差为主、亮度差加权，见 placement 的文件头）。
+  抠掉之后露出一层是什么，由普通合成决定（z 序下面的层）。
+- `quad?: QuadCorners` —— 四角调整（透视变形）：`{ tl, tr, br, bl }`，每个角是 `[x, y]`。
+  坐标在**层空间**：`(0,0)(1,0)(1,1)(0,1)` = 默认图层矩形四角（`fit` / `transform` 之后、
+  透视变形之前）。这样它与 `transform` 的缩放 / 旋转**复合**而不是互相覆盖，用户先摆好
+  图层再拉角依然成立。渲染用「单位方 → 四角」单应的**逆映射**采样（真透视，不是双线性
+  拉伸）。四角退化到不可逆（三点共线 / 面积 0）时按「不调整」渲染 —— **不丢层**。
+- **UI 拖角与渲染采样必须共用同一份纯数学**：`core/quad.ts`（无任何运行时 import，
+  E2E 也直接 import 它算期望值）。判定「恒等」只认 `isIdentityQuad()` —— 各写一份
+  容差的表现是「手柄位置对、画面差半像素」这种没人会查的偏差。
+- 6→7 是**恒等迁移**：两个字段都可选，抬版本号的唯一目的仍然是让旧版打开新版工程时
+  走 `versionTooNew` 显式报错，而不是静默丢掉用户的抠图 / 变形设置（静默数据丢失）。
+- **类型与默认值住在 `core/image-fx.ts`，不在本文件（schema.ts）里定义。**
+  排版文档的 `ImageElement` 也有同样两个字段（见 `src/typography/AGENTS.md`），而
+  `schema.ts` 已经 import 了 `typography/document.ts` —— 定义放在 schema 里会形成
+  **运行时**循环（`defaultKeySettings` / `identityQuad` 是函数，不是类型）。所以：
+  - `KeySettings` / `QuadCorners` / `defaultKeySettings()` / `identityQuad()` 在
+    `core/image-fx.ts`（零运行时 import 的叶子），`schema.ts` 只 re-export；
+  - `core/image-fx.ts` 同时是**色键 CPU 实现的唯一真源**（`keyKeep` /
+    `applyKeyToRgba`）：GLSL（`engine/placement.frag.ts`）与排版图片元素都对着它。
+    改公式必须三处同改（本文件只是说明，不参与运算）。
 
 ---
 

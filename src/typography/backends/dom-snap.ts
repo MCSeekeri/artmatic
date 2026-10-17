@@ -20,6 +20,7 @@
 import { snapdom } from '@zumer/snapdom';
 import { animationSpecs, bakeAnimations } from '../bake-animation';
 import type { FontProvider } from '../font-provider';
+import { ensureDocImagesFx } from '../image-fx';
 import { buildDocDom } from '../render-dom';
 import type { RasterRequest, TextRasterizer } from '../rasterizer';
 
@@ -69,6 +70,13 @@ export class DomSnapRasterizer implements TextRasterizer {
   private async rasterizeOne(req: RasterRequest): Promise<HTMLCanvasElement> {
     // ADR-003 规则 ③：字体没就绪就截图，首帧会用回落字体量度。
     await this.fonts.ensure(req.doc);
+
+    /*
+     * 图片的抠图 / 四角是 CPU 处理的（见 typography/image-fx.ts），必须先等完。
+     * 不等的话截图拿到的是**原图**，而这条产物会按正确的缓存键存下来 ——
+     * 表现是「导出没抠图，而且刷新也不恢复」。
+     */
+    await ensureDocImagesFx(req.doc, req.resolveImage);
 
     const root = buildDocDom(req.doc, {
       forRaster: true,

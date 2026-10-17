@@ -18,6 +18,7 @@ import { appState } from '../app-state.svelte';
 import type { Project, SourceClip } from '../../core/schema';
 import {
   reorderElements,
+  type ImageElement,
   type ShapeElement,
   type TypographyDocument,
   type TypographyElement,
@@ -88,12 +89,36 @@ class TypographyEditorState {
    */
   nodeEditId = $state<string | null>(null);
 
+  /**
+   * 正在做**四角调整**的图片元素 id。null = 不显示四角手柄。
+   *
+   * 与 `nodeEditId` 同一类「更细的编辑态」，也遵守同一条约束：**只在单选时
+   * 成立，选区一变就退出**（见 `setSelection`）。四角手柄与缩放把手在角上
+   * 完全重合，两套同时显示时用户分不清拖的是哪一个 —— 所以进入这个模式时
+   * 选择框只留外框（见 `SelectionLayer` 的 `quadEdit`）。
+   */
+  quadEditId = $state<string | null>(null);
+
   /** 处于顶点 / 控制点编辑态的那个图形元素（不是图形就当作没有）。 */
   get nodeEdit(): ShapeElement | null {
     const id = this.nodeEditId;
     if (!id) return null;
     const el = this.doc?.elements.find((e) => e.id === id);
     return el && el.kind === 'shape' ? el : null;
+  }
+
+  /** 处于四角调整态的那个图片元素（不是图片就当作没有）。 */
+  get quadEdit(): ImageElement | null {
+    const id = this.quadEditId;
+    if (!id) return null;
+    const el = this.doc?.elements.find((e) => e.id === id);
+    return el && el.kind === 'image' ? el : null;
+  }
+
+  /** 进入 / 退出四角调整（传 null 退出）。 */
+  setQuadEdit(id: string | null): void {
+    const el = id ? this.doc?.elements.find((e) => e.id === id) : null;
+    this.quadEditId = el && el.kind === 'image' && !el.locked ? id : null;
   }
 
 
@@ -282,6 +307,7 @@ class TypographyEditorState {
     this.editingTextId = null;
     this.textRange = null;
     this.nodeEditId = null;
+    this.quadEditId = null;
     this.enteredGroupId = null;
   }
 
@@ -293,6 +319,7 @@ class TypographyEditorState {
     this.editingTextId = null;
     this.textRange = null;
     this.nodeEditId = null;
+    this.quadEditId = null;
     this.enteredGroupId = null;
     appState.registerGestureCancel(null);
   }
@@ -304,6 +331,10 @@ class TypographyEditorState {
     if (this.textRange && !ids.includes(this.textRange.elId)) this.textRange = null;
     // 顶点编辑态同理：选的已经不是那个元素了，编辑态自然结束。
     if (this.nodeEditId && !ids.includes(this.nodeEditId)) this.nodeEditId = null;
+    // 四角调整同样只在单选时成立：选区换了就退出（手柄会跟错元素）。
+    if (this.quadEditId && (ids.length !== 1 || ids[0] !== this.quadEditId)) {
+      this.quadEditId = null;
+    }
     // 去重但保序：z 序是有意义的（后选中的应当是最后绘制的）。
     const next = [...new Set(ids)];
     // 被编辑的元素不在新选择集里就收尾（提交在 focusout 里做）。
@@ -331,6 +362,7 @@ class TypographyEditorState {
     this.selectedIds = [];
     this.textRange = null;
     this.nodeEditId = null;
+    this.quadEditId = null;
     this.enteredGroupId = null;
     this.stopEditing();
   }
