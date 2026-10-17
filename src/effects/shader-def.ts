@@ -12,6 +12,7 @@
 import type { EffectClip } from '../core/schema';
 import { beatAtTime, type BeatGrid } from '../core/time';
 import { colorVec3 } from '../core/color';
+import type { GlyphAtlasSpec } from '../engine/glyph-atlas';
 import type { MessageKey } from '../i18n/locales';
 import type { ParamDef } from './types';
 
@@ -290,6 +291,18 @@ export interface EffectShaderDef {
   opaqueOutput?: boolean;
   /** 主 pass 需要 u_feedback（实例的跨帧历史，ping-pong）。 */
   feedback?: boolean;
+  /**
+   * 需要**字形图集**（fragment 声明了 `u_atlas`）时：从参数算出要栅格化的
+   * 字符序列与字体。返回 null = 这一帧不用图集（runner 绑一张全白占位图）。
+   *
+   * 图集由 `engine/glyph-atlas.ts` 建与绑定，与 `u_spectrum` / `u_overlay`
+   * 同一形态：协议只有「声明了这个 sampler，服务就会绑」，runner 里没有
+   * defId 分支，所以主应用与 `/lab/`、离屏缩略图渲染器自动都有。
+   *
+   * 服务同时派发 `u_glyphCount`（字形数）与 `u_glyphCols`（图集每行几格）：
+   * 着色器要按它们算索引与 UV，声明成 `uniform float`。
+   */
+  glyphs?: (values: Record<string, number | string>) => GlyphAtlasSpec | null;
   /**
    * **跨帧状态**（帧间累积的东西，不是每帧独立求值）。
    *

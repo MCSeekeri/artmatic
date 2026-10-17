@@ -162,6 +162,8 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
         // 与参数一样，**每个 pass 都尝试绑频谱**：没声明 u_spectrum 的 program
         // 里 `bindTo` 直接返回，绝大多数特效走的就是这条路径。
         ctx.spectrum?.bindTo(prog, inst.instanceId, ctx.t, delta, values);
+        // 字形图集同理：没声明 u_atlas 的 program 里 bindTo 直接返回。
+        ctx.glyphs?.bindTo(prog, shader.glyphs ? shader.glyphs(values) : null);
         kit.pass(prog, out);
         if (restore) restore();
 
@@ -205,6 +207,9 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
     if (fb) prog.tex('u_feedback', fb.read.tex);
     shader.setUniforms(gl, prog.uniforms, values, uniformCtx);
     ctx.spectrum?.bindTo(prog, inst.instanceId, ctx.t, delta, values);
+    // 字形图集（u_atlas / u_glyphCount / u_glyphCols）。没声明 u_atlas 的特效
+    // 在 `bindTo` 里早退，所以这一行对所有其它特效是零开销。
+    ctx.glyphs?.bindTo(prog, shader.glyphs ? shader.glyphs(values) : null);
 
     if (fb) {
       // 主 pass 写历史，换手，再把刚写的那份拷到链上。

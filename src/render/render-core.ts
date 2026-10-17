@@ -24,6 +24,7 @@ import { Renderer } from '../engine/renderer';
 import { SourceManager } from '../engine/sources';
 import { SpectrumTextures, type SpectrumSource } from '../engine/spectrum-texture';
 import { BoxTracker } from '../engine/box-tracker';
+import { GlyphAtlases } from '../engine/glyph-atlas';
 import { createVideoSourceManager, type VideoSourceManager } from '../engine/video-source';
 import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
@@ -87,6 +88,11 @@ export interface RenderCore {
    * 它持有每实例的探针目标与叠层纹理（见 `src/core/AGENTS.md` 的生命周期一条）。
    */
   tracker: BoxTracker;
+  /**
+   * 字形图集（`u_atlas`）。按 (字符序列, 字体) 缓存纹理，宿主不需要管它；
+   * 暴露出来只为了诊断与 `clear()`。
+   */
+  glyphs: GlyphAtlases;
   /** 算法运行时。暴露出来是为了宿主能换特征来源（`setFeatureSource`）。 */
   algos: AlgoRuntime;
 }
@@ -141,5 +147,12 @@ export function createRenderCore(
   spectrumTextures.setSource(opts.spectrum ?? null);
   renderer.setSpectrumTextures(spectrumTextures);
 
-  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, algos };
+  /*
+   * 字形图集（`u_atlas`）：无条件建。它是纯 CPU 数据 + 一张纹理，没有跨帧
+   * 状态，所以不需要注入口，也不需要 `onSeek` 清理 —— 与频谱「谁供数」不同。
+   */
+  const glyphs = new GlyphAtlases(renderer.kit);
+  renderer.setGlyphAtlases(glyphs);
+
+  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, glyphs, algos };
 }

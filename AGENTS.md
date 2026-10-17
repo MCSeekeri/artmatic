@@ -137,7 +137,8 @@ src/
 ├── engine/        WebGL2：Program / Target / Pass 调度 · 纹理池 · 预览尺寸 · 确定性时钟
 │   ├── media-assets.ts   运行期素材登记（图片 = 已解码 canvas；视频 = Blob / File 引用）
 │   ├── video-source.ts   视频取帧：mediabunny + WebCodecs + 有界纹理缓存
-│   └── video-budget.ts   视频缓存的淘汰决策（纯函数 + 单测，见 `src/core/AGENTS.md`）
+│   ├── video-budget.ts   视频缓存的淘汰决策（纯函数 + 单测，见 `src/core/AGENTS.md`）
+│   └── glyph-atlas.ts    字形图集（u_atlas）：ASCII 字符画的 CPU 侧栅格化
 ├── effects/       声明式特效定义 + GLSL
 │   ├── defs/ · glsl/     「一个特效 = 两个文件」，glob 配对，缺一半启动报错
 │   ├── shader-def.ts     着色器协议：EFFECT_HEAD · 共享 GLSL 头 · floats/colorVec3 · program 命名

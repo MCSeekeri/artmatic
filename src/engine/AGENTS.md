@@ -126,6 +126,23 @@ function buildStack(project: Project, t: number): Stack {
 
 ---
 
+## 字形图集（`glyph-atlas.ts`）
+
+「ASCII 字符画」的 CPU 侧：Canvas2D 栅格化字符 → 一张图集纹理 → `bindTo(prog, spec)`
+（`u_atlas` / `u_glyphCount` / `u_glyphCols`）。与 `spectrum-texture` / `box-tracker`
+同一形态：`engine` 不认识特效，只认 uniform 协议；主应用、`/lab/`、离屏缩略图渲染器
+都从 `createRenderCore` 拿到同一份。
+
+- **按实测覆盖率（alpha 均值）升序摆放字形**。字符的面积占比差一个量级，
+  按输入顺序映射亮度会出现明暗断层 —— 这是「自定义字符集看起来乱」的真因。
+- 按 (字符序列, 字体) 缓存，LRU 8 张；**不含时间**，`onSeek()` 不用清。
+- 建 / 传纹理前先切 `scratchUnit`（同两个邻居，`effects/AGENTS.md` 记过两次事故）。
+- **上传不翻 Y**：图集不是按 `vUv` 采样的，行号由着色器算；`v=0` 就是第 0 行。
+- 内置 5×7 像素字体与本文件同源；方块元素（`█▓▒░▏…`）按几何绘制 ——
+  覆盖率必须精确，走系统字体的话每台机器都不一样。
+
+---
+
 ## 预览
 
 - 预览降质档位（帧率 1×/½/⅓、画质 100/75/50/25%、暂停回全质）**只影响预览**。

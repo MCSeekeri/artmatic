@@ -11,6 +11,7 @@ import { Kit } from './kit';
 import type { BuildStackOptions } from './stack';
 import type { SpectrumTextures } from './spectrum-texture';
 import type { BoxTracker } from './box-tracker';
+import type { GlyphAtlases } from './glyph-atlas';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
 import type { Project } from '../core/schema';
 
@@ -54,6 +55,14 @@ export class Renderer {
    */
   setTracker(tracker: BoxTracker | null): void {
     this.compositor.tracker = tracker;
+  }
+
+  /**
+   * 字形图集（`u_atlas`）。由 `render-core` 装配；它只按 (字符序列, 字体)
+   * 缓存纹理，**不含跨帧状态**，所以 `onSeek()` 不需要清它。
+   */
+  setGlyphAtlases(glyphs: GlyphAtlases | null): void {
+    this.compositor.glyphs = glyphs;
   }
 
   /** 显式回收某个特效实例的追踪状态（片段随工程关闭/删除时用）。 */

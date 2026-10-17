@@ -196,6 +196,30 @@ uniform vec4  u_boxA[12];      // xy = 中心、zw = 半宽半高（均 0..1，�
   不随渲染档位变）。**不要**断言「同一 t 两渲逐字节相同」—— 它持有跨帧状态，
   seek 时清空（与 `feedback` 类特效同一处置）。
 
+### 字形图集（`u_atlas` / `u_glyphCount` / `u_glyphCols`）
+
+「ASCII 字符画」要往每个格子里**画字符**，而 GLSL 里没有字体。走的是与追踪叠加层
+同构的一条 **uniform 协议**（不在 `EffectShaderDef` 里塞纹理字段）：
+
+```
+uniform sampler2D u_atlas;   // 字符图集，每格 64px
+uniform float u_glyphCount;  // 字形数（按覆盖率升序）
+uniform float u_glyphCols;   // 图集每行几格
+```
+
+- 服务是 `engine/glyph-atlas.ts`（`GlyphAtlases`）。判据只有一条：program 声明了
+  `u_atlas` 就干活 —— runner 里没有 defId 分支，其余特效走早退，零开销。
+- **字符序列从哪来**：`EffectShaderDef.glyphs(values)` 返回 `{ text, font }`。
+  它与 `setUniforms` 并列，runner 在**每个 pass** 都调用一次（pre-pass 也能用）。
+- **排序是服务做的**：栅格化后量每个字形的 alpha 均值、升序摆放。着色器只写
+  `index = 亮度 × 字形数` —— **不要在 GLSL 里另排一套**，两处排序必然漂。
+- 图集**不含时间、不含跨帧状态** ⇒ `onSeek()` 不用清；同一 t 两渲逐字节相同。
+- 上传**不翻 Y**（与 `SourceManager.uploadImage` 相反）：图集不是按 `vUv` 直接
+  采样的，行号由着色器算 —— 不翻时 `v = 0` 正好是图集第 0 行。字形内部的上下
+  翻转在着色器里补（`gp.y = 1.0 - gp.y`）。
+- 守卫：`tests/unit/effect-uniforms.test.ts` 的 `GLYPH_BOUND`（这三个 uniform 由
+  服务写，`setUniforms` 不该碰）+ `BINDABLE_SAMPLERS` 里的 `u_atlas`。
+
 **判定「参数有没有接上」的自动关卡**：`tests/unit/effect-uniforms.test.ts` ——
 用伪 gl 跑一遍每个特效的 `setUniforms`，断言「fragment 里声明的每个 uniform 都被写到」
 且「写它的函数类型与声明一致」。它守的是**协议层**（`shader-def.ts` 的 setter 助手），

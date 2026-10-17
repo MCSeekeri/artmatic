@@ -57,6 +57,14 @@ const RUNNER_BOUND = new Set(['u_spectrum']);
 const TRACKER_BOUND = new Set(['u_overlay', 'u_boxCount', 'u_boxA']);
 
 /**
+ * 字形图集服务（`engine/glyph-atlas.ts::bindTo`）负责写的 uniform。
+ *
+ * 与 `TRACKER_BOUND` 同样单列：字形数是**图集的属性**（图集按覆盖率排过序），
+ * `setUniforms` 拿不到它，所以不能要求它被 setUniforms 写到。
+ */
+const GLYPH_BOUND = new Set(['u_atlas', 'u_glyphCount', 'u_glyphCols']);
+
+/**
  * runner **能**绑定的 sampler。声明了别的就没人给它绑 —— 采样会读回未绑定纹理
  * （黑/垃圾），而 GL 自己不会说话。
  */
@@ -66,6 +74,7 @@ const BINDABLE_SAMPLERS = new Set([
   'u_feedback',
   ...RUNNER_BOUND,
   'u_overlay',
+  'u_atlas',
 ]);
 
 interface PassProbe {
@@ -170,7 +179,11 @@ describe('特效接线自检', () => {
     const p = passes.find((x) => x.kind === kind)!;
     const missed = [...p.own.keys()].filter(
       (n) =>
-        !HEAD_OWNED.has(n) && !RUNNER_BOUND.has(n) && !TRACKER_BOUND.has(n) && !written.has(n),
+        !HEAD_OWNED.has(n) &&
+        !RUNNER_BOUND.has(n) &&
+        !TRACKER_BOUND.has(n) &&
+        !GLYPH_BOUND.has(n) &&
+        !written.has(n),
     );
     expect(missed, `${id} 的 ${kind} 声明了却没写 → 这些 uniform 恒为默认值且不报错`).toEqual([]);
   });

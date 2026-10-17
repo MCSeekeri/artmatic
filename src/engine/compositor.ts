@@ -47,6 +47,7 @@ import { bottomScopeBlend, neutralizeBottomBlend } from './scope-blend';
 import type { Kit, Program, Target } from './kit';
 import type { SpectrumTextures } from './spectrum-texture';
 import type { BoxTracker } from './box-tracker';
+import type { GlyphAtlases } from './glyph-atlas';
 import type { BeatGrid } from '../core/time';
 import type { EffectClip, EffectInstance, Project, SourceClip } from '../core/schema';
 
@@ -82,6 +83,12 @@ export interface EffectCtx {
    * 拿不到方框，效果退化成「原样输出」，而不是崩溃。
    */
   tracker: BoxTracker | null;
+  /**
+   * 字形图集（`u_atlas` / `u_glyphCount` / `u_glyphCols`）。由 `render-core` 装配。
+   * `null` = 没有装配 —— 那时声明了 `u_atlas` 的特效读到未绑定 sampler，
+   * 所以正常装配路径上它**恒非空**（`createRenderCore` 无条件创建）。
+   */
+  glyphs: GlyphAtlases | null;
 }
 
 /** 一帧求值的上下文（`runOps` 的递归参数包）：整帧不变，要原样穿过嵌套的作用域组。 */
@@ -196,6 +203,12 @@ export class Compositor {
    */
   public tracker: BoxTracker | null = null;
 
+  /**
+   * 字形图集（`u_atlas`）。同样由 `render-core` 注入：它要读 Canvas2D 与
+   * GL 纹理，属于「谁来供数」，不进构造签名。
+   */
+  public glyphs: GlyphAtlases | null = null;
+
   constructor(
     private readonly kit: Kit,
     public resolve: SourceResolver,
@@ -296,6 +309,7 @@ export class Compositor {
         grid: c.project.beatGrid,
         spectrum: this.spectrum,
         tracker: this.tracker,
+        glyphs: this.glyphs,
       };
       let src = acc;
       let dst = buf;

@@ -31,6 +31,7 @@ export const effects = {
   'fx.tag.hdr': '浮点历史',
 
   /* -------------------------------------------------------- 一句话说明 */
+  'fx.desc.ascii': '把画面重排成一格格字符。',
   'fx.desc.audioBars': '按频谱在画面上画出一排律动柱。',
   'fx.desc.bleach': '抽掉颜色，只留下明暗。',
   'fx.desc.blur': '柔化整幅画面。',

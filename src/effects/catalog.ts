@@ -79,6 +79,7 @@ export interface EffectCatalogEntry {
  * 细节、径向还是运动**，再选底图。选错的表现是缩略图看不出变化。
  */
 export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
+  ascii: { base: 'ramp', descKey: 'fx.desc.ascii', category: 'style' },
   'audio-bars': { base: 'grid', descKey: 'fx.desc.audioBars', category: 'signal', overlay: true },
   bleach: { base: 'bars', descKey: 'fx.desc.bleach', category: 'color' },
   blur: { base: 'photo', descKey: 'fx.desc.blur', category: 'blur' },
