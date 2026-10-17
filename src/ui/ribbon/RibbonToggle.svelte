@@ -14,17 +14,21 @@
     label: string;
     active: boolean;
     size?: RibbonItemSize;
+    /** 与 `itemWidth()` 同源（文字长短决定宽度，见 ribbon-model::labelWidthPx）。 */
+    width?: number;
     disabled?: boolean;
     testid?: string;
     onchange: (active: boolean) => void;
   }
-  const { icon, label, active, size = 'large', disabled = false, testid, onchange }: Props = $props();
+  const { icon, label, active, size = 'large', width, disabled = false, testid, onchange }: Props =
+    $props();
 </script>
 
 <RibbonButton
   {icon}
   {label}
   {size}
+  {width}
   active={active}
   {disabled}
   {testid}

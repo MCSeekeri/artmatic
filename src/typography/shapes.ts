@@ -199,6 +199,11 @@ export interface ShapeBox {
   sides?: number;
   /** shape === 'svg' 时的自定义路径（按 0..100 坐标系 authored）。 */
   path?: string;
+  /**
+   * `shape === 'svg'` 时的填充规则。带洞的路径（环 / 刻度盘 / 嵌套框）必须为
+   * true，否则内圈被 nonzero 填实 —— 生成器素材里近一半靠它。
+   */
+  evenOdd?: boolean;
   /** 圆环 / 方框的壁厚（文档 px）。缺省按短边取一个比例。 */
   inner?: number;
   /** 星形的谷半径比例（0..1，缺省 0.4）。 */
@@ -300,7 +305,13 @@ export function shapeGeometry(shape: ShapeKind, box: ShapeBox): ShapeGeometry {
       return { viewBox, d: pie(w, h, box.angle ?? 270) };
     case 'svg':
       // 自定义路径按 0..100 authored，交给调用方包一层 scale 组。
-      return { viewBox, d: box.path?.trim() || `M0,0 H${w} V${h} H0 Z`, scaleFrom100: true };
+      // `evenOdd` 必须透出去：带洞路径走 nonzero 会被填成实心（形状参数「没生效」）。
+      return {
+        viewBox,
+        d: box.path?.trim() || `M0,0 H${w} V${h} H0 Z`,
+        scaleFrom100: true,
+        evenOdd: box.evenOdd,
+      };
     default:
       return { viewBox, d: `M0,0 H${w} V${h} H0 Z` };
   }

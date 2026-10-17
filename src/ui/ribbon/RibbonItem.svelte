@@ -38,7 +38,7 @@
     icon={item.icon}
     label={item.label}
     size={item.size}
-    width={item.width}
+    width={w}
     disabled={item.disabled}
     testid={item.testid}
     onactivate={item.onselect}
@@ -48,6 +48,7 @@
     icon={item.icon}
     label={item.label}
     size={item.size}
+    width={w}
     active={item.active}
     disabled={item.disabled}
     testid={item.testid}

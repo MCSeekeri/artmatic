@@ -61,6 +61,7 @@ import {
   type GroupedFragment,
 } from '../../typography/groups';
 import { shapeGeometry, type ShapePreset } from '../../typography/shapes';
+import { buildFromSpec, defaultsOf, generatorById, nextSeed } from '../../typography/svg-gen';
 import { cloneAsCustomTheme, type TypographyTheme } from '../../typography/theme';
 import { ICON_STROKE_WIDTH, iconGridFrames, type IconInsert } from '../../typography/icon-shapes';
 import {
@@ -105,6 +106,68 @@ function onlyShape(doc: TypographyDocument) {
   return writable(doc).filter((el): el is ShapeElement => el.kind === 'shape');
 }
 
+/** 选中集里由生成器烘焙出来的图形（`gen` 存在）。 */
+function onlyGen(doc: TypographyDocument): ShapeElement[] {
+  return onlyShape(doc).filter((el) => !!el.gen);
+}
+
+/**
+ * 按元素上存着的参数与种子重算 `path`（就地）。
+ *
+ * **渲染只读 `path`**，所以每次改参数都要显式重算 —— 这样 `docHash` 只在
+ * 真的改了什么时才变，光栅化缓存口径不变。未知 id（旧档 / 别人的数据）
+ * 返回 false，调用方保持原路径不动。
+ */
+function rebuildGen(el: ShapeElement): boolean {
+  const gen = el.gen;
+  if (!gen) return false;
+  const spec = generatorById(gen.id);
+  if (!spec) return false;
+  const r = buildFromSpec(spec, gen.params, gen.seed);
+  el.path = r.d;
+  el.evenOdd = r.evenOdd ? true : undefined;
+  return true;
+}
+
+/** 生成器元素插入时的默认框：`aspect` 决定宽高比，再夹进画布。 */
+function generatedFrame(size: { w: number; h: number }, aspect: number): TextureFrame {
+  const maxW = Math.max(24, Math.round(size.w * 0.8));
+  const maxH = Math.max(24, Math.round(size.h * 0.8));
+  let h = Math.min(160, maxH);
+  let w = Math.round(h * aspect);
+  if (w > maxW) {
+    w = maxW;
+    h = Math.max(12, Math.round(w / aspect));
+  }
+  return {
+    x: Math.round((size.w - w) / 2),
+    y: Math.round((size.h - h) / 2),
+    w,
+    h,
+    // `TextureFrame` 的 rot 是必填的（弧度）。生成器元素插入时不旋转。
+    rot: 0,
+  };
+}
+
+/** `strokeOnly` 生成器的默认描边宽度（authored 0..100 单位，随元素等比缩放）。 */
+const GEN_STROKE_WIDTH = 1.2;
+
+/**
+ * 把参数写进「与首个生成器元素同 id」的所有选中元素，并重算路径。
+ *
+ * 只写同 id 的那些：多选里混了两个生成器时，把一个参数同时塞给两边，
+ * 另一边会拿到一个它根本不认识的键（虽然会被忽略，但语义上是污染）。
+ */
+function applyGenParam(doc: TypographyDocument, key: string, value: number | string): void {
+  const target = onlyGen(doc)[0]?.gen?.id;
+  if (!target) return;
+  for (const el of onlyGen(doc)) {
+    if (el.gen!.id !== target) continue;
+    el.gen!.params = { ...el.gen!.params, [key]: value };
+    rebuildGen(el);
+  }
+}
+
 /**
  * 把参数化图形**就地**转成路径（`shape: 'svg'`）。返回是否真的转了。
  *
@@ -134,11 +197,15 @@ function shapeToPath(el: ShapeElement): boolean {
   if (!path) return false;
   el.path = path;
   el.shape = 'svg';
+  // 搬洞：不搬这一行，一次「转换为路径」就把圆环 / 方框变成实心盘。
+  el.evenOdd = geo.evenOdd ? true : undefined;
   el.radius = undefined;
   el.sides = undefined;
   el.waist = undefined;
   el.inner = undefined;
   el.angle = undefined;
+  // 参数化图形本来就不该带生成器元数据；真带上了（手改过的档）也一并清掉。
+  el.gen = undefined;
   return true;
 }
 
@@ -412,6 +479,28 @@ export interface TypographyActions {
   /* 插入 */
   addText(): void;
   addShape(preset: ShapePreset): void;
+  /**
+   * 插入一个生成器图形（「插入生成器」选择器）。
+   *
+   * 路径在插入时**烘焙**成普通 `shape:'svg'`；`gen` 只保存「怎么再生成一次」。
+   * 渲染只读 `path`，所以生成器元数据不影响光栅化缓存口径。
+   */
+  addGeneratedShape(id: string): void;
+  /**
+   * 切换生成器类型。作用于所有选中的生成器元素，参数重置为新类型的默认值，
+   * **种子保留**（「换个生成器、同一个种子」是常见对比手法）。
+   */
+  setGeneratorType(id: string): void;
+  /** 离散改一个参数（下拉 / 开关）：一笔撤销。 */
+  setGeneratorParam(key: string, value: number | string): void;
+  /** 拖动中的实时改参（滑动中不入撤销栈）。 */
+  setGeneratorParamLive(key: string, value: number): void;
+  /** 手势收尾：一次拖动只落一笔撤销。 */
+  endGeneratorParamLive(): void;
+  /** 直接指定种子（数字框）。 */
+  setGeneratorSeed(seed: number): void;
+  /** 换一个种子：同参数摇出另一张，且旧种子可复现。 */
+  reseedGenerator(): void;
   addImage(): void;
   /**
    * 把一份图片字节置入画布（剪贴板粘贴 / 媒体池拖放 / 文件选择器共用）。
@@ -969,6 +1058,84 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
+    addGeneratedShape(id) {
+      const spec = generatorById(id);
+      if (!spec) return;
+      editorState.commit(tr('gen.undo.insert'), (doc) => {
+        const params = defaultsOf(spec);
+        // 预览用的就是这一次 build：选择器里的图和插进来的图必然同源。
+        const r = buildFromSpec(spec, params, spec.defaultSeed);
+        const strokeOnly = r.strokeOnly === true;
+        const el = createShapeElement(doc.size, 'svg', {
+          name: tr(spec.labelKey),
+          frame: generatedFrame(doc.size, spec.aspect ?? 1),
+          path: r.d,
+          evenOdd: r.evenOdd ? true : undefined,
+          gen: { id: spec.id, seed: spec.defaultSeed, params: { ...params } },
+          /*
+           * 线族只有线宽没有面积：插入即「无填充 + 描边」，否则画布上什么都看不到。
+           * 描边宽度是 authored 单位，随 `scale(w/100, h/100)` 等比缩放 ——
+           * 与图标（`ICON_STROKE_WIDTH`）同一口径。
+           */
+          fill: strokeOnly ? { kind: 'none' } : undefined,
+          stroke: strokeOnly
+            ? { color: DEFAULT_PAINT_A, width: GEN_STROKE_WIDTH, style: 'solid' }
+            : undefined,
+        });
+        doc.elements = [...doc.elements, el];
+        queueMicrotask(() => editorState.selectOnly(el.id));
+      });
+    },
+
+    setGeneratorType(id) {
+      const spec = generatorById(id);
+      if (!spec) return;
+      editorState.commit(tr('gen.undo.type'), (doc) => {
+        const params = defaultsOf(spec);
+        for (const el of onlyGen(doc)) {
+          // 种子保留：换类型、同种子，便于横向比较同一套随机。
+          el.gen = { id: spec.id, seed: el.gen!.seed, params: { ...params } };
+          rebuildGen(el);
+        }
+      });
+    },
+
+    setGeneratorParam(key, value) {
+      editorState.commit(tr('gen.undo.param'), (doc) => {
+        applyGenParam(doc, key, value);
+      });
+    },
+
+    setGeneratorParamLive(key, value) {
+      editorState.beginGesture();
+      editorState.live((doc) => {
+        applyGenParam(doc, key, value);
+      });
+    },
+
+    endGeneratorParamLive() {
+      editorState.endGesture(tr('gen.undo.param'));
+    },
+
+    setGeneratorSeed(seed) {
+      const next = Number.isFinite(seed) ? seed >>> 0 : 0;
+      editorState.commit(tr('gen.undo.seed'), (doc) => {
+        for (const el of onlyGen(doc)) {
+          el.gen!.seed = next;
+          rebuildGen(el);
+        }
+      });
+    },
+
+    reseedGenerator() {
+      editorState.commit(tr('gen.undo.seed'), (doc) => {
+        for (const el of onlyGen(doc)) {
+          el.gen!.seed = nextSeed(el.gen!.seed);
+          rebuildGen(el);
+        }
+      });
+    },
+
     /**
      * 插入图标 = 插入一组「无填充 + 描边」的 `shape:'svg'` 图形。
      *
@@ -1296,11 +1463,16 @@ export function createTypographyActions(): TypographyActions {
        * 路径，与进入编辑**合成一笔撤销**：按一次 Ctrl+Z 应当回到「还是参数化
        * 图形、也没在编辑」，而不是先退回一个「已经是路径但已退出编辑」的
        * 中间态（那对用户毫无意义）。
+       *
+       * 生成器图形同理：路径已经是烘焙好的，只需**清掉 gen**（脱离生成器）。
+       * 否则用户手改的节点会被下一次参数改动覆盖 —— 而且没有任何提示。
        */
-      if (el.shape !== 'svg') {
+      if (el.shape !== 'svg' || el.gen) {
         editorState.commit(tr('typo.undo.toPath'), (doc) => {
           const target = doc.elements.find((e) => e.id === el.id);
-          if (target && target.kind === 'shape') shapeToPath(target);
+          if (!target || target.kind !== 'shape') return;
+          if (target.gen) target.gen = undefined;
+          else shapeToPath(target);
         });
       }
       editorState.nodeEditId = el.id;
@@ -1308,7 +1480,11 @@ export function createTypographyActions(): TypographyActions {
 
     convertToPath() {
       editorState.commit(tr('typo.undo.toPath'), (doc) => {
-        for (const el of onlyShape(doc)) shapeToPath(el);
+        for (const el of onlyShape(doc)) {
+          // 生成器元素：path 已是烘焙结果，脱离 = 丢掉 gen。
+          if (el.gen) el.gen = undefined;
+          else shapeToPath(el);
+        }
       });
     },
 

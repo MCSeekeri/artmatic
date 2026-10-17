@@ -42,6 +42,24 @@
 
 > `HASH_FAST_GLSL` 用的是 Dave Hoskins 风格的无 sin hash（`p * 0.1031` 那一族），在 Shadertoy / MIT 圈通行，上游源码未署名，这里补记出处。
 
+## SVG 素材生成器（`src/typography/svg-gen/`）
+
+一期 20 + 二期 2（`motif` / `contour`）共 **22 个生成器全部自写**，没有复制任何
+第三方源码或形状数据。算法来源只到「公开技法」这一层：
+
+- 10 PRINT 斜纹网格（`tenprint`）：公开的 Commodore 64 单行程序；
+- Catmull-Rom → 三次贝塞尔（`blobs / waveband / squiggle / globe`）：公开的样条公式；
+- 阿基米德螺旋、等距（30°）轴测投影、正交经纬球投影：教科书公式；
+- 刻度盘 / 条码 / HUD 刻度：按 `rahoo.online` **导出的 SVG 结构**归纳出的几何做法
+  （逐图元 `<circle>` / `<line>` / `<path>`），未取其源码与任何资产。
+
+明确**未使用**（许可与产品判断，详见 `.workbuddy/analysis-1017/REPORT.md` §0.2 / §10）：
+
+- fffuel 的形状文件与生成结果 —— 许可禁止再分发；
+- `rahoo.online` 的 canvas 实现代码 —— 无许可声明（默认保留），只参考了算法思路；
+- `pattern.monster` / `svelte-svg-patterns` 的 476 条 tile 数据 —— 一期不做策展层，
+  二期若接入需按 MIT 边界逐条筛选并在此登记。
+
 ## 依赖库
 
 | 包 | 许可 | 用途 |

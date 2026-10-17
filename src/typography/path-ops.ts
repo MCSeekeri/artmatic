@@ -497,6 +497,7 @@ export function shapeToMultiPolygon(el: ShapeElement): MultiPoly {
     inner: el.inner,
     angle: el.angle,
     path: el.path,
+    evenOdd: el.evenOdd,
   });
   const local = pathToMultiPolygon(geo.d);
   // authored 0..100 的图形要先乘回元素尺寸，再平移到文档坐标。

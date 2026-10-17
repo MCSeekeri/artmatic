@@ -314,11 +314,46 @@ export const NUMBER_ITEM_W = 88;
 /** 分段控件按选项数计费：每项 34px。 */
 export const SEGMENT_OPTION_W = 34;
 
-/** 按 size 档推按钮宽度（`large` / `small` / `icon`）。 */
-function sizedWidth(size: RibbonItemSize | undefined): number {
+/**
+ * 标签的估算宽度（px）。
+ *
+ * 为什么估算而不是量 DOM：**预算与渲染必须同一个数**。`itemWidth()` 在
+ * `buildTypographyTabs` 里算组宽、`RibbonButton` 拿同一个值当 `--ribbon-btn-w`；
+ * 若渲染交给浏览器去量、预算却靠常数，两者会慢慢错开（表现是组与组之间挤在一起）。
+ *
+ * 口径来自 `.lbl` 的 `--fs-xs`（10px）：中日韩按全角 10.2、其余按 5.8、空格 3。
+ * 留 10px 给 `.rbtn` 的左右内边距与边框。
+ */
+export function labelWidthPx(label: string): number {
+  let w = 0;
+  for (const ch of label) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (ch === ' ') w += 3;
+    else if (
+      (code >= 0x2e80 && code <= 0x9fff) ||
+      (code >= 0x3000 && code <= 0x303f) ||
+      (code >= 0xff00 && code <= 0xff60)
+    ) {
+      w += 10.2;
+    } else {
+      w += 5.8;
+    }
+  }
+  return Math.ceil(w);
+}
+
+/**
+ * 按 size 档推按钮宽度（`large` / `small` / `icon`）。
+ *
+ * `large` 接受标签：**按钮宽度跟着文字走**（下限仍是默认 50）。原来一律 50px，
+ * 「插入生成器」这种五字标签会被截成「插入生…」—— 而 Ribbon 的设计前提就是
+ * 「文字直接写在按钮上」，截断等于把功能藏起来。显式 `width` 仍然优先。
+ */
+function sizedWidth(size: RibbonItemSize | undefined, label?: string): number {
   if (size === 'icon') return ICON_ITEM_W;
   if (size === 'small') return SMALL_ITEM_W;
-  return DEFAULT_ITEM_W;
+  if (!label) return DEFAULT_ITEM_W;
+  return Math.max(DEFAULT_ITEM_W, labelWidthPx(label) + 10);
 }
 
 export function itemWidth(item: RibbonItemSpec): number {
@@ -338,9 +373,11 @@ export function itemWidth(item: RibbonItemSpec): number {
       return item.size === 'icon' ? MENU_ICON_W : sizedWidth(item.size);
     case 'color':
     case 'gallery':
+      return sizedWidth(item.size);
+    // 这两档的文字写在按钮上，宽度必须容得下它。
     case 'toggle':
     case 'button':
-      return sizedWidth(item.size);
+      return sizedWidth(item.size, item.label);
   }
 }
 

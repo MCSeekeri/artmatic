@@ -62,6 +62,10 @@
   `ribbon-model.ts::itemWidth()`（组宽预算）与 `Ribbon.svelte` 在根元素下发的 CSS 变量
   （`--ribbon-icon-w` 等，值来自 `DENSITY`）。各写一遍的表现是「预算说 26px、按钮实际
   30px」，整条 Ribbon 的横向排布会慢慢错位。
+- **大按钮的宽度跟着标签走**（`labelWidthPx()`，`itemWidth()` 与 `RibbonButton` 用
+  同一个数）。写死 50px 的话「插入生成器」会被截成「插入生…」—— 而 Ribbon 的设计
+  前提是「文字直接写在按钮上」，截断等于把功能藏起来。估算按 `--fs-xs`（10px）：
+  全角 10.2、其余 5.8，另留 10px 内边距；显式 `width` 仍然优先（如「应用到整个项目」）。
 - **取色卡的「最近使用的颜色」只记裸色**（`ui/typography/recent-colors.ts`，localStorage、
   可丢）：把 `@accent1` 混进最近色会让那一行在换方案后显示一堆与主题网格重复、
   但语义不同的格子。
@@ -79,3 +83,28 @@
   颜色跟着走」在那些入口上根本不可能发生。两条口径不变：**显示的是解析后的 hex，
   写回的仍是裸 hex**（精细调整区，改完就该钉死）；`theme` 传**对象**（调用方解析好，
   含 `customThemes`），`allowNone` 控制要不要「无颜色」那一项。
+
+---
+
+## 生成器（`ui/typography/SvgGenPickerModal.svelte` + 元素属性面板）
+
+- **入口只有一个按钮**（「插入」页 → 图形组 → 「插入生成器」），点开按六组分区的
+  22 格选择器。**参数不进 Ribbon**：横向条带装不下十来个滑杆，全部住在右侧
+  「元素属性」的「生成器」小节（类型 / 种子 / 换种子 + `ParamDef` 动态控件）。
+- **换类型也走同一个选择器弹窗**（带 `current` 高亮），不是下拉：二十多个生成器靠
+  名字挑不出来。与「更换特效 / 转场 / 算法艺术」是同一种交互。
+- **预览盒的宽高必须与 `spec.aspect` 严格同比例**（`artBox()` 算好后内联）。
+  `<svg preserveAspectRatio="none">` 会照着盒子拉伸：盒子一旦靠 `width: %` +
+  `max-height` 夹出来，圆就会变成横向椭圆（用户报的「预览都被拉伸」）。
+- **预览与插入同源**：卡片就是 `buildFromSpec(spec, 默认参数, defaultSeed)` 的输出，
+  与 `actions.addGeneratedShape` 第一次 build 逐字节相同。手画预览迟早与生成器分家。
+- **拖动实时、松手一笔撤销**：`range` 的 `oninput` 走 `setGeneratorParamLive`
+  （`beginGesture` + `live`），`onchange` 走 `endGeneratorParamLive`。下拉 / 开关是
+  离散值，直接 `setGeneratorParam`（一次 commit）。
+- **多选语义**：换类型作用于**全部**生成器元素；改参数只写「与首个元素同 id」的那些
+  —— 否则一个色板上的键会污染另一个生成器。
+- 参数标签一律 `resolveLabel(p.labelKey, tr)`：`ParamDef.labelKey` 的类型是 `Label`
+  （插件可能给字面量），直接 `tr()` 会编译报错。
+- **`typo-to-path` 对生成器元素必须可点**（`shape:'svg' && !gen` 才置灰）：
+  它的语义是「脱离生成器」，不是「参数化图形转路径」。
+- 未知 `gen.id`（旧档 / 别人的数据）→ 生成器小节只留一行降级提示，路径照常渲染。

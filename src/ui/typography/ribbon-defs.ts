@@ -66,6 +66,8 @@ export interface TypographyRibbonInput {
   onOpenCustomCss: () => void;
   /** 打开「插入图标」选择器（同上）。 */
   onOpenIconPicker: () => void;
+  /** 打开「插入生成器」选择器（同上）。 */
+  onOpenGenPicker: () => void;
   /** 媒体池开着没有（「插入」页里的开合按钮显示激活态）。 */
   mediaPoolOpen: boolean;
   /** 开合媒体池（同上）。 */
@@ -1028,6 +1030,19 @@ export function buildTypographyTabs(
                 if (preset) a.addShape(preset);
               },
             },
+            {
+              /*
+               * 与形状图库并排的一级入口：图库是「挑一个现成的形状」，这个是
+               * 「让图形按参数长出来」。参数不在这条 Ribbon 上 —— 横向条带装
+               * 不下十来个滑杆，全部住在右侧「元素属性」的生成器小节。
+               */
+              kind: 'button',
+              id: 'add-generator',
+              label: tr('rib.addGenerator'),
+              icon: 'sparkles',
+              testid: 'typo-insert-generator',
+              onselect: () => input.onOpenGenPicker(),
+            },
           ],
         },
         {
@@ -1554,7 +1569,11 @@ export function buildTypographyTabs(
               testid: 'typo-to-path',
               // 参数化图形才能「转为路径」；已经是路径的（含布尔运算结果）
               // 再点一次没有任何意义 —— 置灰比「点了没反应」诚实。
-              disabled: !shape || shape.shape === 'svg',
+              /*
+               * **生成器元素例外**：它的 path 虽已烘焙，但「转为路径」的语义是
+               * 「脱离生成器」（清掉 gen，参数不再覆盖手改的节点），必须可点。
+               */
+              disabled: !shape || (shape.shape === 'svg' && !shape.gen),
               onselect: () => a.convertToPath(),
             },
           ],

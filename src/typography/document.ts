@@ -20,6 +20,7 @@ import { runsFromText, type TextRun } from './rich-text';
 import { themeRef } from './theme';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
+import type { ShapeGenState } from './svg-gen/types';
 
 /**
  * 元素动画的类型定义在 animation.ts —— 那边需要 TypographyDocument，两边
@@ -354,6 +355,19 @@ export interface ShapeElement extends ElementBase {
   angle?: number;
   /** shape === 'svg' 时的路径数据（viewBox 0 0 100 100）。 */
   path?: string;
+  /**
+   * `shape === 'svg'` 时的填充规则。**带洞的图形靠它**（同心环 / 刻度盘 /
+   * 嵌套框）：不置的话内圈会被 nonzero 填实，看起来就是一个实心圆盘。
+   *
+   * 可选字段 ⇒ 不抬 `SCHEMA_VERSION`（与 `groups` / `doc.theme` 同一条约定）。
+   */
+  evenOdd?: boolean;
+  /**
+   * 生成器元数据。有它 = 这条路径是由 `typography/svg-gen` 的生成器烘焙来的，
+   * 参数仍可调；**顶点编辑 / 转为路径会清掉它**（元素退化成普通 svg 路径），
+   * 否则用户手改的节点会被下一次参数改动覆盖。
+   */
+  gen?: ShapeGenState;
 }
 
 export interface ImageElement extends ElementBase {
@@ -795,6 +809,9 @@ export function createShapeElement(  size: Size,
     inner: over.inner,
     angle: over.angle,
     path: over.path,
+    // 可选字段必须**逐项显式搬运**：不写就会静默丢弃（既有注释已警示过一次）。
+    evenOdd: over.evenOdd,
+    gen: over.gen,
   };
 }
 

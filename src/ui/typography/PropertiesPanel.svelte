@@ -20,6 +20,11 @@
   import Field from '../controls/Field.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
   import Select from '../controls/Select.svelte';
+  import Slider from '../controls/Slider.svelte';
+  import Checkbox from '../controls/Checkbox.svelte';
+  import IconButton from '../controls/IconButton.svelte';
+  import Button from '../controls/Button.svelte';
+  import SvgGenPickerModal from './SvgGenPickerModal.svelte';
   import PaintEditor from './PaintEditor.svelte';
 import ColorField from '../controls/ColorField.svelte';
   import { appState } from '../app-state.svelte';
@@ -27,7 +32,10 @@ import ColorField from '../controls/ColorField.svelte';
   import { createTypographyActions } from './actions';
   import { MIX_BLENDS, type MixBlend, type Paint, type Stroke } from '../../typography/document';
   import { resolveThemeColor, themeById } from '../../typography/theme';
+  import { generatorById, mergeParams } from '../../typography/svg-gen';
+  import { visibleParams } from '../../effects/types';
   import { tr } from '../../i18n/index.svelte';
+  import { resolveLabel } from '../../i18n/label';
 
   /** actions 只是回调的集合，无内部状态；建一次就够（与 TypographyEditor 同款）。 */
   const actions = createTypographyActions();
@@ -99,8 +107,29 @@ import ColorField from '../controls/ColorField.svelte';
       /** 文本框背景 / 边框（text.boxFill / boxStroke）。 */
       boxFill: el.kind === 'text' ? clonePaint(el.boxFill) : undefined,
       boxStroke: el.kind === 'text' && el.boxStroke ? ({ ...el.boxStroke } as Stroke) : null,
+      /** 图形路径（「已烘焙」的命令数提示用）。 */
+      path: el.kind === 'shape' ? (el.path ?? '') : '',
+      /** 生成器状态。浅拷贝：面板只读，写入一律走 actions。 */
+      gen:
+        el.kind === 'shape' && el.gen
+          ? { id: el.gen.id, seed: el.gen.seed, params: { ...el.gen.params } }
+          : null,
+      genSpec: el.kind === 'shape' ? generatorById(el.gen?.id) : null,
     };
   });
+
+  /** 生成器的参数表（已合并默认值）。未知 id ⇒ null，整节降级。 */
+  const genParams = $derived(
+    model?.gen && model.genSpec ? mergeParams(model.genSpec, model.gen.params) : null,
+  );
+  /** 按 `visibleWhen` 过滤后的可见参数（模式切换时控件集合会变，见 ParamDef）。 */
+  const genVisible = $derived(
+    model?.genSpec && genParams ? visibleParams(model.genSpec.params, genParams) : [],
+  );
+  /** 路径命令数：直接数 `d` 里的命令字母，不重新 build 一遍。 */
+  const genCommands = $derived((model?.path?.match(/[MLCZ]/gi) ?? []).length);
+  /** 「更换生成器」弹窗（与插入时同一个选择器，只是换标题 + 高亮当前项）。 */
+  let genPickerOpen = $state(false);
 
   const multi = $derived((model?.count ?? 0) > 1);
   /** 旋转：模型存弧度，面板显示度（一位小数）。 */
@@ -120,6 +149,18 @@ import ColorField from '../controls/ColorField.svelte';
     </span>
   </Field>
 {/snippet}
+
+{#if genPickerOpen && model?.gen}
+  <SvgGenPickerModal
+    title={tr('gen.changeTypeTitle')}
+    current={model.gen.id}
+    onclose={() => (genPickerOpen = false)}
+    onpick={(id) => {
+      genPickerOpen = false;
+      actions.setGeneratorType(id);
+    }}
+  />
+{/if}
 
 <aside class="props" data-testid="typo-props">
   {#if !model}
@@ -207,6 +248,111 @@ import ColorField from '../controls/ColorField.svelte';
       </Field>
 
       {#if model.kind === 'shape'}
+        <!--
+          生成器区放在**填充之前**：它是「这个图形怎么长出来的」，比「填什么色」
+          更接近元素的身份。类型 / 种子 / 参数三块版式固定，切换类型时不跳位。
+        -->
+        {#if model.gen}
+          <h4 class="prop-sec">{tr('gen.panelTitle')}</h4>
+          {#if !model.genSpec || !genParams}
+            <!-- 未知 id（旧档 / 别人的数据）：路径照常渲染，只把参数区降级。 -->
+            <p class="props-note">{tr('gen.unknown')}</p>
+          {:else}
+            <!--
+              类型不是下拉而是**弹窗**：二十个生成器靠名字挑不出来，必须看见
+              缩略图（与「更换特效 / 转场 / 算法艺术」同一种交互）。
+            -->
+            <Field label={tr('gen.type')} labelWidth={56}>
+              <Button
+                label={tr(model.genSpec.labelKey)}
+                icon="layout-grid"
+                variant="outline"
+                testid="prop-gen-type"
+                tipText={tr('gen.changeType')}
+                onclick={() => (genPickerOpen = true)}
+              />
+            </Field>
+            <Field label={tr('gen.seed')} labelWidth={56}>
+              <NumberInput
+                value={model.gen.seed}
+                min={0}
+                step={1}
+                precision={0}
+                width={64}
+                ariaLabel={tr('gen.seed')}
+                testid="prop-gen-seed"
+                onchange={(v) => actions.setGeneratorSeed(v)}
+              />
+              <!--
+                图标按钮而不是带字按钮：这一栏只有 150px 左右，「换一个」会被
+                截成「换一…」。语义靠 tooltip（`gen.reseedTip`）给全。
+              -->
+              <IconButton
+                icon="rotate-cw"
+                label={tr('gen.reseed')}
+                tipText={tr('gen.reseedTip')}
+                size="sm"
+                testid="prop-gen-reseed"
+                onclick={() => actions.reseedGenerator()}
+              />
+            </Field>
+            {#each genVisible as p (p.key)}
+              {#if p.type === 'range'}
+                {@const v = Number(genParams[p.key] ?? p.defaultValue)}
+                <Field label={resolveLabel(p.labelKey, tr)} labelWidth={56}>
+                  <Slider
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    value={v}
+                    ariaLabel={resolveLabel(p.labelKey, tr)}
+                    testid={`prop-gen-${p.key}-slider`}
+                    oninput={(nv) => actions.setGeneratorParamLive(p.key, nv)}
+                    onchange={() => actions.endGeneratorParamLive()}
+                  />
+                  <NumberInput
+                    value={v}
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    width={58}
+                    ariaLabel={resolveLabel(p.labelKey, tr)}
+                    testid={`prop-gen-${p.key}-number`}
+                    oninput={(nv) => actions.setGeneratorParamLive(p.key, nv)}
+                    onliveend={() => actions.endGeneratorParamLive()}
+                    onchange={(nv) => {
+                      actions.setGeneratorParamLive(p.key, nv);
+                      actions.endGeneratorParamLive();
+                    }}
+                  />
+                </Field>
+              {:else if p.type === 'select'}
+                <Field label={resolveLabel(p.labelKey, tr)} labelWidth={56}>
+                  <Select
+                    value={String(genParams[p.key] ?? p.defaultValue)}
+                    options={p.options.map((o) => ({
+                      value: o.value,
+                      label: resolveLabel(o.labelKey, tr),
+                    }))}
+                    testid={`prop-gen-${p.key}`}
+                    optionTestidPrefix={`prop-gen-${p.key}-opt`}
+                    onchange={(nv) => actions.setGeneratorParam(p.key, nv)}
+                  />
+                </Field>
+              {:else if p.type === 'checkbox'}
+                <Field label={resolveLabel(p.labelKey, tr)} labelWidth={56}>
+                  <Checkbox
+                    checked={Number(genParams[p.key] ?? p.defaultValue) >= 0.5}
+                    label={resolveLabel(p.labelKey, tr)}
+                    testid={`prop-gen-${p.key}`}
+                    onchange={(on) => actions.setGeneratorParam(p.key, on ? 1 : 0)}
+                  />
+                </Field>
+              {/if}
+            {/each}
+            <p class="props-note">{tr('gen.commands', { n: genCommands })}</p>
+          {/if}
+        {/if}
         <h4 class="prop-sec">{tr('typo.propFill')}</h4>
         <PaintEditor
           paint={model.fill}

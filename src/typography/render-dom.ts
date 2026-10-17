@@ -544,6 +544,7 @@ export function syncShape(svg: SVGSVGElement, el: ShapeElement, theme?: Typograp
     inner: el.inner,
     angle: el.angle,
     path: el.path,
+    evenOdd: el.evenOdd,
   });
   svg.setAttribute('viewBox', geo.viewBox);
 

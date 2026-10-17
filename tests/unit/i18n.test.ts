@@ -159,6 +159,13 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   /* ── 一、启动期不变量 / 构建纪律 ──────────────────────────────────
    * 写错就是构建事故。它们一抛就是整条链路坏掉，不是「用户可以绕过的提示」。
    */
+  /*
+   * 命令预算越界告警：只进 console.warn，**不覆盖用户参数**（静默降档的表现是
+   * 「明明拖到最大了却没变」）。用户界面上看不到它，属于开发诊断。
+   */
+  'typography/svg-gen/registry.ts': [
+    '[svg-gen] ${spec.id} 产生了 ${r.commands} 条路径命令，超过预算 ${GEN_MAX_COMMANDS}',
+  ],
   // 「新增一个特效 = 两个文件」的配对检查。
   'effects/registry.ts': [
     '特效 ${key} 缺少 glsl/${key}.ts（两个文件纪律）',

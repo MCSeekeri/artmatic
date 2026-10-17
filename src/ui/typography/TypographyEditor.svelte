@@ -55,6 +55,7 @@
   import CustomCssModal from './CustomCssModal.svelte';
   import ThemeEditorModal from './ThemeEditorModal.svelte';
   import IconPickerModal from './IconPickerModal.svelte';
+  import SvgGenPickerModal from './SvgGenPickerModal.svelte';
   import type { IconInsert } from '../../typography/icon-shapes';
   import { cloneAsCustomTheme, themeById } from '../../typography/theme';
   import { newId } from '../../core/schema';
@@ -96,6 +97,7 @@
     return { theme: cur, isCustom: custom.some((t) => t.id === cur.id) };
   });
   let iconPickerOpen = $state(false);
+  let genPickerOpen = $state(false);
   /** 中键拖拽平移中（只为光标形态）。 */
   let panning = $state(false);
   /** 右栏宽度拖曳中（与检查器一致：拖动中分隔条保持高亮）。 */
@@ -258,6 +260,7 @@
         anim: selection.flatMap((e) => e.animations)[0] ?? null,
         onOpenCustomCss: () => (customCssOpen = true),
         onOpenIconPicker: () => (iconPickerOpen = true),
+        onOpenGenPicker: () => (genPickerOpen = true),
         mediaPoolOpen: appState.mediaPoolOpen,
         onToggleMediaPool: () => appState.toggleMediaPool(),
         onFlatten: () => actions.flattenToImage(appState.playT - (editorState.clip?.start ?? 0)),
@@ -1504,6 +1507,16 @@
     onapply={(items: IconInsert[]) => {
       iconPickerOpen = false;
       actions.addIcons(items);
+    }}
+  />
+{/if}
+
+{#if genPickerOpen}
+  <SvgGenPickerModal
+    onclose={() => (genPickerOpen = false)}
+    onpick={(id: string) => {
+      genPickerOpen = false;
+      actions.addGeneratedShape(id);
     }}
   />
 {/if}
