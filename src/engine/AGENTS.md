@@ -90,6 +90,42 @@ function buildStack(project: Project, t: number): Stack {
 
 ---
 
+## 斑点追踪（`box-tracker.ts`）
+
+「方框跟踪」特效的服务层：**探针回读 + 跨帧状态 + Canvas2D 叠层**。它补的是
+「特效协议拿不到画面里有哪些物体」这一环：
+
+```
+链输入 → 固定 160×90 探针 pass → readPixels → core/blob-track（纯 TS）
+      → Canvas2D 画框/标签/连线 → 上传 u_overlay → 主 pass 做框内效果 + 合成
+```
+
+- **放在 engine 而不是 effects**：`engine` 不许 import `effects`。特效那一侧只认
+  uniform 协议（program 声明了 `u_overlay` 就调用它），所以主应用与 `/lab/` 自动都有。
+- **探针恒为 160 宽**（高按画幅比）。它**不能**跟着渲染尺寸走：预览 960 与导出
+  1920 会降采样出不同的显著性图，表现是「预览里框在这、导出后框在那」。
+  E2E 钉死 `probeW === 160`（`tests/e2e/box-tracker.spec.ts`）。
+- **探针 pass 的采样步长是「探针 texel」，不是源 texel**。用错的形态很隐蔽：
+  每个 tap 只隔半个源像素（等于点采样），周期为整数倍的画面（lab 的网格）会被
+  采成同一个值 ⇒ 显著性恒为 0 ⇒ 一个框都没有。
+- **检测按帧号栅格**（`frame % refresh`），**参数变化时强制重检** —— 否则暂停着拖
+  「目标数上限 / 灵敏度」画面不动，看起来像滑杆坏了。
+- **状态与 seek**：方框列表 / ID / 标签 / 上一帧亮度都是跨帧状态，`reset()` 在
+  `Renderer.onSeek()` 里清（与 `feedback` 类特效同一处置）。导出是顺序循环，逐帧
+  精确；预览跳转后从新画面重检（一两帧收敛）。**不保证同一 t 两渲逐字节相同**，
+  不要为此写断言。
+- **生命周期必须有调用方**：`drop(instanceId)` 由 `app-state` 关工程时调；
+  `prune()` 兜住「实例被删掉但没人记得调 drop」；`clear()` 全清。每实例持有
+  一张探针 Target + 一张叠层纹理，只增不减就是显存泄漏的老形态。
+- **纹理纪律**：建/传纹理前先切 `scratchUnit`（`Program.tex()` 会把采样本绑到
+  0..n 并留下最后一个为激活态）。这条在 `effects/AGENTS.md` 里记过两次事故。
+
+测试：`tests/unit/blob-track.test.ts`（纯算法）+ `tests/e2e/box-tracker.spec.ts`
+（真的出框 / 换色跟着变 / 探针不随档位变）。读数为 `renderer.trackerStats()`，
+`__artmatic.trackerStats()` 与 `__lab.trackerStats()` 都通到它。
+
+---
+
 ## 预览
 
 - 预览降质档位（帧率 1×/½/⅓、画质 100/75/50/25%、暂停回全质）**只影响预览**。

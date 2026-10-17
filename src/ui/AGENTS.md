@@ -260,6 +260,17 @@ Svelte 跑满 1000 次才抛 `effect_update_depth_exceeded` —— 主线程被�
 8. **浮层里不要用 `transform` / `filter` / `backdrop-filter`**：它们会让祖先成为 `position:
    fixed` 后代的**包含块**，于是 `Select` 弹层按视口算出的坐标被当成「相对祖先」解释 ——
    表现是弹层整体偏到一边。居中请用 `left/right: 0 + margin-inline: auto + width: fit-content`。
+9. **取色卡给的是「主题色引用」，只有排版能存引用。** `ColorField` / `ColorPickerPanel`
+   对所有颜色入口一视同仁地提供 `@accent1` 这类槽位引用，而**只有排版文档**会在渲染时
+   调用 `resolveThemeColor`。算法参数 / 特效参数 / 纯色片段的颜色都直接进
+   `hexToRgba()` —— 引用在那里算坏颜色，回退成**品红**（`#ff00ff`）。
+   症状：在检查器里挑一个主题色，整个画面变品红，参数表里却只看到一串 `@accent1`。
+   纪律：**这三个入口写入前必须 `resolveThemeColor(v, theme)`**（检查器三处、lab 两处）；
+   排版自己的入口继续存引用（那是「换配色方案跟着变」的唯一依据）。
+   历史数据由 `core/schema.ts` 的 `validateProject` → `resolveStrayThemeRefs` 在打开时补，
+   它**只碰** `source.color` / algo `params` / effect `values`，`source.doc` 一个字不动。
+   守卫：`tests/e2e/color-picker-refs.spec.ts`（落库是 hex + 画面无品红）、
+   `tests/unit/schema.test.ts`（含「排版文档里的引用不能被动」）。
 
 ## CSS 命名空间：组件类名会被全局样式命中
 

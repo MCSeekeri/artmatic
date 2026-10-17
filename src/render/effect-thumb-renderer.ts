@@ -88,6 +88,8 @@ function needsHistory(defId: string): boolean {
   const meta = EFFECT_CATALOG[defId];
   if (!entry) return false;
   if (entry.shader.feedback) return true;
+  // 不用 `u_feedback`、但自己持有跨帧状态（追踪叠加层）：一帧渲不出成形的东西。
+  if (entry.shader.stateful) return true;
   if (entry.shader.prePasses?.some((p) => p.feedback || p.delayedInput)) return true;
   // 会动的底图：静止底图上运动量恒为 0，连渲才有东西可看
   return meta?.base === 'scroll';

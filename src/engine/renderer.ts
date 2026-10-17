@@ -10,6 +10,7 @@ import { Compositor, type EffectRunner, type SourceResolver, type TransitionRunn
 import { Kit } from './kit';
 import type { BuildStackOptions } from './stack';
 import type { SpectrumTextures } from './spectrum-texture';
+import type { BoxTracker } from './box-tracker';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
 import type { Project } from '../core/schema';
 
@@ -44,6 +45,28 @@ export class Renderer {
    */
   setSpectrumTextures(spectrum: SpectrumTextures): void {
     this.compositor.spectrum = spectrum;
+  }
+
+  /**
+   * 斑点追踪服务（`u_overlay` / `u_box*`）。同样由 `render-core` 装配；
+   * 它持有**跨帧状态**，所以 `onSeek()` 时由装配层的 seekExtra 回调
+   * `reset()`（本类不认识它，与 algos 的 `alignSims` 同一条路）。
+   */
+  setTracker(tracker: BoxTracker | null): void {
+    this.compositor.tracker = tracker;
+  }
+
+  /** 显式回收某个特效实例的追踪状态（片段随工程关闭/删除时用）。 */
+  dropTrackerInstance(instanceId: string): void {
+    this.compositor.tracker?.drop(instanceId);
+  }
+
+  /**
+   * 斑点追踪的读数（E2E / 诊断）。与 `poolStats()` 同一理由：这一层的失败
+   * 形态是「方框不出现」，没有读数就只能靠猜。
+   */
+  trackerStats(): ReturnType<BoxTracker['stats']> | null {
+    return this.compositor.tracker?.stats() ?? null;
   }
 
   /** 预览画布显示区域的容器元素（量设备像素尺寸用）。 */

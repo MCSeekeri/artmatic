@@ -1014,7 +1014,12 @@ class AppState {
       for (const clip of track.clips) {
         if (clip.kind === 'source' && clip.source.type === 'algo') this.algos?.forget(clip.id);
         if (clip.kind === 'effect') {
-          for (const inst of clip.chain) this.audio?.drop(inst.instanceId);
+          for (const inst of clip.chain) {
+            this.audio?.drop(inst.instanceId);
+            // 追踪服务按实例持有探针目标与叠层纹理 —— 同样是「不显式回收就
+            // 跟着进程一直长」的那一类（见 core/AGENTS.md 的生命周期一条）。
+            this.renderer?.dropTrackerInstance(inst.instanceId);
+          }
         }
       }
     }

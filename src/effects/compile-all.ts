@@ -43,6 +43,7 @@ import {
 } from '../algos/shader-lib';
 import { listTransitions } from './transitions/registry';
 import { EFFECT_HEAD, effectProgramName } from './shader-def';
+import { compileTrackerPrograms } from '../engine/box-tracker';
 import type { Kit } from '../engine/kit';
 
 export interface CompileResult {
@@ -158,6 +159,12 @@ export function compileAll(kit: Kit): CompileAllOutcome {
     ...compileAllEffects(kit),
     ...compileAllAlgoShaders(kit),
     ...compileAllTransitions(kit),
+    /*
+     * 追踪服务自己的探针 program。它不在任何 def 的 fragment / prePasses 里
+     * （由 runner 之外的服务编译），所以不显式加进来就完全没有语法守卫 ——
+     * 而它的失败形态是「方框不动 / 画面不叠」，不报错。
+     */
+    compileTrackerPrograms(kit),
   ];
   return {
     results,

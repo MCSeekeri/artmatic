@@ -290,6 +290,16 @@ export interface EffectShaderDef {
   opaqueOutput?: boolean;
   /** 主 pass 需要 u_feedback（实例的跨帧历史，ping-pong）。 */
   feedback?: boolean;
+  /**
+   * **跨帧状态**（帧间累积的东西，不是每帧独立求值）。
+   *
+   * 目前只被缩略图渲染器用：`EffectThumbRenderer` 对这类特效连渲若干帧，
+   * 因为「只渲一帧」得到的是状态的第一帧（对 `feedback` 是黑，对追踪叠加层
+   * 是「还没跟稳的框」）。`feedback` / `prePasses[].feedback` 已经隐含这一条，
+   * 这个字段是给**不用 `u_feedback` 但同样有状态**的特效（如 `box-tracker`
+   * 的追踪器）留的。
+   */
+  stateful?: boolean;
   setUniforms: (
     gl: WebGL2RenderingContext,
     locs: Record<string, WebGLUniformLocation | null>,

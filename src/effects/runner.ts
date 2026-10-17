@@ -176,6 +176,22 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       ? ctx.compositor.feedbackFor(inst.instanceId, ctx.w, ctx.h, shader.hdrFeedback ?? false)
       : null;
 
+    /*
+     * 追踪叠层（`u_overlay`）的准备工作：探针渲染、回读、检测、绘叠层、上传。
+     *
+     * **必须在 `prog.use()` 之前**：它要切 program / FBO / 激活纹理单元，
+     * 插在纹理绑定之后会把这些绑定顶掉（`effects/AGENTS.md` 记过两次真实事故）。
+     * 服务内部对「program 没声明 u_overlay」直接返回，所以绝大多数特效零开销。
+     */
+    ctx.tracker?.prepare(prog, inst, inputTex, values, {
+      t: ctx.t,
+      frame: ctx.frame,
+      fps: ctx.fps,
+      w: ctx.w,
+      h: ctx.h,
+      seed,
+    });
+
     const restore = shader.linearFilter ? forceLinear(gl, inputTex) : null;
     prog.use();
     prog
@@ -185,6 +201,7 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       .u('u_delta', delta)
       .u('u_seed', seed)
       .u('u_resolution', [ctx.w, ctx.h]);
+    ctx.tracker?.bind(prog, inst);
     if (fb) prog.tex('u_feedback', fb.read.tex);
     shader.setUniforms(gl, prog.uniforms, values, uniformCtx);
     ctx.spectrum?.bindTo(prog, inst.instanceId, ctx.t, delta, values);

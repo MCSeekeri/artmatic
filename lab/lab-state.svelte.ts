@@ -485,6 +485,7 @@ class LabState {
       else if (p.type === 'bitmask') values[p.key] = Math.floor(rng() * 2 ** p.bits);
       // pattern 保持默认值：随机位图是一团噪声，既没有「图案」可言，
       // 也会把「随机出一组好看的参数」这件事直接毁掉。
+      // text 同理：随机字符串既不可读，也会让「随机出一组好看的参数」失效。
       else values[p.key] = p.defaultValue;
     }
     if (scope === 'source') this.sourceParams = values;
@@ -605,6 +606,14 @@ class LabState {
   /** 后备缓冲尺寸（不是 canvas 的显示尺寸——那个被 CSS 缩过）。 */
   renderSize(): { w: number; h: number } {
     return this.core ? { w: this.core.kit.w, h: this.core.kit.h } : { w: 0, h: 0 };
+  }
+
+  /**
+   * 斑点追踪的读数。没有它的时候「方框没出现」只能靠猜：是检测没找到斑、
+   * 还是叠层没画、还是上传把链输入顶掉了。E2E 与手工调试都用它。
+   */
+  trackerStats(): ReturnType<RenderCore['tracker']['stats']> | null {
+    return this.core ? this.core.tracker.stats() : null;
   }
 
   listIds(): { sources: string[]; effects: string[] } {

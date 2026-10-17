@@ -10,6 +10,8 @@ import {
   validateProject,
   type QuadCorners,
 } from '../../src/core/schema';
+import { resolveThemeColor } from '../../src/typography/theme';
+import { createTextElement, createTypographyDocument } from '../../src/typography/document';
 
 describe('validateProject', () => {
   it('defaultProject 通过校验', () => {
@@ -45,6 +47,149 @@ describe('validateProject', () => {
     const p = defaultProject('bad');
     (p as { overlapBehavior: string }).overlapBehavior = 'merge';
     expect(() => validateProject(p)).toThrow(/overlapBehavior/);
+  });
+});
+
+describe('validateProject：历史遗留的「主题色引用」', () => {
+  /*
+   * 取色卡对**所有**颜色入口都提供主题色（`@accent1`），但只有排版文档会在
+   * 渲染时解析引用。算法参数 / 特效参数 / 纯色片段的颜色直接进
+   * `hexToRgba()` —— 引用在那里算坏颜色，回退成**品红**。
+   *
+   * 用户侧的形态：在检查器里挑一个主题色，画面整片变品红，而参数表里存的
+   * 是一串 `@accent1`。新数据由检查器写入时解析，老数据由 validateProject 补。
+   */
+  const solid = (color: string) =>
+    ({
+      kind: 'source',
+      id: newId(),
+      start: 0,
+      end: 1,
+      label: '',
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'solid', color },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'contain',
+    }) as never;
+
+  const algo = (params: Record<string, unknown>) =>
+    ({
+      kind: 'source',
+      id: newId(),
+      start: 0,
+      end: 1,
+      label: '',
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'algo', generator: 'game-of-life', params },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'contain',
+    }) as never;
+
+  const effect = (values: Record<string, unknown>) =>
+    ({
+      kind: 'effect',
+      id: newId(),
+      start: 0,
+      end: 1,
+      label: '',
+      fadeSec: 0,
+      curves: {},
+      chain: [{ instanceId: newId(), defId: 'duotone', enabled: true, values }],
+    }) as never;
+
+  it('纯色 / 算法参数 / 特效参数里的 @slot 被解析成裸 hex', () => {
+    const p = defaultProject('refs');
+    p.tracks = [
+      {
+        kind: 'visual',
+        id: 'v1',
+        name: 'V1',
+        enabled: true,
+        clips: [solid('@accent1'), algo({ colorLive: '@accent1.d25', speed: 1, colorBg: '#102030' }), effect({ tint: '@lt1', amount: 0.5 })],
+      },
+    ] as never;
+
+    validateProject(p);
+    const clips = (p.tracks[0] as unknown as { clips: unknown[] }).clips as {
+      source?: { color?: string; params?: Record<string, unknown> };
+      chain?: { values: Record<string, unknown> }[];
+    }[];
+
+    expect(clips[0]!.source!.color, '纯色片段里的引用必须解析成 hex').toBe('#156082');
+    const params = clips[1]!.source!.params!;
+    expect(String(params.colorLive)).toMatch(/^#[0-9a-f]{6}$/i);
+    // 变体（`.d25`）也要解析对：它比原色暗，不是把整个引用当普通 hex 丢掉。
+    expect(params.colorLive).toBe(resolveThemeColor('@accent1.d25'));
+    expect(params.colorLive).not.toBe('#156082');
+    // 非颜色参数（数字 / 裸 hex）一个都不能被动。
+    expect(params.speed).toBe(1);
+    expect(params.colorBg).toBe('#102030');
+    expect(clips[2]!.chain![0]!.values.tint).toBe('#ffffff');
+    expect(clips[2]!.chain![0]!.values.amount).toBe(0.5);
+  });
+
+  it('排版文档里的引用一个字都不能动（那是换配色方案的唯一依据）', () => {
+    const doc = createTypographyDocument();
+    const el = createTextElement(doc.size, { text: 'hi' });
+    el.style.color = '@accent1';
+    doc.elements.push(el);
+
+    const p = defaultProject('refs-typo');
+    p.tracks = [
+      {
+        kind: 'visual',
+        id: 'v1',
+        name: 'V1',
+        enabled: true,
+        clips: [
+          {
+            kind: 'source',
+            id: newId(),
+            start: 0,
+            end: 1,
+            label: '',
+            fadeSec: 0,
+            curves: {},
+            source: { type: 'text', doc },
+            blend: 'normal',
+            opacity: 1,
+            transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+            fit: 'contain',
+          },
+        ],
+      },
+    ] as never;
+
+    validateProject(p);
+    const src = ((p.tracks[0] as unknown as { clips: { source: { doc: typeof doc } }[] }).clips[0]!).source;
+    const first = src.doc.elements[0]!;
+    expect(first.kind).toBe('text');
+    expect(first.kind === 'text' ? first.style.color : null).toBe('@accent1');
+  });
+
+  it('解析不了的值原样保留（自定义文本参数里手打的 @foo）', () => {
+    const p = defaultProject('refs-keep');
+    p.tracks = [
+      {
+        kind: 'visual',
+        id: 'v1',
+        name: 'V1',
+        enabled: true,
+        clips: [algo({ labelCustom: '@foo', colorLive: '#123456' })],
+      },
+    ] as never;
+
+    validateProject(p);
+    const params = ((p.tracks[0] as { clips: { source: { params: Record<string, unknown> } }[] }).clips[0]!).source
+      .params;
+    expect(params.labelCustom).toBe('@foo');
+    expect(params.colorLive).toBe('#123456');
   });
 });
 

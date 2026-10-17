@@ -18,6 +18,8 @@ import type { KeySettings, QuadCorners } from './image-fx';
 import type { TypographyDocument } from '../typography/document';
 import {
   isKnownTheme,
+  parseThemeRef,
+  resolveThemeColor,
   sanitizeCustomThemes,
   type TypographyTheme,
 } from '../typography/theme';
@@ -414,6 +416,19 @@ export function validateProject(raw: unknown): Project {
       delete (p as { typographyTheme?: string }).typographyTheme;
     }
   }
+  /*
+   * 顺手修掉历史数据里的「主题色引用跑进非排版颜色参数」。
+   *
+   * 取色卡对所有颜色入口都提供主题色（`@accent1`），但只有排版文档会在渲染时
+   * 解析引用；算法参数 / 特效参数 / 纯色片段的颜色直接进 `hexToRgba()`，
+   * 那里的坏颜色回退是**品红**。用户挑一个主题色，画面整片变品红，
+   * 而参数表里存的是一串 `@accent1` —— 从界面上完全看不出发生了什么。
+   *
+   * 新数据由检查器在**写入时**解析（见 `ui/Inspector.svelte` 的三处取色），
+   * 这里只补打开工程这一条：老工程存下来的引用要变成裸 hex，否则它们永远画品红。
+   */
+  resolveStrayThemeRefs(p, custom);
+
   // 循环变量刻意叫 tk 而不是 tr：`tr` 是翻译函数的专名（i18n/index.svelte.ts），
   // 同名会把下面那两次取词整成「tr is not a function」。
   for (const tk of p.tracks as { kind: string; clips: unknown }[]) {
@@ -424,6 +439,41 @@ export function validateProject(raw: unknown): Project {
     for (const c of tk.clips as AnyClip[]) validateClip(c, tk.kind);
   }
   return p;
+}
+
+/**
+ * 把「跑进非排版颜色字段的主题色引用」解析成裸 hex（就地改）。
+ *
+ * 只碰**能解析成合法槽位/变体**的字符串（`parseThemeRef` 非 null）：
+ * 自定义文本参数里手打的 `@foo` 之类必须原样保留 —— 那是用户内容，不是坏颜色。
+ *
+ * 只覆盖三处：纯色片段的 `color`、算法片段的 `params`、特效实例的 `values`。
+ * **排版文档里的引用一个字都不能动** —— 那是「换配色方案跟着变」的唯一依据。
+ */
+function resolveStrayThemeRefs(p: Project, custom: readonly TypographyTheme[]): void {
+  const resolve = (v: unknown): unknown =>
+    typeof v === 'string' && parseThemeRef(v) ? resolveThemeColor(v, p.typographyTheme, custom) : v;
+
+  for (const tk of p.tracks as Track[]) {
+    if (tk.kind !== 'visual') continue;
+    for (const c of tk.clips) {
+      if (c.kind === 'source') {
+        if (c.source.type === 'solid') {
+          c.source.color = String(resolve(c.source.color));
+        } else if (c.source.type === 'algo') {
+          for (const key of Object.keys(c.source.params)) {
+            c.source.params[key] = resolve(c.source.params[key]) as number | string;
+          }
+        }
+      } else if (c.kind === 'effect') {
+        for (const inst of c.chain) {
+          for (const key of Object.keys(inst.values)) {
+            inst.values[key] = resolve(inst.values[key]) as number | string;
+          }
+        }
+      }
+    }
+  }
 }
 
 function validateClip(c: AnyClip, trackKind: Track['kind']): void {

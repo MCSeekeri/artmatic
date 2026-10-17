@@ -117,13 +117,37 @@ export interface PatternParam extends ParamBase {
   mode?: '2d' | '1d';
 }
 
+/**
+ * 文本参数：值就是用户键入的字符串。
+ *
+ * 存在的理由是**候选词库**这类「内容由用户定、但不能是自由文案键」的参数：
+ * 内置几套词库够用，但要的是「用户能填自己的词」。
+ *
+ * 与 `pattern` / `bitmask` 同理，它是**内容入参**、不可打关键帧
+ * （`evalParams` 只对 `range` 走曲线）—— 让一段文字逐帧变形没有语义。
+ *
+ * **不是**富文本，也不做换行编辑：`multiline` 只是让输入框长高、
+ * 用换行分隔多个候选（例如每行一个标签词）。
+ */
+export interface TextParam extends ParamBase {
+  type: 'text';
+  defaultValue: string;
+  /** 输入上限（按字符数）。超长不会有提示，所以默认值要给得宽一点。 */
+  maxLength?: number;
+  /** 允许多行输入（换行分隔）。 */
+  multiline?: boolean;
+  /** 空值时输入框里的灰字提示。存键，理由同 `labelKey`。 */
+  placeholderKey?: Label;
+}
+
 export type ParamDef =
   | RangeParam
   | SelectParam
   | CheckboxParam
   | ColorParam
   | BitmaskParam
-  | PatternParam;
+  | PatternParam
+  | TextParam;
 
 export function defaultValues(params: ParamDef[]): Record<string, number | string> {
   const out: Record<string, number | string> = {};

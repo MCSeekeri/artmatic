@@ -47,10 +47,26 @@ const HEAD_OWNED = new Set([
 const RUNNER_BOUND = new Set(['u_spectrum']);
 
 /**
+ * 追踪服务（`engine/box-tracker.ts::bind`）负责写的 uniform。
+ *
+ * 与 `RUNNER_BOUND` 分开列：那边是 runner 在**同一处**绑的，这边是另一个服务
+ * 在 `bind()` 里写的（叠层纹理 + 方框数组）。混在一起会让「谁负责派发」变得
+ * 不可读。`u_boxA[12]` 是数组声明，`declaredUniforms` 的正则不匹配数组，
+ * 列在这里是为了「将来正则改了也不会误报」。
+ */
+const TRACKER_BOUND = new Set(['u_overlay', 'u_boxCount', 'u_boxA']);
+
+/**
  * runner **能**绑定的 sampler。声明了别的就没人给它绑 —— 采样会读回未绑定纹理
  * （黑/垃圾），而 GL 自己不会说话。
  */
-const BINDABLE_SAMPLERS = new Set(['u_texture', 'u_original', 'u_feedback', ...RUNNER_BOUND]);
+const BINDABLE_SAMPLERS = new Set([
+  'u_texture',
+  'u_original',
+  'u_feedback',
+  ...RUNNER_BOUND,
+  'u_overlay',
+]);
 
 interface PassProbe {
   /** `main` 或 `pre0` / `pre1` … */
@@ -153,7 +169,8 @@ describe('特效接线自检', () => {
     const { passes, written } = probeEffect(id);
     const p = passes.find((x) => x.kind === kind)!;
     const missed = [...p.own.keys()].filter(
-      (n) => !HEAD_OWNED.has(n) && !RUNNER_BOUND.has(n) && !written.has(n),
+      (n) =>
+        !HEAD_OWNED.has(n) && !RUNNER_BOUND.has(n) && !TRACKER_BOUND.has(n) && !written.has(n),
     );
     expect(missed, `${id} 的 ${kind} 声明了却没写 → 这些 uniform 恒为默认值且不报错`).toEqual([]);
   });

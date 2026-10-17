@@ -35,6 +35,19 @@ export const effects = {
   'fx.desc.bleach': '抽掉颜色，只留下明暗。',
   'fx.desc.blur': '柔化整幅画面。',
   'fx.desc.bulge': '像鱼眼镜头一样鼓起或凹陷。',
+  'fx.desc.boxTracker': '给画面叠一层检测 HUD：方框、标签与连线。',
+
+  /*
+   * 方框跟踪的**标签词库**（画进画面里的候选词）。
+   *
+   * 它们放在语言表里不是为了「跟着界面语言变」—— 是**硬编码文案守卫**要求
+   * `src/` 下的中日韩字面量只能出现在语言文件里（`tests/unit/i18n.test.ts`）。
+   * 逗号分隔成一张表：`engine/box-tracker.ts` 在画标签时 split 一次。
+   */
+  'fx.boxTracker.wordsMil': '目标,载具,人员,设施,异常体,信号源,重型单位,空中目标',
+  'fx.boxTracker.wordsTech': 'TARGET,VEHICLE,HOSTILE,UNKNOWN,SIGNAL,UNIT,ANOMALY,DRONE',
+  'fx.boxTracker.wordsId': 'OBJ-0x1F,TRK-07,UNIT-12,SIG-3A,REF-08,NODE-21,TAG-04,SN-114',
+  'fx.boxTracker.wordsBio': '人形,四足,飞行体,集群,植物,微生物,未知生物,巢穴',
   'fx.desc.channelSplit': 'R/G/B 分离，经典的故障特效。',
   'fx.desc.channelSplitPrism': '通道错位的两种映射，参数更细。',
   'fx.desc.circleWarp': '把画面卷到圆筒面上。',

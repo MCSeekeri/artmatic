@@ -21,6 +21,7 @@ import { installTheme } from '../src/ui/theme-apply';
 import { theme } from '../src/ui/theme.svelte';
 import { labState, LAB_SCALES, NO_EFFECT_ID } from './lab-state.svelte';
 import { AlgoThumbRenderer, thumbSize } from '../src/render/algo-thumb-renderer';
+import { EffectThumbRenderer } from '../src/render/effect-thumb-renderer';
 import { TransitionThumbRenderer } from '../src/render/transition-thumb-renderer';
 import { previewRecipe } from '../src/algos/catalog';
 import { getGenerator, listGenerators } from '../src/algos/registry';
@@ -36,6 +37,8 @@ mount(LabApp, { target: document.getElementById('lab')! });
 const algoThumbRenderer = new AlgoThumbRenderer();
 /** 转场缩略图渲染器：另一台离屏上下文（两张底图 + 一条转场）。 */
 const transitionThumbRenderer = new TransitionThumbRenderer();
+/** 特效缩略图渲染器：与选择器 / 批量导出共用同一台（`EffectThumbRenderer`）。 */
+const effectThumbRenderer = new EffectThumbRenderer();
 
 /**
  * E2E 钩子。约定与 `window.__artmatic` 一致：暴露**纯数据**与少量动作，
@@ -76,6 +79,7 @@ const transitionThumbRenderer = new TransitionThumbRenderer();
   onSeek: () => labState.renderAt(labState.t, true),
   readPixels: () => labState.readPixels(),
   renderSize: () => labState.renderSize(),
+  trackerStats: () => labState.trackerStats(),
   compileAll: () => labState.runCompile(),
   compileState: () => labState.compileResults,
 
@@ -138,5 +142,18 @@ const transitionThumbRenderer = new TransitionThumbRenderer();
       progress: shot.progress,
       failed: transitionCompileFailures().has(id),
     };
+  },
+
+  /**
+   * **单张特效缩略图**（`scripts/gen-effect-thumb.mjs` 用）。
+   *
+   * 与选择器、以及 lab 的批量导出**同一个渲染器**（`EffectThumbRenderer`），
+   * 所以拿到的就是缩略图卡片里会显示的那张图；不会另写一套近似实现。
+   * 只回传 WebP data URL（大像素不出 page，与 `__lab` 其余部分同一条纪律）。
+   */
+  effectThumb: (id: string, height: number) => {
+    const canvas = effectThumbRenderer.renderCanvas(id, thumbSize(height));
+    if (!canvas) return null;
+    return canvas.toDataURL('image/webp', 0.84);
   },
 };

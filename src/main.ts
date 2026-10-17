@@ -28,6 +28,7 @@ import {
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
+import { importVideoFile } from './ui/media-import';
 import { applyMachine, currentCapacity, resetCapacity, setLimits } from './core/capacity';
 import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
@@ -344,6 +345,8 @@ const control = createControlPlane(controlContext);
   videoStats: () => appState.video.stats(),
   /** E2E / 诊断：特效池与模拟状态的容量读数（失败模式是静默的，所以要有读数）。 */
   poolStats: () => appState.renderer.poolStats(),
+  /** E2E / 诊断：斑点追踪（方框跟踪）的读数。 */
+  trackerStats: () => appState.renderer.trackerStats(),
   algoStats: () => appState.algos.stats(),
   /**
    * 容量预算的读数与写入。
@@ -374,6 +377,19 @@ const control = createControlPlane(controlContext);
    * 走的那一步）。E2E 里造不出真实文件，但可以造真实 PNG 字节。
    */
   registerImageAsset: (assetId: string, blob: Blob) => registerImageBytes(assetId, blob),
+  /**
+   * E2E / 手工验收：用**字节**走一遍真实的「导入视频」路径。
+   *
+   * 为什么要这个口子：视频导入靠 `showOpenFilePicker`（文件系统访问 API），
+   * 它要求真实用户手势，Playwright 的 `filechooser` 事件截不到 —— 于是
+   * 「方框跟踪」这类需要真实视频素材验收的功能无法在 headless 里跑。
+   * 这里绕过的只是「选文件」那一步，probe / 登记 / 建片段全是同一条路。
+   */
+  importVideoBytes: (
+    name: string,
+    bytes: number[],
+    target?: { trackId?: string; start?: number },
+  ) => importVideoFile(new File([new Uint8Array(bytes)], name, { type: 'video/mp4' }), target ?? {}),
   /**
    * E2E / 性能探针专用：跑真实导出管线但**丢掉帧**，只回传耗时。
    *

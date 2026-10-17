@@ -63,6 +63,23 @@
 | `lab/LabParams.svelte`（同样两个循环） | 参数在试炼场里被 `{:else}` 兜成**一个颜色选择器** |
 | `lab/lab-state.svelte.ts` 的 `randomizeParams` | 「随机」按钮**不随机这一项**（静默回落 defaultValue） |
 | `effects/types.ts` 的 `defaultValues` | 新片段写入时缺这个键 —— 只有自带 `defaultValue` 才没事 |
+| `plugins/manifest.ts` 的 `PARAM_TYPES` | 插件声明这种类型时被**当成非法参数拒掉**（内置没事，插件侧全黑） |
+
+（2026-10-17 加 `text` 时补齐了第五项。`ParamDef` 联合类型新增一支后，先用
+`grep PARAM_TYPES` 把所有白名单找出来，别只改内置那四处。）
+
+### `text` 参数（候选词库那类内容）
+
+- 值就是字符串，`EffectInstance.values` 本来就允许 `number | string`，**不需要抬
+  `SCHEMA_VERSION`**。
+- 不可打关键帧（`evalParams` 只对 `range` 走曲线）：一段文字逐帧变形没有语义。
+- 控件是 `ui/controls/TextField.svelte`，提交时机取 `change`（失焦 / 回车）——
+  逐字符提交会把撤销栈塞满，一次 Ctrl+Z 只退一个字符。
+- **中文内容仍然要进语言表**：`src/` 下除 `i18n/locales/` 外的中日韩字面量会被
+  `tests/unit/i18n.test.ts` 的硬编码守卫挡下（「方框跟踪」的候选词库就存在
+  `effects.ts` 的 `fx.boxTracker.words*` 里，逗号分隔，运行时 split）。
+  这些词是**画进画面**的内容，不是界面文案 —— 放在语言表里只是为了过守卫；
+  别在模块加载时 `tr()`（值会冻在那一刻的语言上）。
 
 - 试炼场是「新参数类型的 testbed」：**它和产品端不一致，等于这个类型没有被测过**。
   所以新参数类型要在 lab 侧也加一条 DOM 断言。
@@ -134,6 +151,50 @@
 - 试炼场：`lab-state` 的循环同样节流到 `LAB_FPS`（漏过这条，是 petri 那份 2× 的来源）。
 - **已知缺口**：预览的「帧率档位」低于 100%（`previewFpsDiv > 1`）时会少渲染帧，
   反馈类特效的演化同比变慢 —— 那个档位是**性能档，不是时间档**。
+
+### 追踪叠加层（`u_overlay` / `u_boxA`）
+
+「方框跟踪」是**唯一一个需要 CPU 侧跨帧状态**的特效。它走的是一条独立的
+**uniform 协议**，不在 `EffectShaderDef` 里加字段：
+
+```
+uniform sampler2D u_overlay;   // Canvas2D 画好的框/标签/连线（straight alpha）
+uniform int   u_boxCount;      // 0..12
+uniform vec4  u_boxA[12];      // xy = 中心、zw = 半宽半高（均 0..1，左上原点）
+```
+
+- 服务是 `engine/box-tracker.ts`（`BoxTracker`）。**判据只有一条**：主 pass 声明了
+  `u_overlay` 就干活 —— 与 `SpectrumTextures.bindTo` 对 `u_spectrum` 同构，
+  runner 里没有 defId 分支。其余七十多个特效走早退路径，零开销。
+- runner 里的调用是**两段式，顺序不能换**：
+  1. `ctx.tracker?.prepare(prog, inst, inputTex, values, ctx)` —— 在 `prog.use()`
+     **之前**。它要切 program / FBO / 激活纹理单元，插在纹理绑定之后会把
+     `u_texture` 顶掉（本文件记过两次真实事故）。
+  2. `ctx.tracker?.bind(prog, inst)` —— 在 `.tex('u_texture').tex('u_original')`
+     之后，只做 `prog.tex('u_overlay', …)` 与 `uniform1i/uniform4fv`。
+- **`Program.u()` 装不下 48 个 float**：数组 uniform 必须直接 `uniform4fv`
+  （location 已去掉 `[0]` 后缀）。别试图用 `floats()` 派发。
+- **框内效果只支持内置的单 pass 观感**（反色 / 黑白 / 阈值 / 色阶 / 色相 /
+  像素化 / RGB 错位 / 扫描线 / 描边）。**不是**「任意已有特效」：现有特效是整帧
+  多 pass 管线（`prePasses` + 私有 `u_feedback` 历史 + 半分辨率浮点草稿），
+  协议里没有「按子区域求值」；按框调用要每个框一组目标 + N 倍 pass。
+  要加新的观感，就在 `glsl/box-tracker.ts` 的 `interiorFx` 里加一支 + 一个
+  `select` 选项，别去动特效链。
+  **默认是 `none`**：整块处理在真实素材上会把画面切成灰/橙卡片，HUD 反而像
+  占位符 —— 风格化的观感要让用户显式开。
+- **装饰（扫描线 / 准星 / 数据条 / 纹理描边 / 连线流光 / 出场动画）全部画在
+  Canvas2D 叠层上**，不进着色器。理由与标签一样：虚线、裁切、渐变、径向柔光
+  在 Canvas2D 里是几行，在 GLSL 里要写一整套 SDF。它们只依赖 `t` 与方框 id
+  的哈希，**没有跨帧状态**（出场动画的 `age`/`lost` 来自追踪状态，但只读）。
+- **出场动画的起点不能是 0**：单帧渲染（缩略图 / 首帧）里 `age` 恒为 1，
+  从 0 开始会得到「一帧没有框」的画面。所以淡入从 0.35 起（见
+  `viewsFor` 的注释），配合 `EffectShaderDef.stateful`（缩略图渲染器据此
+  连渲 12 帧）两处一起保证「第一帧也看得见框」。
+- **反色的强度必须是 1**（或者 0）：`mix(c, 1-c, 0.5)` 恒等于 0.5 灰，
+  半强度反色是一块死灰补丁。需要「弱一点」就去色或直接关掉。
+- 守卫：`tests/e2e/box-tracker.spec.ts`（出框 / 换框线颜色画面跟着变 / 探针尺寸
+  不随渲染档位变）。**不要**断言「同一 t 两渲逐字节相同」—— 它持有跨帧状态，
+  seek 时清空（与 `feedback` 类特效同一处置）。
 
 **判定「参数有没有接上」的自动关卡**：`tests/unit/effect-uniforms.test.ts` ——
 用伪 gl 跑一遍每个特效的 `setUniforms`，断言「fragment 里声明的每个 uniform 都被写到」

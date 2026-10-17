@@ -46,6 +46,7 @@ import { buildStack, type BuildStackOptions, type RenderOp, type ResolvedSource,
 import { bottomScopeBlend, neutralizeBottomBlend } from './scope-blend';
 import type { Kit, Program, Target } from './kit';
 import type { SpectrumTextures } from './spectrum-texture';
+import type { BoxTracker } from './box-tracker';
 import type { BeatGrid } from '../core/time';
 import type { EffectClip, EffectInstance, Project, SourceClip } from '../core/schema';
 
@@ -75,6 +76,12 @@ export interface EffectCtx {
    * （静音），而不是未绑定的 sampler。
    */
   spectrum: SpectrumTextures | null;
+  /**
+   * 斑点追踪服务（`u_overlay` / `u_box*`）。由 `render-core` 装配。
+   * `null` = 没有装配（离屏缩略图渲染之类）—— 那时声明了 `u_overlay` 的特效
+   * 拿不到方框，效果退化成「原样输出」，而不是崩溃。
+   */
+  tracker: BoxTracker | null;
 }
 
 /** 一帧求值的上下文（`runOps` 的递归参数包）：整帧不变，要原样穿过嵌套的作用域组。 */
@@ -183,6 +190,12 @@ export class Compositor {
    */
   public spectrum: SpectrumTextures | null = null;
 
+  /**
+   * 斑点追踪服务（`u_overlay`）。同样由 `render-core` 在装配后注入 ——
+   * 它需要回读链输入并持有跨帧状态，属于「谁来供数」，不该进构造签名。
+   */
+  public tracker: BoxTracker | null = null;
+
   constructor(
     private readonly kit: Kit,
     public resolve: SourceResolver,
@@ -282,6 +295,7 @@ export class Compositor {
         clip: op.clip,
         grid: c.project.beatGrid,
         spectrum: this.spectrum,
+        tracker: this.tracker,
       };
       let src = acc;
       let dst = buf;

@@ -17,12 +17,16 @@
   import Checkbox from '../src/ui/controls/Checkbox.svelte';
   import BitmaskField from '../src/ui/controls/BitmaskField.svelte';
   import PatternField from '../src/ui/controls/PatternField.svelte';
+  import TextField from '../src/ui/controls/TextField.svelte';
   import IconButton from '../src/ui/controls/IconButton.svelte';
   import ColorField from '../src/ui/controls/ColorField.svelte';
   import { labState, itemFor, paramsFor, NO_EFFECT_ID } from './lab-state.svelte';
   import { tr } from '../src/i18n/index.svelte';
   import { resolveLabel } from '../src/i18n/label';
   import { visibleParams, type ParamDef } from '../src/effects/types';
+  // 取色卡给的是主题色引用（`@accent1`），而算法/特效参数直接进 `hexToRgba()`，
+  // 引用在那里会退化成**品红**。与检查器同一条纪律：写入时就解析成裸 hex。
+  import { resolveThemeColor } from '../src/typography/theme';
 
   // 两处都要过 `visibleWhen`。**主应用的 Inspector 一直是这么做的，试炼场漏了** ——
   // 于是 clock 的 `division`、channel-split-prism 的分模式参数在 lab 里全都常显。
@@ -124,7 +128,7 @@
                   label={resolveLabel(p.labelKey, tr)}
                   value={String(valueOf('source', p))}
                   testid={`lab-source-color-${p.key}`}
-                  onchange={(v) => labState.setParam('source', p.key, v)}
+                  onchange={(v) => labState.setParam('source', p.key, resolveThemeColor(v))}
                 />
               </Field>
             {:else if p.type === 'bitmask'}
@@ -152,6 +156,18 @@
                     live: String(labState.sourceParams.colorLive ?? '#7fd4ff'),
                   }}
                   testid={`lab-source-pattern-${p.key}`}
+                  onchange={(v) => labState.setParam('source', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'text'}
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
+                <TextField
+                  value={String(valueOf('source', p))}
+                  ariaLabel={resolveLabel(p.labelKey, tr)}
+                  multiline={p.multiline}
+                  maxLength={p.maxLength}
+                  placeholder={p.placeholderKey ? resolveLabel(p.placeholderKey, tr) : ''}
+                  testid={`lab-source-text-${p.key}`}
                   onchange={(v) => labState.setParam('source', p.key, v)}
                 />
               </Field>
@@ -243,7 +259,7 @@
                   label={resolveLabel(p.labelKey, tr)}
                   value={String(valueOf('effect', p))}
                   testid={`lab-effect-color-${p.key}`}
-                  onchange={(v) => labState.setParam('effect', p.key, v)}
+                  onchange={(v) => labState.setParam('effect', p.key, resolveThemeColor(v))}
                 />
               </Field>
             {:else if p.type === 'bitmask'}
@@ -271,6 +287,18 @@
                     live: String(labState.effectParams.colorLive ?? '#7fd4ff'),
                   }}
                   testid={`lab-effect-pattern-${p.key}`}
+                  onchange={(v) => labState.setParam('effect', p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'text'}
+              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
+                <TextField
+                  value={String(valueOf('effect', p))}
+                  ariaLabel={resolveLabel(p.labelKey, tr)}
+                  multiline={p.multiline}
+                  maxLength={p.maxLength}
+                  placeholder={p.placeholderKey ? resolveLabel(p.placeholderKey, tr) : ''}
+                  testid={`lab-effect-text-${p.key}`}
                   onchange={(v) => labState.setParam('effect', p.key, v)}
                 />
               </Field>

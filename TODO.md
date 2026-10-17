@@ -41,6 +41,23 @@
   E2E `tests/e2e/typography-image-fx.spec.ts`（真实导入 + 舞台/光栅化像素 + 手柄拖动 +
   一笔撤销）。
 
+- **「方框跟踪」特效**（`box-tracker`）：YOLO 风格的检测 HUD 叠加层。链路是
+  「固定 160×90 探针 → `readPixels` → `core/blob-track`（显著性 + 网格峰 + 区域生长
+  + 贪心关联 + EMA）→ Canvas2D 叠层 → `u_overlay` 合成」。方框样式 5 种（实线 /
+  虚线 / 角括号 / 双线 / 纹理描边）、标签 4 套内置词库 + 自定义多行词、45° 折线 /
+  直线 / 曲线连线、框内 9 种单 pass 观感、以及扫描线 / 准星刻度 / 侧边数据条 /
+  连线流光 / 出入场动画。**框内不调用任意特效**（多 pass 管线没有子区域求值）。
+  - 探针尺寸**不随渲染尺寸变**，否则预览与导出会得到不同的框；
+  - 状态在 `onSeek` 清空（与 `feedback` 类同一处置），导出顺序播放逐帧精确；
+  - 缩略图/单帧渲染靠 `EffectShaderDef.stateful` 连渲 12 帧 + 淡入从 0.35 起，
+    否则「第一帧一个框都没有」。
+  - 守卫：`tests/unit/blob-track.test.ts`（11 条）+ `tests/e2e/box-tracker.spec.ts`
+    （出框 / 参数即时生效 / 探针不随档位变 / 每个装饰项都画出东西 / 多行文本框）。
+- **`text` 参数类型**（`TextField`）+ 取色卡主题色引用修复：非排版颜色入口
+  （纯色片段 / 算法参数 / 特效参数 / lab 两处）在**写入时**解析 `@accent1`，
+  打开工程时由 `validateProject` 补历史数据；否则引用会退化成品红。
+  守卫：`tests/e2e/color-picker-refs.spec.ts` + `schema.test.ts` 三条。
+
 ## 待办
 
 - [x] 简易抠图

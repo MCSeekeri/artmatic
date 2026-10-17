@@ -149,7 +149,7 @@ export type ValidateResult =
 
 /* --------------------------------------------------------- 小工具 */
 
-const PARAM_TYPES = new Set(['range', 'select', 'checkbox', 'color', 'bitmask', 'pattern']);
+const PARAM_TYPES = new Set(['range', 'select', 'checkbox', 'color', 'bitmask', 'pattern', 'text']);
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -258,6 +258,16 @@ function checkParam(raw: unknown, path: string): PluginIssue | null {
       }
       if (raw.mode !== undefined && raw.mode !== '2d' && raw.mode !== '1d') {
         return { code: 'bad-param', path, detail: 'mode' };
+      }
+      return null;
+    }
+    case 'text': {
+      if (typeof raw.defaultValue !== 'string') return { code: 'bad-param', path, detail: 'defaultValue' };
+      if (raw.maxLength !== undefined && num(raw.maxLength) === null) {
+        return { code: 'bad-param', path, detail: 'maxLength' };
+      }
+      if (raw.placeholderKey !== undefined && !normalizeLabel(raw.placeholderKey)) {
+        return { code: 'bad-param', path, detail: 'placeholderKey' };
       }
       return null;
     }

@@ -10,6 +10,7 @@
   import PatternField from './controls/PatternField.svelte';
   import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
+  import TextField from './controls/TextField.svelte';
   import ColorField from './controls/ColorField.svelte';
   import {
     BLEND_MODES,
@@ -603,7 +604,11 @@
             testid="clip-color"
             onchange={(v) =>
               upd(clip, tr('insp.changeColor'), (c) => {
-                if (c.kind === 'source' && c.source.type === 'solid') c.source.color = v;
+                // 纯色片段的颜色直接进 `hexToRgba()`，不认 `@accent1` 这类引用
+                // （会退化成品红）。取色卡给的是引用，这里先解析成裸 hex。
+                if (c.kind === 'source' && c.source.type === 'solid') {
+                  c.source.color = resolveThemeColor(v, inspectorTheme);
+                }
               })}
           />
           <span class="dim mono">{clip.source.color}</span>
@@ -674,7 +679,7 @@
                   value={String(clip.source.params[p.key] ?? p.defaultValue)}
                   theme={inspectorTheme}
                   testid={`algo-param-${p.key}`}
-                  onchange={(v) => setAlgoParam(clip, p.key, v)}
+                  onchange={(v) => setAlgoParam(clip, p.key, resolveThemeColor(v, inspectorTheme))}
                 />
               </Field>
             {:else if p.type === 'bitmask'}
@@ -702,6 +707,19 @@
                     bg: String(clip.source.params.colorBg ?? '#05070f'),
                     live: String(clip.source.params.colorLive ?? '#7fd4ff'),
                   }}
+                  testid={`algo-param-${p.key}`}
+                  onchange={(v) => setAlgoParam(clip, p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'text'}
+              <!-- 内容入参（候选词库之类）：可编辑但不可打关键帧。 -->
+              <Field label={resolveLabel(p.labelKey, tr)} tipText={tr('insp.bakedParamTip', { label: resolveLabel(p.labelKey, tr) })}>
+                <TextField
+                  value={String(clip.source.params[p.key] ?? p.defaultValue)}
+                  ariaLabel={resolveLabel(p.labelKey, tr)}
+                  multiline={p.multiline}
+                  maxLength={p.maxLength}
+                  placeholder={p.placeholderKey ? resolveLabel(p.placeholderKey, tr) : ''}
                   testid={`algo-param-${p.key}`}
                   onchange={(v) => setAlgoParam(clip, p.key, v)}
                 />
@@ -995,7 +1013,7 @@
                     value={String(inst.values[p.key] ?? p.defaultValue)}
                     theme={inspectorTheme}
                     testid={`effect-param-${p.key}`}
-                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, resolveThemeColor(v, inspectorTheme))}
                   />
                 </Field>
               {:else if p.type === 'bitmask'}
@@ -1022,6 +1040,18 @@
                       bg: String(inst.values.colorBg ?? '#05070f'),
                       live: String(inst.values.colorLive ?? '#7fd4ff'),
                     }}
+                    testid={`effect-param-${p.key}`}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                  />
+                </Field>
+              {:else if p.type === 'text'}
+                <Field label={resolveLabel(p.labelKey, tr)}>
+                  <TextField
+                    value={String(inst.values[p.key] ?? p.defaultValue)}
+                    ariaLabel={resolveLabel(p.labelKey, tr)}
+                    multiline={p.multiline}
+                    maxLength={p.maxLength}
+                    placeholder={p.placeholderKey ? resolveLabel(p.placeholderKey, tr) : ''}
                     testid={`effect-param-${p.key}`}
                     onchange={(v) => setEffectParam(clip, inst, p.key, v)}
                   />

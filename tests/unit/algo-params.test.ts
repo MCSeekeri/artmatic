@@ -22,7 +22,7 @@ import type { Label } from '../../src/i18n/label';
 
 const zh = LOCALES['zh-CN'] as Record<string, string>;
 
-const KNOWN_TYPES = new Set(['range', 'select', 'checkbox', 'color', 'bitmask', 'pattern']);
+const KNOWN_TYPES = new Set(['range', 'select', 'checkbox', 'color', 'bitmask', 'pattern', 'text']);
 
 /**
  * 把 `Label` 解析成展示文本：文案键查表、字面量原样。
@@ -95,6 +95,11 @@ function checkParams(where: string, params: ParamDef[]): void {
       expect(typeof p.defaultValue, `${id}: pattern 的默认值必须是字符串`).toBe('string');
       if (p.defaultValue !== '') {
         expect(decodePattern(p.defaultValue), `${id}: 默认图案串解不出来`).not.toBeNull();
+      }
+    } else if (p.type === 'text') {
+      expect(typeof p.defaultValue, `${id}: text 的默认值必须是字符串`).toBe('string');
+      if (p.placeholderKey) {
+        expect(typeof textOf(p.placeholderKey), `${id}: placeholderKey 解析不出文本`).toBe('string');
       }
     }
 

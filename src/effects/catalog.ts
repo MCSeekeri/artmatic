@@ -82,6 +82,7 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   'audio-bars': { base: 'grid', descKey: 'fx.desc.audioBars', category: 'signal', overlay: true },
   bleach: { base: 'bars', descKey: 'fx.desc.bleach', category: 'color' },
   blur: { base: 'photo', descKey: 'fx.desc.blur', category: 'blur' },
+  'box-tracker': { base: 'photo', descKey: 'fx.desc.boxTracker', category: 'style', overlay: true },
   bulge: { base: 'grid', descKey: 'fx.desc.bulge', category: 'geometry' },
   'channel-split': { base: 'mandel', descKey: 'fx.desc.channelSplit', category: 'glitch' },
   'channel-split-prism': { base: 'mandel', descKey: 'fx.desc.channelSplitPrism', category: 'glitch' },

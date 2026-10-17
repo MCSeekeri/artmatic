@@ -23,6 +23,7 @@
 import { Renderer } from '../engine/renderer';
 import { SourceManager } from '../engine/sources';
 import { SpectrumTextures, type SpectrumSource } from '../engine/spectrum-texture';
+import { BoxTracker } from '../engine/box-tracker';
 import { createVideoSourceManager, type VideoSourceManager } from '../engine/video-source';
 import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
@@ -81,6 +82,11 @@ export interface RenderCore {
   kit: Kit;
   /** 频谱纹理池。宿主换音频来源时调 `setSource`。 */
   spectrumTextures: SpectrumTextures;
+  /**
+   * 斑点追踪服务（`u_overlay`）。宿主**必须**在关工程时 `clear()` ——
+   * 它持有每实例的探针目标与叠层纹理（见 `src/core/AGENTS.md` 的生命周期一条）。
+   */
+  tracker: BoxTracker;
   /** 算法运行时。暴露出来是为了宿主能换特征来源（`setFeatureSource`）。 */
   algos: AlgoRuntime;
 }
@@ -120,15 +126,20 @@ export function createRenderCore(
   renderer.setEffectRunner(createEffectRunner(renderer.kit, () => opts.getProject().seed));
   renderer.setTransitionRunner(createTransitionRunner(renderer.kit));
   /*
-   * 跳帧后让有状态模拟重新对齐（见 AlgoRuntime.alignSims）。必须走
-   * `Renderer.onSeek()` 这条唯一的路 —— 主应用与 lab 的每一个 seek 入口都会经过它，
-   * 各自记得调一次是不可能的维护方式。
+   * 跳帧后让有状态模拟重新对齐（见 AlgoRuntime.alignSims），并清掉追踪状态。
+   * 必须走 `Renderer.onSeek()` 这条唯一的路 —— 主应用与 lab 的每一个 seek
+   * 入口都会经过它，各自记得调一次是不可能的维护方式。
    */
-  renderer.setSeekExtra(() => algos.alignSims());
+  const tracker = new BoxTracker(renderer.kit, () => opts.getProject().seed);
+  renderer.setTracker(tracker);
+  renderer.setSeekExtra(() => {
+    algos.alignSims();
+    tracker.reset();
+  });
 
   const spectrumTextures = new SpectrumTextures(renderer.kit);
   spectrumTextures.setSource(opts.spectrum ?? null);
   renderer.setSpectrumTextures(spectrumTextures);
 
-  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, algos };
+  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, algos };
 }
