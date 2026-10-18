@@ -1,5 +1,6 @@
 <script lang="ts">
   import { appState } from './app-state.svelte';
+  import Icon from './Icon.svelte';
   import KeyableField from './KeyableField.svelte';
   import Button from './controls/Button.svelte';
   import BitmaskField from './controls/BitmaskField.svelte';
@@ -23,6 +24,8 @@
     type SourceClip,
   } from '../core/schema';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
+  import { reorder } from './drag-reorder';
+  import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
   import { defaultParams, getGenerator } from '../algos/registry';
   import { defaultEffectValues, getEffect } from '../effects/registry';
@@ -80,6 +83,7 @@
         });
       }
     });
+    for (const defId of defIds) rememberRecentEffect(defId);
   }
 
   function removeInstance(clip: AnyClip, instanceId: string): void {
@@ -97,6 +101,40 @@
       const [it] = c.chain.splice(idx, 1);
       c.chain.splice(to, 0, it!);
     });
+  }
+
+  /** 拖曳排序的落点结算（与 `moveInstance` 同一笔撤销语义）。 */
+  function reorderInstance(clip: AnyClip, from: number, to: number): void {
+    upd(clip, tr('insp.reorderEffect'), (c) => {
+      if (c.kind !== 'effect') return;
+      if (from === to || from < 0 || to < 0 || from >= c.chain.length || to >= c.chain.length) return;
+      const [it] = c.chain.splice(from, 1);
+      c.chain.splice(to, 0, it!);
+    });
+  }
+
+  /* ------------------------------------------------- 特效卡片的折叠 */
+  /*
+   * 折叠态按 instanceId 记（不落盘）：它是「这次编辑时我怎么看这条链」，
+   * 与工程内容无关，也没重要到值得写 localStorage。切走再切回来保持原样，
+   * 关掉页面就回到全部展开 —— 与大多数属性面板的手感一致。
+   */
+  let collapsedIds = $state<string[]>([]);
+
+  function isCollapsed(id: string): boolean {
+    return collapsedIds.includes(id);
+  }
+
+  function toggleCollapsed(id: string): void {
+    collapsedIds = isCollapsed(id) ? collapsedIds.filter((x) => x !== id) : [...collapsedIds, id];
+  }
+
+  function allCollapsed(chain: readonly { instanceId: string }[]): boolean {
+    return chain.length > 0 && chain.every((i) => collapsedIds.includes(i.instanceId));
+  }
+
+  function toggleAllCollapsed(chain: readonly { instanceId: string }[]): void {
+    collapsedIds = allCollapsed(chain) ? [] : chain.map((i) => i.instanceId);
   }
 
   function setEffectParam(clip: AnyClip, inst: EffectInstance, key: string, v: number | string): void {
@@ -168,6 +206,7 @@
       c.source = { type: 'algo', generator: genId, params: defaultParams(genId) };
       for (const k of oldKeys) delete c.curves[k];
     });
+    rememberRecentAlgo(genId);
   }
 
   function paramKeyableProps(clip: AnyClip, p: RangeParam) {
@@ -248,6 +287,30 @@
       onClearCurve: () =>
         upd(clip, tr('insp.clearCurve'), (c) => {
           delete c.curves[key];
+        }),
+    };
+  }
+
+  /**
+   * 缩放 X / Y 的联动。
+   *
+   * 默认联动：拖任一轴的滑杆或数字框，另一轴的**基准值**写成同一个数。
+   * 勾「分离 XY」后回到两个独立字段。
+   *
+   * 只同步基值，**不碰曲线**：两轴各自的关键帧是独立编排的（比如只在 Y 上
+   * 做弹跳），强行同步会把另一边已打好的关键帧抹平。基值在曲线存在时不参与
+   * 求值 —— 这是 `KeyableField` 的既定语义，不是这里漏了什么。
+   */
+  function scaleProps(clip: AnyClip, key: 'transform.sx' | 'transform.sy') {
+    const props = keyableProps(clip, key);
+    if (!appState.scaleLinked) return props;
+    const other = key === 'transform.sx' ? 'transform.sy' : 'transform.sx';
+    return {
+      ...props,
+      onBase: (v: number) =>
+        upd(clip, tr('insp.editParam'), (c) => {
+          setBase(c, key, v);
+          setBase(c, other, v);
         }),
     };
   }
@@ -433,8 +496,22 @@
       <KeyableField label={tr('insp.opacity')} min={0} max={1} step={0.01} {...keyableProps(clip, 'opacity')} />
       <KeyableField label={tr('insp.posX')} min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.x')} />
       <KeyableField label={tr('insp.posY')} min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.y')} />
-      <KeyableField label={tr('insp.scaleX')} min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sx')} />
-      <KeyableField label={tr('insp.scaleY')} min={0.05} max={4} step={0.01} {...keyableProps(clip, 'transform.sy')} />
+      <KeyableField label={tr('insp.scaleX')} min={0.05} max={4} step={0.01} {...scaleProps(clip, 'transform.sx')} />
+      <KeyableField label={tr('insp.scaleY')} min={0.05} max={4} step={0.01} {...scaleProps(clip, 'transform.sy')} />
+      <!--
+        「分离 XY」：默认不勾 = X/Y 联动（拖任一轴两轴一起变）。
+        勾上才回到两个独立字段 —— 复选框的语义是「分离」，所以取反存。
+        这是**编辑习惯**，落 localStorage（appState.scaleLinked），不进工程。
+      -->
+      <div class="scale-row">
+        <Checkbox
+          checked={!appState.scaleLinked}
+          label={tr('insp.scaleSeparate')}
+          tipText={tr('insp.scaleSeparateTip')}
+          testid="clip-scale-separate"
+          onchange={(v) => appState.setScaleLinked(!v)}
+        />
+      </div>
       <KeyableField label={tr('insp.rotate')} min={-3.1416} max={3.1416} step={0.01} {...keyableProps(clip, 'transform.rot')} />
 
       <!--
@@ -916,9 +993,16 @@
         {/if}
       {/if}
 
-      <!-- 添加特效：七十多个特效用一个下拉选不现实（不能搜、不能筛、看不见效果），
-           改成唤起选择器。多选后一次追加到链尾，按选择顺序。 -->
-      <Field label={tr('insp.addEffect')}>
+      <!--
+        工具栏：添加特效 + 折叠/展开全部。
+
+        「添加特效」：七十多个特效用一个下拉选不现实（不能搜、不能筛、看不见效果），
+        改成唤起选择器。多选后一次追加到链尾，按选择顺序。
+
+        「折叠/展开全部」：一条链上挂七八个特效时，参数表会长到要滚三四屏；
+        折叠只看名字是「这条链到底做了什么」最省事的读法。
+      -->
+      <div class="fx-tools">
         <Button
           label={tr('insp.addEffect')}
           icon="plus"
@@ -926,7 +1010,16 @@
           testid="add-effect-instance"
           onclick={() => (pickerOpen = true)}
         />
-      </Field>
+        {#if clip.chain.length > 0}
+          <Button
+            label={allCollapsed(clip.chain) ? tr('insp.expandAllEffects') : tr('insp.collapseAllEffects')}
+            icon={allCollapsed(clip.chain) ? 'chevron-down' : 'chevron-up'}
+            variant="outline"
+            testid="effect-collapse-all"
+            onclick={() => toggleAllCollapsed(clip.chain)}
+          />
+        {/if}
+      </div>
 
       {#if pickerOpen}
         <EffectPickerModal
@@ -940,127 +1033,156 @@
 
       {#if clip.chain.length === 0}
         <p class="note">{tr('insp.emptyChain')}</p>
+      {:else if clip.chain.length > 1}
+        <!-- 链的顺序就是合成顺序，这一点在面板上要明说：卡片顺序不是「列表顺序」 -->
+        <p class="note" data-testid="effect-chain-order">{tr('insp.fxOrderHint')}</p>
       {/if}
 
-      {#each clip.chain as inst, idx (inst.instanceId)}
-        {@const entry = getEffect(inst.defId)}
-        <div class="fx" data-testid="effect-instance">
-          <div class="fx-head">
-            <Checkbox
-              checked={inst.enabled}
-              tipText={tr('insp.effectEnableTip')}
-              testid="effect-enabled"
-              onchange={(v) =>
-                upd(clip, tr('insp.toggleEffect'), (c) => {
-                  if (c.kind === 'effect') {
-                    const it = c.chain.find((x) => x.instanceId === inst.instanceId);
-                    if (it) it.enabled = v;
-                  }
-                })}
-            />
-            <span class="fx-name">{entry ? resolveLabel(entry.nameKey, tr) : inst.defId}</span>
-            <IconButton
-              icon="arrow-up"
-              label={tr('common.up')}
-              size="sm"
-              disabled={idx === 0}
-              testid="effect-move-up"
-              onclick={() => moveInstance(clip, inst.instanceId, -1)}
-            />
-            <IconButton
-              icon="arrow-down"
-              label={tr('common.down')}
-              size="sm"
-              disabled={idx === clip.chain.length - 1}
-              testid="effect-move-down"
-              onclick={() => moveInstance(clip, inst.instanceId, 1)}
-            />
-            <IconButton
-              icon="x"
-              label={tr('insp.removeEffect')}
-              size="sm"
-              variant="danger"
-              testid="effect-remove"
-              onclick={() => removeInstance(clip, inst.instanceId)}
-            />
+      <!--
+        链的顺序 = 合成的顺序（上方的先作用于下方轨道的画面），所以排序是内容
+        而不只是「列表长得顺眼」。拖曳复用 `ui/drag-reorder.ts`，把手是卡片
+        左侧的 grip —— 卡片里全是滑杆，不能整卡起拖（一按滑杆就会拖走整张）。
+      -->
+      <div
+        class="fx-chain"
+        use:reorder={{
+          axis: 'y',
+          itemSelector: '[data-fx-item]',
+          handleSelector: '[data-fx-handle]',
+          onReorder: (from, to) => reorderInstance(clip, from, to),
+        }}
+      >
+        {#each clip.chain as inst, idx (inst.instanceId)}
+          {@const entry = getEffect(inst.defId)}
+          {@const collapsed = isCollapsed(inst.instanceId)}
+          <div class="fx" data-testid="effect-instance" data-fx-item data-collapsed={collapsed ? 'true' : undefined}>
+            <div class="fx-head">
+              <span class="fx-grip" data-fx-handle title={tr('insp.dragEffect')} aria-hidden="true">
+                <Icon name="grip-vertical" size={12} />
+              </span>
+              <IconButton
+                icon={collapsed ? 'chevron-right' : 'chevron-down'}
+                label={collapsed ? tr('insp.expandEffect') : tr('insp.collapseEffect')}
+                size="sm"
+                testid="effect-collapse"
+                onclick={() => toggleCollapsed(inst.instanceId)}
+              />
+              <Checkbox
+                checked={inst.enabled}
+                tipText={tr('insp.effectEnableTip')}
+                testid="effect-enabled"
+                onchange={(v) =>
+                  upd(clip, tr('insp.toggleEffect'), (c) => {
+                    if (c.kind === 'effect') {
+                      const it = c.chain.find((x) => x.instanceId === inst.instanceId);
+                      if (it) it.enabled = v;
+                    }
+                  })}
+              />
+              <span class="fx-name">{entry ? resolveLabel(entry.nameKey, tr) : inst.defId}</span>
+              <IconButton
+                icon="arrow-up"
+                label={tr('common.up')}
+                size="sm"
+                disabled={idx === 0}
+                testid="effect-move-up"
+                onclick={() => moveInstance(clip, inst.instanceId, -1)}
+              />
+              <IconButton
+                icon="arrow-down"
+                label={tr('common.down')}
+                size="sm"
+                disabled={idx === clip.chain.length - 1}
+                testid="effect-move-down"
+                onclick={() => moveInstance(clip, inst.instanceId, 1)}
+              />
+              <IconButton
+                icon="x"
+                label={tr('insp.removeEffect')}
+                size="sm"
+                variant="danger"
+                testid="effect-remove"
+                onclick={() => removeInstance(clip, inst.instanceId)}
+              />
+            </div>
+            {#if entry && !collapsed}
+              {#each visibleParams(entry.params, inst.values) as p (p.key)}
+                {#if p.type === 'range'}
+                  <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
+                {:else if p.type === 'select'}
+                  <Field label={resolveLabel(p.labelKey, tr)}>
+                    <Select
+                      value={String(inst.values[p.key] ?? p.defaultValue)}
+                      options={p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))}
+                      testid={`effect-param-${p.key}`}
+                      optionTestidPrefix={`effect-param-${p.key}-opt`}
+                      onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                    />
+                  </Field>
+                {:else if p.type === 'checkbox'}
+                  <Field label={resolveLabel(p.labelKey, tr)}>
+                    <Checkbox
+                      checked={Number(inst.values[p.key] ?? p.defaultValue) !== 0}
+                      testid={`effect-param-${p.key}`}
+                      onchange={(v) => setEffectParam(clip, inst, p.key, v ? 1 : 0)}
+                    />
+                  </Field>
+                {:else if p.type === 'color'}
+                  <Field label={resolveLabel(p.labelKey, tr)}>
+                    <ColorField
+                      label={resolveLabel(p.labelKey, tr)}
+                      value={String(inst.values[p.key] ?? p.defaultValue)}
+                      theme={inspectorTheme}
+                      testid={`effect-param-${p.key}`}
+                      onchange={(v) => setEffectParam(clip, inst, p.key, resolveThemeColor(v, inspectorTheme))}
+                    />
+                  </Field>
+                {:else if p.type === 'bitmask'}
+                  <Field label={resolveLabel(p.labelKey, tr)}>
+                    <BitmaskField
+                      value={Number(inst.values[p.key] ?? p.defaultValue)}
+                      bits={p.bits}
+                      slider={p.slider}
+                      groups={p.groups.map((g) => ({ label: resolveLabel(g.labelKey, tr), bits: g.bits, style: g.style }))}
+                      presets={p.presets?.map((o) => ({ label: resolveLabel(o.labelKey, tr), value: o.value }))}
+                      testid={`effect-param-${p.key}`}
+                      oninput={(v) => setEffectParam(clip, inst, p.key, v)}
+                      onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                    />
+                  </Field>
+                {:else if p.type === 'pattern'}
+                  <Field label={resolveLabel(p.labelKey, tr)}>
+                    <PatternField
+                      value={String(inst.values[p.key] ?? p.defaultValue)}
+                      label={resolveLabel(p.labelKey, tr)}
+                      mode={p.mode}
+                      editorSize={p.editorSize}
+                      colors={{
+                        bg: String(inst.values.colorBg ?? '#05070f'),
+                        live: String(inst.values.colorLive ?? '#7fd4ff'),
+                      }}
+                      testid={`effect-param-${p.key}`}
+                      onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                    />
+                  </Field>
+                {:else if p.type === 'text'}
+                  <Field label={resolveLabel(p.labelKey, tr)}>
+                    <TextField
+                      value={String(inst.values[p.key] ?? p.defaultValue)}
+                      ariaLabel={resolveLabel(p.labelKey, tr)}
+                      multiline={p.multiline}
+                      maxLength={p.maxLength}
+                      placeholder={p.placeholderKey ? resolveLabel(p.placeholderKey, tr) : ''}
+                      testid={`effect-param-${p.key}`}
+                      onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                    />
+                  </Field>
+                {/if}
+              {/each}
+            {/if}
           </div>
-          {#if entry}
-            {#each visibleParams(entry.params, inst.values) as p (p.key)}
-              {#if p.type === 'range'}
-                <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} {...effectParamProps(clip, inst, p)} />
-              {:else if p.type === 'select'}
-                <Field label={resolveLabel(p.labelKey, tr)}>
-                  <Select
-                    value={String(inst.values[p.key] ?? p.defaultValue)}
-                    options={p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))}
-                    testid={`effect-param-${p.key}`}
-                    optionTestidPrefix={`effect-param-${p.key}-opt`}
-                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
-                  />
-                </Field>
-              {:else if p.type === 'checkbox'}
-                <Field label={resolveLabel(p.labelKey, tr)}>
-                  <Checkbox
-                    checked={Number(inst.values[p.key] ?? p.defaultValue) !== 0}
-                    testid={`effect-param-${p.key}`}
-                    onchange={(v) => setEffectParam(clip, inst, p.key, v ? 1 : 0)}
-                  />
-                </Field>
-              {:else if p.type === 'color'}
-                <Field label={resolveLabel(p.labelKey, tr)}>
-                  <ColorField
-                    label={resolveLabel(p.labelKey, tr)}
-                    value={String(inst.values[p.key] ?? p.defaultValue)}
-                    theme={inspectorTheme}
-                    testid={`effect-param-${p.key}`}
-                    onchange={(v) => setEffectParam(clip, inst, p.key, resolveThemeColor(v, inspectorTheme))}
-                  />
-                </Field>
-              {:else if p.type === 'bitmask'}
-                <Field label={resolveLabel(p.labelKey, tr)}>
-                  <BitmaskField
-                    value={Number(inst.values[p.key] ?? p.defaultValue)}
-                    bits={p.bits}
-                    slider={p.slider}
-                    groups={p.groups.map((g) => ({ label: resolveLabel(g.labelKey, tr), bits: g.bits, style: g.style }))}
-                    presets={p.presets?.map((o) => ({ label: resolveLabel(o.labelKey, tr), value: o.value }))}
-                    testid={`effect-param-${p.key}`}
-                    oninput={(v) => setEffectParam(clip, inst, p.key, v)}
-                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
-                  />
-                </Field>
-              {:else if p.type === 'pattern'}
-                <Field label={resolveLabel(p.labelKey, tr)}>
-                  <PatternField
-                    value={String(inst.values[p.key] ?? p.defaultValue)}
-                    label={resolveLabel(p.labelKey, tr)}
-                    mode={p.mode}
-                    editorSize={p.editorSize}
-                    colors={{
-                      bg: String(inst.values.colorBg ?? '#05070f'),
-                      live: String(inst.values.colorLive ?? '#7fd4ff'),
-                    }}
-                    testid={`effect-param-${p.key}`}
-                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
-                  />
-                </Field>
-              {:else if p.type === 'text'}
-                <Field label={resolveLabel(p.labelKey, tr)}>
-                  <TextField
-                    value={String(inst.values[p.key] ?? p.defaultValue)}
-                    ariaLabel={resolveLabel(p.labelKey, tr)}
-                    multiline={p.multiline}
-                    maxLength={p.maxLength}
-                    placeholder={p.placeholderKey ? resolveLabel(p.placeholderKey, tr) : ''}
-                    testid={`effect-param-${p.key}`}
-                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
-                  />
-                </Field>
-              {/if}
-            {/each}
-          {/if}
-        </div>
-      {/each}
+        {/each}
+      </div>
     {:else}
       <Field label={tr('insp.srcIn')}>
         <NumberInput
@@ -1237,11 +1359,28 @@
     min-width: 0;
     height: var(--control-h);
   }
+  /* 添加特效 + 折叠/展开全部：两个按钮贴一行，窄抽屉里也不换行。 */
+  .fx-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-3);
+  }
+  /*
+   * 链容器：卡片间距走 `gap` 而不是卡片的 margin —— 拖曳排序（drag-reorder）
+   * 靠 `getComputedStyle(container).gap` 算「让位」的位移量，用 margin 的话
+   * 它会按 0 算，拖动时下面几张卡的让位距离会少一截。
+   */
+  .fx-chain {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-3);
+  }
   .fx {
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: var(--sp-2) var(--sp-3);
-    margin-bottom: var(--sp-3);
     background: var(--surface-2);
   }
   .fx-head {
@@ -1249,6 +1388,27 @@
     align-items: center;
     gap: var(--sp-1);
     margin-bottom: var(--sp-2);
+  }
+  /* 折叠后没有参数表，标题行下方不需要留白（否则卡片像个空盒子）。 */
+  .fx[data-collapsed] .fx-head {
+    margin-bottom: 0;
+  }
+  /* 拖曳把手：卡片里全是滑杆，只有这里能起拖（见 Inspector 模板里的注释）。 */
+  .fx-grip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: stretch;
+    width: 12px;
+    color: var(--text-muted);
+    cursor: grab;
+  }
+  .fx-grip:active {
+    cursor: grabbing;
+  }
+  /* 「分离 XY」与关键帧行同一缩进，让它明显从属于上面的两条缩放字段。 */
+  .scale-row {
+    margin: 0 0 var(--sp-2) var(--sp-6);
   }
   .fx-name {
     flex: 1;

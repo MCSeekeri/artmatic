@@ -19,8 +19,20 @@ import { LOCALES } from '../../src/i18n/locales';
 
 const zh = LOCALES['zh-CN'] as Record<string, string>;
 
-/** 打开「算法片段」二级菜单。 */
+/**
+ * 二级菜单只列**最近用过的 5 个**（见 `ui/recent-defs.ts`），所以这里先把
+ * 本文件要用到的几条写进 localStorage。`addInitScript` 必须在下一次
+ * `page.goto` 之前注册 —— 应用启动时就会读这张表。
+ *
+ * 顺序有意义：第一项 `rule110` 会在菜单打开时自动高亮，第一条用例断言的
+ * 「一打开就有浮层」靠它。
+ */
+const SEED_ALGOS = ['rule110', 'mandelbrot', 'lyapunov', 'newton', 'kleinian'];
+
 async function openAlgoMenu(page: Page): Promise<void> {
+  await page.addInitScript((ids) => {
+    localStorage.setItem('artmatic.recentAlgos', JSON.stringify(ids));
+  }, SEED_ALGOS);
   await page.goto('/');
   await page.waitForFunction(() => Boolean((window as never as { __artmatic?: unknown }).__artmatic));
   await openDemo(page);

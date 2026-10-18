@@ -32,6 +32,14 @@ export interface ReorderOptions {
   axis: 'x' | 'y';
   /** 承载排序项的选择器（相对容器），例如 `[data-testid=track-side-row]`。 */
   itemSelector: string;
+  /**
+   * 只有按在这类元素上才起拖（相对容器）。缺省 = 项内任意处都能起拖。
+   *
+   * 检查器的特效卡片里全是滑杆 / 数字框 —— 不设把手的话，用户想拖一下滑杆
+   * 就会把整张卡片拖走。页签 / 轨道 / 图层这三处没有这个问题，所以这个字段
+   * 是**可选**的，不影响既有调用。
+   */
+  handleSelector?: string;
   /** 松手时回调，`from`/`to` 是**匹配集合**里的下标。 */
   onReorder: (from: number, to: number) => void;
   /** 为 true 时完全不接管指针事件。 */
@@ -82,7 +90,10 @@ export function reorder(node: HTMLElement, opts: ReorderOptions) {
   function onDown(e: PointerEvent): void {
     if (o.disabled || e.button !== 0 || cleanup) return;
     const target = e.target as HTMLElement | null;
-    const hit = target?.closest<HTMLElement>(o.itemSelector) ?? null;
+    // 有把手时只认把手（且把手必须在项内）；没有时按整项算。
+    const grip = o.handleSelector ? target?.closest<HTMLElement>(o.handleSelector) : target;
+    if (!grip || !node.contains(grip)) return;
+    const hit = grip.closest<HTMLElement>(o.itemSelector) ?? null;
     if (!hit || !node.contains(hit)) return;
     // 收成一个非空类型再往下传：`apply()` / `restore()` 是嵌套的函数声明，
     // TS 不会把外层的 null 收窄带进去。

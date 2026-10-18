@@ -4,7 +4,14 @@
   import Menu from '../ui/controls/Menu.svelte';
   import { separator, submenu, type MenuItem } from '../ui/controls/menu-model';
   import { algoThumbUrl } from '../ui/algo-thumb-assets';
+  import { thumbUrl as effectThumbUrl } from '../ui/effect-picker/thumb-assets';
   import { ALGO_CATALOG } from '../algos/catalog';
+  import { EFFECT_CATALOG } from '../effects/catalog';
+  import { defaultEffectValues, getEffect } from '../effects/registry';
+  import EffectPickerModal from '../ui/effect-picker/EffectPickerModal.svelte';
+  import AlgoPickerModal from '../ui/algo-picker/AlgoPickerModal.svelte';
+  import { rememberRecentAlgo, rememberRecentEffect, recentAlgoIds, recentEffectIds } from '../ui/recent-defs.svelte';
+  import { RECENT_LIMIT } from '../ui/recent-defs';
   import ClipView from './ClipView.svelte';
   import { startMarquee, type MarqueeBox } from './marquee';
   import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
@@ -379,6 +386,7 @@
     };
     appState.store.addClip(trackId, clip);
     appState.selectedClipId = clip.id;
+    rememberRecentAlgo(genId);
   }
 
   function addSolid(trackId: string, at?: number): void {
@@ -437,8 +445,24 @@
     appState.selectedClipId = clip.id;
   }
 
-  function addEffect(trackId: string, at?: number): void {    closeMenus();
+  /**
+   * 新建特效片段。
+   *
+   * 以前这里是「建一个空链」——菜单里没有特效可选，用户得再去检查器里加。
+   * 现在「特效片段」的二级菜单直接给最近用过的特效 + 「全部特效…」，
+   * 所以新建时**就带着至少一个实例**；多选（选择器里）按选择顺序入链。
+   */
+  function addEffect(trackId: string, defIds: readonly string[], at?: number): void {
+    closeMenus();
     const start = startFor(at);
+    const chain = defIds
+      .filter((id) => getEffect(id))
+      .map((defId) => ({
+        instanceId: newId(),
+        defId,
+        enabled: true,
+        values: defaultEffectValues(defId),
+      }));
     const clip: EffectClip = {
       kind: 'effect',
       id: newId(),
@@ -447,10 +471,11 @@
       label: tr('tl.clipEffect'),
       fadeSec: 0,
       curves: {},
-      chain: [],
+      chain,
     };
     appState.store.addClip(trackId, clip);
     appState.selectedClipId = clip.id;
+    for (const inst of chain) rememberRecentEffect(inst.defId);
   }
 
   /**
@@ -512,32 +537,109 @@
    * 右键菜单 `ctx-*`。测试要能分辨「从行菜单建的」与「从右键建的」两条入口。
    */
 
-  /** 算法生成器的二级子菜单。放二级是为了将来加特效/素材类型时不撑爆一级。 */
-  function generatorItems(at: number | undefined, prefix: string): MenuItem[] {
-    return generators.map((g) => {
-      const entry = ALGO_CATALOG[g.id];
-      return {
-        id: `${prefix}algo-${g.id}`,
-        label: resolveLabel(g.nameKey, tr),
-        testid: `${prefix}algo-${g.id}`,
-        onselect: () => addAlgo(currentTrackId!, g.id, at),
-        /*
-         * 缩略图 + 一句话说明。名字（「李雅普诺夫分形」）不足以让人知道
-         * 插进去会长什么样，而这个菜单有二十多项 —— 悬停预览是这里唯一
-         * 能让人不逐个试的办法。
-         *
-         * 图缺失时 `thumb` 是 `undefined`，浮层就不出现（条目照常可点）：
-         * 这是刻意的降级，没有缩略图不该让菜单少一项。
-         */
-        thumb: algoThumbUrl(g.id) ?? undefined,
-        // 内置的说明在 ALGO_CATALOG；插件自带 desc；都没有就回落到名称。
-        desc: entry ? tr(entry.descKey) : g.desc ? resolveLabel(g.desc, tr) : resolveLabel(g.nameKey, tr),
-      };
-    });
+  /**
+   * 「特效片段」/「算法片段」的二级菜单：**最近用过的 5 个 + 全部…**
+   *
+   * 为什么不再平铺全部：特效七十多个、生成器二十多个，一次列出来既撑爆菜单，
+   * 也让人每次都要从头找自己那三五个常用的。最近项按「用过的时间」倒序，
+   * 存在 localStorage（见 `ui/recent-defs.ts`）；条目带缩略图，悬停就出预览浮层。
+   *
+   * 注册表里已经没有的 id（插件卸载、老工程残留）**静默跳过** —— 菜单少一项
+   * 远好过点进去建出一个渲染不出来的片段。
+   */
+  function recentEffectMenuItems(trackId: string, at: number | undefined, prefix: string): MenuItem[] {
+    const out: MenuItem[] = [];
+    const seen = new Set<string>();
+    for (const id of recentEffectIds()) {
+      if (seen.has(id)) continue;
+      const entry = getEffect(id);
+      if (!entry) continue;
+      seen.add(id);
+      const cat = EFFECT_CATALOG[id];
+      out.push({
+        id: `${prefix}effect-${id}`,
+        label: resolveLabel(entry.nameKey, tr),
+        testid: `${prefix}effect-${id}`,
+        onselect: () => addEffect(trackId, [id], at),
+        thumb: effectThumbUrl(id) ?? undefined,
+        desc: cat
+          ? tr(cat.descKey)
+          : entry.meta?.desc
+            ? resolveLabel(entry.meta.desc, tr)
+            : resolveLabel(entry.nameKey, tr),
+      });
+      if (out.length >= RECENT_LIMIT) break;
+    }
+    return out;
   }
 
-  /** 右键菜单的 trackId 在构造时可能是动态的，用一个可变引用接住。 */
-  let currentTrackId: string | null = null;
+  function recentAlgoMenuItems(trackId: string, at: number | undefined, prefix: string): MenuItem[] {
+    const byId = new Map(generators.map((g) => [g.id, g]));
+    const out: MenuItem[] = [];
+    for (const id of recentAlgoIds()) {
+      const g = byId.get(id);
+      if (!g) continue;
+      const entry = ALGO_CATALOG[id];
+      out.push({
+        id: `${prefix}algo-${id}`,
+        label: resolveLabel(g.nameKey, tr),
+        testid: `${prefix}algo-${id}`,
+        onselect: () => addAlgo(trackId, id, at),
+        thumb: algoThumbUrl(id) ?? undefined,
+        desc: entry ? tr(entry.descKey) : g.desc ? resolveLabel(g.desc, tr) : resolveLabel(g.nameKey, tr),
+      });
+      if (out.length >= RECENT_LIMIT) break;
+    }
+    return out;
+  }
+
+  /** 「全部…」放在最近项之后，中间用分隔线隔开 —— 它不是「最近用过的」之一。 */
+  function withAll(
+    recent: MenuItem[],
+    prefix: string,
+    kind: 'effect' | 'algo',
+    trackId: string,
+    at: number | undefined,
+  ): MenuItem[] {
+    const allId = `${prefix}${kind}-all`;
+    return [
+      ...recent,
+      // 没有最近项时不画空分隔线（菜单顶部贴一条线很难看）
+      ...(recent.length ? [separator(`${prefix}${kind}-sep`)] : []),
+      {
+        id: allId,
+        label: kind === 'effect' ? tr('tl.allEffects') : tr('tl.allAlgos'),
+        icon: 'layout-grid',
+        testid: allId,
+        onselect: () => openPicker(kind, trackId, at),
+      },
+    ];
+  }
+
+  function effectMenuItems(trackId: string, at: number | undefined, prefix: string): MenuItem[] {
+    return withAll(recentEffectMenuItems(trackId, at, prefix), prefix, 'effect', trackId, at);
+  }
+
+  function generatorItems(trackId: string, at: number | undefined, prefix: string): MenuItem[] {
+    return withAll(recentAlgoMenuItems(trackId, at, prefix), prefix, 'algo', trackId, at);
+  }
+
+  /* ------------------------------------------------------------ 选择器 */
+
+  type PickKind = 'effect' | 'algo';
+
+  /**
+   * 正在为哪条轨 / 哪个时刻选择片段。`null` = 没有打开选择器。
+   *
+   * 存 `at` 而不是「建好片段再让选择器往里填」：右键菜单给的是**鼠标位置**，
+   * 建完片段再问用户要选什么的话，中途关掉选择器就会留下一个空片段。
+   */
+  let pickTarget = $state<{ kind: PickKind; trackId: string; at: number | undefined } | null>(null);
+
+  function openPicker(kind: PickKind, trackId: string, at: number | undefined): void {
+    closeMenus();
+    pickTarget = { kind, trackId, at };
+  }
 
   function clipItems(track: Track, at: number | undefined, prefix: string): MenuItem[] {
     if (track.kind === 'audio') {
@@ -552,11 +654,12 @@
       ];
     }
     /*
-     * 一级平铺，只有「算法片段」再展开一级。
+     * 一级平铺；「特效片段」「算法片段」各展开一级。
+     *
      * 曾经把三个都塞进「添加片段」二级里，反而多一次悬停才点得到；
-     * 用户反馈要的是「+ 纯色片段 / + 特效片段 / + 算法片段」这种直接可点的形式，
-     * 而真正会变长的是算法生成器列表（现在 3 个，以后只会更多），二级留给它。
-     * 「排版片段」同理平铺 —— 它是最常用的一类源片段。
+     * 用户反馈要的是「+ 纯色片段 / + 特效片段 / + 算法片段」这种直接可点的形式。
+     * 现在这两类各自**再有一级**，但只放最近用过的 5 个 —— 既保持一级可点，
+     * 又不必在七十多个特效里翻。
      */
     return [
       {
@@ -574,11 +677,8 @@
         onselect: () => addText(track.id, at),
       },
       {
-        id: `${prefix}effect`,
-        label: tr('tl.addEffect'),
-        icon: 'flask-conical',
+        ...submenu(`${prefix}effect`, tr('tl.addEffect'), effectMenuItems(track.id, at, prefix), 'flask-conical'),
         testid: `${prefix}effect`,
-        onselect: () => addEffect(track.id, at),
       },
       {
         id: `${prefix}image`,
@@ -597,14 +697,13 @@
       // `submenu()` 不接 testid，但这一项需要能被测试点到（`add-algo`）。
       // 子项带 `add-algo-<id>`，父项没名字就没法定位到那个二级菜单。
       {
-        ...submenu(`${prefix}algo`, tr('tl.addAlgo'), generatorItems(at, prefix), 'sigma'),
+        ...submenu(`${prefix}algo`, tr('tl.addAlgo'), generatorItems(track.id, at, prefix), 'sigma'),
         testid: `${prefix}algo`,
       },
     ];
   }
 
   function trackMenuItems(track: Track, at?: number, prefix = 'add-'): MenuItem[] {
-    currentTrackId = track.id;
     return [
       ...clipItems(track, at, prefix),
       separator('s1'),
@@ -1075,6 +1174,34 @@
       onclose={closeMenus}
     />
   {/if}
+{/if}
+
+<!--
+  「全部特效…」/「全部算法片段…」的选择器。
+  与检查器里那两个选择器是同一个组件 —— 从时间轴进来只是**建片段**，
+  从检查器进来是给已有片段追加 / 更换。共用一份避免两套筛选与缩略图逻辑漂移。
+-->
+{#if pickTarget?.kind === 'effect'}
+  <EffectPickerModal
+    onclose={() => (pickTarget = null)}
+    onapply={(ids) => {
+      const target = pickTarget;
+      pickTarget = null;
+      if (target) addEffect(target.trackId, ids, target.at);
+    }}
+  />
+{:else if pickTarget?.kind === 'algo'}
+  <AlgoPickerModal
+    current=""
+    title={tr('tl.addAlgo')}
+    applyLabel={tr('tl.insertAlgo')}
+    onclose={() => (pickTarget = null)}
+    onapply={(id) => {
+      const target = pickTarget;
+      pickTarget = null;
+      if (target) addAlgo(target.trackId, id, target.at);
+    }}
+  />
 {/if}
 
 <style>

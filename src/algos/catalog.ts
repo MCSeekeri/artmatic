@@ -119,6 +119,10 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   buddhabrot: { descKey: 'algo.desc.buddhabrot', previewT: 30 },
 
   /* ------------------------------------------------------------ realtime */
+  // 基础图案：默认参数下与 t 无关（滚动 / 旋转默认 0），0 秒截即可
+  bars: rt('algo.desc.bars', 0),
+  grid: rt('algo.desc.grid', 0),
+  gradient: rt('algo.desc.gradient', 0),
   mandelbrot: rt('algo.desc.mandelbrot', 0),
   menger: rt('algo.desc.menger'),
   mandelbulb: rt('algo.desc.mandelbulb'),

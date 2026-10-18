@@ -41,6 +41,9 @@ import { wireworldDef } from './wireworld';
 import { sandpileDef } from './sandpile';
 import { reactionDiffusionDef } from './reaction-diffusion';
 import { sceneDefs } from './scenes';
+import { barsDef } from './bars';
+import { gridDef } from './grid';
+import { gradientDef } from './gradient';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
 import type { GeneratorDef } from './types';
@@ -72,6 +75,10 @@ const DEFS = new Map<string, GeneratorDef>(
     snowflakeDef,
     leniaDef,
     wireworldDef,
+    // 基础图案（彩条 / 网格 / 渐变）：从试炼场的测试图产品化而来
+    barsDef,
+    gridDef,
+    gradientDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，七个 def
     ...sceneDefs,
   ].map((d) => [d.id, d]),

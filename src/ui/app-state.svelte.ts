@@ -112,6 +112,12 @@ interface UiPrefs {
   /** 右侧「图层 / 动画」面板宽度。 */
   typoPanelWidth: number;
   /**
+   * 检查器里的「缩放 X / Y」是否联动。默认**联动**（true），勾「分离 XY」后
+   * 变成两个独立轴。存 UI 偏好而不是工程：它描述的是「怎么调参数」的习惯，
+   * 与这一份工程的内容无关（同吸附档位）。
+   */
+  scaleLinked: boolean;
+  /**
    * 时间轴（轨道区）高度。可拖（工具条下缘 + 与抽屉的夹角），存 UI 偏好：
    * 它描述的是「这次剪辑想给预览留多大地方」，与工程内容无关。
    */
@@ -197,6 +203,7 @@ function loadUiPrefs(): UiPrefs {
     typoGrid: { ...DEFAULT_TYPO_GRID },
     typoPanelWidth: TYPO_PANEL_W.default,
     timelineHeight: TRACKS_H.default,
+    scaleLinked: true,
   };
   try {
     const raw = localStorage.getItem(UI_KEY);
@@ -225,6 +232,7 @@ function loadUiPrefs(): UiPrefs {
       typoGrid: normalizeTypoGrid(p.typoGrid, fallback.typoGrid),
       typoPanelWidth: clampTypoPanelWidth(Number(p.typoPanelWidth) || fallback.typoPanelWidth),
       timelineHeight: clampTimelineHeight(Number(p.timelineHeight) || fallback.timelineHeight),
+      scaleLinked: typeof p.scaleLinked === 'boolean' ? p.scaleLinked : fallback.scaleLinked,
     };
   } catch {
     return fallback;
@@ -420,6 +428,11 @@ class AppState {
   shortcutScheme = $state<ShortcutScheme>('artmatic');
   /** 左下角的看板娘（设置 → 外观）。默认关。 */
   mascotEnabled = $state(false);
+  /**
+   * 检查器「缩放 X / Y」联动。默认开 —— 绝大多数素材是等比缩放的，
+   * 而两个分开的滑杆会让「只想放大一点点」变成两次拖动。
+   */
+  scaleLinked = $state(true);
 
   /* ---- 跨剪切点两帧预览（达芬奇式交互） ----
    *
@@ -1562,6 +1575,7 @@ class AppState {
     this.typoGrid = prefs.typoGrid;
     this.typoPanelWidth = prefs.typoPanelWidth;
     this.timelineHeight = prefs.timelineHeight;
+    this.scaleLinked = prefs.scaleLinked;
   }
 
   /**
@@ -1599,6 +1613,13 @@ class AppState {
   setPreviewBarCollapsed(v: boolean): void {
     if (this.previewBarCollapsed === v) return;
     this.previewBarCollapsed = v;
+    this.persistUi();
+  }
+
+  /** 缩放 X / Y 联动开关（检查器的「分离 XY」）。 */
+  setScaleLinked(v: boolean): void {
+    if (this.scaleLinked === v) return;
+    this.scaleLinked = v;
     this.persistUi();
   }
 
@@ -1703,6 +1724,7 @@ class AppState {
       typoGrid: this.typoGrid,
       typoPanelWidth: this.typoPanelWidth,
       timelineHeight: this.timelineHeight,
+      scaleLinked: this.scaleLinked,
     });
   }
 

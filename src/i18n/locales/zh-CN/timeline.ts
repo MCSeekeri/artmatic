@@ -23,6 +23,14 @@ export const timeline = {
   'tl.addText': '排版片段',
   'tl.addEffect': '特效片段',
   'tl.addAlgo': '算法片段',
+  /*
+   * 二级菜单的两个固定项：最近用过的 5 个之后，用分隔线隔开。
+   * 省略号是「会弹窗」的约定（与「导入图片…」一致）。
+   */
+  'tl.allEffects': '全部特效…',
+  'tl.allAlgos': '全部算法片段…',
+  /* 算法选择器的确认按钮：从时间轴进来是「插入」，不是检查器里的「更换」。 */
+  'tl.insertAlgo': '插入',
   /* 图片与视频同族：都是把一个本地文件变成一条 source 片段。 */
   'tl.importImageMenu': '导入图片…',
   'tl.importImage': '导入图片',

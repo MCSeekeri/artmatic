@@ -44,11 +44,24 @@
   interface Props {
     /** 工程里当前的生成器 id。 */
     current: string;
+    /**
+     * 面板标题。默认是检查器的「更换算法艺术」；从时间轴**新建**算法片段时
+     * 传「算法片段」—— 那里没有任何东西被「更换」。
+     */
+    title?: string;
+    /** 确认按钮文字。同样是「更换」与「插入」的区别。 */
+    applyLabel?: string;
     /** 确认：整体替换成这个生成器。 */
     onapply: (defId: string) => void;
     onclose: () => void;
   }
-  const { current, onapply, onclose }: Props = $props();
+  const {
+    current,
+    title = tr('insp.changeAlgo'),
+    applyLabel = tr('insp.algoPickerApply'),
+    onapply,
+    onclose,
+  }: Props = $props();
 
   let query = $state('');
   let view = $state<AlgoView>('grid');
@@ -83,14 +96,16 @@
   <!-- `data-selected-id` 是给 E2E 的稳定判据：显示的文本是中文名（会随文案变，
        也随语言变），而 id 是工程里真正落库的那个值。 -->
   <span class="ap-sel-label" data-testid="algo-picker-selected" data-selected-id={selected}>
-    {unchanged
-      ? tr('insp.algoPickerUnchanged')
-      : tr('insp.algoPickerSelected', { name: selectedLabel })}
+    {selected === ''
+      ? tr('insp.algoPickerPick')
+      : unchanged
+        ? tr('insp.algoPickerUnchanged')
+        : tr('insp.algoPickerSelected', { name: selectedLabel })}
   </span>
   <div class="ap-foot">
     <Button label={tr('common.cancel')} variant="outline" testid="algo-picker-cancel" onclick={onclose} />
     <Button
-      label={tr('insp.algoPickerApply')}
+      label={applyLabel}
       icon="check"
       variant="accent"
       disabled={unchanged}
@@ -101,7 +116,7 @@
   </div>
 {/snippet}
 
-<Modal title={tr('insp.changeAlgo')} testid="modal-algo-picker" width="picker" flushBody {onclose} {footer}>
+<Modal {title} testid="modal-algo-picker" width="picker" flushBody {onclose} {footer}>
   <div class="ap">
     <!-- 工具栏 -->
     <div class="ap-bar">
@@ -137,8 +152,13 @@
       />
     </div>
 
-    <!-- 整份替换的后果：把话说在前面，而不是让用户按下去才发现。 -->
-    <p class="ap-warn" data-testid="algo-picker-warn">{tr('insp.algoPickerWarn')}</p>
+    <!--
+      整份替换的后果：把话说在前面，而不是让用户按下去才发现。
+      从时间轴**新建**片段时没有「旧源」可替换（current 为空串），这条提示不适用。
+    -->
+    {#if current}
+      <p class="ap-warn" data-testid="algo-picker-warn">{tr('insp.algoPickerWarn')}</p>
+    {/if}
 
     <!-- 主体 -->
     <div class="ap-body" class:ap-grid={view === 'grid'} class:ap-list={view === 'list'}>

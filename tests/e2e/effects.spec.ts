@@ -106,10 +106,16 @@ test('特效链 UI：新建特效片段 + 添加实例 + 渲染无报错', async
   await boot(page);
   await page.getByTestId('add-visual-track').click();
   // 新建片段的按钮已收进 ⋯ 菜单（见 Timeline 侧栏行）：开菜单 → 点「+ 特效片段」。
-  // 用 `.last()` 而不是写死下标：`addTrack` 是 push，新轨恒在最后一行。
+  // 用 `.last()` 而不是写死索引：`addTrack` 是 push，新轨恒在最后一行。
   await page.locator('[data-testid=track-side-row]').last().getByTestId('track-menu').click();
+  // 「特效片段」现在是二级菜单（最近 5 个 + 全部…）。这条用例走「全部特效…」，
+  // 顺便盖住「从时间轴直接带着特效建片段」这条路径。
   await page.getByTestId('add-effect').click();
-  await addEffectViaPicker(page, 'channel-split');
+  await page.getByTestId('add-effect-all').click();
+  await page.locator('[data-testid=effect-picker-item][data-effect-id="channel-split"]').click();
+  await page.getByTestId('effect-picker-confirm').click();
+  // 再走一次检查器里的「添加特效」：两条入口都要能把实例追加进同一条链。
+  await addEffectViaPicker(page, 'bleach');
   const chainLen = await page.evaluate(() => {
     const A = (window as never as {
       __artmatic: { store: { project: { tracks: { clips: { kind: string; chain?: unknown[] }[] }[] } } };
@@ -118,7 +124,7 @@ test('特效链 UI：新建特效片段 + 添加实例 + 渲染无报错', async
     const clips = tracks[tracks.length - 1]!.clips;
     return clips[0]?.kind === 'effect' ? (clips[0].chain?.length ?? 0) : -1;
   });
-  expect(chainLen).toBe(1);
+  expect(chainLen).toBe(2);
   await page.evaluate(() => {
     const A = (window as never as { __artmatic: { renderFrame: (t: number) => void } }).__artmatic;
     A.renderFrame(1);

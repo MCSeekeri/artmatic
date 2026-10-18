@@ -34,6 +34,9 @@ export const inspector = {
   'insp.posY': '位置 Y',
   'insp.scaleX': '缩放 X',
   'insp.scaleY': '缩放 Y',
+  /* 默认联动：拖任一轴两轴一起变；勾上这个才拆成两个独立轴。 */
+  'insp.scaleSeparate': '分离 XY',
+  'insp.scaleSeparateTip': '默认 X / Y 联动：拖动任一轴，另一轴跟着变成同一个值。勾选后各自独立（只影响基准值，关键帧始终独立）。',
   'insp.rotate': '旋转',
 
   /* 来源说明：算法生成器 / 图片素材。 */
@@ -79,6 +82,13 @@ export const inspector = {
   'insp.toggleEffect': '切换特效',
   'insp.effectEnableTip': '启用 / 禁用这个特效实例',
   'insp.emptyChain': '空链：从上面添加特效。特效只作用于它下方的轨道。',
+  'insp.fxOrderHint': '从上到下依次处理画面：拖动左侧把手可以改顺序。',
+  /* 特效链的折叠 / 排序（链的顺序就是合成顺序）。 */
+  'insp.dragEffect': '拖动调整顺序（上面的先作用于画面）',
+  'insp.collapseEffect': '折叠这个特效',
+  'insp.expandEffect': '展开这个特效',
+  'insp.collapseAllEffects': '折叠全部',
+  'insp.expandAllEffects': '展开全部',
 
   /* 影响深度（`EffectClip.affectDepth`）。语义见 engine/stack.ts 的文件头。 */
   'insp.affectDepth': '影响深度',
@@ -120,6 +130,8 @@ export const inspector = {
   'insp.algoPickerApply': '更换',
   'insp.algoPickerApplyTip': '整体替换源，并写入新生成器的默认参数',
   'insp.algoPickerSelected': '当前选择：{name}',
+  /* 从时间轴新建片段时 current 为空串：这里还没有「当前生成器」。 */
+  'insp.algoPickerPick': '选一个生成器',
   'insp.algoPickerUnchanged': '已是当前生成器',
   'insp.algoPickerCurrent': '当前',
   'insp.algoPickerHit': '{n} 个生成器',

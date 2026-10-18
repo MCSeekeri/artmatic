@@ -20,7 +20,7 @@ test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1.5 });
 
 type AnyA = {
   store: {
-    project: { duration: number; beatGrid: { bpm: number }; tracks: { id: string; name: string; kind: string; clips: { id: string; kind: string; start: number; end: number; label: string; opacity?: number; assetId?: string; chain?: unknown[] }[] }[] };
+    project: { duration: number; beatGrid: { bpm: number }; tracks: { id: string; name: string; kind: string; clips: { id: string; kind: string; start: number; end: number; label: string; opacity?: number; assetId?: string; chain?: { instanceId: string; defId: string }[]; transform?: { sx: number; sy: number } }[] }[] };
     addTrack: (k: 'visual' | 'audio', name?: string) => string;
     addClip: (t: string, c: unknown) => void;
     removeTrack: (t: string) => void;
@@ -28,7 +28,15 @@ type AnyA = {
     setDuration: (s: number) => void;
     setOverlapBehavior: (b: string) => void;
     setBeatGrid: (g: { bpm?: number; beatsPerBar?: number; offset?: number }) => void;
-    findClip: (id: string) => { clip: { opacity: number; start: number; end: number } } | null;
+    findClip: (id: string) => {
+      clip: {
+        opacity: number;
+        start: number;
+        end: number;
+        chain?: { instanceId: string; defId: string }[];
+        transform?: { sx: number; sy: number };
+      };
+    } | null;
     track: (t: string) => { clips: { id: string; start: number; end: number }[] } | null;
   };
   appState: {
@@ -266,7 +274,7 @@ test('右键：自绘菜单在鼠标位置新建片段，原生菜单被禁用',
   await page.mouse.up({ button: 'right' });
   await expect(page.locator('[data-testid=ctx-menu]')).toHaveCount(1);
 
-  // 右键菜单与轨道行菜单同构，新建项是一级项（只有算法会再展开一级）
+  // 右键菜单与轨道行菜单同构，新建项是一级项（特效 / 算法各自再展开一级）
   await page.getByTestId('ctx-solid').click();
   await expect(page.locator('[data-testid=ctx-menu]')).toHaveCount(0);
   const created = await page.evaluate(() => {
@@ -734,4 +742,112 @@ test('片段就地改名：F2 → 输入框 → Enter 提交，一笔撤销；�
   // 边界：双击片段（打的正是名字那条带子的位置）**不进改名**
   await clipA.dblclick();
   await expect(input).toHaveCount(0);
+});
+
+/* ------------------------------------------------- 检查器：缩放联动 / 特效链 */
+
+/** 选中一个带 ≥2 个特效的片段，返回 id 与链上 defId。 */
+async function selectEffectChain(page: Page): Promise<{ id: string; defIds: string[] }> {
+  const fx = await page.evaluate(() => {
+    const a = (window as never as { __artmatic: AnyA }).__artmatic;
+    for (const t of a.store.project.tracks) {
+      for (const c of t.clips) {
+        if (c.kind === 'effect' && (c.chain?.length ?? 0) >= 2) {
+          return { id: c.id, defIds: c.chain!.map((i) => i.defId) };
+        }
+      }
+    }
+    return null;
+  });
+  expect(fx, 'demo 里没有带两个以上特效的片段，这条用例没得测').not.toBeNull();
+  await page.locator(`[data-clip-id="${fx!.id}"]`).click();
+  return fx!;
+}
+
+async function readChain(page: Page, clipId: string): Promise<string[]> {
+  return page.evaluate(
+    (id) =>
+      (window as never as { __artmatic: AnyA }).__artmatic.store.findClip(id)!.clip.chain!.map(
+        (i) => i.defId,
+      ),
+    clipId,
+  );
+}
+
+test('检查器：缩放 X / Y 默认联动，「分离 XY」后各自独立', async ({ page }) => {
+  await boot(page);
+  const clipId = (await page.evaluate(() => {
+    const a = (window as never as { __artmatic: AnyA }).__artmatic;
+    for (const t of a.store.project.tracks) {
+      for (const c of t.clips) if (c.kind === 'source' && c.label.includes('Mandelbrot')) return c.id;
+    }
+    return null;
+  })) as string;
+  await page.locator(`[data-clip-id="${clipId}"]`).click();
+
+  const rowOf = (label: string) =>
+    page
+      .locator('[data-testid=param-row]', {
+        has: page.locator('[data-testid=param-label]', { hasText: label }),
+      })
+      .first();
+  const inputX = rowOf('缩放 X').locator('[data-testid=param-number]');
+  const inputY = rowOf('缩放 Y').locator('[data-testid=param-number]');
+
+  const transform = () =>
+    page.evaluate((id) => {
+      const c = (window as never as { __artmatic: AnyA }).__artmatic.store.findClip(id)!.clip;
+      const t = c.transform!;
+      return { sx: t.sx, sy: t.sy };
+    }, clipId);
+
+  // 默认联动：只改 X，Y 跟着变成同一个值（两个字段都刷新）
+  await inputX.fill('1.5');
+  await inputX.press('Enter');
+  await expect(inputY).toHaveValue('1.50');
+  expect(await transform()).toEqual({ sx: 1.5, sy: 1.5 });
+
+  // 勾「分离 XY」：只改 Y，X 保持不变
+  await page.getByTestId('clip-scale-separate').click();
+  await inputY.fill('0.5');
+  await inputY.press('Enter');
+  await expect(inputX).toHaveValue('1.50');
+  expect(await transform()).toEqual({ sx: 1.5, sy: 0.5 });
+});
+
+test('检查器：特效链折叠 / 展开全部，拖把手可换顺序', async ({ page }) => {
+  await boot(page);
+  const { id, defIds } = await selectEffectChain(page);
+  const cards = page.locator('[data-testid=effect-instance]');
+  await expect(cards).toHaveCount(defIds.length);
+
+  // 折叠全部：卡片还在，但参数表全部收起来
+  await page.getByTestId('effect-collapse-all').click();
+  await expect(cards).toHaveCount(defIds.length);
+  await expect(page.locator('[data-testid=effect-instance] [data-testid=param-row]')).toHaveCount(0);
+  await expect(cards.first()).toHaveAttribute('data-collapsed', 'true');
+
+  // 拖第一张的把手到第二张下方 → 链顺序互换（链顺序 = 合成顺序）
+  const grips = page.locator('[data-fx-handle]');
+  await grips.nth(0).scrollIntoViewIfNeeded();
+  const a = (await grips.nth(0).boundingBox())!;
+  const b = (await grips.nth(1).boundingBox())!;
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 + 8, { steps: 10 });
+  await page.mouse.up();
+
+  const after = await readChain(page, id);
+  expect(after[0]).toBe(defIds[1]);
+  expect(after[1]).toBe(defIds[0]);
+
+  // 折叠全部变「展开全部」：参数表回来
+  await page.getByTestId('effect-collapse-all').click();
+  await expect(cards.first()).not.toHaveAttribute('data-collapsed', 'true');
+  await expect(page.locator('[data-testid=effect-instance] [data-testid=param-row]')).not.toHaveCount(0);
+
+  // 单张折叠：只收起这一张，其它卡片不动
+  await cards.first().locator('[data-testid=effect-collapse]').click();
+  await expect(cards.first()).toHaveAttribute('data-collapsed', 'true');
+  await expect(cards.nth(1)).not.toHaveAttribute('data-collapsed', 'true');
 });

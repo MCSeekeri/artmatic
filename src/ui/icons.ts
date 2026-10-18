@@ -59,6 +59,7 @@ import Folder from '@lucide/svelte/icons/folder';
 import FolderOpen from '@lucide/svelte/icons/folder-open';
 import Frame from '@lucide/svelte/icons/frame';
 import Grid2x2 from '@lucide/svelte/icons/grid-2x2';
+import GripVertical from '@lucide/svelte/icons/grip-vertical';
 import Group from '@lucide/svelte/icons/group';
 import HardDrive from '@lucide/svelte/icons/hard-drive';
 import Hexagon from '@lucide/svelte/icons/hexagon';
@@ -195,6 +196,7 @@ export const ICONS = {
   'folder-open': FolderOpen,
   frame: Frame,
   'grid-2x2': Grid2x2,
+  'grip-vertical': GripVertical,
   group: Group,
   'hard-drive': HardDrive,
   hexagon: Hexagon,

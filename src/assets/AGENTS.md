@@ -73,7 +73,7 @@ URL 同步可得、字节由浏览器懒加载。它们由 `scripts/` 里的脚�
 「插入片段 → 算法片段」二级菜单在**悬停某一项时**给一张缩略图 + 一句话说明。
 
 - **素材预先导出、静态存放**：`node scripts/gen-algo-thumbs.mjs` →
-  `src/assets/algo-thumbnails/<id>.webp`（640×360，26 张共 518 KB）。
+  `src/assets/algo-thumbnails/<id>.webp`（640×360，30 张共约 593 KB）。
   脚本自己 build + 起 preview + 用 Playwright 调 `__lab.renderThumb()`，
   **直接落盘**（不像特效那套打完 zip 还要人工解压——素材跟着代码走，
   多一步人工就多一次「导出了但忘了解压」）。

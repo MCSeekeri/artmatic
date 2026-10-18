@@ -67,6 +67,20 @@
   `ExportOptions.onFrame`（`export-runner.ts`）给出每帧真实耗时，`__artmatic.exportTiming(n)`
   是它的 E2E 出口。
 
+### 基础图案（`bars` / `grid` / `gradient`，2026-10）
+
+三条从 `lab/patterns.ts` 的测试图**产品化**而来，但**不是同一份实现**：lab 那三张
+仍是「审特效」专用的 `lab:` 伪 id（见 `lab/AGENTS.md`），这三条是用户可选的生成器。
+
+- **与内部分辨率解耦**：`intRes` 是纯性能档位，画面不该跟着它变。所以 `grid` 用
+  **纵向格数**（`u_cells` + `u_aspect`）而不是「32 设备像素一格」—— 后者正是 lab
+  版的口径（那里要的就是设备像素级的问题）。新增图案类生成器时先问「缩略图/预览
+  与导出的格距会不会随 `intRes` 漂」。
+- **`half` 是 GLSL ES 的保留字**，`float half = ...` 直接编译失败（实测）。
+  同类的还有 `input` / `output` / `filter` —— 变量名别用这些词。
+- 彩条用 HSV 等分色相而不是硬编码 7 色：条数是参数，硬编码表跟不了。
+  渐变的三形态用 `int` uniform 分派（`selectInt`），不要用字符串 uniform。
+
 ### 参数类型：`bitmask` 与 `pattern`（2026-10-04）
 
 两个新变体是为「规则可调 / 种子可画」加的，它们**都不需要抬 `SCHEMA_VERSION`**
