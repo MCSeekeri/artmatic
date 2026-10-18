@@ -66,16 +66,29 @@ import { planGif } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
 import { ExportCancelled, runExport, type ExportOptions } from '../exporters/export-runner';
 import { compileAll, type CompileResult } from '../effects/compile-all';
+import { createTypographyDocument } from '../typography/document';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
-import { getCapabilities } from './capabilities';
+import { getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
 import { buildClipView, buildSceneSnapshot } from './scene';
+import * as typo from './typography';
+import {
+  discardPlugin,
+  installPlugin,
+  listPlugins,
+  removePlugin,
+  tryPlugin,
+  draftSource,
+  type DraftStore,
+} from './plugin-author';
+import { helpText } from './plugin-spec';
 import {
   CONTROL_API_VERSION,
   ControlFailure,
   fail,
   ok,
   type Capabilities,
+  type CapabilityDetail,
   type ClipView,
   type ControlContext,
   type ControlResult,
@@ -86,9 +99,17 @@ import {
   type ExportState,
   type FrameSignature,
   type OpenProjectView,
+  type PluginInfoView,
+  type PluginTryResult,
   type SceneDetail,
   type SceneIdSnapshot,
   type SceneSnapshot,
+  type TypographyDocIdView,
+  type TypographyDocView,
+  type TypographyElementInput,
+  type TypographyElementPatch,
+  type TypographyCapabilities,
+  type TypographyLayoutRequest,
   type UndoState,
 } from './types';
 
@@ -185,10 +206,17 @@ export interface AgentControlPlane {
   describe(): Promise<ControlResult<DescribeInfo>>;
   /* 读 */
   getScene(opt?: { t?: number; detail?: SceneDetail }): Promise<ControlResult<SceneSnapshot | SceneIdSnapshot>>;
-  getCapabilities(): Promise<ControlResult<Capabilities>>;
+  getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[] }): Promise<ControlResult<Capabilities>>;
+  getTypographyCapabilities(): Promise<ControlResult<TypographyCapabilities>>;
+  getTypographyDoc(
+    clipId: string | undefined,
+    detail?: 'ids' | 'full',
+  ): Promise<ControlResult<TypographyDocView | TypographyDocIdView>>;
   getClip(clipId: string): Promise<ControlResult<ClipView | null>>;
   listProjects(): Promise<ControlResult<OpenProjectView[]>>;
   undoState(): Promise<ControlResult<UndoState>>;
+  /** 按需取协议 / 模型说明（plugin-api · timeline · typography · workflow · images）。 */
+  help(topic?: string): Promise<ControlResult<{ topic: string; text: string }>>;
   /**
    * 着色器体检：把上下文里**所有**着色器编一遍（特效 + realtime 算法 + 全部转场）。
    *
@@ -243,6 +271,88 @@ export interface AgentControlPlane {
   /* 工程级动作（需要 ui 层的编排，走注入的 ctx） */
   saveProject(): Promise<ControlResult<{ saved: true }>>;
   openProject(name?: string): Promise<ControlResult<{ opened: boolean }>>;
+
+  /* ------------------------------------------------------------- 排版 */
+  /**
+   * 省略 `clipId` 时用排版编辑器当前打开的那份（`ctx.getActiveTypoClipId`）——
+   * 用户在排版页说「把标题改大」时不该被迫先报一个 id。
+   */
+  addTypographyElement(
+    clipId: string | undefined,
+    input: TypographyElementInput,
+  ): Promise<ControlResult<{ elementId: string }>>;
+  addGeneratedShape(
+    clipId: string | undefined,
+    input: {
+      genId: string;
+      params?: Record<string, number | string>;
+      seed?: number;
+      frame?: { x?: number; y?: number; w?: number; h?: number; rot?: number };
+      name?: string;
+      fill?: unknown;
+      stroke?: unknown;
+    },
+  ): Promise<ControlResult<{ elementId: string }>>;
+  updateTypographyElement(
+    clipId: string | undefined,
+    elementId: string,
+    patch: TypographyElementPatch,
+  ): Promise<ControlResult<{ changed: boolean }>>;
+  setTypographyText(
+    clipId: string | undefined,
+    elementId: string,
+    text: string,
+  ): Promise<ControlResult<{ changed: boolean }>>;
+  removeTypographyElement(
+    clipId: string | undefined,
+    elementId: string,
+  ): Promise<ControlResult<{ changed: boolean }>>;
+  reorderTypographyElement(
+    clipId: string | undefined,
+    elementId: string,
+    op: 'front' | 'back' | 'forward' | 'backward',
+  ): Promise<ControlResult<{ changed: boolean }>>;
+  groupTypographyElements(
+    clipId: string | undefined,
+    elementIds: string[],
+    name?: string,
+  ): Promise<ControlResult<{ groupId: string | null }>>;
+  ungroupTypographyElements(
+    clipId: string | undefined,
+    elementIds: string[],
+  ): Promise<ControlResult<{ changed: boolean }>>;
+  layoutTypography(
+    clipId: string | undefined,
+    req: TypographyLayoutRequest,
+  ): Promise<ControlResult<{ moved: number }>>;
+  setTypographyBackground(
+    clipId: string | undefined,
+    paint: unknown,
+  ): Promise<ControlResult<{ changed: boolean }>>;
+  setTypographyTheme(
+    clipId: string | undefined,
+    theme: string | null,
+  ): Promise<ControlResult<{ changed: boolean }>>;
+  replaceTypographyDoc(
+    clipId: string | undefined,
+    doc: unknown,
+  ): Promise<ControlResult<{ elements: number; dropped: number }>>;
+
+  /* ------------------------------------------------------------- 插件 */
+  pluginTry(input: { id: string; name: string; source: string }): Promise<ControlResult<PluginTryResult>>;
+  /**
+   * 安装。`confirm: false`（默认）**只返回 `needs-approval`**，不写盘 ——
+   * 面板拿到 detail 后弹确认，用户点了才带 `confirm: true` 再调一次。
+   */
+  pluginInstall(
+    pluginId: string,
+    confirm?: boolean,
+  ): Promise<ControlResult<{ pluginId: string; persisted: boolean; effects: string[]; generators: string[] }>>;
+  pluginList(): Promise<ControlResult<{ plugins: PluginInfoView[] }>>;
+  pluginDiscard(pluginId: string): Promise<ControlResult<{ discarded: boolean; stillInstalled: boolean }>>;
+  pluginRemove(pluginId: string): Promise<ControlResult<{ removed: boolean }>>;
+  /** 面板审批卡用：拿草稿源码（用户要能看一眼自己批准了什么）。 */
+  pluginSource(pluginId: string): Promise<ControlResult<{ source: string | null }>>;
 }
 
 /* ------------------------------------------------------------- 实现 */
@@ -255,6 +365,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   let txOpen = false;
   /** 最近一次「看」拿到的像素，供 `readPixels()` 独立读取。见 `drawAndRead`。 */
   let lastFrame: { w: number; h: number; rgba: Uint8Array } | null = null;
+  /** 插件草稿区（源码只活在本次会话的内存里，安装之后磁盘才是真源）。 */
+  const pluginDrafts: DraftStore = new Map();
 
   /* ---------------------------------------------------------- 取实例 */
 
@@ -304,8 +416,22 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
 
   /** 写操作前让悬空的手势落地 —— 否则 `beginTx` 会把用户的事务快照顶掉（方案 §5.2）。 */
   function beforeWrite(): ProjectStore {
+    // 先停行内文本编辑：打字是直接改 doc.runs，不经过手势事务，
+    // 不停的话编辑器下一次提交会把 agent 的改动覆盖掉（两边都不报错）。
+    ctx.stopTextEditing?.();
     ctx.cancelPendingGesture();
     return needStore();
+  }
+
+  /** 排版写方法的目标片段：省略时用编辑器当前打开的那一份。 */
+  function typoClipId(clipId: string | undefined): string {
+    const id = clipId || ctx.getActiveTypoClipId?.() || '';
+    if (!id) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.noDoc', { id: '(none)' }), {
+        hint: 'pass clipId, or open the typography editor first',
+      });
+    }
+    return id;
   }
 
   function trackIdOf(store: ProjectStore, clipId: string): string {
@@ -340,9 +466,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'describe'
     | 'getScene'
     | 'getCapabilities'
+    | 'getTypographyCapabilities'
+    | 'getTypographyDoc'
     | 'getClip'
     | 'listProjects'
     | 'undoState'
+    | 'help'
     | 'compileAll'
     | 'exportState'
   > = {
@@ -372,8 +501,27 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
-    async getCapabilities() {
-      return run(() => getCapabilities());
+    async getCapabilities(opt) {
+      return run(() => getCapabilities(opt));
+    },
+
+    async getTypographyCapabilities() {
+      return run<TypographyCapabilities>(() => {
+        const store = needStore();
+        return getTypographyCapabilities(store.project.customThemes ?? null);
+      });
+    },
+
+    async getTypographyDoc(clipId, detail) {
+      return run<TypographyDocView | TypographyDocIdView>(() => {
+        // 纯读：不取消手势、不改播放头、不动渲染尺寸。
+        const store = needStore();
+        return typo.getDoc(store, typoClipId(clipId), detail ?? 'full');
+      });
+    },
+
+    async help(topic) {
+      return run(() => ({ topic: topic ?? 'index', text: helpText(topic) }));
     },
 
     async getClip(clipId) {
@@ -456,6 +604,14 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           { validIds: Object.keys(store.project.assets) },
         );
       }
+    }
+    if (input.kind === 'text' && !input.doc) {
+      /*
+       * 文本片段必须带文档（`clip-factory` 对空 doc 抛错）。让 agent 从零手写
+       * 一份 `TypographyDocument` 是没必要的摩擦：先给一张空画布，再用
+       * `typo_add_element` 往里加东西 —— 这也是排版页「新建」的同一形态。
+       */
+      return { ...input, doc: createTypographyDocument(store.project.resolution) };
     }
     return input;
   }
@@ -1418,5 +1574,194 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     },
   };
 
-  return { ...read, ...write, ...view, ...io, ...projectActions };
+  /* ------------------------------------------------------------ 排版 */
+
+  const typography: Pick<
+    AgentControlPlane,
+    | 'addTypographyElement'
+    | 'addGeneratedShape'
+    | 'updateTypographyElement'
+    | 'setTypographyText'
+    | 'removeTypographyElement'
+    | 'reorderTypographyElement'
+    | 'groupTypographyElements'
+    | 'ungroupTypographyElements'
+    | 'layoutTypography'
+    | 'setTypographyBackground'
+    | 'setTypographyTheme'
+    | 'replaceTypographyDoc'
+  > = {
+    async addTypographyElement(clipId, input) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!isRecord(input)) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'element' }));
+        }
+        return typo.addElement(store, typoClipId(clipId), input);
+      });
+    },
+
+    async addGeneratedShape(clipId, input) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!isRecord(input) || typeof input.genId !== 'string') {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badGen', { id: String(input?.genId) }));
+        }
+        return typo.addGenerated(store, typoClipId(clipId), input);
+      });
+    },
+
+    async updateTypographyElement(clipId, elementId, patch) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!isRecord(patch) || Object.keys(patch).length === 0) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'patch' }));
+        }
+        return { changed: typo.updateElement(store, typoClipId(clipId), elementId, patch) };
+      });
+    },
+
+    async setTypographyText(clipId, elementId, text) {
+      return run(() => {
+        const store = beforeWrite();
+        return { changed: typo.setText(store, typoClipId(clipId), elementId, text) };
+      });
+    },
+
+    async removeTypographyElement(clipId, elementId) {
+      return run(() => {
+        const store = beforeWrite();
+        return { changed: typo.removeElement(store, typoClipId(clipId), elementId) };
+      });
+    },
+
+    async reorderTypographyElement(clipId, elementId, op) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!['front', 'back', 'forward', 'backward'].includes(op)) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: `op=${String(op)}` }));
+        }
+        return { changed: typo.reorderElement(store, typoClipId(clipId), elementId, op) };
+      });
+    },
+
+    async groupTypographyElements(clipId, elementIds, name) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!Array.isArray(elementIds) || elementIds.length < 2) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: 'group needs >= 2 elementIds' }));
+        }
+        return typo.groupElements(store, typoClipId(clipId), elementIds, name ?? 'group');
+      });
+    },
+
+    async ungroupTypographyElements(clipId, elementIds) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!Array.isArray(elementIds) || elementIds.length === 0) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: 'elementIds is empty' }));
+        }
+        return { changed: typo.ungroupElements(store, typoClipId(clipId), elementIds) };
+      });
+    },
+
+    async layoutTypography(clipId, req) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!isRecord(req) || typeof req.op !== 'string') {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: 'op is required' }));
+        }
+        return typo.layout(store, typoClipId(clipId), req);
+      });
+    },
+
+    async setTypographyBackground(clipId, paint) {
+      return run(() => {
+        const store = beforeWrite();
+        return { changed: typo.setBackground(store, typoClipId(clipId), paint) };
+      });
+    },
+
+    async setTypographyTheme(clipId, theme) {
+      return run(() => {
+        const store = beforeWrite();
+        return { changed: typo.setTheme(store, typoClipId(clipId), theme) };
+      });
+    },
+
+    async replaceTypographyDoc(clipId, doc) {
+      return run(() => {
+        const store = beforeWrite();
+        return typo.replaceDoc(store, typoClipId(clipId), doc);
+      });
+    },
+  };
+
+  /* ------------------------------------------------------------ 插件 */
+
+  const plugins: Pick<
+    AgentControlPlane,
+    'pluginTry' | 'pluginInstall' | 'pluginList' | 'pluginDiscard' | 'pluginRemove' | 'pluginSource'
+  > = {
+    async pluginTry(input) {
+      return run(async () => {
+        needStore();
+        return tryPlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          projectKey: ctx.getProjectKey?.() ?? null,
+          drafts: pluginDrafts,
+          input: {
+            id: String(input?.id ?? ''),
+            name: String(input?.name ?? ''),
+            source: String(input?.source ?? ''),
+          },
+        });
+      });
+    },
+
+    async pluginInstall(pluginId, confirm) {
+      return run(() =>
+        installPlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          drafts: pluginDrafts,
+          projectKey: ctx.getProjectKey?.() ?? null,
+          persist: ctx.persistPlugin ?? null,
+          pluginId,
+          confirm: confirm === true,
+        }),
+      );
+    },
+
+    async pluginList() {
+      return run(() => ({ plugins: listPlugins(ctx.getPluginHost?.() ?? null, pluginDrafts) }));
+    },
+
+    async pluginDiscard(pluginId) {
+      return run(() =>
+        discardPlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          drafts: pluginDrafts,
+          unload: ctx.unloadPlugin ?? null,
+          pluginId,
+        }),
+      );
+    },
+
+    async pluginRemove(pluginId) {
+      return run(() =>
+        removePlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          drafts: pluginDrafts,
+          remove: ctx.removePlugin ?? null,
+          pluginId,
+        }),
+      );
+    },
+
+    async pluginSource(pluginId) {
+      return run(() => ({ source: draftSource(pluginDrafts, pluginId) }));
+    },
+  };
+
+  return { ...read, ...write, ...view, ...io, ...projectActions, ...typography, ...plugins };
 }

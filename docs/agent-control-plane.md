@@ -1,6 +1,7 @@
 # Agent 控制平面
 
-> 状态：设计（未实现） ｜ 范围：只定义接口与路线图，不含代码 ｜ 约束真源：`AGENTS.md`
+> 状态：**M0–M4 已实现**；v2（2026-10-18）补了排版写入、插件作者面与应用内模型运行时，
+> 见 §10 ｜ 约束真源：`src/agent/AGENTS.md` + 根 `AGENTS.md`
 
 **这份笔记回答一个问题**：怎样让 AI（编码 agent、MCP 客户端）方便地操控 Artmatic
 —— 剪辑、设参数、拿视觉反馈、导出 —— 以及「要不要做一个 TypeScript CLI」。
@@ -685,3 +686,150 @@ CLI **有位置，但不是「编辑器 CLI」**。定位：**工程文件工具
 6. **不做「跨轨道转场 / 转场参数打关键帧 / transitionIn」**（`AGENTS §5.5` 已明确不做）——
    agent 走的是同一套能力边界，不因为「是 agent」而开新口子。
 7. **不把整个 `project.json` 当工具返回值**（§4.4）。
+
+---
+
+## 10. v2（2026-10-18）：应用内 Agent + 排版 / 插件工具面
+
+这一轮把「外部 MCP 客户端能做的事」搬进了**编辑器页面内的对话面板**，并补上三块
+缺口。控制平面的四条纪律（§2.4）一条没动。
+
+### 10.1 契约变更（`CONTROL_API_VERSION = 2`）
+
+| 变更 | 为什么 |
+|---|---|
+| `getCapabilities({ detail:'ids'\|'params', ids? })` | 参数表是 agent 设参数的唯一依据。`ids` 档保持省上下文；`params` 档带键 / 类型 / 区间 / 选项 / 默认值 / 是否可打关键帧。`visibleWhen` 是函数，序列化时剥掉。 |
+| 文本片段的 `source.doc` 改为 `ClipTextSummary` | 整份 `TypographyDocument`（元素 + 富文本 + 动画 + 组合）能把上下文塞满。详情走 `getTypographyDoc(clipId, detail)`。 |
+| `getTypographyCapabilities()` | 图形种类、22 个程序化生成器、配色方案、Paint 形态、布局操作。 |
+| 新增 `help(topic)` | 协议细节按需取：`plugin-api` / `timeline` / `typography` / `workflow` / `images`。系统提示因此能保持短。 |
+| `ControlContext` 新增接缝 | `getActiveTypoClipId` / `stopTextEditing` / `getPluginHost` / `getProjectKey` / `persistPlugin` / `unloadPlugin` / `removePlugin`。控制平面仍不 import `ui/` 与 `project/plugins`。 |
+
+`src/agent/` 的依赖放宽一条：**可以** import `typography/` 的纯模型层
+（`document` / `shapes` / `svg-gen` / `theme` / `agent-ops`），禁止 `render-dom`。
+
+### 10.2 工具定义单一真源
+
+`src/agent/tools.ts` 是工具表（名字 / 描述 / 参数 kind / required / `writes`）。
+MCP 网关的 `mcp/tools.mjs` 仍是手写的 schema + 校验（它要产 JSON Schema 与
+`validateArgs`），但 `tests/unit/agent-tools-parity.test.ts` 断言：
+
+- 应用内每个工具在 MCP 侧都有 `artmatic_` + 同名条目；
+- MCP 独有的工具（`list_projects` / `compile_all` / `open_project` / `save_project`）
+  在允许清单里显式列出；
+- 每个参数的 `required` 在两侧一致。
+
+工具描述是**给模型读的 API 文档**（英文），界面文案走 i18n 的 `agent.*`。
+
+### 10.3 排版写入
+
+- 纯函数在 `src/typography/agent-ops.ts`：元素工厂 / 白名单 patch / 层级 /
+  组合 / 对齐 / 分布 / 网格 / 行列 / 文档摘要 / `coerceDocument`（永不抛）。
+- `src/agent/typography.ts` 负责校验 + `store.commit`；一次工具调用 = 一笔撤销。
+- 写之前先 `stopTextEditing()`：行内编辑是直接改 `doc.runs`，不停会被编辑器
+  下一次提交覆盖（两边都不报错）。
+- 文本元素的三种填充别混：`fill`（字形）/ `boxFill`（文本框底）/ `boxStroke`（边框）。
+
+### 10.4 插件作者面
+
+```
+plugin_try   清单校验 → import(blob) → 真 GL 编译 → 结构化 issue（可自修复）
+plugin_install  需要用户确认（默认返回 needs-approval）
+plugin_list / plugin_discard / plugin_remove / plugin_source
+```
+
+- 草稿只活在控制平面实例的内存里；安装后磁盘才是真源（与 `project/plugins.ts`
+  「不做台账」同一立场）。
+- 只允许写 `plugins/<合法 id>.js`（`isValidPluginSegment`）；没有任意路径写、没有 eval。
+- `src/agent/plugin-spec.ts` 的说明书由 `EFFECT_HEAD` / `ALGO_HEAD` 常量拼出，
+  单测断言「两个头的每个 uniform 都出现在文档里」——文档不会与代码漂。
+- 插件是单文件、不能 import，所以说明书里带可直接粘贴的 `floats/colors/ints/selectInt`
+  等价 JS。
+
+### 10.5 应用内模型运行时（`src/agent/llm/`）
+
+```
+provider.ts  Chat Completions + 手写 SSE（delta.tool_calls 按 index 累积）
+transport   直连 api.deepseek.com；收到第一个字节前失败 → /__llm 同源代理
+session.ts  消息历史 / 工具循环 / 事务 / 取消 / 上下文裁剪 / 截图注入
+executor.ts 工具名 → 控制平面调用（唯一的应用内映射表）
+```
+
+- **一轮 = 一笔撤销**：session 用 `beginTx` / `endTx` 包住整轮；
+  配套修了 `CommandStack.commit` —— 事务打开时它**只通知界面、不单独入栈**。
+  否则一轮里 N 次写会留下 N 条中间记录，用户再撤销一次就落到没人见过的状态。
+- **图片只能出现在 user 消息**（Chat Completions 限制）：截图在工具轮结束后
+  合成一条 user 消息注入，`role:'tool'` 只带文本。若将来要「工具输出里带图」，
+  得换 Responses API（`input_image` 可出现在 `function_call_output`）。
+- **代理只在 dev / preview 存在**（`scripts/llm-proxy.mjs`，与 `capacityEndpoint`
+  同一范式两侧注册）。只转发 `/__llm/chat/completions`，不透传日志、不落 key。
+- **思考是原生的**：`thinking:{type:'enabled'|'disabled'}` + `reasoning_effort`
+  （low / high / max；`medium` 在服务端映射成 high，所以 UI 只给原生三档 + 关闭）。
+  强度**不写成提示词**。
+- **`reasoning_content` 必须回传**：请求带了 `tools` 时，官方要求每一轮
+  （含没有实际工具调用的轮次）都把该 Turn 的思维链完整带回，漏传 = 400。
+  assistant 消息**无条件**带该字段（没有思维链时是空串），中途开关思考也不会
+  让历史消息缺字段。
+- 重复调用是**阶梯**：同工具同参数第 3 / 6 次把引导**附加在那条 tool 结果末尾**
+  （不能插 system 消息 —— DeepSeek 带 tools 时会 400 并污染后续历史），第 12 次才停。
+- **上下文管理**：窗口按 1M token 计，75% 触发压缩 —— 用同一个模型（不带 tools）
+  把前半段压成交接说明，保留最近 8 条（从 user 边界切）。面板发送按钮左侧常驻
+  环形进度（用量优先取服务端 `usage.prompt_tokens`）。
+- **400 自愈**：请求被 400 拒绝后自动清空模型历史（UI 记录保留）并给出提示，
+  下一次发送不会继续 400。错误卡片会显示响应体（reasoning_content / 工具配对的
+  线索都在里面）。
+- `AbortController` 贯穿请求与循环；单请求超时 300s。
+
+### 10.6 面板（`src/ui/agent/`）
+
+- **与媒体池共用左列、互斥**：`appState.agentOpen` / `mediaPoolOpen` 各记意图，
+  打开一个收起另一个；宽度共用 `mediaPoolWidth`；两个视图各挂一份（条件互斥），
+  排版页也能开。
+- rail 入口 `AgentRailButton` 带运行状态（思考弧 / 工具计数 / 待确认点 / 错误色），
+  纯 CSS 动画 + `prefers-reduced-motion` 退化；tooltip 是「Agent 任务」。
+- 输入框**悬浮在底部**（附件 / 模型 / 思考强度菜单都在框内），不再占流内空间；
+  发送按钮左侧常驻上下文环形（75% 琥珀 / 90% 红）；`Enter` 发送（跳过输入法组词）、
+  `Shift+Enter` 换行。
+- 顶栏图标：新会话（`message-circle-plus`）/ 历史 / 导出日志 / 设置 / 收起。
+  「导出日志」输出 JSON（配置、UI 消息、wire 消息、usage、lastError，key 打码）。
+- 对话正文可选中；右键是自绘菜单（复制 / 全选 / 添加到输入框 / 复制整段），
+  输入框保留原生右键菜单。
+- 工具卡用**显示名**（`agent.toolName.<camelCase>`）而不是 id，状态用名字前的
+  小圆点编码；整轮结束后所有过程卡与思考块自动折叠。失败卡在生成中自动展开一次。
+- 思考过程来自 `delta.reasoning_content`，生成中展开、结束折叠；
+  `ask_user` 弹问答卡，回答作为 tool result 回给模型（`appOnly`，MCP 不声明）。
+- 截图卡点击放大；插件审批卡可展开看源码。
+- 一轮结束时在消息流末尾显示 token / 用时 / 修改数与「撤销本轮」。
+- 配置（Key / 模型 / baseUrl / 温度 / 最大步数 / 思考 / 截图回传 / 隐私与插件风险）
+  是**根级独立 modal**（`AgentSettingsModal`，挂在 `App.svelte` 的 `.page` 上），
+  不在抽屉里内联展开：抽屉带 `z-index`，modal 挂进去会被右侧检查器盖住遮罩；
+  根级也顺带保证两个视图只有一个实例。Key 存 `localStorage` 的 `artmatic.agent`，
+  **不进 `project.json`**；面板如实说明「本机脚本能读到它」。
+
+### 10.7 测试
+
+- 会话历史：`project.agentSessions`（30 会话 / 400 条 / 20k 字上限，图片只留说明），
+  Agent 抽屉顶栏的 `history` 图标打开只读面板（搜索 / 单条删除 / 一键清空 /
+  导出 JSON 日志）。写入走 `ProjectStore.setAgentSessions`：bump version、
+  **不进撤销栈**（快照剔除该字段）。
+- 单测：参数序列化、工具表 parity、排版原语与降级、SSE 分片解析、上下文裁剪、
+  插件说明书完整性、事务内 commit 只留一条记录、会话历史清洗与撤销隔离、
+  重复调用阶梯（3/6 提示、12 停止）、原生思考参数（off/low/high/max）。
+- E2E `tests/e2e/agent-in-app.spec.ts`：用 `page.route` 伪造 SSE（不需要真 Key），
+  覆盖「读场景 → 加片段 → 撤销本轮」「排版加元素 → 截图 → 布局 → 撤销」
+  「坏着色器 → 结构化 issue → 好源码进注册表」「安装需要确认」。
+- 真 Key 冒烟脚本与日志放 `.codebuddy/tmp/<日期>/`，不提交。
+
+### 10.8 已知限制 / 下一轮
+
+1. **真 Key 冒烟尚未在 CI 里**（需要用户提供 key；E2E 全部走伪造 SSE）。
+2. **「图片输入 + 工具调用」是否可组合**官方文档未明确 → 当前实现按可行路径做
+   （图片作为 user 消息），若实测不可用则退化为「先看图、下一轮再调工具」。
+3. **历史只读**：会话随工程保存（可搜索 / 删除 / 清空），但不做「载入并续聊」——
+   续聊需要完整的 wire 消息（tool_calls / tool_call_id），既臃肿又容易和当前模型
+   不兼容。成本只显示每轮 token / 用时，没有预算上限。
+4. **Agent 与用户同时编辑同一段文本**：`stopTextEditing()` 处理了「写前停编辑」，
+   但用户在 agent 写入过程中开始打字仍可能丢一次输入 —— 这是主线程并发编辑的
+   固有限制，暂未加锁。
+5. **`SettingsModal`（应用的全局设置）没有重复放一份 Agent 配置**：唯一入口是
+   Agent 自己的根级 modal（避免两处 key 状态同步）。若将来要并进全局设置，必须共用
+   `agentState` 而不是各自读写 localStorage。

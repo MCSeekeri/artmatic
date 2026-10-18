@@ -20,6 +20,7 @@ export type FieldKind =
   | 'scalars'
   | 'frameRange'
   | 'curve'
+  | 'stringArray'
   | 'any';
 
 export interface FieldSpec {

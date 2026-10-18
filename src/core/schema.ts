@@ -54,6 +54,40 @@ export interface Project {
    * 缺省 = 无。坏数据由 `validateProject` 整条丢掉（详见那里的注释）。
    */
   customThemes?: TypographyTheme[];
+  /**
+   * 应用内 Agent 的对话历史（随工程保存，属工程内容）。
+   *
+   * **不进撤销栈**：`ProjectStore` 的快照会剔除这个字段、恢复时保留当前值 ——
+   * 否则用户按一次 Ctrl+Z 会把聊天记录一起退回去（那不是「改动」，是日志）。
+   * 坏数据整条丢弃，工程必须打得开。
+   */
+  agentSessions?: AgentSessionRecord[];
+}
+
+/* --------------------------------------------------------------- 会话历史 */
+
+export type AgentStoredRole = 'user' | 'assistant' | 'tool' | 'error' | 'reasoning' | 'image';
+
+export interface AgentStoredMessage {
+  role: AgentStoredRole;
+  /** 纯文本（工具卡存的是结果摘要）。上限见 `sanitizeAgentSessions`。 */
+  text: string;
+  toolName?: string;
+  toolStatus?: 'running' | 'ok' | 'error';
+  code?: string;
+  ms?: number;
+  /** `role:'image'` 的说明（**不存 base64**：那是工程体积的灾难）。 */
+  caption?: string;
+}
+
+export interface AgentSessionRecord {
+  id: string;
+  /** 第一条用户消息的前若干字，列表里当标题。 */
+  title: string;
+  /** 毫秒时间戳（界面显示用；不参与渲染）。 */
+  createdAt: number;
+  updatedAt: number;
+  messages: AgentStoredMessage[];
 }
 
 export interface Asset {
@@ -380,6 +414,59 @@ export function migrateProject(raw: Record<string, unknown>): Project {
   return validateProject(cur);
 }
 
+/**
+ * 会话历史的清洗：**永不抛**，坏条目逐条丢弃。
+ *
+ * 三个上限都是为了「工程文件不能被聊天记录撑爆」：单条文本 20k 字、
+ * 单个会话 400 条、总共 30 个会话（按 updatedAt 保留最近的）。
+ * 图片只留说明，不存 base64 —— 一张 1MB 的截图乘上几十轮就是几十 MB。
+ */
+export function sanitizeAgentSessions(raw: unknown): AgentSessionRecord[] {
+  if (!Array.isArray(raw)) return [];
+  const ROLES = new Set<AgentStoredRole>(['user', 'assistant', 'tool', 'error', 'reasoning', 'image']);
+  const out: AgentSessionRecord[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Partial<AgentSessionRecord>;
+    if (typeof r.id !== 'string' || !r.id) continue;
+    if (!Array.isArray(r.messages)) continue;
+    const messages: AgentStoredMessage[] = [];
+    for (const m of r.messages) {
+      if (!m || typeof m !== 'object') continue;
+      const msg = m as Partial<AgentStoredMessage>;
+      if (typeof msg.text !== 'string' || !ROLES.has(msg.role as AgentStoredRole)) continue;
+      messages.push({
+        role: msg.role as AgentStoredRole,
+        text: msg.text.slice(0, 20_000),
+        ...(typeof msg.toolName === 'string' ? { toolName: msg.toolName } : {}),
+        ...(msg.toolStatus === 'ok' || msg.toolStatus === 'error' || msg.toolStatus === 'running'
+          ? { toolStatus: msg.toolStatus }
+          : {}),
+        ...(typeof msg.code === 'string' ? { code: msg.code } : {}),
+        ...(Number.isFinite(Number(msg.ms)) ? { ms: Number(msg.ms) } : {}),
+        ...(typeof msg.caption === 'string' ? { caption: msg.caption.slice(0, 500) } : {}),
+      });
+      if (messages.length >= 400) break;
+    }
+    if (!messages.length) continue;
+    const created = Number(r.createdAt);
+    const updated = Number(r.updatedAt);
+    out.push({
+      id: r.id,
+      title: (typeof r.title === 'string' && r.title.trim() ? r.title : '').slice(0, 120),
+      createdAt: Number.isFinite(created) ? created : 0,
+      updatedAt: Number.isFinite(updated) ? updated : 0,
+      messages,
+    });
+  }
+  // 最近更新的排前面；同一 id 只留一条（手改 JSON 可能造出重复）。
+  const seen = new Set<string>();
+  return out
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)))
+    .slice(0, 30);
+}
+
 export function validateProject(raw: unknown): Project {
   const p = raw as Project;
   if (!p || typeof p !== 'object') throw new SchemaError(tr('err.schema.notObject'));
@@ -416,6 +503,13 @@ export function validateProject(raw: unknown): Project {
       delete (p as { typographyTheme?: string }).typographyTheme;
     }
   }
+  /*
+   * Agent 会话历史（可选）。与 customThemes 同一条纪律：坏数据丢弃，
+   * 工程必须打得开；上限见 `sanitizeAgentSessions`。
+   */
+  const sessions = sanitizeAgentSessions((p as { agentSessions?: unknown }).agentSessions);
+  if (sessions.length) (p as { agentSessions?: AgentSessionRecord[] }).agentSessions = sessions;
+  else delete (p as { agentSessions?: AgentSessionRecord[] }).agentSessions;
   /*
    * 顺手修掉历史数据里的「主题色引用跑进非排版颜色参数」。
    *

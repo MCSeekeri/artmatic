@@ -152,6 +152,7 @@ src/
 ├── render/        ★ 合成根（见 `src/render/AGENTS.md`）
 ├── audio/         离线 FFT · BPM/offset 估计 · 波形桶 · 播放器
 ├── typography/    TypographyDocument 模型 + 光栅化后端 + 字体注册表 / HarfBuzz 子集化
+│                  + `agent-ops.ts`（控制平面用的写入原语，纯函数）
 ├── timeline/      时间轴 UI（Canvas2D 绘制 + DOM 片段）
 ├── exporters/     export-runner（逐帧驱动）+ frame-sink（webcodecs / png-sequence / gif）
 │                  + mixdown（纯混流）+ gif-plan（GIF 的纯计算：尺寸 / 抽帧 / 延迟）
@@ -160,9 +161,11 @@ src/
 ├── i18n/          文案表 + tr() + Label 契约
 ├── platform/      Platform 接口（浏览器实现）
 ├── assets/        静态资源：三套缩略图（特效 / 转场 / 生成器）+ 品牌 mark，见 `src/assets/AGENTS.md`
-├── agent/         Agent 控制面（能力声明 · 场景快照 · clip 工厂）：装配在 main.ts，**不依赖 ui/**，见 `docs/agent-control-plane.md`
+├── agent/         Agent 控制面（能力声明 · 场景快照 · clip 工厂 · 排版写入 · 插件作者面）
+│                  + `llm/`（应用内模型运行时：provider / session / executor）
+│                  装配在 main.ts，**不依赖 ui/**，见 `src/agent/AGENTS.md`
 ├── types/         跨层共用类型
-└── ui/            Svelte 组件 + 控件库（controls/）+ 主题与偏好状态
+└── ui/            Svelte 组件 + 控件库（controls/）+ 主题与偏好状态 + `agent/`（对话抽屉）
 
 lab/               试炼场：第二个 HTML 入口（/lab/），见 `lab/AGENTS.md`
 tests/             Playwright（e2e/）+ vitest（unit/），见 `tests/AGENTS.md`
@@ -175,6 +178,10 @@ mcp/ · cli/        宿主侧入口（MCP server / CLI）：它们驱动内核�
 `ui` 与 `lab` 依赖全部。`platform` 被所有人依赖。
 `plugins/` 在 `render` **之上**：它往 `effects`/`algos` 的注册表里写，只被
 `ui` 装配（`render-core` 与 lab **不认识插件**，所以 lab 不需要插件也能跑）。
+`agent/` 在 `render` 之上、`ui` 之下：它 **可以** import `typography/` 的纯模型层
+（`document` / `shapes` / `svg-gen` / `theme` / `agent-ops`），**禁止** import
+`ui/`、`typography/render-dom`、`project/plugins` —— 运行期实例（含插件宿主、
+目录句柄）全部走注入的 `ControlContext`（与 `platform/` 同一手法）。
 
 > **`render/` 为什么必须单独一层**：它装配 Renderer + SourceManager + AlgoRuntime +
 > EffectRunner，因而要 import `algos/` 与 `effects/` —— 而这两者本就在 `engine/`
@@ -201,6 +208,7 @@ mcp/ · cli/        宿主侧入口（MCP server / CLI）：它们驱动内核�
 | `src/effects/` | `src/effects/AGENTS.md` | 加改特效 / 转场 · `ParamDef` 参数类型 · 从外部移植 · `prePasses` / `feedback` |
 | `src/algos/` | `src/algos/AGENTS.md` | 加改生成器 · sim 状态 / 快照 / 步进预算 · 默认值 · 音频特征 |
 | `src/render/` | `src/render/AGENTS.md` | 动 `createRenderCore` · 加离屏渲染器 |
+| `src/agent/` | `src/agent/AGENTS.md` | 控制平面 / 工具面 / 应用内 LLM · 插件作者面 · 排版写入 · 一轮一笔撤销 |
 | `src/audio/` | `src/audio/AGENTS.md` | 音频分析 / 特征 · 播放器 |
 | `src/typography/` | `src/typography/AGENTS.md` | 排版文档模型 · 光栅化 · 字体子集化 · 配色方案 · 脱机媒体 |
 | `src/ui/` | `src/ui/AGENTS.md` | 面板与控件 · 抽屉 / 工具栏 / 媒体池 · 设计 token · 选择器 · 界面实时性 |
@@ -221,12 +229,14 @@ mcp/ · cli/        宿主侧入口（MCP server / CLI）：它们驱动内核�
 > `CODEBUDDY.md` 会被动态加载，子目录 `AGENTS.md` 是否自动进上下文**未实测**
 > ⇒ **不要假设它已经被读进来了，按上表主动读。**
 
-### 四条跨目录铁律（其余细节都在上面那张表指向的文件里）
+### 五条跨目录铁律（其余细节都在上面那张表指向的文件里）
 
 1. **容量常数只在 `core/capacity.ts`**（内存 / 显存上限）—— 别在别处另写一个数。
 2. **翻译函数叫 `tr()`，不叫 `t`** —— `t` 在本项目里是帧号。
 3. **导出必须走 `runExport` + `FrameSink`** —— 不要另写一条逐帧循环。
 4. **合成只走 `createRenderCore`**（主应用与 `/lab/` 同一份）—— 不要各装配一台。
+5. **Agent 的一切写操作只走控制平面**（`src/agent/`）—— UI 面板与 MCP 网关都只调它；
+   不要在 `ui/agent/` 里直接改 `ProjectStore`，也不要给它开「执行任意代码」的口。
 
 ---
 

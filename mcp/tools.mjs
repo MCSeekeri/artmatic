@@ -97,6 +97,15 @@ const KINDS = {
     json: () => ({ type: ['object', 'null'] }),
     check: (v) => (v === null || (typeof v === 'object' && !Array.isArray(v)) ? null : '必须是曲线对象或 null'),
   },
+  /** 字符串数组（能力清单按 id 过滤、排版元素的 id 列表）。 */
+  stringArray: {
+    json: () => ({ type: 'array', items: { type: 'string' } }),
+    check: (v) => {
+      if (!Array.isArray(v)) return '必须是字符串数组';
+      for (const x of v) if (typeof x !== 'string') return '数组元素必须是字符串';
+      return null;
+    },
+  },
   /** 透传：结构由控制平面校验（它才有 schema 与注册表）。 */
   any: {
     json: () => ({}),
@@ -279,8 +288,14 @@ export const TOOLS = [
   {
     name: 'artmatic_get_capabilities',
     kind: 'read',
-    description: '生成器 / 特效 / 转场 / 混合模式 / fit / 曲线模式清单。**选 id 只依据它**。',
-    args: {},
+    description:
+      '生成器 / 特效 / 转场 / 混合模式 / fit / 曲线模式清单。**选 id 只依据它**。' +
+      "detail:'params' 额外给出参数表（键 / 类型 / 区间 / 选项 / 默认值 / 能否打关键帧），" +
+      '配合 ids 过滤，避免一次吐几千 token。',
+    args: {
+      detail: F.string({ enum: ['ids', 'params'], description: '默认 ids。' }),
+      ids: F.stringArray({ description: '只展开这几个 def id（省略 = 全部）。' }),
+    },
   },
   {
     name: 'artmatic_get_clip',
@@ -372,6 +387,22 @@ export const TOOLS = [
       fit: F.string({ enum: ['contain', 'cover', 'stretch'] }),
       fadeSec: F.number({ minimum: 0 }),
       chain: F.any({ description: "kind:'effect' 的特效链：[{ defId, values? }]" }),
+    },
+  },
+  {
+    name: 'artmatic_add_effect_clip',
+    kind: 'write',
+    description:
+      '加一个特效（调整层）片段。**只作用于它下方（z 更小）的轨道**；chain 按顺序执行。' +
+      'affectDepth 限定只作用下方最近 N 条启用轨（0 = 全部）。',
+    args: {
+      trackId: ID('轨道'),
+      start: t({ required: true }),
+      end: F.number({ required: true, description: '秒。' }),
+      chain: F.any({ description: 'effects 链：[{ defId, values? }]' }),
+      label: F.string(),
+      fadeSec: F.number({ minimum: 0 }),
+      affectDepth: F.integer({ minimum: 0 }),
     },
   },
   {
@@ -516,6 +547,12 @@ export const TOOLS = [
     args: { label: F.string() },
   },
   {
+    name: 'artmatic_cancel_transaction',
+    kind: 'write',
+    description: '回滚整段事务（回到 begin 之前的状态）。',
+    args: {},
+  },
+  {
     name: 'artmatic_undo',
     kind: 'write',
     description: '撤销一步（用户在界面上按 Ctrl+Z 是同一条路）。',
@@ -573,6 +610,197 @@ export const TOOLS = [
     kind: 'project',
     description: '保存当前工程到它的目录句柄。未绑定目录时会失败（不是「另存为」）。',
     args: {},
+  },
+
+  /* ------------------------------------------------------- 说明（按需取） */
+  {
+    name: 'artmatic_help',
+    kind: 'read',
+    description:
+      '取一份说明：plugin-api（插件怎么写：着色器头 / 参数类型 / 派发规则 / 例子）|' +
+      'timeline | typography | workflow | images。写插件之前先取 plugin-api。',
+    args: { topic: F.string({ description: '主题名。省略 = 可用清单。' }) },
+  },
+
+  /* ------------------------------------------------------------ 排版 */
+  {
+    name: 'artmatic_get_typography_capabilities',
+    kind: 'read',
+    description: '排版能力：图形种类（及各自的专属参数）、22 个程序化生成器、配色方案、填充形态、布局操作。',
+    args: {},
+  },
+  {
+    name: 'artmatic_get_typography_doc',
+    kind: 'read',
+    description:
+      '读文本片段的排版文档。detail:\'ids\' 只给元素 id / 类型 / 框，full 还给样式、填充、文本与生成器状态。' +
+      '省略 clipId 时用排版编辑器当前打开的那份。',
+    args: {
+      clipId: F.string({ description: '文本片段 id；省略 = 当前打开的排版文档。' }),
+      detail: F.string({ enum: ['ids', 'full'] }),
+    },
+  },
+  {
+    name: 'artmatic_typo_add_element',
+    kind: 'write',
+    description:
+      '加排版元素。element.kind 决定形态：text{text,frame?,style?,fill?,boxFill?,boxStroke?} |' +
+      'shape{shape,frame?,fill?,stroke?,radius?,sides?,waist?,inner?,angle?,path?} |' +
+      'image{assetId,frame?,fit?,crop?}。frame = {x,y,w,h,rot}（文档 px，左上原点）。',
+    args: {
+      clipId: F.string(),
+      element: F.any({ required: true, description: '元素对象（见 description）。' }),
+    },
+  },
+  {
+    name: 'artmatic_typo_add_generated_shape',
+    kind: 'write',
+    description: '插入一个程序化 SVG 生成器（环 / 条码 / 等高线…）。参数与种子决定图案，之后就是普通图形元素。',
+    args: {
+      clipId: F.string(),
+      genId: F.string({ required: true }),
+      params: F.scalars(),
+      seed: F.integer({ description: '32 位无符号种子。' }),
+      frame: F.any({ description: '{x,y,w,h,rot}。' }),
+      name: F.string(),
+      fill: F.any(),
+      stroke: F.any(),
+    },
+  },
+  {
+    name: 'artmatic_typo_update_element',
+    kind: 'write',
+    description:
+      '改一个元素：name / frame / blend / opacity / visible / locked / text / style / fill / boxFill /' +
+      'boxStroke / stroke / radius / sides / waist / inner / angle / evenOdd / fit / crop / gen。',
+    args: {
+      clipId: F.string(),
+      elementId: F.string({ required: true }),
+      patch: F.any({ required: true }),
+    },
+  },
+  {
+    name: 'artmatic_typo_set_text',
+    kind: 'write',
+    description: '替换元素的文本（丢弃旧的逐段格式）。',
+    args: { clipId: F.string(), elementId: F.string({ required: true }), text: F.string({ required: true }) },
+  },
+  {
+    name: 'artmatic_typo_remove_element',
+    kind: 'write',
+    description: '从排版文档里删掉一个元素（一笔撤销；组合会在写库后自动收口）。',
+    args: { clipId: F.string(), elementId: F.string({ required: true }) },
+  },
+  {
+    name: 'artmatic_typo_reorder_element',
+    kind: 'write',
+    description: '调层级：front | back | forward | backward（数组下标即 z 序）。',
+    args: {
+      clipId: F.string(),
+      elementId: F.string({ required: true }),
+      op: F.string({ required: true, enum: ['front', 'back', 'forward', 'backward'] }),
+    },
+  },
+  {
+    name: 'artmatic_typo_group',
+    kind: 'write',
+    description: '成组（成员共享背景 / 边框外壳；在数组里变成连续一段）。',
+    args: {
+      clipId: F.string(),
+      elementIds: F.stringArray({ required: true }),
+      name: F.string(),
+    },
+  },
+  {
+    name: 'artmatic_typo_ungroup',
+    kind: 'write',
+    description: '解组（只影响这些元素所在的组）。',
+    args: { clipId: F.string(), elementIds: F.stringArray({ required: true }) },
+  },
+  {
+    name: 'artmatic_typo_layout',
+    kind: 'write',
+    description:
+      '排版布局：align（axis + target canvas|selection）| distribute（axis h|v，至少 3 个）|' +
+      'grid（cols, rows?, gap?, margin?）| row | column。省略 elementIds = 所有未锁定元素。',
+    args: {
+      clipId: F.string(),
+      op: F.string({ required: true, enum: ['align', 'distribute', 'grid', 'row', 'column'] }),
+      axis: F.string(),
+      target: F.string({ enum: ['canvas', 'selection'] }),
+      elementIds: F.stringArray(),
+      cols: F.integer({ minimum: 1 }),
+      rows: F.integer({ minimum: 1 }),
+      gap: F.number({ minimum: 0 }),
+      margin: F.number({ minimum: 0 }),
+    },
+  },
+  {
+    name: 'artmatic_typo_set_background',
+    kind: 'write',
+    description: '文档背景（Paint：none | solid | linear | radial | texture）。',
+    args: { clipId: F.string(), paint: F.any({ required: true }) },
+  },
+  {
+    name: 'artmatic_typo_set_theme',
+    kind: 'write',
+    description: '切配色方案；用 @slot 引用的元素会自动换色。theme 传 null = 默认方案。',
+    args: { clipId: F.string(), theme: F.string() },
+  },
+  {
+    name: 'artmatic_typo_replace_doc',
+    kind: 'write',
+    description: '整体替换文档（一笔撤销）。坏元素整条丢弃而不是整次失败 —— 看返回的 dropped。',
+    args: { clipId: F.string(), doc: F.any({ required: true }) },
+  },
+
+  /* ------------------------------------------------------------ 插件 */
+  {
+    name: 'artmatic_plugin_try',
+    kind: 'write',
+    description:
+      '校验 + 载入内存 + 真 GL 编译一个单文件插件（**不写盘**）。返回限定 id 与结构化 issue，' +
+      '模型据此自修复后再次调用（同一个 id 会热替换草稿）。',
+    args: {
+      id: F.string({ required: true, description: '[a-z0-9][a-z0-9._-]*' }),
+      name: F.string({ required: true }),
+      source: F.string({ required: true, description: '完整 ESM 源码（export const plugin = …）。' }),
+    },
+  },
+  {
+    name: 'artmatic_plugin_install',
+    kind: 'write',
+    description:
+      '把试挂中的插件写进工程 plugins/。**需要用户确认**：不传 confirm 时返回 code=needs-approval，' +
+      '面板上点「安装」之后页面内会带 confirm=true 再调一次。',
+    args: {
+      pluginId: F.string({ required: true }),
+      confirm: F.boolean({ description: '页面内审批后由界面传 true；MCP 客户端不要自己传。' }),
+    },
+  },
+  {
+    name: 'artmatic_plugin_list',
+    kind: 'read',
+    description: '已安装插件（状态 / 条目数 / issue / 是否有草稿）。',
+    args: {},
+  },
+  {
+    name: 'artmatic_plugin_discard',
+    kind: 'write',
+    description: '丢弃内存里的草稿（不删已安装的文件）。',
+    args: { pluginId: F.string({ required: true }) },
+  },
+  {
+    name: 'artmatic_plugin_remove',
+    kind: 'write',
+    description: '摘注册表 + 删工程目录里的插件文件。',
+    args: { pluginId: F.string({ required: true }) },
+  },
+  {
+    name: 'artmatic_plugin_source',
+    kind: 'read',
+    description: '取当前草稿源码（给审批 / 对比用）。',
+    args: { pluginId: F.string({ required: true }) },
   },
 ];
 

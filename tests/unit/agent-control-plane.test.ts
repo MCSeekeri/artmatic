@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createControlPlane, type AgentControlPlane } from '../../src/agent/control-plane';
+import { CONTROL_API_VERSION } from '../../src/agent/types';
 import type { ControlContext, ControlResult } from '../../src/agent/types';
 import { ProjectStore } from '../../src/core/project-store';
 import { createBlankProject } from '../../src/core/demo-project';
@@ -67,7 +68,7 @@ describe('读接口', () => {
   it('describe 给出握手需要的全部字段', async () => {
     const h = harness();
     const d = await ok(h.cp.describe());
-    expect(d.apiVersion).toBe(1);
+    expect(d.apiVersion).toBe(CONTROL_API_VERSION);
     // 不写死数字：这里守的是「握手报的是本构建支持的 schema 版本」，
     // 写死的话每次抬版本都要来改这条守卫，而不是它挡住了什么。
     expect(d.schemaVersion).toBe(SCHEMA_VERSION);

@@ -11,27 +11,43 @@
  */
 
 export { createControlPlane, type AgentControlPlane } from './control-plane';
-export { getCapabilities } from './capabilities';
+export { getCapabilities, getTypographyCapabilities } from './capabilities';
 export { buildSceneSnapshot, buildClipView, snapToFrame, visualZ } from './scene';
 export { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
 export { frameSignatureOf, type SignatureInput } from './frame-signature';
+export { pluginReference, helpText, HELP_TOPICS, type HelpTopic } from './plugin-spec';
 export { CONTROL_API_VERSION, ControlFailure } from './types';
 export type {
+  AgentPluginHost,
   Capabilities,
+  CapabilityDetail,
   ClipSourceView,
+  ClipTextSummary,
   ClipView,
   ControlContext,
   ControlErrorCode,
   ControlResult,
   DescribeInfo,
+  EffectCapability,
   ExportArtifact,
   ExportArtifactBase64,
   ExportFormat,
   ExportRequest,
   ExportState,
   FrameSignature,
+  GeneratorCapability,
   OpenProjectView,
+  ParamSchema,
+  PluginInfoView,
+  PluginTryResult,
   SceneDetail,
   SceneSnapshot,
+  TransitionCapability,
+  TypographyCapabilities,
+  TypographyDocIdView,
+  TypographyDocView,
+  TypographyElementInput,
+  TypographyElementPatch,
+  TypographyLayoutRequest,
   UndoState,
 } from './types';

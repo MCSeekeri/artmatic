@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { llmProxy } from './scripts/llm-proxy.mjs';
 
 /**
  * 版本号的**单一真源是 `package.json`**。这里读出来注入成编译期常量
@@ -114,7 +115,7 @@ function labRedirect(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [svelte(), labRedirect(), capacityEndpoint()],
+  plugins: [svelte(), labRedirect(), capacityEndpoint(), llmProxy()],
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   worker: { format: 'es' },
   build: {

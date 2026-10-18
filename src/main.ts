@@ -16,7 +16,9 @@ import { Mp4Sink, MP4_CODEC } from './exporters/mp4-sink';
 import { mixdown } from './exporters/mixdown';
 import { unzipSync } from 'fflate';
 import { opfsRoot, readBytesIfExists, resolveDir, writeBytesAtomic } from './project/fs';
-import { splitRelPath } from './project/layout';
+import { splitRelPath, pluginFileName } from './project/layout';
+import { writePluginFile } from './project/plugins';
+import { editorState } from './ui/typography/editor-state.svelte';
 import {
   attachProjectDirectory,
   openProjectDirectory,
@@ -33,6 +35,7 @@ import { applyMachine, currentCapacity, resetCapacity, setLimits } from './core/
 import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
 import { createControlPlane } from './agent/index';
+import { registerControlPlane } from './ui/agent/agent-state.svelte';
 import type { ControlContext, OpenProjectView } from './agent/types';
 import type { Renderer } from './engine/renderer';
 
@@ -220,9 +223,40 @@ const controlContext: ControlContext = {
   openProject: (name) => (name ? projectDebug.open(name) : openProjectPicker()),
   cancelPendingGesture: () => appState.cancelGesture(),
   refreshPreview: () => appState.refreshPreview(),
+
+  /*
+   * 排版 / 插件的接缝。控制平面不 import `ui/` 与 `project/plugins`，
+   * 这三件事只有装配点知道「现在前台是哪份工程、目录句柄在哪」。
+   */
+  getActiveTypoClipId: () => appState.activeTypoClipId,
+  // 打字是直接改 doc.runs，不经过手势事务；agent 写文档前必须先停掉。
+  stopTextEditing: () => editorState.stopEditing(),
+  getPluginHost: () => appState.plugins,
+  getProjectKey: () => (appState.hasProject ? appState.activeProjectId : null),
+  persistPlugin: async (pluginId, source) => {
+    const dir = appState.projectDir;
+    if (!dir) return false;
+    await writePluginFile(dir, pluginId, new TextEncoder().encode(source));
+    appState.plugins.markPersisted(pluginId, pluginFileName(pluginId));
+    return true;
+  },
+  unloadPlugin: async (pluginId) => {
+    // 只摘注册表与记录，不动磁盘（草稿丢弃走这条）。
+    await appState.plugins.remove(pluginId, null);
+  },
+  removePlugin: async (pluginId) => {
+    await appState.plugins.remove(pluginId, appState.projectDir);
+  },
 };
 
 const control = createControlPlane(controlContext);
+/*
+ * 把控制平面交给界面层的 Agent 状态（它需要同一份实例来执行工具调用）。
+ *
+ * 反过来（agent-state import main）会成环；这个注册函数是唯一的方向：
+ * `ui/agent/*` 只知道 `AgentControlPlane` 的类型，不知道它是怎么装配出来的。
+ */
+registerControlPlane(control);
 
 (window as unknown as Record<string, unknown>).__artmatic = {
   /**

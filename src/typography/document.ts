@@ -320,20 +320,29 @@ export interface TextElement extends ElementBase {
   boxStroke?: Stroke;
 }
 
-export type ShapeKind =
-  | 'rect'
-  | 'ellipse'
-  | 'line'
-  | 'triangle'
-  | 'star'
-  | 'polygon'
-  | 'trapezoid'
-  | 'parallelogram'
-  | 'arrow'
-  | 'ring'
-  | 'frame'
-  | 'pie'
-  | 'svg';
+/**
+ * 全部图形种类。**顺序即选择器分组顺序**（`SHAPE_PRESETS` 另有一套展示项）。
+ *
+ * 写成常量数组再派生联合类型：能力清单（`agent/capabilities.ts`）要把它
+ * 序列化给 LLM，手写第二份字符串列表必然与类型漂掉。
+ */
+export const SHAPE_KINDS = [
+  'rect',
+  'ellipse',
+  'line',
+  'triangle',
+  'star',
+  'polygon',
+  'trapezoid',
+  'parallelogram',
+  'arrow',
+  'ring',
+  'frame',
+  'pie',
+  'svg',
+] as const;
+
+export type ShapeKind = (typeof SHAPE_KINDS)[number];
 
 export interface ShapeElement extends ElementBase {
   kind: 'shape';

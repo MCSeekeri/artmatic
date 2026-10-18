@@ -1,3 +1,78 @@
+# 本轮已完成（2026-10-18 · 第三轮：400 修复与可用性）
+
+- **修复 400**：重复调用的引导以前作为 **system 消息**插在 assistant/tool 之间，
+  DeepSeek 带 tools 时会 400，且坏消息留在历史里导致之后每条都 400。现在引导
+  附加在**那条 tool 结果的末尾**（结构不变）。
+- **400 自愈**：`bad-response + 400` 后自动清空模型历史（UI 记录保留）并提示，
+  下一条消息可以继续；错误卡显示响应体（reasoning_content / 工具配对的线索）。
+- **上下文管理**：窗口 1M token，75% 触发压缩（同一个模型、不带 tools 把前半段
+  压成交接说明，保留最近 8 条）；发送按钮左侧常驻环形进度，75% 琥珀 / 90% 红。
+- **历史入口回面板顶栏**；「新会话」改用 `message-circle-plus`；新增「导出日志」
+  （JSON：配置 / UI 消息 / wire 消息 / usage / lastError，key 与图片打码）。
+- **对话可选中**：`.stream` 恢复 `user-select: text`；右键是自绘菜单
+  （复制 / 全选 / 添加到输入框 / 复制整段），输入框保留原生菜单。
+- 思考过程旁那句解释删掉，只留「思考过程」。
+- 守卫：`agent-llm.test.ts` 增压缩原语（75% 阈值 / 裁剪不拆工具对 / recentTail）；
+  `agent-in-app.spec.ts` 增「右键菜单」「上下文环」「重复引导不新增 system」
+  「400 后自动恢复」四条。
+
+# 本轮已完成（2026-10-18 · 第二轮：Agent 体验）
+
+- **运行时长/步数**：默认 200 步、上限 2000（旧的 16/40 在真实任务里根本不够）；
+  默认开思考；思考强度用 **DeepSeek 原生 `reasoning_effort`**（关 / low / high / max），
+  不是提示词。带 `tools` 的请求把每轮 `reasoning_content` **完整回传**（漏传会 400）。
+- **重复调用不再掐断**：同一「工具 + 参数」第 3 / 6 次注入引导（换参数 / 读结果 /
+  用 `ask_user`），第 12 次才停。用户能在「思考过程」块里看到模型在干什么。
+- **`ask_user` 工具**（appOnly）：模型可以暂停任务、弹问答卡（选项 + 自由输入），
+  回答作为 tool result 继续同一轮。MCP 不声明它（没有正在看着面板的人）。
+- **UI**：输入框改为悬浮在底部（附图 / 模型 / 思考强度二级菜单 / 纸飞机发送）；
+  工具卡显示中文名 + 状态小圆点，整轮结束自动折叠；消息区 flex 子项禁止收缩
+  （修滚动条不出现、卡片被压扁）；设置改为左 navside 分页的独立 modal；
+  rail tooltip = 「Agent 任务」；会话结束后默认提示自动消失。
+- **会话历史进工程**：`project.agentSessions`（30/400/20k 上限，图片不存 base64），
+  顶栏 `history` 图标 → 只读历史面板（内容搜索 / 删除 / 一键清空）。
+  `ProjectStore` 快照剔除该字段：撤销不会把聊天记录退回去。
+- 守卫：`tests/unit/agent-sessions.test.ts`（清洗 + 撤销隔离）、
+  `agent-llm.test.ts`（重复阶梯 / 原生思考参数）、
+  `agent-in-app.spec.ts` 增「悬浮输入框 + 附图」「思考过程折叠」「ask_user」
+  「历史搜索 / 清空」「工具卡高度」五条。
+
+# 本轮已完成（2026-10-18）
+
+**应用内 Agent（v2 控制平面）**：从左侧 rail 打开一个对话抽屉，用自然语言写插件、
+编排时间轴、组合排版。落地的东西：
+
+- **契约 v2**：`getCapabilities({detail:'params', ids})`（参数表序列化，剥掉
+  `visibleWhen`）；文本片段的 `source.doc` 改为摘要 + `getTypographyDoc`；
+  `CONTROL_API_VERSION = 2`。`ControlContext` 新增排版 / 插件接缝
+  （`stopTextEditing` / `getPluginHost` / `persistPlugin` / …），控制平面仍不 import
+  `ui/` 与 `project/plugins`。
+- **排版写入**：`typography/agent-ops.ts`（纯函数：元素工厂 / 白名单 patch / 层级 /
+  组合 / 对齐分布 / 网格行列 / `coerceDocument` 永不抛）+ `agent/typography.ts`
+  （校验前置 + 每工具一笔撤销）。12 个 `typo_*` 工具。
+- **插件作者面**：`plugin_try`（内存载入 + 真 GL 编译，结构化 issue 供自修复）→
+  `plugin_install`（**必须用户确认**，面板出审批卡、可看源码）；`plugin-spec.ts`
+  的说明书由 `EFFECT_HEAD`/`ALGO_HEAD` 常量拼出。
+- **应用内模型运行时**：`agent/llm/`（provider 手写 SSE + tool_calls 分片累积 /
+  session 工具循环 + 事务 + 裁剪 / executor 工具映射）；直连失败自动回落
+  `/__llm` 同源代理（`scripts/llm-proxy.mjs`，dev 与 preview 双侧注册）。
+  截图以 user 消息注入（Chat Completions 只允许图片在 user 消息）。
+- **面板**：左侧与媒体池互斥、共用宽度；rail 图标带状态（思考弧 / 工具计数 /
+  待确认点 / 错误色，`prefers-reduced-motion` 退化）；工具卡 / 截图卡 / 审批卡 /
+  「已修改 N 处 · 撤销本轮」。排版页也能开。
+- **一轮 = 一笔撤销**：`CommandStack.commit` 在 `beginTx` 打开时不再单独入栈
+  （补了单测：事务内多次 commit 只留一条记录、撤销回到事务之前）。
+- **工具表单一真源**：`src/agent/tools.ts` + `tests/unit/agent-tools-parity.test.ts`
+  钉住「应用内 ⊆ MCP、required 一致、MCP 独有工具在允许清单里」。
+- 守卫：`tests/unit/agent-capabilities.test.ts`、`typography-agent-ops.test.ts`、
+  `agent-llm.test.ts`（SSE / 裁剪 / 说明书完整性）、`commands.test.ts`（事务语义）、
+  `tests/e2e/agent-in-app.spec.ts`（伪造 SSE：编排 / 排版 / 插件试挂 / 安装审批，
+  不需要真 Key）。
+- 文档：新增 `src/agent/AGENTS.md`（依赖 / 写纪律 / 工具面 / 插件 / 模型层），
+  根 `AGENTS.md` 补依赖方向、规则地图与第 5 条铁律，本方案文档补 §10。
+
+待真 Key 冒烟：脚本与日志放 `.codebuddy/tmp/<日期>/`。
+
 # 本轮已完成（2026-10-17）
 
 - **简易抠图（色键）**：`SourceClip.key`（`{ color, tolerance, softness, spill }`，

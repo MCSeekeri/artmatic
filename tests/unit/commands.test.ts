@@ -77,6 +77,52 @@ describe('CommandStack', () => {
     expect(state.x).toBe(0);
     expect(stack.canUndo()).toBe(false);
   });
+
+  /*
+   * 事务内 `commit` 只通知、不入栈 —— agent 的「一轮对话 = 一笔撤销」依赖它。
+   * 修之前：两次 commit 会留下 3 条记录（两次中间态 + 事务快照），撤到第二次
+   * 就落在一个用户从没见过的中间态上。
+   */
+  it('事务内多次 commit 只产生一条撤销记录', () => {
+    let state = { x: 0, y: 0 };
+    const changes: string[] = [];
+    const stack = new CommandStack(
+      () => JSON.stringify(state),
+      (j) => { state = JSON.parse(j); },
+      (label) => changes.push(label),
+    );
+    stack.beginTx();
+    stack.commit('x=1', () => { state.x = 1; });
+    stack.commit('y=2', () => { state.y = 2; });
+    expect(stack.endTx('一轮')).toBe(true);
+    expect(state).toEqual({ x: 1, y: 2 });
+
+    // 事务内每次 commit 仍然通知界面（版本/重绘），所以有两条中间通知。
+    expect(changes).toEqual(['x=1', 'y=2', '一轮']);
+
+    stack.undo();
+    // 一次撤销直接回到事务之前 —— 不是 { x: 1, y: 0 }。
+    expect(state).toEqual({ x: 0, y: 0 });
+    expect(stack.canUndo()).toBe(false);
+
+    stack.redo();
+    expect(state).toEqual({ x: 1, y: 2 });
+  });
+
+  it('事务内无变化时 endTx 不入栈，也不丢已有记录', () => {
+    let state = { x: 0 };
+    const stack = new CommandStack(
+      () => JSON.stringify(state),
+      (j) => { state = JSON.parse(j); },
+      () => {},
+    );
+    stack.commit('x=1', () => { state.x = 1; });
+    stack.beginTx();
+    stack.commit('noop', () => {});
+    expect(stack.endTx('空事务')).toBe(false);
+    stack.undo();
+    expect(state.x).toBe(0);
+  });
 });
 
 /* ---------------------------------------------------------- store 层 */

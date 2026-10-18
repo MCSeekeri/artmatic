@@ -80,6 +80,14 @@ interface UiPrefs {
    */
   mediaPoolOpen: boolean;
   mediaPoolWidth: number;
+  /**
+   * Agent 抽屉（与媒体池**同一列、互斥**）。
+   *
+   * 分开记开关意图（与 `mediaPoolOpen` 的理由相同：一个值管两个抽屉会出现
+   * 「关掉媒体池顺手把 Agent 也关了」），但两者打开时会互相收起 ——
+   * 左列只有一个位置，宽度也共用一份（`mediaPoolWidth`）。
+   */
+  agentOpen: boolean;
   /** 预览帧率分母：1 = 全速、2 = 半速、3 = 三分之一。 */
   previewFpsDiv: number;
   /** 预览分辨率缩放：1 / 0.75 / 0.5 / 0.25。 */
@@ -193,6 +201,7 @@ function loadUiPrefs(): UiPrefs {
     // 默认收起：它是「要用时才拉开看一眼」的辅助面板，不该开局就吃掉画面宽度。
     mediaPoolOpen: false,
     mediaPoolWidth: DENSITY.poolW,
+    agentOpen: false,
     previewFpsDiv: 1,
     previewScale: 1,
     previewRestoreOnPause: true,
@@ -215,6 +224,7 @@ function loadUiPrefs(): UiPrefs {
       mediaPoolOpen:
         typeof p.mediaPoolOpen === 'boolean' ? p.mediaPoolOpen : fallback.mediaPoolOpen,
       mediaPoolWidth: clampPoolWidth(Number(p.mediaPoolWidth) || fallback.mediaPoolWidth),
+      agentOpen: typeof p.agentOpen === 'boolean' ? p.agentOpen : fallback.agentOpen,
       previewFpsDiv: normalizeDiv(p.previewFpsDiv),
       previewScale: normalizeScale(p.previewScale),
       previewRestoreOnPause:
@@ -413,6 +423,12 @@ class AppState {
   /** 左侧媒体池抽屉。默认收起（要用时才拉开），宽度可拖，两者都持久化。 */
   mediaPoolOpen = $state(false);
   mediaPoolWidth = $state<number>(DENSITY.poolW);
+
+  /**
+   * 左侧 Agent 抽屉。与媒体池**共用同一列与同一份宽度**，所以绝不能同时开
+   * （同时开会让 `.body` 的网格多出一列，画面被挤两次）。
+   */
+  agentOpen = $state(false);
 
   /* ---- 预览质量（只影响预览；导出永远全帧全质） ----
    *
@@ -1565,6 +1581,9 @@ class AppState {
     this.drawerWidth = prefs.drawerWidth;
     this.mediaPoolOpen = prefs.mediaPoolOpen;
     this.mediaPoolWidth = prefs.mediaPoolWidth;
+    this.agentOpen = prefs.agentOpen;
+    // 老偏好里可能两份都开着（这个字段是后加的）：左列只有一个位置。
+    if (this.agentOpen) this.mediaPoolOpen = false;
     this.previewFpsDiv = prefs.previewFpsDiv;
     this.previewScale = prefs.previewScale;
     this.previewRestoreOnPause = prefs.previewRestoreOnPause;
@@ -1668,11 +1687,24 @@ class AppState {
   setMediaPoolOpen(open: boolean): void {
     if (this.mediaPoolOpen === open) return;
     this.mediaPoolOpen = open;
+    // 左列只有一个位置：打开媒体池就收起 Agent。
+    if (open && this.agentOpen) this.agentOpen = false;
     this.persistUi();
   }
 
   toggleMediaPool(): void {
     this.setMediaPoolOpen(!this.mediaPoolOpen);
+  }
+
+  setAgentOpen(open: boolean): void {
+    if (this.agentOpen === open) return;
+    this.agentOpen = open;
+    if (open && this.mediaPoolOpen) this.mediaPoolOpen = false;
+    this.persistUi();
+  }
+
+  toggleAgent(): void {
+    this.setAgentOpen(!this.agentOpen);
   }
 
   setMediaPoolWidth(w: number): void {
@@ -1714,6 +1746,7 @@ class AppState {
       drawerWidth: this.drawerWidth,
       mediaPoolOpen: this.mediaPoolOpen,
       mediaPoolWidth: this.mediaPoolWidth,
+      agentOpen: this.agentOpen,
       previewFpsDiv: this.previewFpsDiv,
       previewScale: this.previewScale,
       previewRestoreOnPause: this.previewRestoreOnPause,

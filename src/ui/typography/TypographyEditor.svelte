@@ -50,6 +50,7 @@
   import Menu from '../controls/Menu.svelte';
   import type { MenuItem } from '../controls/menu-model';
   import MediaPoolDrawer from '../MediaPoolDrawer.svelte';
+  import AgentDrawer from '../agent/AgentDrawer.svelte';
   import { ASSET_DRAG_MIME, poolItemById, type PoolItem } from '../media-pool';
   import { animationSpecs, seekAnimations } from '../../typography/bake-animation';
   import { keyframeBodyOf } from '../../typography/animation';
@@ -1218,13 +1219,18 @@
     class="main"
     class:resizing={panelResizing}
     style:--typo-panel-w={`${appState.typoPanelWidth}px`}
-    style:--typo-pool-w={appState.mediaPoolOpen ? `${appState.mediaPoolWidth}px` : '0px'}
+    style:--typo-pool-w={appState.mediaPoolOpen || appState.agentOpen
+      ? `${appState.mediaPoolWidth}px`
+      : '0px'}
   >
     <!--
-      媒体池（左侧）：与时间轴共用同一个抽屉组件、同一个开关。在排版页里它是
-      「拖图片进画布」的来源，条目的落点由本页接管（见 insertPoolItem）。
+      左列（媒体池 / Agent 互斥）：媒体池在排版页里是「拖图片进画布」的来源，
+      条目的落点由本页接管（见 insertPoolItem）。Agent 抽屉与时间轴共用同一个
+      组件与同一份宽度 —— **排版页也必须能开 Agent**（需求 3 的核心场景）。
     -->
-    {#if appState.mediaPoolOpen}
+    {#if appState.agentOpen}
+      <AgentDrawer />
+    {:else if appState.mediaPoolOpen}
       <MediaPoolDrawer />
     {/if}
 
@@ -1591,6 +1597,9 @@
    * 画面整个消失」。与 App.svelte 的 .body 是同一条教训。
    */
   .main > :global(aside.media-drawer) {
+    grid-column: 1;
+  }
+  .main > :global(aside.agent-drawer) {
     grid-column: 1;
   }
   .main > :global(aside.side) {

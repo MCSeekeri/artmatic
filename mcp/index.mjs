@@ -97,7 +97,88 @@ async function dispatch(name, args, extra) {
     case 'artmatic_get_scene':
       return unwrap(await bridge.call('getScene', [{ t: args.t, detail: args.detail }]));
     case 'artmatic_get_capabilities':
-      return unwrap(await bridge.call('getCapabilities'));
+      return unwrap(
+        await bridge.call('getCapabilities', [
+          {
+            ...(args.detail ? { detail: args.detail } : {}),
+            ...(Array.isArray(args.ids) ? { ids: args.ids } : {}),
+          },
+        ]),
+      );
+
+    case 'artmatic_help':
+      return unwrap(await bridge.call('help', [args.topic]));
+
+    case 'artmatic_get_typography_capabilities':
+      return unwrap(await bridge.call('getTypographyCapabilities'));
+
+    case 'artmatic_get_typography_doc':
+      return unwrap(await bridge.call('getTypographyDoc', [args.clipId, args.detail]));
+
+    case 'artmatic_typo_add_element':
+      return unwrap(await bridge.call('addTypographyElement', [args.clipId, args.element]));
+
+    case 'artmatic_typo_add_generated_shape':
+      return unwrap(
+        await bridge.call('addGeneratedShape', [
+          args.clipId,
+          {
+            genId: args.genId,
+            params: args.params,
+            seed: args.seed,
+            frame: args.frame,
+            name: args.name,
+            fill: args.fill,
+            stroke: args.stroke,
+          },
+        ]),
+      );
+
+    case 'artmatic_typo_update_element':
+      return unwrap(await bridge.call('updateTypographyElement', [args.clipId, args.elementId, args.patch]));
+
+    case 'artmatic_typo_set_text':
+      return unwrap(await bridge.call('setTypographyText', [args.clipId, args.elementId, args.text]));
+
+    case 'artmatic_typo_remove_element':
+      return unwrap(await bridge.call('removeTypographyElement', [args.clipId, args.elementId]));
+
+    case 'artmatic_typo_reorder_element':
+      return unwrap(await bridge.call('reorderTypographyElement', [args.clipId, args.elementId, args.op]));
+
+    case 'artmatic_typo_group':
+      return unwrap(
+        await bridge.call('groupTypographyElements', [args.clipId, args.elementIds, args.name]),
+      );
+
+    case 'artmatic_typo_ungroup':
+      return unwrap(await bridge.call('ungroupTypographyElements', [args.clipId, args.elementIds]));
+
+    case 'artmatic_typo_layout':
+      return unwrap(
+        await bridge.call('layoutTypography', [
+          args.clipId,
+          {
+            op: args.op,
+            ...(args.axis ? { axis: args.axis } : {}),
+            ...(args.target ? { target: args.target } : {}),
+            ...(args.elementIds ? { elementIds: args.elementIds } : {}),
+            ...(args.cols !== undefined ? { cols: args.cols } : {}),
+            ...(args.rows !== undefined ? { rows: args.rows } : {}),
+            ...(args.gap !== undefined ? { gap: args.gap } : {}),
+            ...(args.margin !== undefined ? { margin: args.margin } : {}),
+          },
+        ]),
+      );
+
+    case 'artmatic_typo_set_background':
+      return unwrap(await bridge.call('setTypographyBackground', [args.clipId, args.paint]));
+
+    case 'artmatic_typo_set_theme':
+      return unwrap(await bridge.call('setTypographyTheme', [args.clipId, args.theme ?? null]));
+
+    case 'artmatic_typo_replace_doc':
+      return unwrap(await bridge.call('replaceTypographyDoc', [args.clipId, args.doc]));
     case 'artmatic_get_clip':
       return unwrap(await bridge.call('getClip', [args.clipId]));
     case 'artmatic_list_projects':
@@ -170,6 +251,21 @@ async function dispatch(name, args, extra) {
       );
     }
 
+    case 'artmatic_add_effect_clip':
+      return unwrap(
+        await bridge.call('addEffectClip', [
+          args.trackId,
+          {
+            start: args.start,
+            end: args.end,
+            chain: args.chain,
+            label: args.label,
+            fadeSec: args.fadeSec,
+            affectDepth: args.affectDepth,
+          },
+        ]),
+      );
+
     case 'artmatic_remove_clip':
       return unwrap(await bridge.call('removeClip', [args.clipId]));
 
@@ -238,6 +334,9 @@ async function dispatch(name, args, extra) {
     case 'artmatic_commit_transaction':
       return unwrap(await bridge.call('endTx', [args.label ?? 'agent: transaction']));
 
+    case 'artmatic_cancel_transaction':
+      return unwrap(await bridge.call('cancelTx'));
+
     case 'artmatic_undo':
       return unwrap(await bridge.call('undo'));
 
@@ -268,6 +367,27 @@ async function dispatch(name, args, extra) {
 
     case 'artmatic_save_project':
       return unwrap(await bridge.call('saveProject'));
+
+    /* -------------------------------------------------------------- 插件 */
+    case 'artmatic_plugin_try':
+      return unwrap(
+        await bridge.call('pluginTry', [{ id: args.id, name: args.name, source: args.source }]),
+      );
+
+    case 'artmatic_plugin_install':
+      return unwrap(await bridge.call('pluginInstall', [args.pluginId, args.confirm === true]));
+
+    case 'artmatic_plugin_list':
+      return unwrap(await bridge.call('pluginList'));
+
+    case 'artmatic_plugin_discard':
+      return unwrap(await bridge.call('pluginDiscard', [args.pluginId]));
+
+    case 'artmatic_plugin_remove':
+      return unwrap(await bridge.call('pluginRemove', [args.pluginId]));
+
+    case 'artmatic_plugin_source':
+      return unwrap(await bridge.call('pluginSource', [args.pluginId]));
 
     default:
       return errResult({ code: 'not-found', message: `没有工具 ${name}` });
@@ -339,9 +459,11 @@ const server = new Server(
     capabilities: { tools: {} },
     // 网关的版本在 initialize 的 serverInfo 里带上（与控制平面版本分开演进）。
     instructions:
-      `Artmatic 控制平面网关 v${GATEWAY_VERSION}。渲染只在浏览器里发生：` +
+      `Artmatic 控制平面网关 v${GATEWAY_VERSION}（控制平面契约 v2）。渲染只在浏览器里发生：` +
       '所有工具都是对**页面上那一台编辑器**的操作，没有第二套求值路径。' +
-      '先 get_capabilities 拿合法 id，再用 frame_signature（而不是截图）做自循环判断。',
+      '先 get_capabilities 拿合法 id；参数表用 detail:"params" 按需展开。' +
+      '写插件前先 artmatic_help(topic:"plugin-api")；安装需要用户在页面上确认。' +
+      '自循环判断优先用 frame_signature，需要看构图时再用 render_frame。',
   },
 );
 
@@ -372,4 +494,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 await server.connect(new StdioServerTransport());
-log(`就绪（control-plane API v1，网关 v${GATEWAY_VERSION}）。日志走 stderr，stdout 只走协议。`);
+log(`就绪（control-plane API v2，网关 v${GATEWAY_VERSION}）。日志走 stderr，stdout 只走协议。`);

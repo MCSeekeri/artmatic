@@ -20,6 +20,7 @@
   import SettingsModal from './SettingsModal.svelte';
   import ExportModal from './ExportModal.svelte';
   import PluginManagerModal from './plugin-manager/PluginManagerModal.svelte';
+  import AgentRailButton from './agent/AgentRailButton.svelte';
   import { tip } from './tip';
   import Brand from './Brand.svelte';
   import Icon from './Icon.svelte';
@@ -128,6 +129,12 @@
       active={appState.mediaPoolOpen}
       onclick={() => appState.toggleMediaPool()}
     />
+    <!--
+      Agent 与媒体池**同一列**：`appState.setAgentOpen` 会顺手收起媒体池
+      （反之亦然）。图标本身带运行状态（思考那圈弧 / 工具计数 / 待确认点），
+      见 `AgentRailButton` 的注释。
+    -->
+    <AgentRailButton />
     <IconButton
       icon="save"
       label={tr('app.saveProject')}

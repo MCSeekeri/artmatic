@@ -6,6 +6,10 @@
   import Preview from './Preview.svelte';
   import InspectorDrawer from './InspectorDrawer.svelte';
   import MediaPoolDrawer from './MediaPoolDrawer.svelte';
+  import AgentDrawer from './agent/AgentDrawer.svelte';
+  import AgentSettingsModal from './agent/AgentSettingsModal.svelte';
+  import AgentHistoryModal from './agent/AgentHistoryModal.svelte';
+  import { agentState } from './agent/agent-state.svelte';
   import StatusBar from './StatusBar.svelte';
   import Tip from './Tip.svelte';
   import EmptyState from './EmptyState.svelte';
@@ -51,6 +55,12 @@
   $effect(() => {
     installTheme(theme.spec);
     applyFontScale(theme.fontScale);
+  });
+
+  // 切工程 = 新会话：否则 A 的聊天会被记进 B 的历史（见 agentState.onProjectChanged）。
+  $effect(() => {
+    void appState.activeProjectId;
+    agentState.onProjectChanged();
   });
 
   /* ------------------------------------------------ 面板调校（拖拽热区）
@@ -354,7 +364,7 @@
       <div
         class="body"
         class:is-hidden={appState.editorOpen}
-        style={`--pool-w: ${appState.mediaPoolOpen
+        style={`--pool-w: ${appState.mediaPoolOpen || appState.agentOpen
           ? `${appState.mediaPoolWidth}px`
           : '0px'}; --drawer-w: ${appState.drawerOpen ? `${appState.drawerWidth}px` : '0px'}`}
       >
@@ -367,7 +377,10 @@
           少了这个条件时两份抽屉会同时在 DOM 里 —— 两份列表、两份视频缩略图
           队列，`getByTestId('media-drawer')` 也会同时命中两个。
         -->
-        {#if appState.mediaPoolOpen && !appState.editorOpen}
+        <!-- 左列只有一个位置：Agent 与媒体池互斥（appState 的 setter 保证）。 -->
+        {#if appState.agentOpen && !appState.editorOpen}
+          <AgentDrawer />
+        {:else if appState.mediaPoolOpen && !appState.editorOpen}
           <MediaPoolDrawer />
         {/if}
 
@@ -410,7 +423,7 @@
             夹角热区：轨道区与抽屉的交界。只在对应抽屉开着时出现
             （关着时没有第二件事可做，一个只能调高度的方块只会让人以为坏了）。
           -->
-          {#if appState.mediaPoolOpen && !appState.editorOpen}
+          {#if (appState.mediaPoolOpen || appState.agentOpen) && !appState.editorOpen}
             <div
               class="corner-resize left"
               role="separator"
@@ -450,6 +463,18 @@
       <!-- 排版编辑页：同格兄弟，同一时刻只有一个在流内。 -->
       {#if appState.editorOpen && appState.activeTypoClipId}
         <TypographyEditor clipId={appState.activeTypoClipId} />
+      {/if}
+
+      <!--
+        Agent 设置放在**根级**（`.page` 里、抽屉外）：抽屉是带 z-index 的层叠
+        上下文，modal 挂进去会被右侧检查器盖住遮罩（见 ui/AGENTS.md 的 z 刻度）。
+        这里只渲染一个实例，时间轴与排版页共用；状态在 agentState 上。
+      -->
+      {#if agentState.settingsOpen}
+        <AgentSettingsModal />
+      {/if}
+      {#if agentState.historyOpen}
+        <AgentHistoryModal onclose={() => agentState.closeHistory()} />
       {/if}
     </div>
   </div>
@@ -523,6 +548,10 @@
    * `.stage` 会被填进那一列（关掉媒体池时它落在 0px 宽的第一列上，整块画面消失）。
    */
   .body > :global(aside.media-drawer) {
+    grid-column: 1;
+  }
+  /* Agent 抽屉与媒体池共用第一列；同样必须显式定位（理由见上一段）。 */
+  .body > :global(aside.agent-drawer) {
     grid-column: 1;
   }
   .body > :global(aside.drawer) {

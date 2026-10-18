@@ -5,18 +5,100 @@
  * 网关侧也要按这份清单校验（方案 §4.4）。着色器是惰性编译的 —— 语法错误在你
  * 点到它之前不报 —— 所以「先看清单再挂特效」是 agent 唯一能提前发现自己选错
  * 的手段。
+ *
+ * ## `detail: 'params'`（v2 新增）
+ *
+ * `ids` 档只给 id（省上下文）；`params` 档给**参数表**：键 / 类型 / 区间 /
+ * 选项 / 默认值。没有它，agent 给 `set_params` 填参数只能靠报错试错，而
+ * 未知键会被控制平面直接拒掉。
+ *
+ * 序列化时**剥掉 `visibleWhen`**（函数，过不了 JSON，也没有必要给客户端执行）。
  */
 
 import { BLEND_MODES } from '../core/schema';
-import { effectRegistryRevision, listEffects } from '../effects/registry';
-import { algoRegistryRevision, listGenerators } from '../algos/registry';
+import { EFFECT_CATALOG, structuralTags } from '../effects/catalog';
+import { effectRegistryRevision, getEffect, listEffects } from '../effects/registry';
+import { algoRegistryRevision, getGenerator, listGenerators } from '../algos/registry';
 import { listTransitions } from '../effects/transitions/registry';
-import type { Capabilities } from './types';
+import type { ParamDef } from '../effects/types';
+import { resolveLabel } from '../i18n/label';
+import { tr } from '../i18n/index.svelte';
+import { BUILTIN_THEMES, themeDisplayName, themeIds, type TypographyTheme } from '../typography/theme';
+import { SVG_GENERATORS, defaultsOf } from '../typography/svg-gen/registry';
+import { shapeParamSupport } from '../typography/shapes';
+import {
+  DEFAULT_FONT_FAMILY,
+  MIX_BLENDS,
+  SHAPE_KINDS,
+  TEXTURE_PATTERNS,
+} from '../typography/document';
+import type {
+  Capabilities,
+  CapabilityDetail,
+  EffectCapability,
+  GeneratorCapability,
+  ParamSchema,
+  TransitionCapability,
+  TypographyCapabilities,
+} from './types';
 
 /** 允许的 fit / 曲线模式 / 源类型：与 `schema.ts` 的联合类型一一对应。 */
 const FITS: Capabilities['fits'] = ['contain', 'cover', 'stretch'];
 const CURVE_MODES: Capabilities['curveModes'] = ['keyframe', 'impulse', 'follower'];
 const SOURCE_TYPES: Capabilities['sourceTypes'] = ['video', 'image', 'algo', 'text', 'solid'];
+
+/* -------------------------------------------------------- 参数表序列化 */
+
+/** `ParamDef` → JSON 安全的 `ParamSchema`（剥离 `visibleWhen`）。 */
+export function serializeParam(p: ParamDef): ParamSchema {
+  const base: ParamSchema = {
+    key: p.key,
+    label: resolveLabel(p.labelKey, tr),
+    type: p.type,
+    defaultValue: p.defaultValue,
+    curvable: p.type === 'range',
+  };
+  switch (p.type) {
+    case 'range':
+      base.min = p.min;
+      base.max = p.max;
+      base.step = p.step;
+      if (p.curve !== undefined) base.curve = p.curve;
+      break;
+    case 'select':
+      base.options = p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }));
+      break;
+    case 'bitmask':
+      base.bits = p.bits;
+      base.groups = p.groups.map((g) => ({
+        label: resolveLabel(g.labelKey, tr),
+        bits: g.bits,
+        style: g.style,
+      }));
+      if (p.presets) {
+        base.presets = p.presets.map((x) => ({ label: resolveLabel(x.labelKey, tr), value: x.value }));
+      }
+      break;
+    case 'pattern':
+      if (p.editorSize !== undefined) base.editorSize = p.editorSize;
+      if (p.mode) base.mode = p.mode;
+      break;
+    case 'text':
+      if (p.maxLength !== undefined) base.maxLength = p.maxLength;
+      if (p.multiline) base.multiline = true;
+      if (p.placeholderKey) base.placeholder = resolveLabel(p.placeholderKey, tr);
+      break;
+    default:
+      break;
+  }
+  return base;
+}
+
+export function serializeParams(params: readonly ParamDef[] | undefined): ParamSchema[] {
+  return (params ?? []).map(serializeParam);
+}
+
+/* ------------------------------------------------------------- 能力清单 */
 
 /**
  * 清单在**插件挂载之前**是常量（内置注册表在模块加载时建好，glob 是 eager 的），
@@ -28,20 +110,156 @@ const SOURCE_TYPES: Capabilities['sourceTypes'] = ['video', 'image', 'algo', 'te
  */
 let cached: Capabilities | null = null;
 let cachedRevision = -1;
+let cachedDetail: CapabilityDetail = 'ids';
 
-export function getCapabilities(): Capabilities {
-  const revision = effectRegistryRevision() + algoRegistryRevision();
-  if (!cached || cachedRevision !== revision) {
-    cachedRevision = revision;
-    cached = {
-      generators: listGenerators().map((g) => ({ id: g.id, kind: g.kind })),
-      effects: listEffects().map((e) => ({ id: e.id })),
-      transitions: listTransitions().map((t) => ({ id: t.id })),
-      blendModes: BLEND_MODES.map((b) => b.id),
-      fits: FITS,
-      curveModes: CURVE_MODES,
-      sourceTypes: SOURCE_TYPES,
-    };
+function generatorCapability(id: string, detail: CapabilityDetail): GeneratorCapability {
+  const entry = listGenerators().find((g) => g.id === id)!;
+  const out: GeneratorCapability = { id, kind: entry.kind, pluginId: entry.pluginId };
+  if (detail === 'params') {
+    out.name = resolveLabel(entry.nameKey, tr);
+    if (entry.desc) out.desc = resolveLabel(entry.desc, tr);
+    out.params = serializeParams(getGenerator(id)?.params);
   }
-  return cached;
+  return out;
+}
+
+function effectCapability(id: string, detail: CapabilityDetail): EffectCapability {
+  const entry = listEffects().find((e) => e.id === id)!;
+  const def = getEffect(id);
+  const out: EffectCapability = { id, pluginId: entry.pluginId };
+  if (detail === 'params') {
+    out.name = resolveLabel(entry.nameKey, tr);
+    const cat = def?.meta?.category ?? EFFECT_CATALOG[id]?.category ?? null;
+    out.category = cat;
+    const descKey = EFFECT_CATALOG[id]?.descKey;
+    if (def?.meta?.desc) out.desc = resolveLabel(def.meta.desc, tr);
+    else if (descKey) out.desc = tr(descKey);
+    out.tags = [
+      ...new Set([...(def ? structuralTags(def.shader) : []), ...(def?.meta?.tags ?? [])]),
+    ];
+    out.params = serializeParams(def?.params);
+    if (def) {
+      out.flags = {
+        feedback: Boolean(def.shader.feedback),
+        prePasses: def.shader.prePasses?.length ?? 0,
+        stateful: Boolean(def.shader.stateful),
+        hdrFeedback: Boolean(def.shader.hdrFeedback),
+        opaqueOutput: Boolean(def.shader.opaqueOutput),
+      };
+    }
+  }
+  return out;
+}
+
+function transitionCapability(id: string, detail: CapabilityDetail): TransitionCapability {
+  const entry = listTransitions().find((t) => t.id === id)!;
+  const out: TransitionCapability = { id };
+  if (detail === 'params') {
+    out.name = entry.id;
+    out.author = entry.author;
+    out.license = entry.license;
+    out.params = entry.params.map((p) => ({
+      key: p.key,
+      label: p.label,
+      type: p.type,
+      ...(p.min === undefined ? {} : { min: p.min }),
+      ...(p.max === undefined ? {} : { max: p.max }),
+      ...(p.step === undefined ? {} : { step: p.step }),
+      defaultValue: p.defaultValue,
+    }));
+  }
+  return out;
+}
+
+/**
+ * @param opt.detail `ids`（默认）或 `params`
+ * @param opt.ids 只给这几条（按 id 过滤；未知 id 被忽略）。省略 = 全部。
+ *   参数表可以很大（70+ 特效 × 十几项），所以 agent 应当先取 id 再按需展开。
+ */
+export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[] }): Capabilities {
+  const detail = opt?.detail ?? 'ids';
+  const revision = effectRegistryRevision() + algoRegistryRevision();
+  const wantAll = !opt?.ids || opt.ids.length === 0;
+  const only = new Set(opt?.ids ?? []);
+
+  // 只有「全量 + 同一档位」才走缓存；按 id 过滤是一次性小查询。
+  if (wantAll && cached && cachedRevision === revision && cachedDetail === detail) return cached;
+
+  const keep = (id: string) => wantAll || only.has(id);
+  const out: Capabilities = {
+    generators: listGenerators()
+      .filter((g) => keep(g.id))
+      .map((g) => generatorCapability(g.id, detail)),
+    effects: listEffects()
+      .filter((e) => keep(e.id))
+      .map((e) => effectCapability(e.id, detail)),
+    transitions: listTransitions()
+      .filter((t) => keep(t.id))
+      .map((t) => transitionCapability(t.id, detail)),
+    blendModes: [...BLEND_MODES.map((b) => b.id)],
+    fits: [...FITS],
+    curveModes: [...CURVE_MODES],
+    sourceTypes: [...SOURCE_TYPES],
+  };
+
+  if (wantAll) {
+    cached = out;
+    cachedRevision = revision;
+    cachedDetail = detail;
+  }
+  return out;
+}
+
+/* --------------------------------------------------------- 排版能力清单 */
+
+/**
+ * 排版侧的能力清单：图形种类、22 个程序化生成器、配色方案、可控属性。
+ *
+ * 与特效清单同理：`params` 是 agent 唯一能知道自己「能调什么」的地方。
+ * **纯函数**（自定义配色由调用方传进来），可以在单测里跑。
+ */
+export function getTypographyCapabilities(custom: readonly TypographyTheme[] | null): TypographyCapabilities {
+  return {
+    shapeKinds: [...SHAPE_KINDS],
+    shapeParams: Object.fromEntries(SHAPE_KINDS.map((k) => [k, shapeParamSupport(k)])),
+    generators: SVG_GENERATORS.map((g) => ({
+      id: g.id,
+      group: g.group,
+      name: tr(g.labelKey),
+      defaultSeed: g.defaultSeed,
+      ...(g.aspect === undefined ? {} : { aspect: g.aspect }),
+      params: serializeParams(g.params),
+    })),
+    themes: themeIds(custom).map((id) => {
+      const builtin = BUILTIN_THEMES.find((t) => t.id === id) ?? null;
+      const c = custom?.find((t) => t.id === id) ?? null;
+      const theme = builtin ?? c;
+      return { id, name: theme ? themeDisplayName(theme) : id, builtin: Boolean(builtin) };
+    }),
+    defaultFontFamily: DEFAULT_FONT_FAMILY,
+    paintKinds: ['none', 'solid', 'linear', 'radial', 'texture'],
+    texturePatterns: TEXTURE_PATTERNS.map((p) => p.id),
+    mixBlends: MIX_BLENDS.map((b) => b.id),
+    imageFits: ['fill', 'contain', 'cover', 'none'],
+    textAligns: ['left', 'center', 'right', 'justify'],
+    textVAligns: ['top', 'middle', 'bottom'],
+    strokeStyles: ['solid', 'dashed', 'dotted'],
+    layoutOps: ['align', 'distribute', 'grid', 'row', 'column'],
+    alignAxes: [
+      'left',
+      'center-h',
+      'right',
+      'top',
+      'middle',
+      'bottom',
+      'distribute-h',
+      'distribute-v',
+    ],
+  };
+}
+
+/** 生成器默认参数（`add_generated_shape` 省略 params 时用）。 */
+export function svgGenDefaults(id: string): Record<string, number | string> {
+  const spec = SVG_GENERATORS.find((g) => g.id === id);
+  return spec ? defaultsOf(spec) : {};
 }

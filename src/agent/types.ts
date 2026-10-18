@@ -1,9 +1,9 @@
 /**
  * types.ts — 控制平面的契约类型（方案：`docs/agent-control-plane.md` §3）。
  *
- * 这一层是 **agent 的唯一操作面**：读场景 / 写工程 / 出图 / 导出。
+ * 这一层是 **agent 的唯一操作面**：读场景 / 写工程 / 出图 / 导出 / 排版 / 插件。
  * 它不 import `ui/` —— 运行期实例（当前工程的 `ProjectStore`、`Renderer`、
- * 素材仓、播放头）全部走注入的 `ControlContext`（见本文件末尾），
+ * 素材仓、播放头、插件宿主）全部走注入的 `ControlContext`（见本文件末尾），
  * 与 `platform/` 的解耦是同一手法（AGENTS 硬约束 1.5）。
  *
  * ## 关于 `t` 的单位：秒（吸附到帧栅格）
@@ -26,16 +26,23 @@
 
 import type { Curve } from '../core/curve';
 import type { BlendMode } from '../core/schema';
+import type { AlignAxis } from '../typography/geometry';
 
 /* ------------------------------------------------------------------ 结果 */
 
-/** 控制平面 API 版本。网关握手时校验主版本，不匹配就拒绝。 */
-export const CONTROL_API_VERSION = 1;
+/**
+ * 控制平面 API 版本。网关握手时校验主版本，不匹配就拒绝。
+ *
+ * v2（2026-10-18）：文本片段的 `source.doc` 从「整份文档」改成摘要
+ * （`ClipTextSummary`），详情走 `getTypographyDoc`。这是**读形状变更**，
+ * 旧客户端拿到的字段会变成 undefined —— 所以要抬版本而不是静默改。
+ */
+export const CONTROL_API_VERSION = 2;
 
 export type ControlErrorCode =
   /** 参数形状不对 / 越界 / 枚举里没有这个 id。 */
   | 'invalid-argument'
-  /** 引用的东西不存在（clipId / trackId / defId）。 */
+  /** 引用的东西不存在（clipId / trackId / defId / pluginId）。 */
   | 'not-found'
   /** 这个对象做不到这件事（如给 solid 源设 generator 参数）。 */
   | 'unsupported'
@@ -49,6 +56,8 @@ export type ControlErrorCode =
   | 'busy'
   /** 导出被 AbortSignal 取消。 */
   | 'cancelled'
+  /** 写盘 / 执行代码需要用户确认（插件安装）。 */
+  | 'needs-approval'
   /** 兜底：不该发生。 */
   | 'internal';
 
@@ -101,11 +110,28 @@ export type ClipKind = 'source' | 'effect' | 'audio';
 
 export type SourceType = 'video' | 'image' | 'algo' | 'text' | 'solid';
 
+/**
+ * 文本片段的摘要（v2 起 `ClipSourceView` 里给的就是它）。
+ *
+ * 整份 `TypographyDocument` 有元素、富文本 runs、动画、组合表 —— 一个工程里
+ * 几段文字就能把上下文塞满。所以快照只给「有几个元素、画布多大、用什么配色」，
+ * 详情由 `getTypographyDoc(clipId, detail)` 按需拉。
+ */
+export interface ClipTextSummary {
+  size: { w: number; h: number };
+  /** 元素个数。 */
+  elements: number;
+  /** 配色方案 id（缺省 = 默认方案）。 */
+  theme: string | null;
+  /** 有没有元素带入场动画（给「这一帧会不会动」一个提示）。 */
+  animated: boolean;
+}
+
 export type ClipSourceView =
   | { type: 'video'; assetId: string; srcIn: number; speed: number }
   | { type: 'image'; assetId: string }
   | { type: 'algo'; generator: string; params: Record<string, number | string> }
-  | { type: 'text'; doc: unknown }
+  | { type: 'text'; doc: ClipTextSummary }
   | { type: 'solid'; color: string };
 
 export interface EffectInstanceView {
@@ -216,19 +242,270 @@ export interface OpenProjectView {
   dir: string | null;
 }
 
+/* ------------------------------------------------------- 能力（参数化） */
+
+/** `ids` 只给 id；`params` 额外给展示名与完整参数表。 */
+export type CapabilityDetail = 'ids' | 'params';
+
+export interface ParamOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * 一项参数的机器可读描述（从 `ParamDef` 序列化而来）。
+ *
+ * **`visibleWhen` 这样的函数字段一律剥掉**：它过不了 JSON，而且 agent 需要的
+ * 只是「有哪些键、什么类型、取值范围」，不需要在客户端执行谓词。
+ */
+export interface ParamSchema {
+  key: string;
+  label: string;
+  type: 'range' | 'select' | 'checkbox' | 'color' | 'bitmask' | 'pattern' | 'text';
+  defaultValue: number | string;
+  /** 只有 range 能打关键帧（`runtime.evalParams` 只对 range 走曲线）。 */
+  curvable: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  curve?: number;
+  options?: ParamOption[];
+  bits?: number;
+  groups?: { label: string; bits: number; style: 'eca' | 'count' }[];
+  presets?: { label: string; value: number }[];
+  editorSize?: number;
+  mode?: '2d' | '1d';
+  maxLength?: number;
+  multiline?: boolean;
+  placeholder?: string;
+}
+
+export interface GeneratorCapability {
+  id: string;
+  kind: string;
+  name?: string;
+  desc?: string;
+  pluginId?: string | null;
+  params?: ParamSchema[];
+}
+
+export interface EffectCapability {
+  id: string;
+  name?: string;
+  desc?: string;
+  category?: string | null;
+  tags?: string[];
+  pluginId?: string | null;
+  params?: ParamSchema[];
+  /** 结构标记：agent 据此知道「这条特效有历史 / 有几个 pre-pass」。 */
+  flags?: {
+    feedback: boolean;
+    prePasses: number;
+    stateful: boolean;
+    hdrFeedback: boolean;
+    opaqueOutput: boolean;
+  };
+}
+
+export interface TransitionParamSchema {
+  key: string;
+  label: string;
+  type: 'range' | 'checkbox';
+  min?: number;
+  max?: number;
+  step?: number;
+  defaultValue: number;
+}
+
+export interface TransitionCapability {
+  id: string;
+  name?: string;
+  author?: string;
+  license?: string;
+  params?: TransitionParamSchema[];
+}
+
+export interface UndoState {
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
 export interface Capabilities {
-  generators: { id: string; kind: string }[];
-  effects: { id: string }[];
-  transitions: { id: string }[];
+  generators: GeneratorCapability[];
+  effects: EffectCapability[];
+  transitions: TransitionCapability[];
   blendModes: BlendMode[];
   fits: ('contain' | 'cover' | 'stretch')[];
   curveModes: ('keyframe' | 'impulse' | 'follower')[];
   sourceTypes: SourceType[];
 }
 
-export interface UndoState {
-  canUndo: boolean;
-  canRedo: boolean;
+/* ------------------------------------------------------------ 排版能力 */
+
+export interface TypographyGeneratorCapability {
+  id: string;
+  group: string;
+  name: string;
+  defaultSeed: number;
+  aspect?: number;
+  params: ParamSchema[];
+}
+
+export interface TypographyCapabilities {
+  /** 全部 `ShapeKind`。 */
+  shapeKinds: string[];
+  /** 每种图形支持哪些专属参数（圆角 / 边数 / 谷半径 / 壁厚 / 张角）。 */
+  shapeParams: Record<
+    string,
+    { radius: boolean; sides: boolean; waist: boolean; inner: boolean; angle: boolean }
+  >;
+  /** 程序化 SVG 生成器（22 个）。 */
+  generators: TypographyGeneratorCapability[];
+  themes: { id: string; name: string; builtin: boolean }[];
+  defaultFontFamily: string;
+  paintKinds: ('none' | 'solid' | 'linear' | 'radial' | 'texture')[];
+  texturePatterns: string[];
+  mixBlends: string[];
+  imageFits: ('fill' | 'contain' | 'cover' | 'none')[];
+  textAligns: ('left' | 'center' | 'right' | 'justify')[];
+  textVAligns: ('top' | 'middle' | 'bottom')[];
+  strokeStyles: ('solid' | 'dashed' | 'dotted')[];
+  layoutOps: string[];
+  alignAxes: AlignAxis[];
+}
+
+/* --------------------------------------------------------------- 排版视图 */
+
+export interface TypographyElementView {
+  id: string;
+  kind: 'text' | 'shape' | 'image';
+  name: string;
+  frame: { x: number; y: number; w: number; h: number; rot: number };
+  blend: string;
+  opacity: number;
+  visible: boolean;
+  locked: boolean;
+  groupId?: string;
+  /** text */
+  text?: string;
+  style?: Record<string, unknown>;
+  fill?: unknown;
+  boxFill?: unknown;
+  boxStroke?: unknown;
+  /** shape */
+  shape?: string;
+  stroke?: unknown;
+  radius?: number;
+  sides?: number;
+  waist?: number;
+  inner?: number;
+  angle?: number;
+  evenOdd?: boolean;
+  gen?: { id: string; seed: number; params: Record<string, number | string> };
+  /** image */
+  assetId?: string;
+  fit?: string;
+  crop?: unknown;
+  /** 入场动画的描述（只给类型与时长，不给完整表达式）。 */
+  animations?: { kind: string; duration: number }[];
+}
+
+export interface TypographyGroupView {
+  id: string;
+  name: string;
+  fill: unknown;
+  stroke: unknown;
+  radius: number;
+  padding: number;
+}
+
+export interface TypographyDocView {
+  clipId: string;
+  size: { w: number; h: number };
+  background: unknown;
+  theme: string | null;
+  elements: TypographyElementView[];
+  groups: TypographyGroupView[];
+  fonts: { family: string; format: string }[];
+}
+
+/** `detail: 'ids'` 的排版文档：只够 agent 找到「要改哪一个元素」。 */
+export interface TypographyDocIdView {
+  clipId: string;
+  size: { w: number; h: number };
+  theme: string | null;
+  elements: { id: string; kind: 'text' | 'shape' | 'image'; name: string; frame: TypographyFrame }[];
+}
+
+/* --------------------------------------------------------------- 插件 */
+
+/**
+ * 控制平面对插件宿主的**最小视图**。
+ *
+ * 只声明它用到的那几个方法（结构类型，不需要 import `plugins/host.ts`）——
+ * `src/agent/` 的依赖方向里没有 `plugins/`，装配点（`main.ts`）负责把
+ * `appState.plugins` 交进来。
+ */
+export interface AgentPluginHost {
+  importBytes(
+    fileName: string,
+    bytes: Uint8Array,
+    projectKey: string | null,
+  ): Promise<{ pluginId: string; ok: boolean; issues: PluginIssueView[] }>;
+  get(pluginId: string): AgentLoadedPlugin | null;
+  list(): AgentLoadedPlugin[];
+  markPersisted(pluginId: string, fileName: string): void;
+  installedIds?(): Set<string>;
+}
+
+export interface PluginIssueView {
+  code: string;
+  path?: string;
+  detail?: string;
+}
+
+export interface AgentLoadedPlugin {
+  id: string;
+  name: string | null;
+  author?: string | null;
+  version?: string | null;
+  license?: string | null;
+  fileName: string | null;
+  enabled: boolean;
+  status: 'ok' | 'partial' | 'failed' | 'disabled';
+  effectCount: number;
+  generatorCount: number;
+  issues: PluginIssueView[];
+  verified: boolean;
+  failure?: { code: string; detail: string } | null;
+}
+
+export interface PluginTryResult {
+  pluginId: string;
+  ok: boolean;
+  status: AgentLoadedPlugin['status'];
+  /** 已进注册表的**限定 id**（`${pluginId}/${localId}`）。 */
+  effects: string[];
+  generators: string[];
+  issues: PluginIssueView[];
+  /** 有没有跑过真 GL 编译校验。false = 预览还没装配，稍后重试。 */
+  verified: boolean;
+  /** 归档在草稿区（可安装 / 可丢弃）。 */
+  draft: boolean;
+}
+
+export interface PluginInfoView {
+  id: string;
+  name: string | null;
+  enabled: boolean;
+  status: AgentLoadedPlugin['status'];
+  effectCount: number;
+  generatorCount: number;
+  issues: PluginIssueView[];
+  /** 磁盘上的文件名。null = 只在内存里（还没安装 / 工程没目录）。 */
+  fileName: string | null;
+  /** 控制平面的草稿区里有没有这份源码。 */
+  draft: boolean;
 }
 
 /* -------------------------------------------------------------------- 看 */
@@ -344,4 +621,144 @@ export interface ControlContext {
   cancelPendingGesture(): void;
   /** 让界面重新同步（导出 / 出图改过渲染尺寸之后调）。 */
   refreshPreview(): void;
+
+  /* -------------------------------------------------- 排版 / 插件的接缝 */
+
+  /**
+   * 排版编辑器当前正在编辑的文本片段 id。没有打开排版页时返回 null。
+   *
+   * 排版工具允许省略 `clipId`，此时用它 —— 用户在排版页里说「把标题改大」，
+   * agent 不该要求他先报一个 id。
+   */
+  getActiveTypoClipId?: () => string | null;
+  /**
+   * 停掉正在进行的行内文本编辑（contenteditable）。
+   *
+   * 只调 `cancelPendingGesture()` 不够：那个落地的是手势事务，而打字是
+   * 直接在文档对象上改 runs 的。不停止的话，agent 写入会被编辑器下一次
+   * 提交覆盖（或者反过来）—— 两边都「看起来正常」，只是改动丢了。
+   */
+  stopTextEditing?: () => void;
+
+  /** 插件宿主（`appState.plugins`）。没有工程 / 未初始化时为 null。 */
+  getPluginHost?: () => AgentPluginHost | null;
+  /** 当前工程的引用计数键（`OpenProject.id`）。 */
+  getProjectKey?: () => string | null;
+  /**
+   * 把插件源码写进 `<工程目录>/plugins/<id>.js`。
+   * 返回 false = 没有工程目录（只能本次会话内存可用）。
+   */
+  persistPlugin?: (pluginId: string, source: string) => Promise<boolean>;
+  /** 从注册表卸载（不删磁盘文件）。 */
+  unloadPlugin?: (pluginId: string) => Promise<void>;
+  /** 彻底移除：注册表 + 记录 + 磁盘文件。 */
+  removePlugin?: (pluginId: string) => Promise<void>;
 }
+
+/* ------------------------------------------------------ 排版写入的请求形状 */
+
+/**
+ * 新增元素。三种 `kind` 各有自己的字段，公共字段（位置 / 样式）在顶层。
+ *
+ * 之所以不用「一个通用 patch 对象」：文字要 runs + style、图形要 shape + fill，
+ * 混在一个宽松对象里，agent 写错字段名不会有任何报错（只是静默没生效）。
+ */
+export type TypographyElementInput =
+  | {
+      kind: 'text';
+      text: string;
+      /** 文档坐标（左上原点，px）。省略 = 水平居中、纵向居中偏上。 */
+      frame?: Partial<TypographyFrame>;
+      style?: Partial<TypographyTextStyleInput>;
+      fill?: unknown;
+      boxFill?: unknown;
+      boxStroke?: unknown;
+      name?: string;
+      opacity?: number;
+      blend?: string;
+    }
+  | {
+      kind: 'shape';
+      shape: string;
+      frame?: Partial<TypographyFrame>;
+      fill?: unknown;
+      stroke?: unknown;
+      radius?: number;
+      sides?: number;
+      waist?: number;
+      inner?: number;
+      angle?: number;
+      path?: string;
+      evenOdd?: boolean;
+      name?: string;
+      opacity?: number;
+      blend?: string;
+    }
+  | {
+      kind: 'image';
+      assetId: string;
+      frame?: Partial<TypographyFrame>;
+      fit?: 'fill' | 'contain' | 'cover' | 'none';
+      radius?: number;
+      crop?: { x: number; y: number; w: number; h: number };
+      name?: string;
+      opacity?: number;
+      blend?: string;
+    };
+
+export interface TypographyFrame {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rot: number;
+}
+
+export interface TypographyTextStyleInput {
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: number;
+  fontStyle: 'normal' | 'italic';
+  letterSpacing: number;
+  lineHeight: number;
+  align: 'left' | 'center' | 'right' | 'justify';
+  vAlign: 'top' | 'middle' | 'bottom';
+  color: string;
+  textDecoration: 'none' | 'underline' | 'line-through';
+  textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+  highlight?: string;
+  shadow?: { color: string; dx: number; dy: number; blur: number };
+  writingMode: 'horizontal-tb' | 'vertical-rl';
+}
+
+/** 元素属性的白名单补丁（`kind` / `id` / `source` 一类不可写）。 */
+export interface TypographyElementPatch {
+  name?: string;
+  frame?: Partial<TypographyFrame>;
+  blend?: string;
+  opacity?: number;
+  visible?: boolean;
+  locked?: boolean;
+  /** text */
+  style?: Partial<TypographyTextStyleInput>;
+  fill?: unknown;
+  boxFill?: unknown;
+  boxStroke?: unknown;
+  /** shape */
+  stroke?: unknown;
+  radius?: number;
+  sides?: number;
+  waist?: number;
+  inner?: number;
+  angle?: number;
+  evenOdd?: boolean;
+  /** image */
+  fit?: 'fill' | 'contain' | 'cover' | 'none';
+  crop?: { x: number; y: number; w: number; h: number };
+}
+
+export type TypographyLayoutRequest =
+  | { op: 'align'; axis: AlignAxis; target?: 'canvas' | 'selection'; elementIds?: string[] }
+  | { op: 'distribute'; axis: 'h' | 'v'; elementIds?: string[] }
+  | { op: 'grid'; cols: number; rows?: number; gap?: number; margin?: number; elementIds?: string[] }
+  | { op: 'row' | 'column'; gap?: number; margin?: number; elementIds?: string[] };

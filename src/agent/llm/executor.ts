@@ -1,0 +1,481 @@
+/**
+ * executor.ts — 把模型的**工具调用**翻译成控制平面调用。
+ *
+ * 这里是「工具名 ↔ 方法」的**唯一映射**（应用内侧）。MCP 网关有它自己的一份
+ * dispatch（那边还要过 CDP），但两边的工具名集合由 parity 单测钉住。
+ *
+ * 三条纪律：
+ *  1. **不抛异常**：任何失败都变成 `{ ok:false, text, code }` 回给模型 ——
+ *     它需要读 `code` 才能自我修复（与控制平面「不抛」同一条理由）。
+ *  2. **截图走 `snapshotPng`**：与预览/导出一模一样的求值路径（含 onSeek 与
+ *     排版异步光栅就绪）。控制平面内部已经把尺寸钉好又还原。
+ *  3. **导出不回 base64**：一段 3 秒的 mp4 有几百 KB，塞进对话就是几万 token。
+ *     应用内直接触发浏览器下载，只把体积/路径告诉模型。
+ */
+
+import type { AgentControlPlane } from '../control-plane';
+import { ControlFailure } from '../types';
+import type { ToolOutcome } from './types';
+
+/** 工具结果回给模型时的文本上限（字符）。超出截断并注明。 */
+export const TOOL_TEXT_LIMIT = 20_000;
+
+function clip(text: string): string {
+  if (text.length <= TOOL_TEXT_LIMIT) return text;
+  return `${text.slice(0, TOOL_TEXT_LIMIT)}\n…[truncated ${text.length - TOOL_TEXT_LIMIT} chars]`;
+}
+
+function okText(data: unknown): ToolOutcome {
+  return { ok: true, text: clip(JSON.stringify(data)) };
+}
+
+function errText(message: string, code = 'internal', detail?: unknown): ToolOutcome {
+  return {
+    ok: false,
+    code,
+    ...(detail === undefined ? {} : { detail }),
+    text: clip(JSON.stringify({ ok: false, error: { code, message, ...(detail === undefined ? {} : { detail }) } })),
+  };
+}
+
+function unwrap(r: { ok: true; data: unknown } | { ok: false; error: { code: string; message: string; detail?: unknown } }): ToolOutcome {
+  return r.ok ? okText(r.data) : errText(r.error.message, r.error.code, r.error.detail);
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function bytesToBase64(buf: Uint8Array): string {
+  let latin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < buf.length; i += CHUNK) {
+    latin += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+  }
+  return btoa(latin);
+}
+
+/** PNG 的 IHDR 里读宽高（大端 32 位，偏移 16 / 20）。读不出就返回 0。 */
+function pngSize(bytes: Uint8Array): { w: number; h: number } {
+  if (bytes.length < 24) return { w: 0, h: 0 };
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { w: view.getUint32(16), h: view.getUint32(20) };
+}
+
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 立刻 revoke 会让部分浏览器的下载悬空；下一个任务再释放。
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+const EXT: Record<string, string> = { mp4: 'mp4', png: 'zip', gif: 'gif' };
+
+export type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<ToolOutcome>;
+
+export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
+  /** 截图尺寸要跟着工程宽高比走；describe 在一次会话里基本不变，缓存它。 */
+  let stepSize: { w: number; h: number } | null = null;
+  async function snapshotSize(size: unknown): Promise<{ w: number; h: number } | undefined> {
+    if (size && typeof size === 'object') {
+      const r = asRecord(size);
+      const w = Number(r.w);
+      const h = Number(r.h);
+      if (Number.isFinite(w) && Number.isFinite(h) && w >= 2 && h >= 2) return { w: Math.round(w), h: Math.round(h) };
+    }
+    if (!stepSize) {
+      const d = await control.describe();
+      const res = d.ok ? d.data.resolution : { w: 16, h: 9 };
+      const w = 640;
+      stepSize = { w, h: Math.max(2, Math.round((w * res.h) / Math.max(1, res.w) / 2) * 2) };
+    }
+    return stepSize;
+  }
+
+  return async (name, args) => {
+    try {
+      switch (name) {
+        /* ------------------------------------------------------------ 读 */
+        case 'describe':
+          return unwrap(await control.describe());
+
+        case 'help': {
+          const topic = typeof args.topic === 'string' ? args.topic : undefined;
+          const r = await control.help(topic);
+          // help 的正文是纯文本，不要再套一层 JSON 转义。
+          return r.ok ? { ok: true, text: clip(r.data.text) } : errText(r.error.message, r.error.code);
+        }
+
+        case 'get_scene':
+          return unwrap(
+            await control.getScene({
+              ...(typeof args.t === 'number' ? { t: args.t } : {}),
+              ...(args.detail === 'ids' || args.detail === 'full' ? { detail: args.detail } : {}),
+            }),
+          );
+
+        case 'get_capabilities':
+          return unwrap(
+            await control.getCapabilities({
+              ...(args.detail === 'params' ? { detail: 'params' as const } : {}),
+              ...(Array.isArray(args.ids) ? { ids: args.ids.filter((x): x is string => typeof x === 'string') } : {}),
+            }),
+          );
+
+        case 'get_typography_capabilities':
+          return unwrap(await control.getTypographyCapabilities());
+
+        case 'get_typography_doc':
+          return unwrap(
+            await control.getTypographyDoc(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              args.detail === 'ids' ? 'ids' : 'full',
+            ),
+          );
+
+        case 'get_clip':
+          return unwrap(await control.getClip(String(args.clipId ?? '')));
+
+        case 'undo_state':
+          return unwrap(await control.undoState());
+
+        case 'frame_signature':
+          return unwrap(
+            await control.frameSignature({
+              ...(typeof args.t === 'number' ? { t: args.t } : {}),
+              ...(args.size ? { size: asRecord(args.size) as { w: number; h: number } } : {}),
+              ...(typeof args.grid === 'number' ? { grid: Math.max(1, Math.round(args.grid)) } : {}),
+            }),
+          );
+
+        case 'render_frame': {
+          const size = await snapshotSize(args.size);
+          const r = await control.snapshotPng({
+            ...(typeof args.t === 'number' ? { t: args.t } : {}),
+            ...(size ? { size } : {}),
+          });
+          if (!r.ok) return errText(r.error.message, r.error.code, r.error.detail);
+          const bytes = r.data;
+          const dim = pngSize(bytes);
+          const t = typeof args.t === 'number' ? args.t : undefined;
+          const caption = `Rendered frame${t === undefined ? '' : ` at t=${t}s`} (${dim.w}x${dim.h}).`;
+          return {
+            ok: true,
+            text: clip(JSON.stringify({ ok: true, data: { w: dim.w, h: dim.h, bytes: bytes.byteLength } })),
+            images: [{ base64: bytesToBase64(bytes), mimeType: 'image/png', caption }],
+          };
+        }
+
+        /* -------------------------------------------------------- 时间轴写 */
+        case 'add_track':
+          return unwrap(await control.addTrack(args.kind === 'audio' ? 'audio' : 'visual', typeof args.name === 'string' ? args.name : undefined));
+
+        case 'remove_track':
+          return unwrap(await control.removeTrack(String(args.trackId ?? '')));
+
+        case 'move_track':
+          return unwrap(await control.moveTrack(Number(args.from), Number(args.to)));
+
+        case 'set_track':
+          return unwrap(
+            await control.setTrack(String(args.trackId ?? ''), {
+              ...(typeof args.enabled === 'boolean' ? { enabled: args.enabled } : {}),
+              ...(typeof args.name === 'string' ? { name: args.name } : {}),
+            }),
+          );
+
+        case 'add_clip':
+          return unwrap(
+            await control.addClip(String(args.trackId ?? ''), {
+              kind: args.kind as never,
+              start: Number(args.start),
+              end: Number(args.end),
+              ...(typeof args.id === 'string' ? { id: args.id } : {}),
+              ...(typeof args.label === 'string' ? { label: args.label } : {}),
+              ...(typeof args.generator === 'string' ? { generator: args.generator } : {}),
+              ...(args.params ? { params: asRecord(args.params) as Record<string, number | string> } : {}),
+              ...(typeof args.color === 'string' ? { color: args.color } : {}),
+              ...(typeof args.assetId === 'string' ? { assetId: args.assetId } : {}),
+              ...(typeof args.srcIn === 'number' ? { srcIn: args.srcIn } : {}),
+              ...(typeof args.speed === 'number' ? { speed: args.speed } : {}),
+              ...(args.doc !== undefined ? { doc: args.doc } : {}),
+              ...(typeof args.blend === 'string' ? { blend: args.blend as never } : {}),
+              ...(typeof args.opacity === 'number' ? { opacity: args.opacity } : {}),
+              ...(typeof args.fit === 'string' ? { fit: args.fit as never } : {}),
+              ...(typeof args.fadeSec === 'number' ? { fadeSec: args.fadeSec } : {}),
+            }),
+          );
+
+        case 'add_effect_clip':
+          return unwrap(
+            await control.addEffectClip(String(args.trackId ?? ''), {
+              start: Number(args.start),
+              end: Number(args.end),
+              ...(Array.isArray(args.chain) ? { chain: args.chain as never } : {}),
+              ...(typeof args.label === 'string' ? { label: args.label } : {}),
+              ...(typeof args.fadeSec === 'number' ? { fadeSec: args.fadeSec } : {}),
+              ...(typeof args.affectDepth === 'number' ? { affectDepth: args.affectDepth } : {}),
+            }),
+          );
+
+        case 'remove_clip':
+          return unwrap(await control.removeClip(String(args.clipId ?? '')));
+
+        case 'move_clip':
+          return unwrap(
+            await control.moveClip(String(args.clipId ?? ''), String(args.targetTrackId ?? ''), Number(args.newStart)),
+          );
+
+        case 'resize_clip':
+          return unwrap(
+            await control.resizeClip(String(args.clipId ?? ''), args.edge === 'start' ? 'start' : 'end', Number(args.time)),
+          );
+
+        case 'split_clip':
+          return unwrap(await control.splitClip(String(args.clipId ?? ''), Number(args.at)));
+
+        case 'set_clip_props':
+          return unwrap(await control.setClipProps(String(args.clipId ?? ''), asRecord(args.patch)));
+
+        case 'set_params':
+          return unwrap(
+            args.target === 'effect'
+              ? await control.setEffectParams(
+                  String(args.clipId ?? ''),
+                  Number(args.chainIndex),
+                  asRecord(args.params) as Record<string, number | string>,
+                )
+              : await control.setClipSourceParams(
+                  String(args.clipId ?? ''),
+                  asRecord(args.params) as Record<string, number | string>,
+                ),
+          );
+
+        case 'set_curve':
+          return unwrap(
+            await control.setCurve(String(args.clipId ?? ''), String(args.param ?? ''), (args.curve ?? null) as never),
+          );
+
+        case 'add_effect':
+          return unwrap(
+            await control.addEffect(
+              String(args.clipId ?? ''),
+              String(args.defId ?? ''),
+              asRecord(args.values) as Record<string, number | string>,
+              typeof args.index === 'number' ? args.index : undefined,
+            ),
+          );
+
+        case 'remove_effect':
+          return unwrap(await control.removeEffect(String(args.clipId ?? ''), Number(args.chainIndex)));
+
+        case 'reorder_effect':
+          return unwrap(await control.reorderEffect(String(args.clipId ?? ''), Number(args.from), Number(args.to)));
+
+        case 'set_transition':
+          return unwrap(
+            await control.setTransition(
+              String(args.clipId ?? ''),
+              String(args.defId ?? ''),
+              Number(args.duration),
+              asRecord(args.values) as Record<string, number>,
+            ),
+          );
+
+        case 'clear_transition':
+          return unwrap(await control.clearTransition(String(args.clipId ?? '')));
+
+        case 'set_project':
+          return unwrap(
+            await control.setProject({
+              ...(typeof args.fps === 'number' ? { fps: args.fps } : {}),
+              ...(args.resolution ? { resolution: asRecord(args.resolution) as { w: number; h: number } } : {}),
+              ...(typeof args.duration === 'number' ? { duration: args.duration } : {}),
+              ...(args.beatGrid ? { beatGrid: asRecord(args.beatGrid) as never } : {}),
+              ...(typeof args.overlapBehavior === 'string' ? { overlapBehavior: args.overlapBehavior as never } : {}),
+            }),
+          );
+
+        case 'load_scene':
+          return unwrap(await control.loadScene(args.project));
+
+        case 'begin_transaction':
+          return unwrap(await control.beginTx());
+
+        case 'commit_transaction':
+          return unwrap(await control.endTx(typeof args.label === 'string' ? args.label : 'agent: turn'));
+
+        case 'cancel_transaction':
+          return unwrap(await control.cancelTx());
+
+        case 'undo':
+          return unwrap(await control.undo());
+
+        case 'redo':
+          return unwrap(await control.redo());
+
+        /* ------------------------------------------------------------ 排版 */
+        case 'typo_add_element':
+          return unwrap(
+            await control.addTypographyElement(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              asRecord(args.element) as never,
+            ),
+          );
+
+        case 'typo_add_generated_shape':
+          return unwrap(
+            await control.addGeneratedShape(typeof args.clipId === 'string' ? args.clipId : undefined, {
+              genId: String(args.genId ?? ''),
+              ...(args.params ? { params: asRecord(args.params) as Record<string, number | string> } : {}),
+              ...(typeof args.seed === 'number' ? { seed: args.seed } : {}),
+              ...(args.frame ? { frame: asRecord(args.frame) as never } : {}),
+              ...(typeof args.name === 'string' ? { name: args.name } : {}),
+              ...(args.fill !== undefined ? { fill: args.fill } : {}),
+              ...(args.stroke !== undefined ? { stroke: args.stroke } : {}),
+            }),
+          );
+
+        case 'typo_update_element':
+          return unwrap(
+            await control.updateTypographyElement(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              String(args.elementId ?? ''),
+              asRecord(args.patch) as never,
+            ),
+          );
+
+        case 'typo_set_text':
+          return unwrap(
+            await control.setTypographyText(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              String(args.elementId ?? ''),
+              String(args.text ?? ''),
+            ),
+          );
+
+        case 'typo_remove_element':
+          return unwrap(
+            await control.removeTypographyElement(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              String(args.elementId ?? ''),
+            ),
+          );
+
+        case 'typo_reorder_element':
+          return unwrap(
+            await control.reorderTypographyElement(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              String(args.elementId ?? ''),
+              (args.op as never) ?? 'front',
+            ),
+          );
+
+        case 'typo_group':
+          return unwrap(
+            await control.groupTypographyElements(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              Array.isArray(args.elementIds) ? args.elementIds.map(String) : [],
+              typeof args.name === 'string' ? args.name : undefined,
+            ),
+          );
+
+        case 'typo_ungroup':
+          return unwrap(
+            await control.ungroupTypographyElements(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              Array.isArray(args.elementIds) ? args.elementIds.map(String) : [],
+            ),
+          );
+
+        case 'typo_layout':
+          return unwrap(
+            await control.layoutTypography(typeof args.clipId === 'string' ? args.clipId : undefined, {
+              op: String(args.op ?? 'align') as never,
+              ...(typeof args.axis === 'string' ? { axis: args.axis as never } : {}),
+              ...(args.target === 'selection' ? { target: 'selection' as const } : {}),
+              ...(Array.isArray(args.elementIds) ? { elementIds: args.elementIds.map(String) } : {}),
+              ...(typeof args.cols === 'number' ? { cols: args.cols } : {}),
+              ...(typeof args.rows === 'number' ? { rows: args.rows } : {}),
+              ...(typeof args.gap === 'number' ? { gap: args.gap } : {}),
+              ...(typeof args.margin === 'number' ? { margin: args.margin } : {}),
+            } as never),
+          );
+
+        case 'typo_set_background':
+          return unwrap(
+            await control.setTypographyBackground(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              args.paint,
+            ),
+          );
+
+        case 'typo_set_theme':
+          return unwrap(
+            await control.setTypographyTheme(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              typeof args.theme === 'string' ? args.theme : null,
+            ),
+          );
+
+        case 'typo_replace_doc':
+          return unwrap(
+            await control.replaceTypographyDoc(typeof args.clipId === 'string' ? args.clipId : undefined, args.doc),
+          );
+
+        /* ------------------------------------------------------------ 插件 */
+        case 'plugin_try':
+          return unwrap(
+            await control.pluginTry({
+              id: String(args.id ?? ''),
+              name: String(args.name ?? ''),
+              source: String(args.source ?? ''),
+            }),
+          );
+
+        case 'plugin_install':
+          // confirm:false → 未确认时返回 needs-approval，由面板弹确认卡。
+          return unwrap(await control.pluginInstall(String(args.pluginId ?? ''), false));
+
+        case 'plugin_list':
+          return unwrap(await control.pluginList());
+
+        case 'plugin_discard':
+          return unwrap(await control.pluginDiscard(String(args.pluginId ?? '')));
+
+        case 'plugin_remove':
+          return unwrap(await control.pluginRemove(String(args.pluginId ?? '')));
+
+        case 'plugin_source':
+          return unwrap(await control.pluginSource(String(args.pluginId ?? '')));
+
+        /* ------------------------------------------------------------ 导出 */
+        case 'export': {
+          const format = args.format === 'png' || args.format === 'gif' ? args.format : 'mp4';
+          const r = await control.export({
+            format,
+            ...(args.frameRange ? { frameRange: asRecord(args.frameRange) as never } : {}),
+            ...(args.size ? { size: asRecord(args.size) as { w: number; h: number } } : {}),
+            ...(typeof args.frameStep === 'number' ? { frameStep: args.frameStep } : {}),
+          });
+          if (!r.ok) return errText(r.error.message, r.error.code, r.error.detail);
+          const name = `artmatic-${Date.now()}.${EXT[format] ?? 'bin'}`;
+          saveBlob(r.data.blob, name);
+          return okText({ downloadedAs: name, bytes: r.data.bytes, mimeType: r.data.mimeType });
+        }
+
+        default:
+          return errText(`unknown tool: ${name}`, 'not-found');
+      }
+    } catch (e) {
+      if (e instanceof ControlFailure) return errText(e.message, e.code, e.detail);
+      return errText(e instanceof Error ? e.message : String(e), 'internal');
+    }
+  };
+}

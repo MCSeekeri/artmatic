@@ -336,6 +336,25 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   **不卸载**，少了 `!editorOpen` 就会有两份列表 + 两份视频缩略图队列）。开关是**同一个**
   `appState.mediaPoolOpen`（切视图不重置），条目落点由 `MediaPool` 的 `oninsert` 注入：
   不传 = 插入时间轴，排版页传「图片置入画布」（视频/音频给一句说明）。
+- **Agent 抽屉与媒体池共用左列，互斥**：`appState.agentOpen` / `mediaPoolOpen`
+  各记各的意图，但 `setAgentOpen(true)` 会收起媒体池、`setMediaPoolOpen(true)` 会收起
+  Agent（左列只有一个位置）。宽度共用 `mediaPoolWidth`，拖宽热区同一套。
+  两个视图各挂一份、条件互斥（与媒体池同一条），**排版页也必须能开 Agent** ——
+  「让模型排字」就是在那页发生的。rail 的入口是 `AgentRailButton`（状态弧 / 计数角标 /
+  待确认点，全部 CSS 动画 + `prefers-reduced-motion` 退化）。
+- **Agent 的输入框是浮动的，不是流里的最后一块**：`position: absolute` 贴底，
+  消息区用 `bind:clientHeight` 量出来的真实高度留底部内边距。它内部有附图、
+  模型 / 思考强度的二级菜单。消息列表里每个子项必须 `flex: 0 0 auto`
+  （工具卡组件自己也钉了），否则 flex column 会把它们压扁、滚动条永不出现。
+- **Agent 的历史入口在 Agent 抽屉顶栏、面板本身是根级 modal**：抽屉带 z-index 是
+  层叠上下文，modal 挂进去会被检查器盖住遮罩。会话记录存在 `project.agentSessions`
+  （随工程保存、不进撤销栈），历史面板只读，底部可导出 JSON 日志。
+- **对话内容必须可选中**（`app.css` 默认全局不可选）：`.stream` 显式恢复
+  `user-select: text`；右键走自绘菜单（复制 / 全选 / 添加到输入框 / 复制整段），
+  输入框保留原生菜单。全局 contextmenu 已在 `App.svelte` 禁止。
+- **工具卡显示的是「设置轨道」而不是 `set_track`**：`ui/agent/tool-labels.ts`
+  把 id 转成 `agent.toolName.<camelCase>`；状态用名字前的小圆点编码，
+  不用左边框色条。整轮结束后所有过程卡自动折叠。
 - **媒体池的列表是「合成」出来的**：`Project.assets`（kind / 名字 / 时长 / 尺寸）与
   `AssetStore`（字节）各说一半，合成规则与「素材 → 片段」的默认值都在 `ui/media-pool.ts`
   （纯函数，有单测）；面板只管把 `appState` 喂进去。想改「图片默认几拍 / 什么 fit」时

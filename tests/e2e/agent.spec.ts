@@ -14,6 +14,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { openDemo } from './_stage';
+import { CONTROL_API_VERSION } from '../../src/agent/types';
 
 /** `window.__artmatic.control` 在本 spec 用到的部分。 */
 interface ControlApi {
@@ -151,7 +152,7 @@ test('M0：控制平面挂上了，且读接口是紧凑、确定、无副作用
     };
   });
 
-  expect(result.apiVersion).toBe(1);
+  expect(result.apiVersion).toBe(CONTROL_API_VERSION);
   expect(result.schemaVersion).toBe(result.projectSchemaVersion);
   expect(result.idKeys).toEqual(['end', 'id', 'kind', 'label', 'start']);
   expect(result.zs.filter((z) => z !== null)).toEqual([...result.zs.filter((z) => z !== null)].sort((a, b) => b! - a!));

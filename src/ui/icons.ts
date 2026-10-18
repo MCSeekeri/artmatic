@@ -34,6 +34,7 @@ import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Baseline from '@lucide/svelte/icons/baseline';
 import Blend from '@lucide/svelte/icons/blend';
 import Bold from '@lucide/svelte/icons/bold';
+import Brain from '@lucide/svelte/icons/brain';
 import BringToFront from '@lucide/svelte/icons/bring-to-front';
 import CaseSensitive from '@lucide/svelte/icons/case-sensitive';
 import Check from '@lucide/svelte/icons/check';
@@ -64,6 +65,7 @@ import Group from '@lucide/svelte/icons/group';
 import HardDrive from '@lucide/svelte/icons/hard-drive';
 import Hexagon from '@lucide/svelte/icons/hexagon';
 import Highlighter from '@lucide/svelte/icons/highlighter';
+import History from '@lucide/svelte/icons/history';
 import ImageIcon from '@lucide/svelte/icons/image';
 import ImagePlus from '@lucide/svelte/icons/image-plus';
 import Images from '@lucide/svelte/icons/images';
@@ -78,6 +80,7 @@ import Magnet from '@lucide/svelte/icons/magnet';
 import Megaphone from '@lucide/svelte/icons/megaphone';
 import MegaphoneOff from '@lucide/svelte/icons/megaphone-off';
 import Maximize from '@lucide/svelte/icons/maximize';
+import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 import Minimize from '@lucide/svelte/icons/minimize';
 import Minimize2 from '@lucide/svelte/icons/minimize-2';
 import Minus from '@lucide/svelte/icons/minus';
@@ -103,6 +106,7 @@ import RotateCw from '@lucide/svelte/icons/rotate-cw';
 import Save from '@lucide/svelte/icons/save';
 import Scissors from '@lucide/svelte/icons/scissors';
 import Search from '@lucide/svelte/icons/search';
+import Send from '@lucide/svelte/icons/send';
 import SendToBack from '@lucide/svelte/icons/send-to-back';
 import Settings from '@lucide/svelte/icons/settings';
 import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
@@ -171,6 +175,7 @@ export const ICONS = {
   baseline: Baseline,
   blend: Blend,
   bold: Bold,
+  brain: Brain,
   'bring-to-front': BringToFront,
   'case-sensitive': CaseSensitive,
   check: Check,
@@ -201,6 +206,7 @@ export const ICONS = {
   'hard-drive': HardDrive,
   hexagon: Hexagon,
   highlighter: Highlighter,
+  history: History,
   image: ImageIcon,
   'image-plus': ImagePlus,
   images: Images,
@@ -215,6 +221,7 @@ export const ICONS = {
   megaphone: Megaphone,
   'megaphone-off': MegaphoneOff,
   maximize: Maximize,
+  'message-circle-plus': MessageCirclePlus,
   minimize: Minimize,
   'minimize-2': Minimize2,
   minus: Minus,
@@ -239,6 +246,7 @@ export const ICONS = {
   save: Save,
   scissors: Scissors,
   search: Search,
+  send: Send,
   'send-to-back': SendToBack,
   settings: Settings,
   'sliders-horizontal': SlidersHorizontal,

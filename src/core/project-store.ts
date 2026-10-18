@@ -13,6 +13,7 @@ import {
   type AnyClip,
   type AudioClip,
   type EffectClip,
+  type AgentSessionRecord,
   type OverlapBehavior,
   type Project,
   type SourceClip,
@@ -51,13 +52,33 @@ export class ProjectStore {
 
   constructor(project: Project) {
     this.project = project;
+    /*
+     * 快照**剔除 `agentSessions`**，恢复时保留当前值。
+     *
+     * 撤销栈存的是整工程 JSON；聊天记录如果跟着进快照，用户按一次 Ctrl+Z
+     * 会把对话一起退回上一轮（那不是「改动」，是日志）。插件文件同理不进工程。
+     */
     this.stack = new CommandStack(
-      () => JSON.stringify(this.project),
+      () => JSON.stringify({ ...this.project, agentSessions: undefined }),
       (json) => {
-        this.project = JSON.parse(json) as Project;
+        const keep = this.project.agentSessions;
+        const next = JSON.parse(json) as Project;
+        if (keep?.length) next.agentSessions = keep;
+        else delete next.agentSessions;
+        this.project = next;
       },
       () => this.bump(),
     );
+  }
+
+  /**
+   * 写入 Agent 会话历史。**不走 commit**（见构造函数里的注释），
+   * 只 bump version 让界面与脏标记跟上。
+   */
+  setAgentSessions(sessions: AgentSessionRecord[]): void {
+    if (sessions.length) this.project.agentSessions = sessions;
+    else delete this.project.agentSessions;
+    this.touch();
   }
 
   subscribe(fn: () => void): () => void {

@@ -23,12 +23,27 @@ export class CommandStack {
     private readonly onChange: (label: string) => void,
   ) {}
 
-  /** 单次改动：fn 直接改状态，有变化才入栈。返回是否真的改了。 */
+  /**
+   * 单次改动：fn 直接改状态，有变化才入栈。返回是否真的改了。
+   *
+   * ## 事务内不入栈
+   *
+   * `beginTx` 打开时，快照由**整段事务**统一提交（`endTx`）。这里若照旧逐次入栈，
+   * 一次「包在事务里的多步操作」会留下 N 条中间记录：撤销一次回到事务起点（看着
+   * 对），但再撤一次就落到某个中间态 —— 而那个状态用户从没见过。
+   *
+   * 现有的手势路径（`timeline/drag.ts`、`QuadHandles`、排版编辑器）在事务里都用
+   * `touch()` 直改、不经过 `commit`，所以这条分支只影响「显式用事务包多笔 commit」
+   * 的调用方（agent 的一轮对话正是这一类）。
+   *
+   * `onChange` 仍然每次调用：它只负责通知界面重绘（`ProjectStore` 的 version++），
+   * 与「是否入栈」是两件事。事务里也必须让界面跟着动。
+   */
   commit(label: string, fn: () => void): boolean {
     const before = this.snapshot();
     fn();
     if (this.snapshot() === before) return false;
-    this.pushUndo(before);
+    if (this.txSnapshot === null) this.pushUndo(before);
     this.onChange(label);
     return true;
   }

@@ -1,0 +1,683 @@
+/**
+ * agent-state.svelte.ts — Agent 面板的**界面状态**（消息流 / 运行状态 / 配置）。
+ *
+ * 与 `src/agent/llm/session.ts` 的分工：session 管「模型 ↔ 工具」的循环，
+ * 这个类只管「用户看到什么」—— 事件怎么落成消息、待审批卡怎么弹、配置存哪。
+ *
+ * ## 控制平面从哪来
+ *
+ * `main.ts` 装配完控制平面后调 `registerControlPlane(control)`。不在这里
+ * import 它：`createControlPlane` 需要注入 `appState`（ui 层），模块级 import
+ * 会把 ui 的初始化顺序搅乱（也会让 `/lab/` 之类的入口被迫背上整棵 ui 依赖）。
+ *
+ * ## Key 只存本机
+ *
+ * 存 `localStorage` 的 `artmatic.agent`（独立键，**不进 project.json**）。
+ * 这不是「安全存储」—— 本机任何脚本都能读；设置面板里写明了这一点。
+ * 「仅本次会话」开关会把 key 留在内存里（`sessionOnly`）。
+ */
+
+import { tr } from '../../i18n/index.svelte';
+import type { AgentControlPlane } from '../../agent/control-plane';
+import type { AgentStatus, LlmConfig, ReasoningEffort, SessionEvent } from '../../agent/llm/types';
+import { AgentSession, createToolExecutor, DEFAULT_LLM_CONFIG, MAX_STEPS_LIMIT } from '../../agent/llm/index';
+import type { AgentSessionRecord, AgentStoredMessage } from '../../core/schema';
+import { appState } from '../app-state.svelte';
+
+const KEY = 'artmatic.agent';
+/**
+ * localStorage 的结构版本：
+ *  2 → 16 步 / 思考关闭 抬到新默认；
+ *  3 → 思考强度改成 DeepSeek 原生三档（旧的 `medium` 迁到 `high`）。
+ */
+const PREFS_REV = 3;
+
+/** 界面层的名字；真源在 `agent/llm/types.ts`（原生 `reasoning_effort`）。 */
+export type AgentEffort = ReasoningEffort;
+
+export interface AgentPrefs {
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  /** 思考强度：`off` 关思考，其余走原生 `reasoning_effort`。 */
+  effort: AgentEffort;
+  maxSteps: number;
+  /** 每轮允许把截图回传给模型（关掉可以省 token / 不外传画面）。 */
+  screenshots: boolean;
+  /** key 只在内存里（不落 localStorage）。 */
+  sessionOnly: boolean;
+}
+
+const DEFAULT_PREFS: AgentPrefs = {
+  baseUrl: DEFAULT_LLM_CONFIG.baseUrl,
+  model: DEFAULT_LLM_CONFIG.model,
+  temperature: DEFAULT_LLM_CONFIG.temperature,
+  effort: DEFAULT_LLM_CONFIG.effort,
+  maxSteps: 200,
+  screenshots: true,
+  sessionOnly: false,
+};
+
+function loadPrefs(): { prefs: AgentPrefs; apiKey: string } {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return { prefs: { ...DEFAULT_PREFS }, apiKey: '' };
+    const p = JSON.parse(raw) as Partial<AgentPrefs> & {
+      apiKey?: string;
+      prefsRev?: number;
+      /** 旧版字段（已被 effort 取代）。 */
+      thinking?: boolean;
+    };
+    /*
+     * 一次性迁移：旧默认（16 步、思考关闭）在真实任务里明显不够。
+     * 只在新结构缺席时抬一次，之后用户自己的选择原样尊重。
+     */
+    const fresh = (p.prefsRev ?? 1) < PREFS_REV;
+    const effort: AgentEffort =
+      p.effort === 'off' || p.effort === 'low' || p.effort === 'high' || p.effort === 'max'
+        ? p.effort
+        : // 旧版的 `medium`（以及更早的 thinking 字段）统一迁到原生 high。
+          (p.effort as string | undefined) === 'medium' || p.thinking === true
+          ? 'high'
+          : DEFAULT_PREFS.effort;
+    return {
+      prefs: {
+        baseUrl: typeof p.baseUrl === 'string' && p.baseUrl ? p.baseUrl : DEFAULT_PREFS.baseUrl,
+        model: typeof p.model === 'string' && p.model ? p.model : DEFAULT_PREFS.model,
+        temperature: Number.isFinite(Number(p.temperature)) ? Number(p.temperature) : DEFAULT_PREFS.temperature,
+        effort,
+        maxSteps: Number.isFinite(Number(p.maxSteps))
+          ? Math.max(1, Math.min(MAX_STEPS_LIMIT, fresh ? Math.max(200, Number(p.maxSteps)) : Number(p.maxSteps)))
+          : DEFAULT_PREFS.maxSteps,
+        screenshots: typeof p.screenshots === 'boolean' ? p.screenshots : DEFAULT_PREFS.screenshots,
+        sessionOnly: typeof p.sessionOnly === 'boolean' ? p.sessionOnly : DEFAULT_PREFS.sessionOnly,
+      },
+      apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+    };
+  } catch {
+    return { prefs: { ...DEFAULT_PREFS }, apiKey: '' };
+  }
+}
+
+/* ------------------------------------------------------------------ 消息 */
+
+export type AgentMessageRole =
+  | 'user'
+  | 'assistant'
+  | 'reasoning'
+  | 'tool'
+  | 'ask'
+  | 'notice'
+  | 'error'
+  | 'image'
+  | 'system';
+
+export interface AgentMessage {
+  id: string;
+  role: AgentMessageRole;
+  text: string;
+  /** `role:'tool'` */
+  callId?: string;
+  toolName?: string;
+  args?: unknown;
+  toolStatus?: 'running' | 'ok' | 'error';
+  code?: string;
+  ms?: number;
+  /** `role:'image'` / 用户消息里附的图（不落工程，只在本轮上下文里）。 */
+  image?: { base64: string; mimeType: string; caption: string };
+  images?: { base64: string; mimeType: string }[];
+  /** `role:'ask'` */
+  question?: string;
+  options?: string[];
+  allowFreeText?: boolean;
+  answer?: string | null;
+}
+
+export interface PendingApproval {
+  pluginId: string;
+  text: string;
+  detail?: unknown;
+}
+
+export interface PendingAsk {
+  question: string;
+  options: string[];
+  allowFreeText: boolean;
+}
+
+let seq = 0;
+const nextId = (): string => `m${++seq}`;
+
+/* ------------------------------------------------------------------ 状态 */
+
+class AgentUiState {
+  prefs = $state<AgentPrefs>({ ...DEFAULT_PREFS });
+  apiKey = $state('');
+  messages = $state<AgentMessage[]>([]);
+  status = $state<AgentStatus>('idle');
+  busy = $state(false);
+  /** 上下文用量（发送按钮左侧的环形进度）。 */
+  context = $state<{ tokens: number; limit: number }>({ tokens: 0, limit: 1_000_000 });
+  /** 历史面板是否打开（根级 modal，状态在这里）。 */
+  historyOpen = $state(false);
+  /**
+   * 设置面板是**根级 modal**（挂在 `App.svelte` 的 `.page` 上），状态放这里：
+   * 抽屉在 `.body` 里、又带着 `z-index`，把 modal 挂进抽屉会让它被困在那一层
+   * （见 `ui/AGENTS.md` 的 z 刻度那一段）。放根级只有一个实例，两个视图共用。
+   */
+  settingsOpen = $state(false);
+  /** 待用户确认的插件安装（null = 没有）。 */
+  pending = $state<PendingApproval | null>(null);
+  /** 最近一轮改了几处（面板顶部提示「撤销本轮」）。 */
+  lastWrites = $state(0);
+  usage = $state<{ prompt: number; completion: number } | null>(null);
+  /** 工具调用计数（rail 图标角标）。 */
+  toolCalls = $state(0);
+  /** 模型通过 `ask_user` 提的问题（null = 没有）。 */
+  pendingAsk = $state<PendingAsk | null>(null);
+  /** 本轮耗时（结束时写；摘要行用）。 */
+  lastMs = $state(0);
+
+  private session: AgentSession | null = null;
+  private control: AgentControlPlane | null = null;
+  private approvalResolve: ((ok: boolean) => void) | null = null;
+  private askResolve: ((answer: string | null) => void) | null = null;
+  private indexByCall = new Map<string, number>();
+  /** 当前会话在 `project.agentSessions` 里的 id（第一次发消息时创建）。 */
+  private activeSessionId: string | null = null;
+  private sessionCreatedAt = 0;
+  /** 上一次绑定的工程 id：切工程时清空对话，别把 A 的聊天记进 B。 */
+  private boundProjectId: string = appState.activeProjectId;
+  /**
+   * 会话持有的**同一个** config 对象：改设置时原地更新字段。
+   *
+   * 为什么不是每次 `send` 重新造一份：`AgentSession` 在构造时接住 config；
+   * 换对象的话「先发一句 → 再填 key」会一直用旧对象（key 永远是空串）。
+   */
+  private cfg: LlmConfig;
+
+  constructor() {
+    const { prefs, apiKey } = loadPrefs();
+    this.prefs = prefs;
+    this.apiKey = apiKey;
+    this.cfg = { ...DEFAULT_LLM_CONFIG };
+    this.syncConfig();
+  }
+
+  /* ------------------------------------------------------------ 生命周期 */
+
+  attachControl(control: AgentControlPlane): void {
+    this.control = control;
+    this.session = null; // 换控制平面 = 换工程容器，旧会话的工具闭包不能再用
+  }
+
+  /**
+   * 切换工程时由 `App.svelte` 的 effect 调一次。
+   *
+   * 不这么做的话：在 A 工程聊到一半，切到 B 再发一句，`saveSession` 会把 A 的
+   * 消息记进 **B 的历史**（activeSessionId 还是 A 的）。消息只在轮末落库，
+   * 所以这里不需要补存 —— 直接开一份新会话。
+   */
+  onProjectChanged(): void {
+    const id = appState.activeProjectId;
+    if (id === this.boundProjectId) return;
+    this.boundProjectId = id;
+    this.session?.stop();
+    this.session = null;
+    this.messages = [];
+    this.activeSessionId = null;
+    this.sessionCreatedAt = 0;
+    this.pending = null;
+    this.pendingAsk = null;
+    this.askResolve?.(null);
+    this.askResolve = null;
+    this.lastWrites = 0;
+    this.lastMs = 0;
+    this.usage = null;
+    this.toolCalls = 0;
+    this.context = { tokens: 0, limit: 1_000_000 };
+    this.historyOpen = false;
+    this.status = 'idle';
+  }
+
+  private syncConfig(): void {
+    this.cfg.baseUrl = this.prefs.baseUrl;
+    this.cfg.apiKey = this.apiKey.trim();
+    this.cfg.model = this.prefs.model;
+    this.cfg.temperature = this.prefs.temperature;
+    // 强度是原生参数，`off` 也原样传下去（provider 翻译成 thinking.disabled）。
+    this.cfg.effort = this.prefs.effort;
+    this.cfg.proxyPath = DEFAULT_LLM_CONFIG.proxyPath;
+  }
+
+  get ready(): boolean {
+    return Boolean(this.control) && this.apiKey.trim().length > 0;
+  }
+
+  private ensureSession(): AgentSession | null {
+    if (!this.control) return null;
+    if (!this.session) {
+      this.session = new AgentSession({
+        config: this.cfg,
+        control: this.control,
+        execute: createToolExecutor(this.control),
+        maxSteps: () => this.prefs.maxSteps,
+        screenshots: () => this.prefs.screenshots,
+        onEvent: (e) => this.onEvent(e),
+        onStatus: (s) => {
+          this.status = s;
+        },
+        onApproval: (req) => this.askApproval(req),
+        onAskUser: (req) => this.askUser(req),
+      });
+    }
+    return this.session;
+  }
+
+  /* ------------------------------------------------------------ 配置 */
+
+  openSettings(): void {
+    this.settingsOpen = true;
+  }
+
+  closeSettings(): void {
+    this.settingsOpen = false;
+  }
+
+  openHistory(): void {
+    this.historyOpen = true;
+  }
+
+  closeHistory(): void {
+    this.historyOpen = false;
+  }
+
+  /**
+   * 导出这一轮的详细日志（JSON）。**key 打码**，图片只留尺寸与 MIME ——
+   * 日志是为了排查 400 / 上下文问题，不需要把 base64 复制一份到磁盘。
+   */
+  exportLog(): void {
+    const snap = this.session?.snapshot();
+    const key = this.apiKey.trim();
+    const payload = {
+      kind: 'artmatic-agent-log',
+      exportedAt: new Date().toISOString(),
+      project: appState.projectName,
+      config: {
+        model: this.prefs.model,
+        baseUrl: this.prefs.baseUrl,
+        effort: this.prefs.effort,
+        temperature: this.prefs.temperature,
+        maxSteps: this.prefs.maxSteps,
+        screenshots: this.prefs.screenshots,
+        apiKey: key ? `${key.slice(0, 4)}…${key.slice(-4)}` : '',
+      },
+      usage: this.usage,
+      context: this.context,
+      lastError: this.session?.lastError ?? null,
+      uiMessages: this.messages.map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.toolName ? { toolName: m.toolName } : {}),
+        ...(m.toolStatus ? { toolStatus: m.toolStatus } : {}),
+        ...(m.code ? { code: m.code } : {}),
+        ...(m.ms !== undefined ? { ms: m.ms } : {}),
+        ...(m.args !== undefined ? { args: m.args } : {}),
+        ...(m.image ? { image: { mimeType: m.image.mimeType, bytes: m.image.base64.length } } : {}),
+      })),
+      // 图片 base64 不写进日志（一张就能几十 MB）：只留占位。
+      wireMessages: (snap?.messages ?? []).map((m) =>
+        Array.isArray(m.content)
+          ? {
+              ...m,
+              content: m.content.map((p) =>
+                p.type === 'image_url' ? { type: 'text' as const, text: '[image omitted]' } : p,
+              ),
+            }
+          : m,
+      ),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = (appState.projectName || 'project').replace(/[^\w\u4e00-\u9fa5-]+/g, '_').slice(0, 40);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.href = url;
+    a.download = `agent-log-${safeName}-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // 下一帧再回收：立刻 revoke 在部分浏览器里会让下载拿到空文件。
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  setPrefs(patch: Partial<AgentPrefs>): void {
+    this.prefs = { ...this.prefs, ...patch };
+    this.syncConfig();
+    this.persist();
+  }
+
+  setApiKey(key: string): void {
+    this.apiKey = key;
+    this.syncConfig();
+    this.persist();
+  }
+
+  clearApiKey(): void {
+    this.apiKey = '';
+    this.syncConfig();
+    this.persist();
+  }
+
+  private persist(): void {
+    try {
+      localStorage.setItem(
+        KEY,
+        JSON.stringify({
+          ...this.prefs,
+          prefsRev: PREFS_REV,
+          apiKey: this.prefs.sessionOnly ? '' : this.apiKey,
+        }),
+      );
+    } catch {
+      // 存储不可用（隐私模式 / 配额）不该打断对话。
+    }
+  }
+
+  /* ------------------------------------------------------------ 对话 */
+
+  async send(text: string, images: { base64: string; mimeType: string }[] = []): Promise<void> {
+    if (this.busy) return;
+    // 设置可能刚被改过（key / 模型 / 温度 / 思考强度）—— 会话持有的是同一个对象。
+    this.syncConfig();
+    const session = this.ensureSession();
+    if (!session) {
+      this.push({ id: nextId(), role: 'error', text: tr('agent.llm.notReady') });
+      return;
+    }
+    if (!this.apiKey.trim()) {
+      this.push({ id: nextId(), role: 'error', text: tr('agent.llm.noKey') });
+      return;
+    }
+    this.busy = true;
+    this.lastWrites = 0;
+    this.lastMs = 0;
+    this.toolCalls = 0;
+    const started = Date.now();
+    // 会话记录从第一条消息开始；标题取用户第一句话。
+    if (!this.activeSessionId) {
+      this.activeSessionId = `as-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      this.sessionCreatedAt = started;
+    }
+    try {
+      await session.send(text, images);
+    } finally {
+      this.busy = false;
+      this.status = 'idle';
+      this.lastMs = Date.now() - started;
+      const snap = session.snapshot();
+      if (snap.usage) {
+        this.usage = {
+          prompt: snap.usage.prompt_tokens ?? 0,
+          completion: snap.usage.completion_tokens ?? 0,
+        };
+      }
+      this.saveSession();
+    }
+  }
+
+  stop(): void {
+    this.session?.stop();
+  }
+
+  /**
+   * 撤销整轮。
+   *
+   * 一轮 = 一笔撤销（`CommandStack.commit` 在事务内不入栈），所以点一次
+   * `undo()` 就够 —— 不需要按工具调用次数循环。
+   */
+  async undoTurn(): Promise<void> {
+    if (!this.control) return;
+    await this.control.undo();
+    this.lastWrites = 0;
+  }
+
+  clear(): void {
+    // 开新会话之前先把这一段存进工程（否则「新会话」= 丢掉历史）。
+    this.saveSession();
+    this.session?.clear();
+    this.messages = [];
+    this.lastWrites = 0;
+    this.lastMs = 0;
+    this.toolCalls = 0;
+    this.usage = null;
+    this.pending = null;
+    this.pendingAsk = null;
+    this.askResolve?.(null);
+    this.askResolve = null;
+    this.activeSessionId = null;
+    this.sessionCreatedAt = 0;
+    this.status = 'idle';
+  }
+
+  /* ------------------------------------------------------------ 会话历史 */
+
+  /** 当前工程的会话记录（由 `project.agentSessions` 承载，随工程保存）。 */
+  get history(): AgentSessionRecord[] {
+    // 读 version 建立依赖：撤销 / 切工程 / 保存后列表要跟着刷新。
+    void appState.version;
+    return appState.store.project.agentSessions ?? [];
+  }
+
+  /**
+   * 把当前消息流写成一条会话记录。
+   *
+   * **不写图片的 base64**（工程体积），只留说明；工具卡留下名字 / 状态 / 耗时。
+   * 由 `ProjectStore.setAgentSessions` 落库 —— 它 bump version 但不进撤销栈。
+   */
+  private saveSession(): void {
+    if (!this.activeSessionId || this.messages.length === 0) return;
+    const stored: AgentStoredMessage[] = [];
+    for (const m of this.messages) {
+      if (m.role === 'tool' && m.toolStatus === 'running') continue;
+      if (m.role === 'image') {
+        stored.push({ role: 'image', text: m.text, caption: m.text });
+        continue;
+      }
+      if (m.role === 'ask') {
+        stored.push({ role: 'user', text: `${m.text}\n→ ${m.answer ?? ''}`.trim() });
+        continue;
+      }
+      if (m.role === 'system' || m.role === 'notice') continue;
+      stored.push({
+        role: m.role,
+        text: m.text.slice(0, 20_000),
+        ...(m.toolName ? { toolName: m.toolName } : {}),
+        ...(m.toolStatus ? { toolStatus: m.toolStatus } : {}),
+        ...(m.code ? { code: m.code } : {}),
+        ...(m.ms === undefined ? {} : { ms: m.ms }),
+      });
+    }
+    if (!stored.length) return;
+    const title =
+      this.messages.find((m) => m.role === 'user')?.text.trim().slice(0, 60) || tr('agent.historyUntitled');
+    const record: AgentSessionRecord = {
+      id: this.activeSessionId,
+      title,
+      createdAt: this.sessionCreatedAt || Date.now(),
+      updatedAt: Date.now(),
+      messages: stored,
+    };
+    const rest = (appState.store.project.agentSessions ?? []).filter((s) => s.id !== record.id);
+    appState.store.setAgentSessions([record, ...rest].slice(0, 30));
+  }
+
+  deleteSession(id: string): void {
+    appState.store.setAgentSessions(
+      (appState.store.project.agentSessions ?? []).filter((s) => s.id !== id),
+    );
+  }
+
+  clearHistory(): void {
+    // 当前会话也一并清掉（它就在工程里）；内存里的消息保留与否由调用方决定。
+    appState.store.setAgentSessions([]);
+    this.activeSessionId = null;
+  }
+
+  /** 审批卡「查看源码」用。 */
+  async pluginSource(pluginId: string): Promise<string | null> {
+    if (!this.control) return null;
+    const r = await this.control.pluginSource(pluginId);
+    return r.ok ? r.data.source : null;
+  }
+
+  /** 待确认卡上的按钮。 */
+  resolveApproval(approved: boolean): void {
+    const resolve = this.approvalResolve;
+    this.approvalResolve = null;
+    this.pending = null;
+    resolve?.(approved);
+  }
+
+  private askApproval(req: { pluginId: string; text: string; detail?: unknown }): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.approvalResolve = resolve;
+      this.pending = req;
+      this.status = 'awaiting-approval';
+    });
+  }
+
+  /** 问答卡上的提交（null = 取消）。 */
+  resolveAsk(answer: string | null): void {
+    const resolve = this.askResolve;
+    this.askResolve = null;
+    this.pendingAsk = null;
+    const id = this.activeAskId;
+    this.activeAskId = null;
+    if (id) this.patch(id, { answer });
+    resolve?.(answer);
+  }
+
+  private activeAskId: string | null = null;
+
+  private askUser(req: PendingAsk): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
+      const id = nextId();
+      this.activeAskId = id;
+      this.push({ id, role: 'ask', text: req.question, ...req, answer: undefined });
+      this.askResolve = resolve;
+      this.pendingAsk = req;
+      this.status = 'awaiting-user';
+    });
+  }
+
+  /* ------------------------------------------------------------ 事件 */
+
+  private push(msg: AgentMessage): void {
+    this.messages = [...this.messages, msg];
+  }
+
+  private patch(callId: string, patch: Partial<AgentMessage>): void {
+    // 工具卡按 callId 定位；其它消息（问答卡）按消息 id 定位。
+    let i = this.indexByCall.get(callId);
+    if (i === undefined) i = this.messages.findIndex((m) => m.id === callId);
+    if (i === undefined || i < 0) return;
+    const next = this.messages.slice();
+    const current = next[i];
+    if (!current) return;
+    next[i] = { ...current, ...patch };
+    this.messages = next;
+  }
+
+  private onEvent(e: SessionEvent): void {
+    switch (e.kind) {
+      case 'user':
+        this.push({
+          id: nextId(),
+          role: 'user',
+          text: e.text,
+          ...(e.images?.length ? { images: e.images } : {}),
+        });
+        break;
+      case 'assistant': {
+        const last = this.messages[this.messages.length - 1];
+        if (last && last.role === 'assistant') {
+          // 流式增量：原地追加到最后一条 assistant。
+          const next = this.messages.slice();
+          next[next.length - 1] = { ...last, text: last.text + e.text };
+          this.messages = next;
+        } else {
+          this.push({ id: nextId(), role: 'assistant', text: e.text });
+        }
+        break;
+      }
+      case 'reasoning': {
+        // 同一段思考流式追加（模型开思考时才有）。
+        const last = this.messages[this.messages.length - 1];
+        if (last && last.role === 'reasoning') {
+          const next = this.messages.slice();
+          next[next.length - 1] = { ...last, text: last.text + e.text };
+          this.messages = next;
+        } else {
+          this.push({ id: nextId(), role: 'reasoning', text: e.text });
+        }
+        break;
+      }
+      case 'ask':
+        // 卡片由 `askUser()` 插入（它要拿 id 回填答案），这里只更新状态。
+        this.status = 'awaiting-user';
+        break;
+      case 'notice':
+        this.push({ id: nextId(), role: 'notice', text: e.text });
+        break;
+      case 'context':
+        this.context = { tokens: e.tokens, limit: e.limit };
+        break;
+      case 'tool': {
+        if (e.status === 'running') {
+          this.toolCalls += 1;
+          this.indexByCall.set(e.callId, this.messages.length);
+          this.push({
+            id: nextId(),
+            role: 'tool',
+            text: '',
+            callId: e.callId,
+            toolName: e.name,
+            args: e.args,
+            toolStatus: 'running',
+          });
+        } else {
+          this.patch(e.callId, {
+            toolStatus: e.status,
+            text: e.text ?? '',
+            ...(e.code ? { code: e.code } : {}),
+            ...(e.ms === undefined ? {} : { ms: e.ms }),
+          });
+        }
+        break;
+      }
+      case 'image':
+        this.push({
+          id: nextId(),
+          role: 'image',
+          text: e.caption,
+          image: { base64: e.base64, mimeType: e.mimeType, caption: e.caption },
+        });
+        break;
+      case 'error':
+        this.push({ id: nextId(), role: 'error', text: e.message });
+        break;
+      case 'turn-end':
+        this.lastWrites = e.writes;
+        this.lastMs = e.ms;
+        break;
+    }
+  }
+}
+
+export const agentState = new AgentUiState();
+
+/** `main.ts` 装配完控制平面后调一次。 */
+export function registerControlPlane(control: AgentControlPlane): void {
+  agentState.attachControl(control);
+}

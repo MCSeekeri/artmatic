@@ -18,10 +18,11 @@
 import { transitionAt } from '../core/transitions';
 import { frameOf, timeOf } from '../engine/clock';
 import type { Curve } from '../core/curve';
-import type { AnyClip, Project, VisualTrack } from '../core/schema';
+import type { AnyClip, Project, SourceClip, VisualTrack } from '../core/schema';
 import type {
   ClipIdView,
   ClipSourceView,
+  ClipTextSummary,
   ClipView,
   SceneDetail,
   SceneIdSnapshot,
@@ -77,6 +78,22 @@ function activeFlags(track: VisualTrack, t: number): boolean[] {
 
 /* ------------------------------------------------------------- 视图构造 */
 
+/**
+ * 文本片段只给摘要（v2）。
+ *
+ * 整份 `TypographyDocument` 有元素、富文本 runs、动画、组合表 —— 一段文字就
+ * 能把上下文塞满，而 agent 大多数时候只需要知道「这是一张多大的画、几个元素」。
+ * 详情走 `getTypographyDoc`（按需拉，且可只拉 ids）。
+ */
+function textSummary(doc: Extract<SourceClip['source'], { type: 'text' }>['doc']): ClipTextSummary {
+  return {
+    size: { w: doc.size.w, h: doc.size.h },
+    elements: doc.elements.length,
+    theme: doc.theme ?? null,
+    animated: doc.elements.some((e) => (e.animations?.length ?? 0) > 0),
+  };
+}
+
 function sourceView(clip: Extract<AnyClip, { kind: 'source' }>): ClipSourceView {
   const src = clip.source;
   switch (src.type) {
@@ -87,7 +104,7 @@ function sourceView(clip: Extract<AnyClip, { kind: 'source' }>): ClipSourceView 
     case 'algo':
       return { type: 'algo', generator: src.generator, params: { ...src.params } };
     case 'text':
-      return { type: 'text', doc: src.doc };
+      return { type: 'text', doc: textSummary(src.doc) };
     default:
       return { type: 'solid', color: src.color };
   }
