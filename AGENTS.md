@@ -120,9 +120,11 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 | 文案 / i18n | 自研 `src/i18n/`，无第三方库 |
 | 测试 | Playwright（E2E）+ vitest（**只测纯函数**） |
 
-**打包分发：目前不做。不要复活 Electron 壳** —— 它原本只为捆绑 ffmpeg 存在，
-而实测 Chrome 品牌构建带 H.264 / AAC，纯浏览器即可编码。将来要做分发走 PWA，
-不走 Electron（Chromium / Electron 构建反而不带专有编解码器）。
+**打包分发：仍然不做。** `desktop/` 是**兼容性探针**，不是分发路径：`bun run desktop:probe`
+跑能力探针 + 截图，`node desktop/build.mjs` 打免安装便携目录。它只回答「现有 web 产物在
+Electron 壳里是否逐条成立」，结论见 `docs/electron-compat.md`（官方构建自带专有编解码器，
+**不需要**塞 ffmpeg）。`src/platform/` 只有 `browser.ts` —— IPC 版 platform（W5）未做，
+在那之前 `desktop/` 的能力等价于一个浏览器。分发仍走纯静态 / 将来的 PWA。
 
 ---
 
@@ -130,6 +132,8 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 
 ```
 src/
+├── main.ts        入口：能力闸门（WebGL2 + showDirectoryPicker）通过后才动态 import 装配
+├── app-boot.ts    装配根（主题 → store → mount，import 顺序有讲究，不要重排）
 ├── core/          纯 TS，无 DOM / WebGL，必须可单测
 │                  schema · 曲线求值 · 命令栈 · 片段几何（clips）· 转场钳制 · prng
 │                  · 颜色（color.ts）· 位掩码（bitmask.ts：位序映射 + B/S 打包）
@@ -169,7 +173,9 @@ src/
 
 lab/               试炼场：第二个 HTML 入口（/lab/），见 `lab/AGENTS.md`
 tests/             Playwright（e2e/）+ vitest（unit/），见 `tests/AGENTS.md`
-docs/              设计说明与专题笔记（agent 控制面 / 排版光栅化）
+scripts/           e2e 运行器 · 缩略图 / 主题色生成 · 容量探测 · LLM 代理 · CLI 打包 · 变异分诊
+desktop/           Electron 兼容性探针（探针 + 便携目录），**不是分发路径**
+docs/              设计说明与专题笔记（agent 控制面 / 排版光栅化 / Electron 兼容 / 0.3 加固计划）
 mcp/ · cli/        宿主侧入口（MCP server / CLI）：它们驱动内核，**内核反向不许 import 它们**
 ```
 
@@ -225,9 +231,11 @@ mcp/ · cli/        宿主侧入口（MCP server / CLI）：它们驱动内核�
 
 > **规则冲突时就近优先**：离代码最近的那份说了算；但**硬约束（§1）永远以本文件为准**。
 >
-> ⚠️ 子目录的规则文件与主文件同名（`AGENTS.md`）。CodeBuddy 的官方文档只保证子目录的
-> `CODEBUDDY.md` 会被动态加载，子目录 `AGENTS.md` 是否自动进上下文**未实测**
-> ⇒ **不要假设它已经被读进来了，按上表主动读。**
+> ⚠️ **已核实（2026-10-19，官方 Rules 文档）**：CodeBuddy 只自动加载**项目根**的
+> `CODEBUDDY.md`；根 `AGENTS.md` 仅在**不存在** `CODEBUDDY.md` 时被全文注入（两者共存时
+> 本文件整份失效）。子目录的 `AGENTS.md` / `CODEBUDDY.md` 不在承诺范围内 ⇒ 按上表主动读。
+> **禁止在根新建 `CODEBUDDY.md`**；要让子规则被自动发现，走 `.codebuddy/rules/<name>/RULE.mdc`
+> （`alwaysApply: false` + `description`，正文只写「先读 `src/x/AGENTS.md`」）。
 
 ### 五条跨目录铁律（其余细节都在上面那张表指向的文件里）
 
@@ -252,7 +260,16 @@ bun run test         # vitest，只测纯逻辑（配置里限死 tests/unit，�
 bun run test:mutate  # Stryker 变异测试（见 `tests/AGENTS.md`）：逐处改错源码再跑测试，报出「假守卫」
 bun run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright（系统 Chrome）
 bunx vitest run tests/unit/xxx.test.ts    # 只想跑一个测试文件
+node scripts/e2e.mjs tests/e2e/x.spec.ts  # 只跑一个 E2E（参数原样转给 playwright test）
+bun run capacity     # 打印本机内存 / 显存探测（页面读的是 /__capacity.json）
+bun run cli new ./p  # CLI（new / validate / clip add / diff / render），首次按需 SSR 打包
+bun run mcp          # MCP server（stdio）：stdout 是 JSON-RPC 通道，不能往里打日志
+bun run desktop      # Electron 探针壳（先 build）；desktop:probe 加探针 + 截图
 ```
+
+**构建期注入**（`vite.config.ts`，dev 与 preview 两侧，`build` 里没有）：`__APP_VERSION__` 由
+`package.json` 注入；`GET /__capacity.json` 给本机真实内存 / 显存（拉不到则退回保守默认）；
+`/__llm/*` 是直连失败时的同源代理回落。纯静态部署按「三项都不存在」理解。
 
 > **包管理器只有 bun。** `package.json` 的 `packageManager` 声明了版本，lockfile
 > 只有 `bun.lock` 一份（`package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` 已进
@@ -295,25 +312,16 @@ bunx vitest run tests/unit/xxx.test.ts    # 只想跑一个测试文件
    **但导出与预览走的正是这两条不同路径，所以它不是纯粹的测试噪声。**
    **不要为了绿而放宽这条断言。** 复现：`for i in 1 2 3; do node scripts/e2e.mjs algos.spec; done`
    （单跑常常绿，全量跑才挂 —— 负载相关）。
-   > **2026-10-04 补到的新证据（Wave 2）**：新建的 `sim` 生成器上有**更便宜的复现**——
-   > **根本不用回退**，同一个 t 连渲两次就会差：Brian's Brain 恒差 **15 字节**、
-   > 沙堆恒差 **489 字节**（出界 700848 字节里），2/3 的运行失败，**每次数值都一样**。
-   > 几个已知量：
-   > - `renderer.onSeek()` 只调 `compositor.clearFeedback()`，**不碰 sim** —— 模拟侧被排除；
-   > - 单元测试里 `seek(f) ≡ 顺序 step f 次` 逐字节相等（`tests/unit/cellular-automata.test.ts` 等），
-   >   所以状态机是确定的；
-   > - 「差异每次都是同一个数」排除了随机噪声，指向一处**固定的渲染层竞态**
-   >   （嫌疑仍是 R8 上传 / tint pass / `outPool` 复用这条链）。
-   > 处置：`tests/e2e/algo-sim.spec.ts` **不断**这条（头注里写了完整理由），
-   > 确定性交给单元测试。**这不等于问题解决了** —— 它只是被放在能精确断言的那一层。
+   > **更便宜的复现（Wave 2）**：`sim` 生成器**根本不用回退** —— 同一个 t 连渲两次就差
+   > （Brian's Brain 恒差 15 字节、沙堆 489 字节，每次数值都一样）。`onSeek()` 不碰 sim、
+   > 单测里 `seek ≡ 顺序推进` 逐字节相等 ⇒ 嫌疑固定在渲染层（R8 上传 / tint pass / `outPool`）。
+   > 处置：`tests/e2e/algo-sim.spec.ts` 不断这条，确定性交给单测 —— **不等于问题解决了**。
 3. **素材重定位 UI**：`auditLedger` 能检出 `missing` / `changed` 并在「工程」面板列出来，
    但**只能报告不能修**。缺的动作是「重选这个文件」→ `showOpenFilePicker()` → 比对哈希 →
    更新台账并回写工程。
-4. **打开工程时素材是全量读进内存的**：`AssetStore.loadFrom()` 把每一条 bundled 素材都读了
-   回来（视频也在内）。音频 + 图片量级没问题，含 2 GB 视频的工程会一次性吃 2 GB 堆。
-   修法是把素材字节改成**流式**：`AssetStore` 存 `File` / `Blob` 引用（`FsFile` 加
-   `readBlob()`）、`SaveInput.bytesFor` 允许返回 `Blob`、`writeBytesAtomic` 接受 Blob。
-   动的是保存 / 打开的公共路径，需要单独一轮回归。
+4. **打开工程时素材是全量读进内存的**：`AssetStore.loadFrom()` 连视频一起读回，含 2 GB
+   视频的工程会一次性吃 2 GB 堆。修法是改成**流式**（`FsFile.readBlob()` / `bytesFor`
+   返回 `Blob` / `writeBytesAtomic` 收 Blob）—— 动的是保存 / 打开的公共路径，需单独回归。
 5. **`analysis/` 与 `thumbs/` 只建了目录**，路径规则就位，缓存还没落地。
 6. **视频解码在无 GPU / 不支持的容器时没有兜底文案**：失败只记进 `stats().failures` 与
    `console.error`，界面表现为「这一层不出画面」。应当在底栏给一条 `err.video.unreadable`。
@@ -335,15 +343,13 @@ bunx vitest run tests/unit/xxx.test.ts    # 只想跑一个测试文件
     保存提示只看 `warnings`，于是「磁盘写坏」与「保存成功」在界面上长得一样。
     修法：把 `verified !== 'hash'` 并进保存提示。触发条件是大工程（几十 MB 的
     `project.json`），现在没踩到，但它是**数据安全**那一类。
-12. **超上限的静默夹小没有提示**：`maxUploadWidth` / `rasterEdge` 现在由容量派生
-    （见 `src/core/AGENTS.md`），但「8K 素材被缩到 4096」「文本层被夹到 4096 边长」仍然只是变糊，
-    没有一处 UI 说出来。修法：在素材面板/排版面板上给一条一次性提示。
+12. **超上限的静默夹小没有提示**：`maxUploadWidth` / `rasterEdge` 由容量派生，但「8K 缩到
+    4096」只是变糊，没有 UI 说出来。修法：素材 / 排版面板给一条一次性提示。
 13. **撤销栈按步数裁，不按字节裁**：`undoSteps` 已按可用内存派生（见 `src/core/AGENTS.md`），
     但每条记录是**整份工程 JSON 快照**，所以「能存几步」其实是工程大小的函数。
     修法：字段级/增量快照，或直接按字节预算裁（`pushUndo` 里已经有钩子）。
-11. **两处近义提示没有统一**：`app.beatAnchorTip` 与 `insp.anchorTip` 只差斜杠两边的空格。
-    抽取时按「逐字保留」原则没动它，但同一个功能的 tooltip 有两份文案本身就是维护负担。
-    合并需要一次独立的、显式的文案改动。
+14. **两处近义提示没有统一**：`app.beatAnchorTip` 与 `insp.anchorTip` 只差斜杠空格。
+    同一功能两份 tooltip 是维护负担，合并需一次独立的文案改动。
 
 ---
 
