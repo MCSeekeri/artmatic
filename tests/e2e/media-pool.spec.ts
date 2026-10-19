@@ -399,6 +399,25 @@ test('移除素材：⋯ → 确认后才删，且如实报出引用数', async 
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('1 个片段引用');
 
+  /*
+   * 遮罩必须在 body 上。留在媒体抽屉里时，它会被抽屉的 z-index 层叠上下文
+   * 困住，右侧检查器（同层、DOM 更靠后）会盖住遮罩 —— 这是真实报过的 bug。
+   */
+  const layering = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="confirm-delete-asset-backdrop"]');
+    if (!(b instanceof HTMLElement)) return null;
+    const hit = document.elementFromPoint(window.innerWidth - 12, Math.round(window.innerHeight / 2));
+    return {
+      inBody: b.parentElement === document.body,
+      z: getComputedStyle(b).zIndex,
+      coversRightEdge: !!hit && (hit === b || b.contains(hit)),
+    };
+  });
+  expect(layering).not.toBeNull();
+  expect(layering!.inBody).toBe(true);
+  expect(layering!.z).toBe('150');
+  expect(layering!.coversRightEdge).toBe(true);
+
   // 取消：什么都不该变
   await page.getByTestId('confirm-delete-asset-cancel').click();
   await expect(row).toHaveCount(1);

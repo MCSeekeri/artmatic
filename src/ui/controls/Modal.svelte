@@ -51,6 +51,27 @@
     children,
   }: Props = $props();
 
+  /**
+   * 把遮罩挂到 `document.body`。
+   *
+   * 抽屉（媒体池 / 检查器 / Agent）都带 `z-index: var(--z-drawer)`，是一个
+   * **层叠上下文**：modal 留在抽屉里时，它自己的 `z-modal(150)` 只在这一层内
+   * 有效。检查器与它同层、DOM 更靠后，就会盖住遮罩右侧 —— 表现是「弹窗开着，
+   * 右边检查器还是亮的」。
+   *
+   * 挂到 body 之后 modal 回到根上下文，`z-modal` 才真的是全局最上层。
+   * 这是 `ui/AGENTS.md` 里「浮层不要挂在带 z-index 的祖先里」那条规则的
+   * 组件级兜底：以后任何抽屉里打开 Modal 都不会再踩一次。
+   */
+  function portal(node: HTMLElement): { destroy: () => void } {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
+
   function onkeydown(e: KeyboardEvent): void {
     if (e.key !== 'Escape') return;
     // 阻止冒泡：否则会顺带关掉底下的菜单 / 触发其它 Esc 处理
@@ -67,7 +88,12 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="backdrop" data-testid={testid ? `${testid}-backdrop` : undefined} onclick={onclose}>
+<div
+  class="backdrop"
+  use:portal
+  data-testid={testid ? `${testid}-backdrop` : undefined}
+  onclick={onclose}
+>
   <div
     class="modal {width}"
     role="dialog"
