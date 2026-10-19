@@ -59,8 +59,31 @@ import {
   type AssetMode,
 } from './ledger';
 import { openAssetFile } from './io';
+import { contentOfPath } from './fingerprint';
 import type { FsDirHandle, FsFileHandle } from './fs';
 import type { Project } from '../core/schema';
+
+/**
+ * 桌面版 linked 的按范围读取。由 `main.ts` 在装配时注入（`platform.readPath`）。
+ *
+ * 注入而不是直接 import platform：`project/` 不该知道宿主是谁；单测也不需要
+ * 一个 Electron 才能测保存路径。
+ */
+export type AssetPathReader = (path: string, start: number, end: number) => Promise<Uint8Array>;
+
+let pathReader: AssetPathReader | null = null;
+
+export function setAssetPathReader(reader: AssetPathReader | null): void {
+  pathReader = reader;
+}
+
+/** 视频解码器要的「路径来源」载体（结构上与 `engine/media-assets.ts` 的同名类型一致）。 */
+export interface PathVideoMedia {
+  kind: 'path';
+  path: string;
+  size: number;
+  read(start: number, end: number): Promise<Uint8Array>;
+}
 
 export interface AssetInput {
   kind: 'audio' | 'image' | 'video';
@@ -126,6 +149,8 @@ export class AssetStore {
    * 磁盘上却多出一份（正是「反复换素材来源制造垃圾」的一半来源）。
    */
   private persisted = new Set<string>();
+  /** 源文件在本次会话里被改过（只标 stale，不自动换内容）。 */
+  private stale = new Set<string>();
 
   /* ------------------------------------------------------------ 登记 */
 
@@ -205,6 +230,26 @@ export class AssetStore {
     this.retained.delete(id);
   }
 
+  /** 桌面版 linked 图片 / 音频：字节在内存里（要喂解码器），本地位置是绝对路径。 */
+  putLinkedBytesAt(
+    id: string,
+    bytes: Uint8Array,
+    path: string,
+    input: AssetInput,
+    content?: AssetContent | null,
+  ): void {
+    const prev = this.items.get(id);
+    this.items.set(id, {
+      input: { ...input, mode: 'linked' },
+      source: { kind: 'bytes', bytes },
+      addedAt: prev?.addedAt ?? Date.now(),
+      entry: prev?.entry ?? null,
+      content: content ?? prev?.content ?? null,
+      local: path,
+    });
+    this.retained.delete(id);
+  }
+
   /** 登记一份浏览器 linked 素材（图片 / 音频）：字节在内存里，本地位置另有句柄。 */
   putLinkedBytes(id: string, bytes: Uint8Array, input: AssetInput, content?: AssetContent | null): void {
     const prev = this.items.get(id);
@@ -224,6 +269,14 @@ export class AssetStore {
     const item = this.items.get(id);
     if (!item) return;
     item.source = item.input.kind === 'video' ? { kind: 'handle', handle, size } : item.source;
+  }
+
+  /** 打开工程时把本机绝对路径接回素材（桌面版 linked，不读字节）。 */
+  attachLocalPath(id: string, path: string, size: number): void {
+    const item = this.items.get(id);
+    if (!item) return;
+    item.source = { kind: 'path', path, size };
+    item.local = path;
   }
 
   /** linked 条目但本地来源没接上（句柄丢了 / 没授权）—— 不等于「工程里没有这条」。 */
@@ -367,6 +420,19 @@ export class AssetStore {
     return this.persisted.has(id);
   }
 
+  /** 源文件变了：只记一个标记，**不**自动重新读内容（确定性优先）。 */
+  markStale(id: string): void {
+    this.stale.add(id);
+  }
+
+  clearStale(id: string): void {
+    this.stale.delete(id);
+  }
+
+  isStale(id: string): boolean {
+    return this.stale.has(id);
+  }
+
   remove(id: string): void {
     this.items.delete(id);
     this.retained.delete(id);
@@ -400,9 +466,8 @@ export class AssetStore {
   open(id: string): AsyncIterable<Uint8Array> | null {
     const src = this.items.get(id)?.source;
     if (!src || src.kind === 'none') return null;
-    // path 的字节在 platform（W5）。返回 null 让保存记一条警告，
-    // 而不是拿空流写出一个 0 字节文件。
-    if (src.kind === 'path') return null;
+    // path 依赖注入的 readRange；注入之前返回 null（保存会记警告，而不是写 0 字节）。
+    if (src.kind === 'path') return pathReader ? chunksOfPath(src.path, src.size, pathReader) : null;
     return chunksOf(src);
   }
 
@@ -411,7 +476,10 @@ export class AssetStore {
     const item = this.items.get(id);
     if (!item) return null;
     if (item.source.kind === 'bytes') return item.source.bytes;
-    if (item.source.kind === 'path') return null;
+    if (item.source.kind === 'path') {
+      if (!pathReader) return null;
+      return readAllOfPath(item.source.path, item.source.size, pathReader);
+    }
     return readAllOf(item.source);
   }
 
@@ -420,9 +488,19 @@ export class AssetStore {
    *
    * 原生 `File` 本身就是 `Blob`，所以本地导入这条路零拷贝。
    */
-  async openVideo(id: string): Promise<Blob | Uint8Array | null> {
+  async openVideo(id: string): Promise<Blob | Uint8Array | PathVideoMedia | null> {
     const src = this.items.get(id)?.source;
-    if (!src || src.kind === 'none' || src.kind === 'path') return null;
+    if (!src || src.kind === 'none') return null;
+    if (src.kind === 'path') {
+      if (!pathReader) return null;
+      const reader = pathReader;
+      return {
+        kind: 'path',
+        path: src.path,
+        size: src.size,
+        read: (start, end) => reader(src.path, start, end),
+      };
+    }
     if (src.kind === 'bytes') return src.bytes;
     if (src.kind === 'file') return src.file;
     const file = await src.handle.get();
@@ -534,6 +612,10 @@ export class AssetStore {
     if (source.kind === 'bytes') return contentOfBytes(source.bytes);
     if (source.kind === 'file') return contentOfBlob(source.file);
     if (source.kind === 'handle') return contentOfHandle(source.handle);
+    if (source.kind === 'path' && pathReader) {
+      const reader = pathReader;
+      return contentOfPath(source.size, (start, end) => reader(source.path, start, end));
+    }
     return null;
   }
 
@@ -735,6 +817,35 @@ async function* chunksOf(src: AssetSource): AsyncGenerator<Uint8Array> {
    * `writeStreamAtomic` 把工程副本写成 0 字节（那会静默毁掉一份素材）。
    */
   if (src.kind === 'path') return;
+}
+
+/** 4 MiB：一块的大小，也是保存时峰值内存的上限（与 `writeStreamAtomic` 的缓冲同一量级）。 */
+const PATH_CHUNK = 4 * 1024 * 1024;
+
+async function* chunksOfPath(
+  path: string,
+  size: number,
+  read: AssetPathReader,
+): AsyncGenerator<Uint8Array> {
+  for (let offset = 0; offset < size; offset += PATH_CHUNK) {
+    const end = Math.min(offset + PATH_CHUNK, size);
+    const chunk = await read(path, offset, end);
+    if (chunk.byteLength) yield chunk;
+  }
+}
+
+async function readAllOfPath(
+  path: string,
+  size: number,
+  read: AssetPathReader,
+): Promise<Uint8Array> {
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for await (const chunk of chunksOfPath(path, size, read)) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return offset === size ? out : out.subarray(0, offset);
 }
 
 /** `ReadableStream` → 异步迭代。不依赖 `DOM.AsyncIterable` 的 lib 版本。 */

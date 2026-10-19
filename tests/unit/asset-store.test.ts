@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createAssetStore, isLazySource, type AssetSource } from '../../src/project/asset-store';
+import {
+  createAssetStore,
+  isLazySource,
+  setAssetPathReader,
+  type AssetSource,
+} from '../../src/project/asset-store';
 import { contentOfBytes } from '../../src/project/fingerprint';
 import { memoryRoot } from '../../src/project/fs';
 import { createLedger, projectPath, serializeLedger } from '../../src/project/ledger';
@@ -299,5 +304,41 @@ describe('AssetStore：内容身份与去重（W1 清理链路）', () => {
     expect(store.contentOf('img')).toMatchObject({ size: 3 });
     expect(store.findByFp(store.contentOf('img')!.fp)).toBe('img');
     expect(store.isPersisted('img')).toBe(true);
+  });
+});
+
+describe('path 来源：桌面版 linked（W5）', () => {
+  it('按范围分块读；openVideo 返回 path 载体；没有 reader 时不假装读到空字节', async () => {
+    const store = createAssetStore();
+    const size = 5 * 1024 * 1024 + 7;
+    const bytes = new Uint8Array(size);
+    for (let i = 0; i < size; i++) bytes[i] = i % 251;
+
+    store.putPath('v1', '/tmp/take.mp4', size, VIDEO_INPUT, {
+      size,
+      fp: `fp1:${size}:x`,
+    });
+
+    setAssetPathReader(async (_p, start, end) => bytes.slice(start, end));
+    try {
+      const chunks: Uint8Array[] = [];
+      for await (const c of store.open('v1')!) chunks.push(c);
+      expect(chunks.length).toBeGreaterThan(1); // 4 MiB 一块，5 MiB 至少两块
+      expect(chunks.reduce((n, c) => n + c.byteLength, 0)).toBe(size);
+      // 5 MB 的 `toEqual` 会逐元素深比较，把 5 s 的默认超时吃光；
+      // 这里核对长度 + 首尾（块边界由上面的 chunks.length 覆盖）。
+      const all = await store.readAll('v1');
+      expect(all!.byteLength).toBe(size);
+      expect(all![0]).toBe(0);
+      expect(all![size - 1]).toBe((size - 1) % 251);
+
+      const media = await store.openVideo('v1');
+      expect(media).toMatchObject({ kind: 'path', path: '/tmp/take.mp4', size });
+    } finally {
+      setAssetPathReader(null);
+    }
+
+    expect(store.open('v1'), '没有 reader 时不能返回空流').toBeNull();
+    expect(await store.openVideo('v1')).toBeNull();
   });
 });

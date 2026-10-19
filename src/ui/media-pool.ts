@@ -54,6 +54,8 @@ export interface PoolItem {
   missing: boolean;
   /** 引用式素材（W1）：字节不在工程目录里，指向本机原文件。 */
   linked?: boolean;
+  /** linked 的原文件在本次会话里变过（只提示，不自动换内容）。 */
+  stale?: boolean;
 }
 
 /**
@@ -63,7 +65,7 @@ export interface PoolItem {
  * 而「这一行显示多大」只需要字节数。
  */
 type PoolSource = Pick<AssetStore, 'ids' | 'input' | 'size'> &
-  Partial<Pick<AssetStore, 'modeOf'>>;
+  Partial<Pick<AssetStore, 'modeOf' | 'isStale'>>;
 
 export function buildPoolItems(
   declared: Readonly<Record<string, Asset>>,
@@ -87,6 +89,7 @@ export function buildPoolItems(
        */
       missing: !store.input(id),
       linked: store.modeOf?.(id) === 'linked',
+      stale: store.isStale?.(id) === true,
     });
   }
 

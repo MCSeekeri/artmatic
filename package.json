@@ -16,7 +16,9 @@
     "cli": "node scripts/cli.mjs",
     "capacity": "node scripts/capacity.mjs",
     "desktop": "electron desktop/main.mjs",
-    "desktop:probe": "electron desktop/main.mjs --probe"
+    "desktop:probe": "electron desktop/main.mjs --probe",
+    "desktop:artifact": "bun run build && node desktop/build.mjs",
+    "desktop:smoke": "node desktop/smoke.mjs"
   },
   "trustedDependencies": [
     "electron"

@@ -20,9 +20,10 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
+import { installHost, ASSET_SCHEME } from './host.mjs'
 
 const require = createRequire(import.meta.url)
-const { app, BrowserWindow, protocol, session, dialog } = require('electron')
+const { app, BrowserWindow, protocol, session, dialog, ipcMain, shell } = require('electron')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // dev：desktop/ 的兄弟目录；打包后：resources/app/dist。
@@ -35,6 +36,8 @@ const SW_GL = process.argv.includes('--sw')
 const NO_SANDBOX = process.argv.includes('--nosandbox')
 const DO_EXPORT = process.argv.includes('--export')
 const CLOSE_TEST = process.argv.includes('--closetest')
+/** 冒烟：验证 preload / IPC / Range 协议（打包产物里也走这条）。 */
+const HOST_SMOKE = process.argv.includes('--host-smoke')
 
 // 这些开关必须走 app.commandLine：直接当命令行参数传给 electron.exe 时，
 // 本机会话下进程会被外层静默干掉（表现为无输出 + SIGTERM）。
@@ -81,6 +84,7 @@ protocol.registerSchemesAsPrivileged([
       codeCache: true,
     },
   },
+  ASSET_SCHEME,
 ])
 
 /** 限制在 dist 内，不认 `..`。目录 → index.html；扩展名不存在 → SPA fallback。 */
@@ -213,10 +217,115 @@ function allowPermissions(ses) {
   })
 }
 
+/**
+ * 宿主冒烟：验证「preload 桥 / IPC 按范围读 / 自定义协议 + Range」。
+ *
+ * 跑在**打包产物**里（`release/.../Artmatic.exe --host-smoke --nosandbox`），
+ * 所以它验的是用户真正会拿到的那份 main/preload/host，而不是 dev 路径。
+ */
+async function runHostSmoke(win) {
+  const dir = path.join(process.cwd(), 'test-results')
+  await fs.mkdir(dir, { recursive: true })
+  const asset = path.join(dir, 'electron-host-smoke.bin')
+  const payload = Buffer.alloc(256 * 1024)
+  for (let i = 0; i < payload.length; i++) payload[i] = i % 251
+  await fs.writeFile(asset, payload)
+
+  await new Promise((r) => setTimeout(r, 2500))
+  const result = await win.webContents.executeJavaScript(
+    `(async () => {
+      const host = window.artmaticHost;
+      if (!host) return { error: 'no bridge' };
+      await host.__smokeAllow(${JSON.stringify(asset)});
+      const url = await host.__smokeUrl(${JSON.stringify(asset)});
+      const direct = await host.readRange(${JSON.stringify(asset)}, 0, 4);
+      const res = await fetch(url, { headers: { Range: 'bytes=5-14' } });
+      const body = new Uint8Array(await res.arrayBuffer());
+      const head = await fetch(url, { method: 'HEAD' });
+      const st = await host.stat(${JSON.stringify(asset)});
+      return {
+        bridge: true,
+        direct: Array.from(direct),
+        status: res.status,
+        range: res.headers.get('content-range'),
+        len: body.length,
+        body: Array.from(body),
+        headStatus: head.status,
+        headLen: head.headers.get('content-length'),
+        size: st.size,
+        platform: window.__artmatic?.platform?.supportsLinked ?? null,
+        mounted: !!document.querySelector('.app') || !!document.querySelector('[data-testid="empty-state"]'),
+      };
+    })()`,
+    true,
+  )
+  console.log('[host-smoke]', JSON.stringify(result))
+
+  /*
+   * 第二段：真的按路径导入一个视频，再打包。
+   *
+   * 这一段才验证到 `CustomSource`（mediabunny 按 Range 读）与 `AssetStore.open`
+   * 的 path 分支 —— 只测 IPC 只能证明「管道通了」，证明不了「解码器能用」。
+   */
+  let linked = null
+  const video = process.env.ARTMATIC_SMOKE_VIDEO
+  if (video && fsSync.existsSync(video)) {
+    await win.webContents.executeJavaScript(
+      `document.querySelector('[data-testid="empty-demo"]')?.click(); 1`,
+      true,
+    )
+    await new Promise((r) => setTimeout(r, 3200))
+    linked = await win.webContents.executeJavaScript(
+      `(async () => {
+        const A = window.__artmatic;
+        const host = window.artmaticHost;
+        await host.__smokeAllow(${JSON.stringify(video)});
+        const st = await host.stat(${JSON.stringify(video)});
+        const out = await A.project.importLinkedPath('video', 'smoke.mp4', ${JSON.stringify(video)}, st.size, { trackId: null });
+        if (!out) return { error: 'import failed' };
+        const media = await A.assets.openVideo(out.assetId);
+        const pack = await A.project.packToOpfs('host-smoke.artmatic');
+        return {
+          id: out.assetId,
+          mode: A.assets.modeOf(out.assetId),
+          mediaKind: media?.kind ?? null,
+          mediaSize: media?.size ?? null,
+          pack,
+        };
+      })()`,
+      true,
+    )
+    console.log('[host-smoke:linked]', JSON.stringify(linked))
+  }
+
+  const ok =
+    !!result &&
+    result.bridge === true &&
+    result.status === 206 &&
+    result.len === 10 &&
+    result.body[0] === 5 &&
+    result.body[9] === 14 &&
+    result.headStatus === 200 &&
+    Number(result.headLen) === payload.length &&
+    result.size === payload.length &&
+    result.platform === true &&
+    result.mounted === true &&
+    (!video ||
+      (!!linked &&
+        !linked.error &&
+        linked.mode === 'linked' &&
+        linked.mediaKind === 'path' &&
+        linked.pack?.assets >= 1 &&
+        linked.pack?.bytes > 1_000_000))
+  console.log('[host-smoke]', ok ? 'PASS' : 'FAIL')
+  setTimeout(() => app.exit(ok ? 0 : 1), 200)
+}
+
 async function main() {
   await app.whenReady()
 
   protocol.handle('app', serve)
+  installHost({ app, protocol, ipcMain, dialog, shell })
   allowPermissions(session.defaultSession)
   watchDownloads()
 
@@ -229,6 +338,7 @@ async function main() {
     show: SHOW || !PROBE,
     backgroundColor: '#111114',
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       // 隐藏窗口里 rAF 会被暂停（fps 读出来是 1），所以性能测量必须 --show。
@@ -236,6 +346,7 @@ async function main() {
       // 产品值应为 true。本机这个会话里沙箱渲染进程起不来
       // （render-process-gone: crashed / 0x80000003），探针跑 --nosandbox。
       sandbox: !NO_SANDBOX,
+      additionalArguments: HOST_SMOKE ? ['--artmatic-smoke'] : [],
     },
   })
 
@@ -293,6 +404,8 @@ async function main() {
 
   await win.loadURL('app://bundle/')
   console.log('[loaded]', win.webContents.getURL())
+
+  if (HOST_SMOKE) return runHostSmoke(win)
 
   if (!PROBE) return
 

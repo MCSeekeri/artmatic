@@ -40,6 +40,7 @@ import {
   ALL_FORMATS,
   BlobSource,
   BufferSource,
+  CustomSource,
   Input,
   VideoSampleSink,
   type Source,
@@ -246,6 +247,24 @@ export interface VideoProbe {
 }
 
 /**
+ * `VideoMedia` → mediabunny 的 `Source`。
+ *
+ * 三条来源必须是三种 adapter，不能「都包成 Blob」：`path` 的整份包装等于
+ * 把 2 GB 读进内存，正好是 W1.1 消灭的动作。`CustomSource` 只按请求的范围
+ * 读，缓存上限 8 MiB（与 `BufferSource` 的量级一致）。
+ */
+function sourceOf(media: VideoMedia): Source {
+  if (media instanceof Blob) return new BlobSource(media);
+  if (media instanceof Uint8Array) return new BufferSource(media);
+  return new CustomSource({
+    getSize: () => media.size,
+    read: (start, end) => media.read(start, end),
+    prefetchProfile: 'fileSystem',
+    maxCacheSize: 8 * 1024 * 1024,
+  });
+}
+
+/**
  * 读一次元数据（时长 + 显示尺寸）。导入时用来定片段的默认长度，
  * 以及写进 `Project.assets[id].durationSec / size`。
  *
@@ -255,7 +274,7 @@ export interface VideoProbe {
 export async function probeVideo(media: VideoMedia): Promise<VideoProbe | null> {
   let input: Input<Source> | null = null;
   try {
-    const source = media instanceof Blob ? new BlobSource(media) : new BufferSource(media);
+    const source = sourceOf(media);
     input = new Input({ formats: ALL_FORMATS, source });
     if (!(await input.canRead())) return null;
     const track = await input.getPrimaryVideoTrack();
@@ -301,7 +320,7 @@ export async function videoThumbnail(
 
   let input: Input<Source> | null = null;
   try {
-    const source = media instanceof Blob ? new BlobSource(media) : new BufferSource(media);
+    const source = sourceOf(media);
     input = new Input({ formats: ALL_FORMATS, source });
     if (!(await input.canRead())) return null;
     const track = await input.getPrimaryVideoTrack();
@@ -435,8 +454,8 @@ export function createVideoSourceManager(
     try {
       // Blob → 磁盘背书（本地导入的 File 走这条，零内存）
       // Uint8Array → 零拷贝包住（打开工程时素材已在内存里，不再多一份）
-      const source =
-        media instanceof Blob ? new BlobSource(media) : new BufferSource(media);
+      // path → CustomSource 按范围读（桌面版 linked，不整份进堆）
+      const source = sourceOf(media);
       const input = new Input({ formats: ALL_FORMATS, source });
       entry.input = input;
       entry.chain = entry.chain.then(async () => {

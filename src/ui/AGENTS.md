@@ -360,6 +360,10 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   `ui/media-pool.ts`（纯函数，有单测）；面板只管把 `appState` 喂进去。想改
   「图片默认几拍 / 什么 fit」时改那一处 —— 抄进组件就意味「导入」与「从池里插入」
   两条路会给出两个结果。
+- **linked 素材的三种状态都有唯一出口**：媒体池行内徽标（`引用` / `源已变化`）、
+  右键「收集到工程 / 重新链接」走 `project-actions.collectAsset` / `relinkAsset`。
+  桌面版的文件监视在 `ui/asset-watch.ts`，**只标 `stale`，绝不自动重读**——
+  自动换内容会让「同一帧两次渲染用了不同字节」变得无法复现。
 - **「未使用素材」只在工程面板里（`Rail.svelte`）**，数据是 `assets.retainedIds()` /
   `retainedInput()` / `retainedSize()`（W1.3）。三个动作都有唯一实现：恢复走
   `project-actions.restoreUnusedAsset`（要 await 素材来源重建，之后画面才能出来）、

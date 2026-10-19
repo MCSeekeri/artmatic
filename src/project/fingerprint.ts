@@ -109,6 +109,24 @@ export async function contentOfBlob(blob: Blob): Promise<AssetContent> {
   return content;
 }
 
+/**
+ * 从**绝对路径**算指纹（桌面版 linked）。
+ *
+ * 只读首尾两块，与 `contentOfBlob` 的切法逐字节一致；不缓存 —— 外部文件
+ * 可以在两次调用之间被改掉，缓存会让「源已变化」永远检测不到。
+ */
+export async function contentOfPath(
+  size: number,
+  read: (start: number, end: number) => Promise<Uint8Array>,
+): Promise<AssetContent> {
+  if (!hashSupported()) return weakContent(size);
+  const headLen = Math.min(FP_CHUNK, size);
+  const tailLen = size > FP_CHUNK ? Math.min(FP_CHUNK, size) : 0;
+  const head = headLen ? await read(0, headLen) : new Uint8Array(0);
+  const tail = tailLen ? await read(size - tailLen, size) : new Uint8Array(0);
+  return { size, fp: await fpOf(size, head, tail) };
+}
+
 /** 从工程目录里的文件句柄算指纹（打开工程时给视频补身份用）。 */
 export async function contentOfHandle(handle: FsFileHandle): Promise<AssetContent> {
   const hit = cache.get(handle);

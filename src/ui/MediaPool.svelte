@@ -221,6 +221,11 @@
                     {tr('pool.linked')}
                   </span>
                 {/if}
+                {#if it.stale}
+                  <span class="badge stale" title={tr('pool.staleHint')} data-testid="pool-stale">
+                    {tr('pool.stale')}
+                  </span>
+                {/if}
                 {#if metaOf(it)}<span>{metaOf(it)}</span>{/if}
               </span>
             </span>
@@ -406,6 +411,19 @@
   }
   .warn {
     color: var(--danger);
+  }
+  .badge {
+    flex: none;
+    padding: 0 4px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    line-height: 14px;
+  }
+  .badge.stale {
+    color: var(--warn, #d9a441);
+    border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, transparent);
   }
 
   .foot {

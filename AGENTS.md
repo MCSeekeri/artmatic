@@ -120,11 +120,14 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 | 文案 / i18n | 自研 `src/i18n/`，无第三方库 |
 | 测试 | Playwright（E2E）+ vitest（**只测纯函数**） |
 
-**打包分发：仍然不做。** `desktop/` 是**兼容性探针**，不是分发路径：`bun run desktop:probe`
-跑能力探针 + 截图，`node desktop/build.mjs` 打免安装便携目录。它只回答「现有 web 产物在
-Electron 壳里是否逐条成立」，结论见 `docs/electron-compat.md`（官方构建自带专有编解码器，
-**不需要**塞 ffmpeg）。`src/platform/` 只有 `browser.ts` —— IPC 版 platform（W5）未做，
-在那之前 `desktop/` 的能力等价于一个浏览器。分发仍走纯静态 / 将来的 PWA。
+**打包分发：安装包 / 签名 / 自动更新仍不做。** `desktop/` 现在是**真正的宿主**
+（`preload.cjs` + `host.mjs`）：`bun run desktop` 起壳，`desktop:probe` 跑能力探针，
+`desktop:artifact` 打免安装便携目录，`desktop:smoke` 在打包产物里验 preload / IPC /
+`artmatic-asset://` 的 Range（可配 `ARTMATIC_SMOKE_VIDEO` 验路径 linked 视频 + 打包）。
+`src/platform/electron.ts` 只覆盖浏览器做不到的三件事（原生路径、按范围读、文件监视），
+其余直接复用 `browserPlatform`；页面拿不到 `fs`，主进程只认用户选过的路径 + token。
+结论见 `docs/electron-compat.md`（官方构建自带专有编解码器，**不需要**塞 ffmpeg）。
+分发仍走纯静态 / 将来的 PWA。
 
 ---
 
@@ -174,7 +177,7 @@ src/
 lab/               试炼场：第二个 HTML 入口（/lab/），见 `lab/AGENTS.md`
 tests/             Playwright（e2e/）+ vitest（unit/），见 `tests/AGENTS.md`
 scripts/           e2e 运行器 · 缩略图 / 主题色生成 · 容量探测 · LLM 代理 · CLI 打包 · 变异分诊
-desktop/           Electron 兼容性探针（探针 + 便携目录），**不是分发路径**
+desktop/           Electron 宿主（preload/IPC/asset 协议/监视）+ 便携目录；仍不是分发路径
 docs/              设计说明与专题笔记（agent 控制面 / 排版光栅化 / Electron 兼容 / 0.3 加固计划）
 mcp/ · cli/        宿主侧入口（MCP server / CLI）：它们驱动内核，**内核反向不许 import 它们**
 ```

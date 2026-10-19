@@ -65,7 +65,11 @@ export interface PickedVideo {
 export interface PickedLinked {
   kind: 'audio' | 'image' | 'video';
   name: string;
-  file: File;
+  /**
+   * 可直接解码的 `File`。桌面版视频为 `null` —— 它走路径 + 范围读，
+   * 把 2 GB 包成 `File` 等于整份进堆。
+   */
+  file: File | null;
   handle: unknown | null;
   path: string | null;
   size: number;
@@ -95,6 +99,19 @@ export interface Platform {
   pickLinkedFile(kind: 'audio' | 'image' | 'video'): Promise<PickedLinked | null>;
   /** 这个宿主能不能给出可持久化的引用（FSA 句柄 / 本机路径）。 */
   readonly supportsLinked: boolean;
+  /**
+   * 按范围读本机路径。**只有桌面版有**；浏览器没有真实路径，返回 undefined。
+   * 视频解码（mediabunny `CustomSource`）与采样指纹都靠它。
+   */
+  readonly readPath?: (path: string, start: number, end: number) => Promise<Uint8Array>;
+  /** 整份读一个小文件（图片 / 音频）；大文件不要用。 */
+  readonly readFileAt?: (path: string) => Promise<Uint8Array>;
+  readonly statPath?: (path: string) => Promise<{ size: number; mtime: number } | null>;
+  /**
+   * 监视源文件变化。返回停止函数。**只用于标记 stale**，绝不自动换内容。
+   */
+  watchPaths?: (paths: readonly string[], onChange: (path: string) => void) => () => void;
+  showInFolder?: (path: string) => void;
   /**
    * 多选字体文件。浏览器：`<input type=file multiple>`；
    * Electron（M5）：文件对话框 + IPC 读盘。

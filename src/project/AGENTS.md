@@ -47,8 +47,12 @@
   **本地原文件永远不删**；linked-only 条目在工程目录里没有文件是正常状态，
   `auditLedger` 不对它报 missing。
 - **素材仓存的是来源，不是一律摊开的字节（W1.1）**：`AssetSource = file | handle | bytes | path | none`。
-  - 视频：`file`（本地导入）/ `handle`（句柄）/ `path`（桌面版绝对路径，读取走
-    `platform.readPath`）—— **一个字节都不进堆**。图片/音频：`bytes`（要喂解码器）。
+  - 视频：`file`（本地导入）/ `handle`（句柄）/ `path`（桌面版绝对路径）——
+    **一个字节都不进堆**。图片/音频：`bytes`（要喂解码器）。
+  - `path` 的读取由 `setAssetPathReader()` 在 `main.ts` 注入（Electron 主进程的
+    `readRange`）：`open()` 按 4 MiB 分块、`openVideo()` 返回 `{kind:'path',read}`
+    给 mediabunny `CustomSource`、`contentFor` 只读首尾 128 KiB。**没有注入时
+    `open()` 返回 null，绝不产出空流**（否则保存会写出 0 字节文件）。
   - 读接口只有两条：`open()`（分块，保存用）与 `readAll()`（一次性，图片/音频用）。
     `bytesOf()` **只返回已在内存里的字节**，绝不读盘 —— 排版置图是同步 API，靠它。
   - 旧版「视频 hash 恒为 null」已废弃：现在所有素材都有采样 `content.fp`。

@@ -18,6 +18,7 @@ import { createBlankProject, DEMO_ASSET_ID } from './core/demo-project';
 import { renderDemoAudio } from './audio/demo-audio';
 import { computeWaveform } from './audio/decode';
 import { appState } from './ui/app-state.svelte';
+import { platform } from './platform/index';
 import { theme } from './ui/theme.svelte';
 import { installTheme, applyFontScale } from './ui/theme-apply';
 import { runExport } from './exporters/export-runner';
@@ -43,7 +44,12 @@ import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
-import { importAudioBlob, importImageBlob, importVideoFile } from './ui/media-import';
+import {
+  importAudioBlob,
+  importImageBlob,
+  importLinkedPath,
+  importVideoFile,
+} from './ui/media-import';
 import { applyMachine, currentCapacity, resetCapacity, setLimits } from './core/capacity';
 import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
@@ -197,6 +203,14 @@ const projectDebug = {
   draftKey: () => (appState.hasProject ? appState.activeProject.draftKey : null),
   /** 把一条 linked 素材收集进工程（E2E 与将来的批量收集共用）。 */
   collect: (assetId: string) => collectAsset(assetId),
+  /** 桌面宿主冒烟：按本机路径导入 linked 素材（正常路径走原生选择器）。 */
+  importLinkedPath: (
+    kind: 'audio' | 'image' | 'video',
+    name: string,
+    path: string,
+    size: number,
+    target: { trackId?: string | null } = {},
+  ) => importLinkedPath(kind, name, path, size, target),
 
   /**
    * 把当前工程打包到 OPFS（E2E 用；`showSaveFilePicker` 驱动不了）。
@@ -397,6 +411,10 @@ registerControlPlane(control);
   },
   get assets() {
     return appState.assets;
+  },
+  /** 当前宿主实现（诊断 / 冒烟用；业务代码走 `platform/index`）。 */
+  get platform() {
+    return platform;
   },
   project: projectDebug,
   plugins: pluginDebug,

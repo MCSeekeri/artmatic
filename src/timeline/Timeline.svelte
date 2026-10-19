@@ -26,7 +26,13 @@
   } from '../core/schema';
   import { beatDur, snapTime } from '../core/time';
   import { resolveTransition } from '../core/transitions';
-  import { importAudioBlob, importFiles, importImageBlob, importVideoFile } from '../ui/media-import';
+  import {
+    importAudioBlob,
+    importFiles,
+    importImageBlob,
+    importLinkedPath,
+    importVideoFile,
+  } from '../ui/media-import';
   import { ASSET_DRAG_MIME, insertAssetClip, poolItemById } from '../ui/media-pool';
   import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
   import { createTextElement, createTypographyDocument } from '../typography/document';
@@ -492,7 +498,13 @@
     if (platform.supportsLinked) {
       const linked = await platform.pickLinkedFile('audio');
       if (!linked) return;
-      await importAudioBlob(linked.name, await linked.file.arrayBuffer(), target, linked.handle);
+      // 桌面版即使给了 `File`，也要走 path 分支：`File` 只是读取用，
+      // 台账必须记真实路径（否则会退化成 bundled，白读一份字节）。
+      if (linked.path) {
+        await importLinkedPath('audio', linked.name, linked.path, linked.size, target);
+      } else if (linked.file) {
+        await importAudioBlob(linked.name, await linked.file.arrayBuffer(), target, linked.handle);
+      }
       return;
     }
     const picked = await platform.pickAudioFile();
@@ -507,7 +519,11 @@
     if (platform.supportsLinked) {
       const linked = await platform.pickLinkedFile('video');
       if (!linked) return;
-      await importVideoFile(linked.file, target, linked.handle);
+      if (linked.file) {
+        await importVideoFile(linked.file, target, linked.handle);
+      } else if (linked.path) {
+        await importLinkedPath('video', linked.name, linked.path, linked.size, target);
+      }
       return;
     }
     const picked = await platform.pickVideoFile();
@@ -522,7 +538,11 @@
     if (platform.supportsLinked) {
       const linked = await platform.pickLinkedFile('image');
       if (!linked) return;
-      await importImageBlob(linked.name, await linked.file.arrayBuffer(), target, linked.handle);
+      if (linked.path) {
+        await importLinkedPath('image', linked.name, linked.path, linked.size, target);
+      } else if (linked.file) {
+        await importImageBlob(linked.name, await linked.file.arrayBuffer(), target, linked.handle);
+      }
       return;
     }
     const picked = await platform.pickImageFile();

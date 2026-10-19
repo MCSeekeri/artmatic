@@ -15,6 +15,7 @@
 
 import { appState, type OpenProject } from './app-state.svelte';
 import { platform } from '../platform/index';
+import { watchProjectAssets } from './asset-watch';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import {
   NotAProjectError,
@@ -44,7 +45,7 @@ import {
   putAssetHandle,
   requestReadPermission,
 } from '../project/asset-handles';
-import { contentOfBlob } from '../project/fingerprint';
+import { contentOfBlob, contentOfPath } from '../project/fingerprint';
 import {
   getHandle,
   keyForHandle,
@@ -143,6 +144,8 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
       issues: res.issues,
     });
     await hydrateRenderAssets(assetStore);
+    // 桌面版：监视 linked 的本机原文件（只标 stale，不自动换内容）。
+    watchProjectAssets(proj);
 
     /*
      * 插件在**素材之后、其余收尾之前**挂载。
@@ -370,7 +373,23 @@ export async function saveProjectNow(): Promise<boolean> {
 async function resolveLocalHandles(store: AssetStore): Promise<void> {
   for (const id of store.ids()) {
     const local = store.localOf(id);
-    if (!local?.startsWith('fsa:')) continue;
+    if (!local) continue;
+
+    /*
+     * 桌面版 linked：台账里是绝对路径。这里只 `stat` 一次（不读字节），
+     * 把来源接成 `path`；真正的读取由 `setAssetPathReader` 注入的
+     * `platform.readPath` 按范围完成。
+     */
+    if (!local.startsWith('fsa:')) {
+      try {
+        const st = await platform.statPath?.(local);
+        if (st) store.attachLocalPath(id, local, st.size);
+      } catch {
+        /* 源文件不在：保持 none，画面走脱机占位 */
+      }
+      continue;
+    }
+
     try {
       const raw = await getAssetHandle(id);
       if (!raw) continue;
@@ -702,12 +721,17 @@ export async function relinkAsset(assetId: string): Promise<boolean> {
   if (!input) return false;
   const picked = await platform.pickLinkedFile(input.kind);
   if (!picked) return false;
-  if (!picked.file) {
-    // 桌面版 path-only 的取字节路径要等 W5 的 readRange 接上。
+
+  const path = picked.path;
+  const content = picked.file
+    ? await contentOfBlob(picked.file)
+    : path && platform.readPath
+      ? await contentOfPath(picked.size, (s, e) => platform.readPath!(path, s, e))
+      : null;
+  if (!content) {
     appState.flash(tr('pool.relinkUnsupported'), 'error');
     return false;
   }
-  const content = await contentOfBlob(picked.file);
   const known = p.assets.contentOf(assetId);
   if (known && known.fp !== content.fp) {
     appState.flash(tr('pool.relinkMismatch'), 'error');
@@ -715,15 +739,31 @@ export async function relinkAsset(assetId: string): Promise<boolean> {
   }
   try {
     if (input.kind === 'video') {
-      const fh = adoptFileHandle(picked.handle as FileSystemFileHandle);
-      p.assets.putLinkedHandle(assetId, fh, picked.size, input, content);
-      registerVideoMedia(assetId, picked.file);
-    } else {
+      if (path && !picked.file) {
+        const read = platform.readPath!;
+        p.assets.putPath(assetId, path, picked.size, input, content);
+        registerVideoMedia(assetId, {
+          kind: 'path',
+          path,
+          size: picked.size,
+          read: (s, e) => read(path, s, e),
+        });
+      } else if (picked.file) {
+        const fh = adoptFileHandle(picked.handle as FileSystemFileHandle);
+        p.assets.putLinkedHandle(assetId, fh, picked.size, input, content);
+        registerVideoMedia(assetId, picked.file);
+      }
+    } else if (path) {
+      const bytes = await platform.readFileAt!(path);
+      p.assets.putLinkedBytesAt(assetId, bytes, path, input, content);
+      await hydrateAsset(p.assets, assetId);
+    } else if (picked.file) {
       const bytes = new Uint8Array(await picked.file.arrayBuffer());
       p.assets.putLinkedBytes(assetId, bytes, input, content);
       await hydrateAsset(p.assets, assetId);
     }
     if (picked.handle) await putAssetHandle(assetId, picked.handle);
+    p.assets.clearStale(assetId);
     p.store.touch();
     autosave.schedule();
     appState.flash(tr('pool.relinked', { name: input.name }), 'success');

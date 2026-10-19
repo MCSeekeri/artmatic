@@ -49,7 +49,19 @@ export interface ImageEntry {
  * 素材读回内存（AGENTS §8 第 12 条的已知问题），此时再包一层 `Blob` 会多一份
  * 拷贝，所以原样收下、用 mediabunny 的 `BufferSource` 零拷贝包住。
  */
-export type VideoMedia = Blob | Uint8Array;
+export interface VideoPathMedia {
+  kind: 'path';
+  /** 本机绝对路径（桌面版 linked）。 */
+  path: string;
+  size: number;
+  read(start: number, end: number): Promise<Uint8Array>;
+}
+
+/**
+ * 桌面版 linked 视频：**按范围读**，不整份进堆。`read` 由平台层注入
+ * （Electron 主进程的 `fs.read`，见 `platform/electron.ts`）。
+ */
+export type VideoMedia = Blob | Uint8Array | VideoPathMedia;
 
 const images = new Map<string, ImageEntry>();
 const videoMedia = new Map<string, VideoMedia>();

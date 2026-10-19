@@ -23,7 +23,8 @@
  */
 
 import { newId } from '../core/schema';
-import { contentOfBlob, contentOfBytes } from '../project/fingerprint';
+import { contentOfBlob, contentOfBytes, contentOfPath } from '../project/fingerprint';
+import { platform } from '../platform/index';
 import { adoptFileHandle } from '../project/fs';
 import { putAssetHandle } from '../project/asset-handles';
 import { checkImportSize, getLimits } from '../core/capacity';
@@ -229,6 +230,106 @@ export async function importVideoFile(
   );
 }
 
+/**
+ * 桌面版：导入一份**本机路径**（linked）。
+ *
+ * 视频走 `path` 来源 + mediabunny `CustomSource`，全程只按范围读；图片/音频
+ * 读一份字节（解码器本来就要整份）。**不复制进工程**，`collect` 才复制。
+ */
+export async function importLinkedPath(
+  kind: PoolKind,
+  name: string,
+  path: string,
+  size: number,
+  target: ImportTarget = {},
+): Promise<ImportedFile | null> {
+  const read = platform.readPath;
+  if (!read) return null;
+
+  if (kind !== 'video') {
+    const readFile = platform.readFileAt;
+    if (!readFile) return null;
+    try {
+      const bytes = await readFile(path);
+      const data =
+        bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+          ? (bytes.buffer as ArrayBuffer)
+          : (bytes.slice().buffer as ArrayBuffer);
+      return kind === 'image'
+        ? await importImageBlob(name, data, target, undefined, path)
+        : await importAudioBlob(name, data, target, undefined, path);
+    } catch (e) {
+      appState.flash(tr('err.video.unreadable', { name }), 'error');
+      void e;
+      return null;
+    }
+  }
+
+  const check = checkImportSize(size, getLimits().videoPerAssetMB);
+  if (!check.ok) {
+    appState.flash(
+      tr('err.video.tooLarge', {
+        size: formatBytes(check.sizeBytes),
+        limit: formatBytes(check.limitBytes),
+      }),
+      'error',
+    );
+    return null;
+  }
+
+  const media = {
+    kind: 'path' as const,
+    path,
+    size,
+    read: (start: number, end: number) => read(path, start, end),
+  };
+  const meta = await probeVideo(media);
+  if (!meta) {
+    appState.flash(tr('err.video.unreadable', { name }), 'error');
+    return null;
+  }
+  const content = await contentOfPath(size, (s, e) => read(path, s, e));
+  const existing = appState.assets.findByFp(content.fp);
+  const assetId = existing ?? newId();
+  const wasRetained = existing ? appState.assets.isRetained(existing) : false;
+  if (existing) appState.assets.activate(existing);
+
+  registerVideoMedia(assetId, media);
+  appState.assets.putPath(
+    assetId,
+    path,
+    size,
+    { kind: 'video', name, originName: name },
+    content,
+  );
+
+  const declared = appState.store.project.assets[assetId];
+  if (!declared) {
+    appState.store.commit(tr('tl.importVideo'), (p) => {
+      p.assets[assetId] = {
+        id: assetId,
+        kind: 'video',
+        name,
+        durationSec: meta.duration,
+        size: { w: meta.width, h: meta.height },
+      };
+    });
+  }
+  if (existing) {
+    appState.flash(
+      tr(wasRetained ? 'pool.reusedRestored' : 'pool.reusedAsset', { name }),
+      'info',
+    );
+  }
+  return finish(
+    assetId,
+    'video',
+    declared?.name ?? name,
+    { durationSec: meta.duration, size: { w: meta.width, h: meta.height } },
+    target,
+  );
+}
+
 /* ------------------------------------------------------------------ 图片 */
 
 /**
@@ -242,6 +343,7 @@ export async function importImageBlob(
   data: ArrayBuffer,
   target: ImportTarget = {},
   linkedHandle?: unknown,
+  linkedPath?: string,
 ): Promise<ImportedFile | null> {
   const bytes = new Uint8Array(data);
   const content = await contentOfBytes(bytes);
@@ -269,7 +371,9 @@ export async function importImageBlob(
   // 字节进仓。直接持有 `data` 上的视图，不额外拷贝：这份 buffer 是刚读出来的，
   // 没有第二个持有者（`putImageBytes` 与 `registerImageBytes` 各自内部拷贝）。
   const input = { kind: 'image' as const, name, originName: name };
-  if (linkedHandle) {
+  if (linkedPath) {
+    appState.assets.putLinkedBytesAt(assetId, bytes, linkedPath, input, content);
+  } else if (linkedHandle) {
     appState.assets.putLinkedBytes(assetId, bytes, input, content);
     void putAssetHandle(assetId, linkedHandle);
   } else {
@@ -312,6 +416,7 @@ export async function importAudioBlob(
   data: ArrayBuffer,
   target: ImportTarget = {},
   linkedHandle?: unknown,
+  linkedPath?: string,
 ): Promise<ImportedFile | null> {
   const content = await contentOfBytes(new Uint8Array(data));
   const existing = appState.assets.findByFp(content.fp);
@@ -337,7 +442,9 @@ export async function importAudioBlob(
    */
   const input = { kind: 'audio' as const, name, originName: name };
   const copy = new Uint8Array(data.slice(0));
-  if (linkedHandle) {
+  if (linkedPath) {
+    appState.assets.putLinkedBytesAt(assetId, copy, linkedPath, input, content);
+  } else if (linkedHandle) {
     appState.assets.putLinkedBytes(assetId, copy, input, content);
     void putAssetHandle(assetId, linkedHandle);
   } else {

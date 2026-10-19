@@ -61,6 +61,9 @@ export const pool = {
   'pool.relinkMismatch': '选择的文件内容与这条素材不一致，已取消（要换内容请作为新素材导入）',
   'pool.relinkUnsupported': '这个环境暂时只能重新链接图片 / 音频 / 带文件句柄的视频',
   'pool.relinked': '「{name}」已重新链接',
+  'pool.stale': '源已变化',
+  'pool.staleHint': '本机原文件在本次会话里变过。画面仍用打开时冻结的那份，重新链接或收集到工程可更新。',
+  'pool.sourceChanged': '「{name}」的本机原文件已变化，画面仍用打开时的版本',
   'pool.hint': '双击条目，或点右侧的 + 插入到播放头；条目也能直接拖到时间轴上',
   'pool.hintTypo': '双击条目置入画布中心；图片也能直接拖到画布上',
 

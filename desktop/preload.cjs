@@ -1,0 +1,54 @@
+/**
+ * desktop/preload.cjs — 桌面宿主暴露给页面的**唯一**入口。
+ *
+ * 页面拿不到 `fs` / `path` / `process`：只有这几个白名单方法。
+ * 主进程侧每个方法都有 allowlist（只有用户亲手选过的文件才可读），
+ * 协议也不认任意路径 —— 只认 token。
+ *
+ * 沙箱模式（`sandbox: true`）下 preload 只能用 `require('electron')`，
+ * 这是刻意的：多一个 Node 模块就多一个「页面能间接碰到 fs」的口子。
+ */
+
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
+
+/** 只有冒烟模式才暴露测试入口；正常启动时页面上不存在这两个键。 */
+const SMOKE = process.argv.includes('--artmatic-smoke')
+
+const api = {
+  /** 原生文件选择器：返回路径 + stat，不读字节。 */
+  pickLinked: (kind) => ipcRenderer.invoke('artmatic:pickLinked', kind),
+  /** 小文件整份读（图片 / 音频）。 */
+  readFile: (path) => ipcRenderer.invoke('artmatic:readFile', path),
+  /** 大文件按范围读（视频解码 / 指纹）。 */
+  readRange: (path, start, end) =>
+    ipcRenderer.invoke('artmatic:readRange', path, start, end),
+  stat: (path) => ipcRenderer.invoke('artmatic:stat', path),
+  /** 拖入的 File → 真实路径（Electron 32 起 `File.path` 已删除）。 */
+  pathForFile: (file) => {
+    try {
+      return webUtils && typeof webUtils.getPathForFile === 'function'
+        ? webUtils.getPathForFile(file)
+        : null
+    } catch {
+      return null
+    }
+  },
+  /** 工程包选择（`.artmatic`）。 */
+  pickArchive: () => ipcRenderer.invoke('artmatic:pickArchive'),
+  /** 监视一组本机文件（源文件变化 → 只有 stale 提示，不自动换内容）。 */
+  watch: (paths) => ipcRenderer.invoke('artmatic:watch', paths),
+  unwatch: () => ipcRenderer.invoke('artmatic:unwatch'),
+  onAssetChanged: (cb) => {
+    const fn = (_e, p) => cb(p)
+    ipcRenderer.on('artmatic:asset-changed', fn)
+    return () => ipcRenderer.removeListener('artmatic:asset-changed', fn)
+  },
+  showInFolder: (path) => ipcRenderer.invoke('artmatic:showInFolder', path),
+}
+
+if (SMOKE) {
+  api.__smokeAllow = (path) => ipcRenderer.invoke('artmatic:smokeAllow', path)
+  api.__smokeUrl = (path) => ipcRenderer.invoke('artmatic:smokeUrl', path)
+}
+
+contextBridge.exposeInMainWorld('artmaticHost', api)

@@ -71,7 +71,9 @@ for (const name of fs.readdirSync(localesDir)) {
 }
 
 // 3. 应用：入口 + 清单 + 产物
-fs.copyFileSync(path.join(__dirname, 'main.mjs'), path.join(APP, 'main.mjs'))
+for (const f of ['main.mjs', 'preload.cjs', 'host.mjs']) {
+  fs.copyFileSync(path.join(__dirname, f), path.join(APP, f))
+}
 fs.cpSync(WEB_DIST, path.join(APP, 'dist'), { recursive: true })
 fs.writeFileSync(
   path.join(APP, 'package.json'),

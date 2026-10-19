@@ -17,10 +17,26 @@
 - **测试**：单测 2808 全绿（新增 fingerprint / asset-resolve / archive / package）；
   E2E `dedupe` / `cleanup` / `linked-assets` / `package` 新增，相关 37 条全绿。
 
+- **C 段 Electron 宿主已完成**：
+  - `desktop/preload.cjs`（contextBridge 白名单）+ `desktop/host.mjs`（allowlist、
+    `artmatic-asset://` + Range/206/HEAD、IPC 读写/stat/watch/showInFolder）；
+  - `src/platform/electron.ts` 只覆盖原生路径/范围读/监视，其余复用 browser；
+  - `AssetSource.path` 全链路：`setAssetPathReader` → `open()` 分块 / `openVideo()`
+    返回 mediabunny `CustomSource` 载体 / 打包时收集；
+  - `ui/asset-watch.ts`：源文件变化只标 `stale`（媒体池「源已变化」徽标）。
+  - **打包产物实测通过**：`release/Artmatic-0.2.2-win32-x64/Artmatic.exe
+    --host-smoke --nosandbox --show` → `PASS`；带 `ARTMATIC_SMOKE_VIDEO` 时
+    7.6 MB 视频按路径 linked 导入（`mediaKind:'path'`）并打进 `.artmatic`
+    （`assets:1, bytes:7614208`）。
+  - 可复现入口：`bun run desktop:artifact` / `bun run desktop:smoke`。
+
 **未完成（下一步）**：
-- `desktop/preload.cjs` / `host.mjs`、`src/platform/electron.ts`、`artmatic-asset`
-  自定义协议 + Range、路径 linked 视频（mediabunny `CustomSource`）、文件监视。
-- 回归全量 E2E 与 Electron 冒烟；更新 `src/ui/AGENTS.md` 的工程包/徽标约定。
+- 干净机器上复测 `sandbox: true`（本机已知渲染进程崩溃，冒烟用 `--nosandbox`）。
+- 拖拽入口的 `webUtils.getPathForFile` 还没有接到 `MediaPoolDrawer` / 时间轴
+  drop（现在只有右键「导入」走原生选择器；拖拽仍回退 bundled）。
+- 图片/音频的桌面 linked 只做了单测 + 代码路径，冒烟只覆盖视频；补一条带
+  PNG/WAV 的产物冒烟。
+- 工程包导入在 Electron 仍用 `<input type=file>`（可用，但不是原生对话框）。
 
 # 本轮已完成（2026-10-19 · 0.3 加固 W1「素材生命周期」）
 

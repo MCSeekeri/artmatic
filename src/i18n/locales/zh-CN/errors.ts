@@ -76,6 +76,7 @@ export const errors = {
   'err.pack.tooLarge': '工程包解压后 {size}，超过上限 {limit}',
   'err.pack.pluginsIgnored': '已跳过包里的 {n} 个插件文件（导入他人工程不执行代码）',
   'err.pack.duplicatePath': '工程包里有重复的素材路径：{path}',
+  'err.file.readFailed': '读不了「{name}」：{detail}',
   'err.io.openFailed': '打开失败：{detail}',
   'err.io.saveFailed': '保存失败：{detail}',
 
