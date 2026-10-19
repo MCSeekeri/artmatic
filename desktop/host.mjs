@@ -249,6 +249,35 @@ export function installHost({ app, protocol, ipcMain, dialog, shell }) {
     return true
   })
 
+  /**
+   * 机器能力（容量预算的输入）。
+   *
+   * 浏览器版靠 dev / preview 服务端的 `/__capacity.json`（`scripts/capacity.mjs`
+   * 同时是个 Vite 插件），而 `app://` 下没有这个路由。不补这一条，发行版启动时
+   * 只会打一行「拿不到宿主机器能力」然后退回保守默认 —— 一台大显存机器被当成
+   * 中端机，表现是特效池 / 视频纹理缓存偏小，**且不会报错**。
+   *
+   * 测量逻辑只有一份（`scripts/capacity.mjs::probeMachine`）：dev 下走 `../scripts`，
+   * 打包后走 `resources/app/scripts`（`desktop/build.mjs` 会把这个文件带进去）。
+   */
+  let capacity = null
+  ipcMain.handle('artmatic:capacity', () => {
+    capacity ??= (async () => {
+      for (const rel of ['./scripts/capacity.mjs', '../scripts/capacity.mjs']) {
+        try {
+          const mod = await import(new URL(rel, import.meta.url))
+          if (typeof mod.probeMachine === 'function') {
+            return { machine: await mod.probeMachine(), overrides: null }
+          }
+        } catch {
+          /* 这个位置没有 / 探测抛了，换下一个 */
+        }
+      }
+      return null
+    })()
+    return capacity
+  })
+
   /*
    * 冒烟入口只在测试参数下注册。它仍然是「allow 一次 + 拿 token」，
    * 不开新能力 —— 只是把「选文件」这一步换成脚本给路径。

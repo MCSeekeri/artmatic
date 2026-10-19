@@ -52,6 +52,8 @@ const api = {
     return () => ipcRenderer.removeListener('artmatic:asset-changed', fn)
   },
   showInFolder: (path) => ipcRenderer.invoke('artmatic:showInFolder', path),
+  /** 机器能力（内存 / 显存）。`app://` 下没有 `/__capacity.json`，只能由主进程量。 */
+  capacity: () => ipcRenderer.invoke('artmatic:capacity'),
 }
 
 if (SMOKE) {

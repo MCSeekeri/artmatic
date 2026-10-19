@@ -46,13 +46,20 @@
 # 0.3 交付前复核（2026-10-19）
 
 计划（`docs/plan-0.3-hardening.md`）W0–W5 逐条核对：`bun run check` 0 error 0 warning，
-单测 2902 全绿，E2E 419 全绿。复核修掉三处漂移：
+单测 2902 全绿，E2E 419 全绿。复核修掉三处漂移 + 一处漏项：
 
 - `mcp/index.mjs` 的 `APP_VERSION` 从写死的 `0.2.2` 改成读 `package.json`（版本号
   单一真源，否则 MCP 面报的是旧版本）。
 - `MediaPool.svelte` 的 `menuTarget` 改 `$state.raw`（svelte-check 把它报成疑似漏写
   `$state`；`raw` 不做深代理，闭包语义不变）。
 - README / AGENTS 跟上报废结论：发行版是桌面壳、素材默认引用、自动保存与回收站。
+- **W5.2 第四条补上**：`probeCapacity()` 在 `app://` 下没有 `/__capacity.json`，
+  发行版会静默退回 `DEFAULT_LIMITS`。现在由主进程 `artmatic:capacity` 供给
+  （见 `docs/electron-compat.md` §8.6）。
+
+发布：`0.3.0` 便携产物 `release/Artmatic-0.3.0-win32-x64`（333 MB）。冒烟 PASS、
+探针全绿（UA `Artmatic/0.3.0`、WebGL2 + 硬编、`localFonts 800`）、1080p 端到端
+MP4 4.6 s / 48.5 MB。
 
 # 本轮已完成（2026-10-19 · 0.3 加固 W1「素材生命周期」）
 

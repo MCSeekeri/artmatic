@@ -377,3 +377,22 @@ ARTMATIC_CLOSE_ANSWER=discard → [close] dirty prompt -> discard → 进程干�
 
 打包产物上同样跑过一遍。`ARTMATIC_CLOSE_ANSWER` 只是给自动化用的旁路，
 不设它就走真实对话框。
+
+### 8.6 机器能力：`app://` 下没有 `/__capacity.json`（0.3.0 补）
+
+浏览器版的容量预算来自 dev / preview 服务端的 `/__capacity.json`（`scripts/capacity.mjs`
+同时是个 Vite 插件）。发行版里没有这个路由，于是 `probeCapacity()` 返回 null、
+`loadCapacityProfile()` 打一行 `[capacity] 拿不到宿主机器能力` 就退回 `DEFAULT_LIMITS`
+—— **不报错，只是把一台 8 GB 显存的机器当中端机用**（特效池 256 而非 512、导出内存
+512 而非 1.2 GB）。
+
+修法：`desktop/host.mjs` 加 `artmatic:capacity`（复用同一个 `probeMachine()`，
+dev 走 `../scripts`、打包后走 `resources/app/scripts`，`desktop/build.mjs` 负责带上），
+`preload.cjs` 暴露 `capacity()`，`src/platform/electron.ts` 覆盖 `probeCapacity()`。
+
+实测（RTX 4070 Laptop / 16 GB）：
+
+```
+[capacity] 来源 node+nvidia-smi｜内存 5261/16065 MB｜显存 8188 MB
+｜预算：视频 819 MB、排版 307 MB、特效池 512 MB、模拟 205 MB、导出内存 1315 MB、撤销 164 步
+```

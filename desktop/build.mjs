@@ -74,6 +74,9 @@ for (const name of fs.readdirSync(localesDir)) {
 for (const f of ['main.mjs', 'preload.cjs', 'host.mjs']) {
   fs.copyFileSync(path.join(__dirname, f), path.join(APP, f))
 }
+// 容量探测：`host.mjs` 的 `artmatic:capacity` 要 import 它（dev 走 `../scripts`）。
+fs.mkdirSync(path.join(APP, 'scripts'), { recursive: true })
+fs.copyFileSync(path.join(ROOT, 'scripts', 'capacity.mjs'), path.join(APP, 'scripts', 'capacity.mjs'))
 fs.cpSync(WEB_DIST, path.join(APP, 'dist'), { recursive: true })
 fs.writeFileSync(
   path.join(APP, 'package.json'),

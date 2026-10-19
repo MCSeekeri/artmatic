@@ -13,7 +13,7 @@
 | W2 时间轴双形态 | **完成** | `Project.sections`、`UiPrefs.timelineMode`、`AudioClip.fadeIn/fadeOut`；E2E `timeline-sections` / `timeline-modes` / `timeline-audio-fade` |
 | W3 关键帧插值 | **完成** | `Key.hOut/hIn` + 曲线编辑器浮层；E2E `curve-editor` |
 | W4 工程卫生 | **完成** | `NumericField`、`runtime-errors`、`check-bundle.mjs`；`SCHEMA_VERSION` 9 |
-| W5 桌面发行版 | **便携产物完成**，安装包 / 签名未做 | `desktop/{main,host,preload,build,smoke}`，实测见 `docs/electron-compat.md` §8 |
+| W5 桌面发行版 | **便携产物完成**，安装包 / 签名未做 | `desktop/{main,host,preload,build,smoke}`、`artmatic:capacity`、locale 裁剪；实测见 `docs/electron-compat.md` §8 |
 
 **仍未闭合（都是已知项，不是遗漏）**：
 
@@ -430,7 +430,11 @@ audio buffer 在淡变区首尾能量低于中段 —— 走离线混流，不�
 
 > **状态（2026-10-19）**：便携产物已跑通，端到端 MP4 导出 4.1 s / 48 MB 成功。
 > 实测数据与两个待复测异常见 `docs/electron-compat.md` §8。剩下的不是可行性问题，
-> 而是收尾：沙箱复测、locale 裁剪、安装包与签名。
+> 而是收尾：沙箱复测、安装包与签名。
+>
+> 0.3.0 交付前补掉了 5.2 的第四条：`probeCapacity()` 现在由主进程供给
+> （`artmatic:capacity`，见 `docs/electron-compat.md` §8.6）—— 此前发行版在
+> `app://` 下拿不到 `/__capacity.json`，会静默退回保守预算。locale 已裁到三份。
 
 调研结论见 `docs/electron-compat.md`。三条要点改变了这一波的形状：
 

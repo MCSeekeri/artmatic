@@ -6,11 +6,15 @@
  *   2. 按范围读（视频 seek / 指纹，几 GB 不整份进堆）；
  *   3. 源文件监视。
  *
- * 其余（保存 / 下载 / 剪贴板 / 容量探测 / FSA）直接复用 `browserPlatform`：
+ * 其余（保存 / 下载 / 剪贴板 / FSA）直接复用 `browserPlatform`：
  * Electron 里这些 Web API 都在，另写一份只会让两个宿主慢慢分叉。
+ *
+ * 例外是 `probeCapacity()`：浏览器版 fetch `/__capacity.json`，那是 dev / preview
+ * 服务端的路由，`app://` 下不存在 —— 不覆盖就会静默退回保守默认预算。
  */
 
 import { browserPlatform } from './browser';
+import type { MachineCapacity } from '../core/capacity';
 import type { PickedLinked, Platform } from './types';
 
 /** `desktop/preload.cjs` 暴露的形状。页面只认这一份。 */
@@ -30,6 +34,10 @@ export interface ElectronHostBridge {
   unwatch(): Promise<boolean>;
   onAssetChanged(cb: (path: string) => void): () => void;
   showInFolder(path: string): Promise<void>;
+  capacity(): Promise<{
+    machine: MachineCapacity;
+    overrides: Partial<Record<string, number>> | null;
+  } | null>;
 }
 
 const MIME: Record<string, string> = {
@@ -95,6 +103,19 @@ export function createElectronPlatform(host: ElectronHostBridge): Platform {
     readFileAt: (path) => host.readFile(path),
     statPath: (path) => host.stat(path),
     pathForFile: (file) => host.pathForFile(file),
+
+    /**
+     * 机器事实由主进程量（`os.totalmem/freemem` + 显卡探测），不走 HTTP。
+     * 拿不到就返回 null —— 上层退回 `DEFAULT_LIMITS`，与浏览器版同一条兜底。
+     */
+    async probeCapacity() {
+      try {
+        const c = await host.capacity();
+        return c?.machine ? c : null;
+      } catch {
+        return null;
+      }
+    },
 
     watchPaths(paths, onChange) {
       void host.watch([...paths]);
