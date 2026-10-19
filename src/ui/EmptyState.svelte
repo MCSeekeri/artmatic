@@ -17,17 +17,8 @@
   import Icon from './Icon.svelte';
   import { appState } from './app-state.svelte';
   import { newProject, openProjectPicker, openRecentProject } from './project-actions';
+  import { ago } from './format-time';
   import { tr } from '../i18n/index.svelte';
-
-  /** 相对时间。与 Rail 的最近工程列表同一套口径。 */
-  function ago(ts: number): string {
-    if (!ts) return '—';
-    const s = Math.floor((Date.now() - ts) / 1000);
-    if (s < 60) return tr('common.justNow');
-    if (s < 3600) return tr('common.minutesAgo', { n: Math.floor(s / 60) });
-    if (s < 86400) return tr('common.hoursAgo', { n: Math.floor(s / 3600) });
-    return tr('common.daysAgo', { n: Math.floor(s / 86400) });
-  }
 </script>
 
 <div class="empty" data-testid="empty-state">

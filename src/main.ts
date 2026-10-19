@@ -12,7 +12,11 @@
  * 这也让闸门可以保持极小的依赖（只有 i18n）。
  */
 
+import { installErrorCapture } from './ui/runtime-errors.svelte';
 import { detectCapabilityGap, renderCapabilityNotice } from './ui/capability-gate';
+
+// 必须在能力闸门之前：闸门自己抛错、平台探针失败也要能落到诊断面板里。
+installErrorCapture();
 
 interface HostBridge {
   readRange(path: string, start: number, end: number): Promise<Uint8Array>;

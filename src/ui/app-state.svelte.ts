@@ -59,6 +59,7 @@ import type { ShortcutScheme } from './shortcuts';
 import type { FsDirHandle } from '../project/fs';
 import type { AssetIssue } from '../project/ledger';
 import type { ProjectRef } from '../project/handles';
+import { rgbToHex } from '../core/color';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import { loadOpenTabs, saveOpenTabs } from '../project/open-tabs';
 import { DENSITY } from './tokens';
@@ -196,20 +197,6 @@ function normalizeDiv(v: unknown): number {
 function normalizeScale(v: unknown): number {
   const n = Number(v);
   return (PREVIEW_SCALES as readonly number[]).includes(n) ? n : 1;
-}
-
-/**
- * 0..255 的三通道 → `#rrggbb`。
- *
- * 键色在 schema 里只接受裸 hex（`validateProject` 的 `/^#[0-9a-fA-F]{6}$/`），
- * 而 `readPixels` 给的是字节 —— 这里顺手挡掉越界 / NaN，免得把坏值写进文档。
- */
-function rgbToHex(r: number, g: number, b: number): string {
-  const to2 = (n: number): string => {
-    const c = Number.isFinite(n) ? Math.max(0, Math.min(255, Math.round(n))) : 0;
-    return c.toString(16).padStart(2, '0');
-  };
-  return `#${to2(r)}${to2(g)}${to2(b)}`;
 }
 
 function loadUiPrefs(): UiPrefs {
@@ -1609,7 +1596,11 @@ class AppState {
     const x = Math.min(px.w - 1, Math.max(0, Math.floor(u * px.w)));
     const y = Math.min(px.h - 1, Math.max(0, Math.floor((1 - v) * px.h)));
     const i = (y * px.w + x) * 4;
-    const color = rgbToHex(px.data[i] ?? 0, px.data[i + 1] ?? 0, px.data[i + 2] ?? 0);
+    const color = rgbToHex({
+      r: px.data[i] ?? 0,
+      g: px.data[i + 1] ?? 0,
+      b: px.data[i + 2] ?? 0,
+    });
 
     // 一笔撤销：改了键色（必要时先补默认参数）就是一条记录。
     this.store.updateClip(clipId, tr('insp.keyPick'), (c) => {

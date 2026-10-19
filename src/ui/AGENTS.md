@@ -184,6 +184,17 @@
   不许占展示位。新增「用过了」的写入点必须调用 `rememberRecentEffect/Algo`，
   否则下次菜单顺序不变（静默、无报错）。
 
+## 参数行与全局错误
+
+- **非关键帧的「滑杆 + 数字框」只有一份实现**：`controls/NumericField.svelte`。
+  检查器烘焙入参 / 转场参数、lab 源 / 特效参数都用它；testid、宽度、tip 走 props。
+  `KeyableField` 是它的超集（多了 ◆、曲线键列表、播放头处 key 的读写），不要把两者
+  再合并成一份 props 爆炸的分派器。
+- **全局错误兜底在 `ui/runtime-errors.svelte.ts`**：`main.ts` 最早安装，底栏
+  `runtime-error` 段只显示计数，详情在 `runtime-error-modal`。同一条 message 2 秒内
+  去重；只留最近 5 条错误 + 10 条 `console.error`。诊断文本包含版本 / URL / UA，
+  由 `diagnosticText()` 生成 —— **不要在别处另拼一份**。
+
 ## 关键帧曲线编辑器（`ui/curve-editor/`，0.3 W3）
 
 - **是独立浮层，不进检查器**。曲线要同时看「时间 × 值」两维，塞进一列表单只能得到

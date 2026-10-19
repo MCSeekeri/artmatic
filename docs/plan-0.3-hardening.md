@@ -355,6 +355,42 @@ audio buffer 在淡变区首尾能量低于中段 —— 走离线混流，不�
 
 ## W4 · 工程卫生
 
+> **状态（2026-10-19）**：已按审计结果落地。计划表里有四处前提已经过时 / 不成立，按实际情况处理：
+>
+> 1. **Lab 的「未知类型渲成颜色选择器」已不存在**：`lab/LabParams.svelte` 七种类型
+>    全部显式覆盖，且没有 `{:else}` 兜底。不改。
+> 2. **体积格式化已经收口在 `core/format.ts`**（`export.ts` 只是兼容别名）；Rail 里
+>    漏网的那份 `fmtBytes` 本轮删掉，全部改用 `formatBytes`。
+> 3. **首屏 preload 实测 4 个，不是 21**：`manualChunks` 的「按字母分片」是
+>    `ui/typography/icon-library.ts` 的 `?raw` 懒加载前提（逐图标成 chunk 会顶爆
+>    safe-delete 的 500 文件阈值，第二次构建直接失败）。所以**不改规则，只加断言**。
+> 4. **`agent/types.ts` 的 12 个「零引用类型」不是死代码**：它们都是其它公开接口的
+>    字段类型（`ClipView.chain: EffectInstanceView[]` 等），删了会破坏类型图。不改。
+>
+> 已落地：
+> - 死代码：`algos/sheet.ts` 连测试一起删、`ui/export.ts::isExporting`、
+>   `algos/glyph-layout.ts` 的 `glyphIndex` / `glyphUvOrigin`、
+>   `recent-colors.ts::rememberColor` 取消 export（仍被同文件使用）。
+> - 参数行：新增 `ui/controls/NumericField.svelte`，收口 4 处
+>   `Field + Slider + NumberInput`（检查器烘焙入参 / 转场参数、lab 源 / 特效参数）。
+>   关键帧参数继续用 `KeyableField`（它是超集）。**没有抽全量 `paramControl(p)`**：
+>   四段的 testid、tip、区间默认值兜底、关键帧门禁、曲线键构造都不同，一份分派器
+>   会变成 props 爆炸；只抽结构相同的「非关键帧三件套」。
+> - 重复工具：`ago()` 收口到 `ui/format-time.ts`；颜色解析收口到 `core/color.ts`
+>   （`ui/tokens.ts` 的 `parseHex` 变成别名、`app-state` 复用 `rgbToHex`；
+>   `algos/image-fx.ts` 的 `hexToRgb01` 保留 —— 它坏值回落黑是渲染路径的业务选择）。
+> - 文案：`insp.emptyChain` 删第二句、`insp.effectEnableTip` 降为 aria 名
+>   （`insp.effectEnable`）、`app.shortcutSchemeHint` 删除、三条搜索空态提示并成
+>   `insp.pickerEmptyHint`、`insp.scaleSeparateTip` / `insp.affectDepthTip` 压缩。
+> - 全局错误兜底：`ui/runtime-errors.svelte.ts` + `main.ts` 安装；底栏常驻
+>   「运行错误 N」段，点开 Modal 看消息 / 栈 / 最近 10 条 `console.error`，
+>   可复制诊断信息（版本 / URL / UA / 错误）。
+> - 构建守卫：`scripts/check-bundle.mjs` 断言首屏 preload、entry script、
+>   lucide 分片数与 `dist/assets` 总数；`bun run build` 与 `scripts/e2e.mjs` 都跑。
+>
+> 判据：`tests/unit/color.test.ts`、`tests/e2e/runtime-errors.spec.ts`、
+> `scripts/check-bundle.mjs`；`param-row` / lab / 检查器 / 三个选择器的 E2E 全绿。
+
 可以和任何一波并行。
 
 | 项 | 位置 | 做法 |

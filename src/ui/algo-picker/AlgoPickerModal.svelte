@@ -165,7 +165,7 @@
       {#if cards.length === 0}
         <p class="ap-empty" data-testid="algo-picker-empty">
           {tr('insp.algoPickerEmpty')}
-          <br /><span class="ap-empty-hint">{tr('insp.algoPickerEmptyHint')}</span>
+          <br /><span class="ap-empty-hint">{tr('insp.pickerEmptyHint')}</span>
         </p>
       {:else}
         {#each cards as c (c.item.id)}

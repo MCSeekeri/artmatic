@@ -16,7 +16,15 @@
    * 前三条都是「画面为什么不对 / 刚才发生了什么」的解释，比提示重要。
    */
   import Icon from './Icon.svelte';
+  import Modal from './controls/Modal.svelte';
+  import Button from './controls/Button.svelte';
   import { appState } from './app-state.svelte';
+  import {
+    clearRuntimeErrors,
+    diagnosticText,
+    recentConsoleErrors,
+    runtimeErrors,
+  } from './runtime-errors.svelte';
   import { statusHint } from './status-hint.svelte';
   import { hoverHint, pickHint, sceneHint, type Hint, type HintContext } from './hints';
   import { splitKeysKeyOf } from './shortcuts';
@@ -56,13 +64,62 @@
     if (statusHint.gesture) return statusHint.gesture;
     return pickHint([hoverHint(statusHint.hover, ctx), sceneHint(ctx)]);
   });
+
+  let errorOpen = $state(false);
+  let copied = $state(false);
+
+  async function copyDiagnostics(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(diagnosticText());
+      copied = true;
+      window.setTimeout(() => (copied = false), 1500);
+    } catch {
+      /* 剪贴板不可用（http / 权限）：保留内容让用户手动选，不弹新的错误。 */
+    }
+  }
 </script>
+
+{#snippet errorFooter()}
+  <span class="dim">{copied ? tr('app.diagnosticsCopied') : ''}</span>
+  <Button
+    label={tr('app.clearErrors')}
+    variant="outline"
+    testid="runtime-error-clear"
+    onclick={() => {
+      clearRuntimeErrors();
+      errorOpen = false;
+    }}
+  />
+  <Button
+    label={tr('app.copyDiagnostics')}
+    icon="copy"
+    variant="accent"
+    testid="runtime-error-copy"
+    onclick={copyDiagnostics}
+  />
+{/snippet}
 
 <footer class="statusbar" data-testid="statusbar">
   <span class="seg project" data-testid="statusbar-project">
     <Icon name="video" size={11} />
     {project.name || tr('proj.unnamed')}
   </span>
+
+  <!--
+    未捕获错误：**常驻段**，与下面那串一次性提示并列。
+    它是「刚才那一下为什么没反应」的唯一出口；详情在 Modal 里，底栏只放计数。
+  -->
+  {#if runtimeErrors().length > 0}
+    <button
+      type="button"
+      class="seg err"
+      data-testid="runtime-error"
+      onclick={() => (errorOpen = true)}
+    >
+      <Icon name="triangle-alert" size={11} />
+      {tr('app.runtimeError', { n: runtimeErrors().length })}
+    </button>
+  {/if}
 
   <!--
     自动保存降级的**常驻**提示（W1.2）：它与下面那串一次性提示是两种东西 ——
@@ -129,6 +186,32 @@
   </span>
   <span class="seg mono dim">{appState.playT.toFixed(2)}s</span>
 </footer>
+
+{#if errorOpen}
+  <Modal
+    title={tr('app.runtimeErrorTitle')}
+    testid="runtime-error-modal"
+    width="wide"
+    footer={errorFooter}
+    onclose={() => (errorOpen = false)}
+  >
+    <p class="err-hint">{tr('app.runtimeErrorHint')}</p>
+    {#each runtimeErrors() as e (e.id)}
+      <div class="err-item" data-testid="runtime-error-item">
+        <div class="err-head">
+          <span class="mono">{e.source}</span>
+          <span class="dim">{new Date(e.at).toLocaleTimeString()}</span>
+        </div>
+        <div class="err-msg">{e.message}</div>
+        {#if e.stack}<pre class="err-stack">{e.stack}</pre>{/if}
+      </div>
+    {/each}
+    {#if recentConsoleErrors().length > 0}
+      <h4 class="err-sub">{tr('app.recentConsole')}</h4>
+      <pre class="err-stack">{recentConsoleErrors().join('\n')}</pre>
+    {/if}
+  </Modal>
+{/if}
 
 <style>
   .statusbar {
@@ -210,5 +293,57 @@
   kbd.kbd {
     border-color: var(--bar-border);
     flex-shrink: 0;
+  }
+  /* 底栏里的可点击段：去掉 button 的默认外观，只保留文字与颜色 */
+  button.err {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    font: inherit;
+    color: var(--danger);
+    cursor: pointer;
+  }
+  button.err:hover {
+    text-decoration: underline;
+  }
+  .err-hint {
+    margin: 0 0 var(--sp-3);
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .err-item {
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-2);
+    background: var(--surface-2);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+  }
+  .err-head {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2px;
+    font-size: var(--fs-xs);
+  }
+  .err-msg {
+    font-weight: 600;
+    word-break: break-word;
+  }
+  .err-stack {
+    max-height: 220px;
+    margin: var(--sp-2) 0 0;
+    padding: var(--sp-2);
+    overflow: auto;
+    background: var(--surface-1);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    font-family: 'Cascadia Code', Consolas, monospace;
+    font-size: var(--fs-xs);
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+  }
+  .err-sub {
+    margin: var(--sp-3) 0 var(--sp-2);
+    font-size: var(--fs-sm);
   }
 </style>

@@ -11,8 +11,7 @@
    * （effects 与 algos 共用），所以这里不需要知道任何一个具体特效长什么样。
    */
   import Field from '../src/ui/controls/Field.svelte';
-  import Slider from '../src/ui/controls/Slider.svelte';
-  import NumberInput from '../src/ui/controls/NumberInput.svelte';
+  import NumericField from '../src/ui/controls/NumericField.svelte';
   import Select from '../src/ui/controls/Select.svelte';
   import Checkbox from '../src/ui/controls/Checkbox.svelte';
   import BitmaskField from '../src/ui/controls/BitmaskField.svelte';
@@ -83,27 +82,18 @@
         {#each sourceParams as p (p.key)}
           <div data-testid={`lab-source-param-${p.key}`}>
             {#if p.type === 'range'}
-              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
-                <Slider
-                  value={Number(valueOf('source', p))}
-                  min={p.min}
-                  max={p.max}
-                  step={p.step}
-                  ariaLabel={resolveLabel(p.labelKey, tr)}
-                  testid={`lab-source-slider-${p.key}`}
-                  oninput={(v) => labState.setParam('source', p.key, v)}
-                />
-                <NumberInput
-                  value={Number(valueOf('source', p))}
-                  min={p.min}
-                  max={p.max}
-                  step={p.step}
-                  width={62}
-                  testid={`lab-source-num-${p.key}`}
-                  oninput={(v) => labState.setParam('source', p.key, v)}
-                  onchange={(v) => labState.setParam('source', p.key, v)}
-                />
-              </Field>
+              <NumericField
+                label={resolveLabel(p.labelKey, tr)}
+                labelWidth={78}
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                value={Number(valueOf('source', p))}
+                numberWidth={62}
+                sliderTestid={`lab-source-slider-${p.key}`}
+                numberTestid={`lab-source-num-${p.key}`}
+                oninput={(v) => labState.setParam('source', p.key, v)}
+              />
             {:else if p.type === 'select'}
               <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Select
@@ -214,27 +204,18 @@
         {#each effectParams as p (p.key)}
           <div data-testid={`lab-effect-param-${p.key}`}>
             {#if p.type === 'range'}
-              <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
-                <Slider
-                  value={Number(valueOf('effect', p))}
-                  min={p.min}
-                  max={p.max}
-                  step={p.step}
-                  ariaLabel={resolveLabel(p.labelKey, tr)}
-                  testid={`lab-effect-slider-${p.key}`}
-                  oninput={(v) => labState.setParam('effect', p.key, v)}
-                />
-                <NumberInput
-                  value={Number(valueOf('effect', p))}
-                  min={p.min}
-                  max={p.max}
-                  step={p.step}
-                  width={62}
-                  testid={`lab-effect-num-${p.key}`}
-                  oninput={(v) => labState.setParam('effect', p.key, v)}
-                  onchange={(v) => labState.setParam('effect', p.key, v)}
-                />
-              </Field>
+              <NumericField
+                label={resolveLabel(p.labelKey, tr)}
+                labelWidth={78}
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                value={Number(valueOf('effect', p))}
+                numberWidth={62}
+                sliderTestid={`lab-effect-slider-${p.key}`}
+                numberTestid={`lab-effect-num-${p.key}`}
+                oninput={(v) => labState.setParam('effect', p.key, v)}
+              />
             {:else if p.type === 'select'}
               <Field label={resolveLabel(p.labelKey, tr)} labelWidth={78}>
                 <Select

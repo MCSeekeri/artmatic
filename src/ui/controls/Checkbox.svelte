@@ -11,12 +11,22 @@
   interface Props {
     checked: boolean;
     label?: string;
+    /** 图标型复选框（没有可见 label）的无障碍名。缺省用 label。 */
+    ariaLabel?: string;
     disabled?: boolean;
     tipText?: string;
     testid?: string;
     onchange: (v: boolean) => void;
   }
-  const { checked, label, disabled = false, tipText, testid, onchange }: Props = $props();
+  const {
+    checked,
+    label,
+    ariaLabel,
+    disabled = false,
+    tipText,
+    testid,
+    onchange,
+  }: Props = $props();
 
   function toggle(): void {
     if (disabled) return;
@@ -37,7 +47,7 @@
   tabindex={disabled ? -1 : 0}
   aria-checked={checked}
   aria-disabled={disabled}
-  aria-label={label}
+  aria-label={ariaLabel ?? label}
   data-exempt
   data-testid={testid}
   use:tip={{ text: tipText ?? label ?? '', disabled: !tipText }}

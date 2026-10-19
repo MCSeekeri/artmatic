@@ -42,6 +42,12 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
   - `tests/unit/popover.test.ts` 的 `computePreviewPosition` —— 菜单预览浮层在任何
     翻边情况下都不能与菜单面板相交。`tests/e2e/insert-menu.spec.ts` 有一条真界面
     回归（靠右右键 → 二级左翻 → 悬停预览）。
+  - `tests/unit/color.test.ts` —— `hexToRgb` / `rgbToHex` 的坏值回落（NaN 不能写进
+    hex）。`tests/e2e/runtime-errors.spec.ts` —— 未捕获错误 / rejection 必须能落到底栏，
+    详情 Modal 可清空。
+  - `scripts/check-bundle.mjs` —— 构建产物守卫（首屏 preload / lucide 分片 /
+    `dist/assets` 总数）。`bun run build` 与 `scripts/e2e.mjs` 都会跑；改构建配置后
+    先看它的输出。
     ⚠️ **空转探针红旗**：任何「两个配置 hash 不同」的断言，前面必须先有一条
     `meanAt > 阈值` —— 否则两张黑图不同也会「通过」。
 

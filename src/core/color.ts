@@ -27,9 +27,11 @@ export function colorVec3(hex: string): [number, number, number] {
  * 排版配色方案的**明暗变体**需要「只改亮度、不动色相/饱和度」——
  * 这是 Office 主题色变体的实测行为（见 typography/theme.ts 的说明）。
  *
- * `ui/tokens.ts` 里另有一份 `parseHex` / `rgbToHsl` / `hslToRgb`：那是给
- * 界面主题（品牌色/语义色）派生用的，带它自己的 clamp 约定。两份暂时并存，
- * 但**新增的颜色数学一律放这里** —— core 层不依赖 UI，反过来才成立。
+ * `ui/tokens.ts` 的 `parseHex` 现在只是 `hexToRgb` 的别名（2026-10-19 收口）；
+ * 它的 `rgbToHsl` / `hslToRgb` 仍是给界面主题派生用的独立实现（带自己的 clamp
+ * 约定）。**新增的颜色数学一律放这里** —— core 层不依赖 UI，反过来才成立。
+ * `algos/image-fx.ts::hexToRgb01` 刻意保留：它只认 `#rrggbb`、坏值回落黑，
+ * 那是渲染路径的业务选择，不能合并成 `hexToRgba`（后者坏值画品红）。
  */
 
 export interface Rgb {
@@ -60,8 +62,12 @@ export function hexToRgb(hex: string): Rgb | null {
 }
 
 export function rgbToHex(c: Rgb): string {
+  // NaN / Infinity 一律落到 0：吸管读像素时 `data[i]` 可能越界（`?? 0` 只挡
+  // undefined，不挡 NaN），让 `toString(16)` 产出 `NaN` 会写进文档的坏 hex。
   const h = (v: number): string =>
-    Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+    (Number.isFinite(v) ? Math.max(0, Math.min(255, Math.round(v))) : 0)
+      .toString(16)
+      .padStart(2, '0');
   return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
 }
 

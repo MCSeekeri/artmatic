@@ -40,7 +40,7 @@ export const inspector = {
   'insp.scaleY': '缩放 Y',
   /* 默认联动：拖任一轴两轴一起变；勾上这个才拆成两个独立轴。 */
   'insp.scaleSeparate': '分离 XY',
-  'insp.scaleSeparateTip': '默认 X / Y 联动：拖动任一轴，另一轴跟着变成同一个值。勾选后各自独立（只影响基准值，关键帧始终独立）。',
+  'insp.scaleSeparateTip': '勾选后 X / Y 各自独立；关键帧始终各自独立。',
   'insp.rotate': '旋转',
 
   /* 来源说明：算法生成器 / 图片素材。 */
@@ -84,8 +84,8 @@ export const inspector = {
   'insp.reorderEffect': '调整特效顺序',
   'insp.editEffectParam': '修改特效参数',
   'insp.toggleEffect': '切换特效',
-  'insp.effectEnableTip': '启用 / 禁用这个特效实例',
-  'insp.emptyChain': '空链：从上面添加特效。特效只作用于它下方的轨道。',
+  'insp.effectEnable': '启用 / 禁用这个特效实例',
+  'insp.emptyChain': '空链：从上面添加特效。',
   'insp.fxOrderHint': '从上到下依次处理画面：拖动左侧把手可以改顺序。',
   /* 特效链的折叠 / 排序（链的顺序就是合成顺序）。 */
   'insp.dragEffect': '拖动调整顺序（上面的先作用于画面）',
@@ -96,8 +96,7 @@ export const inspector = {
 
   /* 影响深度（`EffectClip.affectDepth`）。语义见 engine/stack.ts 的文件头。 */
   'insp.affectDepth': '影响深度',
-  'insp.affectDepthTip':
-    '只作用于下方最近的 N 条启用轨道；0 = 下方全部。作用域内的画面先独立合成、再由特效处理，所以它看不到作用域之外的轨道。',
+  'insp.affectDepthTip': '只作用于下方最近的 N 条启用轨道；0 = 下方全部。',
   'insp.affectDepthAll': '影响下方所有轨道。',
   'insp.affectDepthTracks': '影响：{names}',
   'insp.affectDepthEmpty': '下方没有启用的视觉轨，这个特效作用在空画面上。',
@@ -122,7 +121,7 @@ export const inspector = {
   'insp.pickerApplyN': '保存并应用（{n}）',
   'insp.pickerApplyTip': '按选择顺序追加到特效链末尾',
   'insp.pickerNone': '没有符合条件的特效。',
-  'insp.pickerNoneHint': '少勾几个条件，或换个搜索词。',
+  'insp.pickerEmptyHint': '换个搜索词试试；也可以少勾几个筛选条件。',
   'insp.pickerHitCount': '{n} 个特效',
 
   /* ------------------------------------------------ 算法生成器选择器 */
@@ -140,7 +139,6 @@ export const inspector = {
   'insp.algoPickerCurrent': '当前',
   'insp.algoPickerHit': '{n} 个生成器',
   'insp.algoPickerEmpty': '没有符合条件的生成器。',
-  'insp.algoPickerEmptyHint': '换个搜索词试试。',
   'insp.algoPickerSortDefault': '默认顺序',
 
   /* ------------------------------------------------ 片段动作 */
@@ -200,7 +198,6 @@ export const inspector = {
   'insp.transitionPickerSelected': '当前选择：{name}',
   'insp.transitionPickerHit': '{n} 条转场',
   'insp.transitionPickerEmpty': '没有符合条件的转场。',
-  'insp.transitionPickerEmptyHint': '换个搜索词，或按作者查。',
   'insp.transitionPickerSortName': '名称',
   'insp.transitionPickerSortAuthor': '作者',
   /* 按上游 id 排 —— 知道 gl-transitions 命名的人用它对齐文档。 */

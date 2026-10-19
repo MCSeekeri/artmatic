@@ -215,7 +215,7 @@
       {#if cards.length === 0}
         <p class="fxp-none" data-testid="effect-picker-none">
           {tr('insp.pickerNone')}
-          <br /><span class="fxp-none-hint">{tr('insp.pickerNoneHint')}</span>
+          <br /><span class="fxp-none-hint">{tr('insp.pickerEmptyHint')}</span>
         </p>
       {:else}
         {#each cards as c (c.item.id)}

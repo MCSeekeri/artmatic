@@ -29,6 +29,8 @@
   import { theme } from './theme.svelte';
   import { SHORTCUT_GROUPS } from './shortcuts';
   import { tr } from '../i18n/index.svelte';
+  import { formatBytes } from '../core/format';
+  import { ago } from './format-time';
   import {
     cleanupOrphanFiles,
     clearProjectTrash,
@@ -59,25 +61,6 @@
     void panel;
     return { count: appState.assets.ids().length, bytes: appState.assets.totalBytes() };
   });
-
-  function fmtBytes(n: number): string {
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  }
-
-  /**
-   * 相对时间。`Date.now()` 在这里是合规的：它是**界面显示**，不是渲染求值 ——
-   * 硬约束 1.1 管的是「任何渲染函数不得接收 Date.now()」，这条路径不参与出帧。
-   */
-  function ago(ts: number): string {
-    if (!ts) return '—';
-    const s = Math.floor((Date.now() - ts) / 1000);
-    if (s < 60) return tr('common.justNow');
-    if (s < 3600) return tr('common.minutesAgo', { n: Math.floor(s / 60) });
-    if (s < 86400) return tr('common.hoursAgo', { n: Math.floor(s / 3600) });
-    return tr('common.daysAgo', { n: Math.floor(s / 86400) });
-  }
 
   const exporting = $derived(appState.exportProgress !== null);
 
@@ -149,14 +132,14 @@
     if (action === 'trash-all') {
       return {
         title: tr('app.trashAll'),
-        message: tr('app.trashAllConfirm', { n: unused.length, size: fmtBytes(unusedBytes) }),
+        message: tr('app.trashAllConfirm', { n: unused.length, size: formatBytes(unusedBytes) }),
         label: tr('app.trashAll'),
       };
     }
     if (action === 'delete-all') {
       return {
         title: tr('app.deleteAll'),
-        message: tr('app.deleteAllConfirm', { n: unused.length, size: fmtBytes(unusedBytes) }),
+        message: tr('app.deleteAllConfirm', { n: unused.length, size: formatBytes(unusedBytes) }),
         label: tr('app.deleteAll'),
       };
     }
@@ -165,7 +148,7 @@
         title: tr('app.clearTrash'),
         message: tr('app.clearTrashConfirm', {
           n: usage?.trashCount ?? 0,
-          size: fmtBytes(usage?.trashBytes ?? 0),
+          size: formatBytes(usage?.trashBytes ?? 0),
         }),
         label: tr('app.clearTrash'),
       };
@@ -174,7 +157,7 @@
       title: tr('app.cleanupOrphans'),
       message: tr('app.cleanupOrphansConfirm', {
         n: usage?.orphanCount ?? 0,
-        size: fmtBytes(usage?.orphanBytes ?? 0),
+        size: formatBytes(usage?.orphanBytes ?? 0),
       }),
       label: tr('app.cleanupOrphans'),
     };
@@ -384,7 +367,7 @@
       </span>
       <span>{tr('app.assets')}</span>
       <span class="mono" data-testid="project-assets">
-        {tr('app.assetCount', { n: assetInfo.count, size: fmtBytes(assetInfo.bytes) })}
+        {tr('app.assetCount', { n: assetInfo.count, size: formatBytes(assetInfo.bytes) })}
       </span>
     </div>
 
@@ -415,17 +398,17 @@
         <h3>{tr('app.storageUsage')}</h3>
         <div class="usage">
           <span>{tr('app.usageProject')}</span>
-          <span class="mono">{fmtBytes(usage.projectBytes)}</span>
+          <span class="mono">{formatBytes(usage.projectBytes)}</span>
           <span>{tr('app.usageUnused')}</span>
-          <span class="mono">{fmtBytes(usage.unusedBytes)}</span>
+          <span class="mono">{formatBytes(usage.unusedBytes)}</span>
           {#if appState.projectDir}
             <span>{tr('app.usageTrash')}</span>
             <span class="mono" data-testid="usage-trash">
-              {tr('app.assetCount', { n: usage.trashCount, size: fmtBytes(usage.trashBytes) })}
+              {tr('app.assetCount', { n: usage.trashCount, size: formatBytes(usage.trashBytes) })}
             </span>
             <span>{tr('app.usageOrphans')}</span>
             <span class="mono" data-testid="usage-orphans">
-              {tr('app.assetCount', { n: usage.orphanCount, size: fmtBytes(usage.orphanBytes) })}
+              {tr('app.assetCount', { n: usage.orphanCount, size: formatBytes(usage.orphanBytes) })}
             </span>
           {/if}
         </div>
@@ -460,7 +443,7 @@
     {#if unused.length}
       <section class="setting">
         <h3>{tr('app.unusedAssets')}</h3>
-        <p class="unused-hint">{tr('app.unusedAssetsHint', { n: unused.length, size: fmtBytes(unusedBytes) })}</p>
+        <p class="unused-hint">{tr('app.unusedAssetsHint', { n: unused.length, size: formatBytes(unusedBytes) })}</p>
         {#if unused.length > 1}
           <div class="row wrap">
             {#if appState.projectDir}
@@ -482,7 +465,7 @@
         {#each unused as u (u.id)}
           <div class="unused" data-testid="unused-asset" data-asset-id={u.id}>
             <span class="grow">{u.name}</span>
-            <span class="mono dim">{fmtBytes(u.bytes)}</span>
+            <span class="mono dim">{formatBytes(u.bytes)}</span>
             <Button
               label={tr('app.unusedRestore')}
               variant="outline"

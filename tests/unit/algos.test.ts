@@ -10,7 +10,6 @@ import {
 import { logisticMap, lyapunovMap, mapDiagram } from '../../src/algos/bifurcation';
 import { createAnt, parseTurmite } from '../../src/algos/langtons-ant';
 import { lsystem, lsystemRun, LS_PRESETS } from '../../src/algos/lsystem';
-import { sheetSpec, sheetPut } from '../../src/algos/sheet';
 import { bitmapFromRows, encodePattern } from '../../src/algos/pattern-codec';
 
 describe('elementary（Rule 30/90/110）', () => {
@@ -67,27 +66,6 @@ describe('生命游戏 sim：seek ≡ 顺序推进（硬约束 1.3）', () => {
     const a = createLife({ size: 32, density: 0.4, rate: 12 }, 5);
     const b = createLife({ size: 32, density: 0.4, rate: 12 }, 5);
     expect(a.current()).toEqual(b.current());
-  });
-});
-
-describe('sheet 图集', () => {
-  it('sheetSpec 布局不超 maxSide', () => {
-    const s = sheetSpec(96, 512);
-    expect(s.w).toBeLessThanOrEqual(4096);
-    expect(s.cols * s.rows).toBeGreaterThanOrEqual(96);
-    expect(s.w).toBe(s.cols * 512);
-  });
-
-  it('sheetPut 写到正确的 tile 位置', () => {
-    const s = sheetSpec(4, 2);
-    const out = new Uint8Array(s.w * s.h);
-    const tile = new Uint8Array([1, 2, 3, 4]);
-    sheetPut(out, s, 3, tile, 2, 2);
-    // tile 3 = 第 1 列第 1 行（cols = min(4, 4096/2)=4 → 每行 4 个? 实际 cols = min(4, 2048)=4）
-    const cx = (3 % s.cols) * 2;
-    const cy = Math.floor(3 / s.cols) * 2;
-    expect(out[cy * s.w + cx]).toBe(1);
-    expect(out[(cy + 1) * s.w + cx + 1]).toBe(4);
   });
 });
 

@@ -28,6 +28,7 @@
 
 /** 只借类型，不引运行时 —— tokens 保持「纯数据 + 纯函数」的定位。 */
 import type { MessageKey } from '../i18n/locales';
+import { hexToRgb, rgbToHex } from '../core/color';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -450,24 +451,7 @@ function clamp01(v: number): number {
 }
 
 /** 解析 `#rgb` / `#rrggbb`（大小写与 `#` 均可省）。失败返回 null。 */
-export function parseHex(hex: string): { r: number; g: number; b: number } | null {
-  let s = hex.trim().replace(/^#/, '');
-  if (s.length === 3) s = s[0]! + s[0]! + s[1]! + s[1]! + s[2]! + s[2]!;
-  if (!/^[0-9a-fA-F]{6}$/.test(s)) return null;
-  return {
-    r: parseInt(s.slice(0, 2), 16),
-    g: parseInt(s.slice(2, 4), 16),
-    b: parseInt(s.slice(4, 6), 16),
-  };
-}
-
-function toHex(r: number, g: number, b: number): string {
-  const h = (v: number): string =>
-    Math.round(clamp01(v / 255) * 255)
-      .toString(16)
-      .padStart(2, '0');
-  return `#${h(r)}${h(g)}${h(b)}`;
-}
+export const parseHex = hexToRgb;
 
 export function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
   const rn = r / 255;
@@ -537,7 +521,7 @@ export const ACCENT_MIN_CONTRAST = 4.5;
 
 function rampFromHsl(h: number, s: number, l: number, mode: ThemeMode): AccentRamp {
   const base = hslToRgb(h, s, l);
-  const hex = toHex(base.r, base.g, base.b);
+  const hex = rgbToHex(base);
 
   const strong = hslToRgb(h, clamp01(s * 1.02), clamp01(mode === 'light' ? l - 0.1 : l + 0.09));
   // weak 是「选中底」这类极淡填充：亮色下提亮降饱和，暗色下压暗降饱和。
@@ -549,8 +533,8 @@ function rampFromHsl(h: number, s: number, l: number, mode: ThemeMode): AccentRa
 
   return {
     accent: hex,
-    accentStrong: toHex(strong.r, strong.g, strong.b),
-    accentWeak: toHex(weak.r, weak.g, weak.b),
+    accentStrong: rgbToHex(strong),
+    accentWeak: rgbToHex(weak),
     accentBorder: hex,
     accentOn: onWhite >= onInk ? '#ffffff' : PRIMITIVES['neutral-1000']!,
   };
@@ -573,10 +557,7 @@ export function accentRampFromHex(hex: string, mode: ThemeMode): AccentRamp {
 
   // 饱和度兜底：全灰的输入也能出一条合法的 ramp（退化为灰阶强调色）。
   const sat = Math.max(s, 0.28);
-  const hexAt = (ll: number): string => {
-    const c = hslToRgb(h, sat, ll);
-    return toHex(c.r, c.g, c.b);
-  };
+  const hexAt = (ll: number): string => rgbToHex(hslToRgb(h, sat, ll));
 
   const ok = (ll: number): boolean => contrastRatio(hexAt(ll), surface) >= ACCENT_MIN_CONTRAST;
 

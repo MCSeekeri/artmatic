@@ -48,10 +48,6 @@ export function totalFrames(): number {
   return Math.max(1, Math.ceil(p.duration * p.fps));
 }
 
-export function isExporting(): boolean {
-  return appState.exportProgress !== null;
-}
-
 /**
  * 本机是否**存在** WebCodecs。
  *

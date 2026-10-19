@@ -43,6 +43,9 @@ let server = null;
 try {
   console.log('[e2e] vite build …');
   await run(node, ['node_modules/vite/bin/vite.js', 'build']);
+  // 构建产物守卫：首屏 preload / lucide 分片数。E2E 每次都跑，避免「测试绿、
+  // 产物悄悄膨胀」—— 它不依赖浏览器，失败会直接中断在起 preview 之前。
+  await run(node, ['scripts/check-bundle.mjs']);
   if (!reuse) {
     console.log('[e2e] 启动 vite preview …');
     server = spawn(node, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'ignore' });

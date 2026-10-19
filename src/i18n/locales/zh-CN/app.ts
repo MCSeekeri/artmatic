@@ -236,7 +236,16 @@ export const app = {
   /* —— 操作习惯 —— */
   'app.shortcutScheme': '快捷键方案',
   'app.shortcutSplit': '切分片段',
-  'app.shortcutSchemeHint': '各方案之间只有「切分片段」的按键不同，其余按键完全一致。',
+
+  /* —— 运行错误兜底 —— */
+  'app.runtimeError': '运行错误 {n}',
+  'app.runtimeErrorTitle': '运行错误',
+  'app.runtimeErrorHint':
+    '这些错误不会中断编辑，但可能意味着某块界面或渲染没有正常工作。复制诊断信息可以帮助定位。',
+  'app.copyDiagnostics': '复制诊断信息',
+  'app.diagnosticsCopied': '已复制',
+  'app.recentConsole': '最近的 console.error',
+  'app.clearErrors': '清空',
 
   /* —— 编辑器行为 —— */
   'app.overlapBehavior': '片段重叠行为',

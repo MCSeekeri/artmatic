@@ -35,14 +35,4 @@ export function glyphLayout(cell = 32): GlyphLayout {
   return { cols, rows, cell: c };
 }
 
-/** 码点 → 图集里的格坐标（`-1` 表示不在图集内）。 */
-export function glyphIndex(code: number, layout: GlyphLayout): { x: number; y: number } | null {
-  const i = code - ASCII_FIRST;
-  if (i < 0 || i >= layout.cols * layout.rows) return null;
-  return { x: i % layout.cols, y: Math.floor(i / layout.cols) };
-}
 
-/** 格坐标 → UV 原点的**左下角**（GL 纹理原点，与 `vUv` 同向）。 */
-export function glyphUvOrigin(ix: number, iy: number, layout: GlyphLayout): { u0: number; v0: number } {
-  return { u0: ix / layout.cols, v0: iy / layout.rows };
-}

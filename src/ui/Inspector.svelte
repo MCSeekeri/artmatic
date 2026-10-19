@@ -8,6 +8,7 @@
   import Field from './controls/Field.svelte';
   import IconButton from './controls/IconButton.svelte';
   import NumberInput from './controls/NumberInput.svelte';
+  import NumericField from './controls/NumericField.svelte';
   import PatternField from './controls/PatternField.svelte';
   import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
@@ -739,27 +740,17 @@
                 <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
               {:else}
                 <!-- 烘焙入参：改了要重烘，所以不能打关键帧（每帧重烘会卡死） -->
-                <Field label={resolveLabel(p.labelKey, tr)} tipText={tr('insp.bakedParamTip', { label: resolveLabel(p.labelKey, tr) })}>
-                  <Slider
-                    min={p.min}
-                    max={p.max}
-                    step={p.step}
-                    value={Number(clip.source.params[p.key] ?? p.defaultValue)}
-                    ariaLabel={resolveLabel(p.labelKey, tr)}
-                    testid="bake-param-slider"
-                    oninput={(v) => setAlgoParam(clip, p.key, v)}
-                  />
-                  <NumberInput
-                    value={Number(clip.source.params[p.key] ?? p.defaultValue)}
-                    min={p.min}
-                    max={p.max}
-                    step={p.step}
-                    width={64}
-                    testid="bake-param-number"
-                    oninput={(v) => setAlgoParam(clip, p.key, v)}
-                    onchange={(v) => setAlgoParam(clip, p.key, v)}
-                  />
-                </Field>
+                <NumericField
+                  label={resolveLabel(p.labelKey, tr)}
+                  tipText={tr('insp.bakedParamTip', { label: resolveLabel(p.labelKey, tr) })}
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  value={Number(clip.source.params[p.key] ?? p.defaultValue)}
+                  sliderTestid="bake-param-slider"
+                  numberTestid="bake-param-number"
+                  oninput={(v) => setAlgoParam(clip, p.key, v)}
+                />
               {/if}
             {:else if p.type === 'select'}
               <Field label={resolveLabel(p.labelKey, tr)}>
@@ -946,26 +937,16 @@
                 />
               </Field>
             {:else}
-              <Field label={p.label}>
-                <Slider
-                  min={p.min ?? 0}
-                  max={p.max ?? 1}
-                  step={p.step ?? 0.01}
-                  value={Number(trRef.values[p.key] ?? p.defaultValue)}
-                  ariaLabel={p.label}
-                  testid={`transition-param-${p.key}`}
-                  oninput={(v) => setTransitionParam(clip, p.key, v)}
-                />
-                <NumberInput
-                  value={Number(trRef.values[p.key] ?? p.defaultValue)}
-                  min={p.min ?? 0}
-                  max={p.max ?? 1}
-                  step={p.step ?? 0.01}
-                  width={64}
-                  testid={`transition-param-num-${p.key}`}
-                  onchange={(v) => setTransitionParam(clip, p.key, v)}
-                />
-              </Field>
+              <NumericField
+                label={p.label}
+                min={p.min ?? 0}
+                max={p.max ?? 1}
+                step={p.step ?? 0.01}
+                value={Number(trRef.values[p.key] ?? p.defaultValue)}
+                sliderTestid={`transition-param-${p.key}`}
+                numberTestid={`transition-param-num-${p.key}`}
+                oninput={(v) => setTransitionParam(clip, p.key, v)}
+              />
             {/if}
           {/each}
 
@@ -1099,7 +1080,7 @@
               />
               <Checkbox
                 checked={inst.enabled}
-                tipText={tr('insp.effectEnableTip')}
+                ariaLabel={tr('insp.effectEnable')}
                 testid="effect-enabled"
                 onchange={(v) =>
                   upd(clip, tr('insp.toggleEffect'), (c) => {

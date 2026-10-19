@@ -31,8 +31,8 @@ export function loadRecentColors(): string[] {
   }
 }
 
-/** 记一次使用：去重（忽略大小写）、最新在前、截断到上限。 */
-export function rememberColor(color: string): void {
+/** 记一次使用：去重（忽略大小写）、最新在前、截断到上限。只被同文件的 `rememberRecentColor` 调。 */
+function rememberColor(color: string): void {
   const c = color.trim().toLowerCase();
   if (!HEX.test(c) || typeof localStorage === 'undefined') return;
   const next = [c, ...loadRecentColors().filter((x) => x !== c)].slice(0, RECENT_COLOR_LIMIT);

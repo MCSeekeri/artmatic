@@ -180,7 +180,7 @@
       {#if cards.length === 0 && !showNone}
         <p class="trp-empty" data-testid="transition-picker-empty">
           {tr('insp.transitionPickerEmpty')}
-          <br /><span class="trp-empty-hint">{tr('insp.transitionPickerEmptyHint')}</span>
+          <br /><span class="trp-empty-hint">{tr('insp.pickerEmptyHint')}</span>
         </p>
       {/if}
     </div>

@@ -526,7 +526,6 @@
           <span class="set-td muted">{tr('app.shortcutSplit')}</span>
           <span class="set-td mono">{tr(currentScheme.splitKeysKey)}</span>
         </div>
-        <p class="set-note">{tr('app.shortcutSchemeHint')}</p>
       {:else}
         <div class="set-row">
           <span class="set-lbl">
