@@ -31,6 +31,7 @@
 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -39,7 +40,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { Bridge } from './bridge.mjs';
 import { TOOL_BY_NAME, checkFrameRange, checkIdInList, listToolDescriptors, validateArgs } from './tools.mjs';
 
-const APP_VERSION = '0.2.2';
+/** 与内核同源：`package.json` 是版本号唯一真源（`vite.config.ts` 也读它）。 */
+const APP_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 /** 网关自己的版本：与控制平面（`CONTROL_API_VERSION`）分开演进。 */
 const GATEWAY_VERSION = 1;
 

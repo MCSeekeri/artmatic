@@ -120,14 +120,14 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 | 文案 / i18n | 自研 `src/i18n/`，无第三方库 |
 | 测试 | Playwright（E2E）+ vitest（**只测纯函数**） |
 
-**打包分发：安装包 / 签名 / 自动更新仍不做。** `desktop/` 现在是**真正的宿主**
+**发行版是桌面壳，安装包 / 签名 / 自动更新仍不做。** `desktop/` 是**真正的宿主**
 （`preload.cjs` + `host.mjs`）：`bun run desktop` 起壳，`desktop:probe` 跑能力探针，
 `desktop:artifact` 打免安装便携目录，`desktop:smoke` 在打包产物里验 preload / IPC /
 `artmatic-asset://` 的 Range（可配 `ARTMATIC_SMOKE_VIDEO` 验路径 linked 视频 + 打包）。
 `src/platform/electron.ts` 只覆盖浏览器做不到的三件事（原生路径、按范围读、文件监视），
 其余直接复用 `browserPlatform`；页面拿不到 `fs`，主进程只认用户选过的路径 + token。
 结论见 `docs/electron-compat.md`（官方构建自带专有编解码器，**不需要**塞 ffmpeg）。
-分发仍走纯静态 / 将来的 PWA。
+Web 版（`bun run build` 的 `dist/`）自此定位为**开发与试玩**，不再追 Firefox / Safari 适配。
 
 ---
 

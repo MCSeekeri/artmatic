@@ -1,8 +1,8 @@
 /**
  * desktop/build.mjs — 打一个**免安装的便携目录**，不引 electron-builder。
  *
- * 产物：release/Artmatic-win32-x64/Artmatic.exe
- *   resources/app/{main.mjs, package.json, dist/}
+ * 产物：release/Artmatic-<version>-win32-x64/Artmatic.exe
+ *   resources/app/{main.mjs, preload.cjs, host.mjs, package.json, dist/}
  *
  * 为什么不用 electron-builder：这一步只是「让现有 web 产物在桌面壳里真的跑起来」，
  * 需要的是可复现、可 diff 的最小结构。安装包 / 签名 / 自动更新属于发行流程，

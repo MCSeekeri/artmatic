@@ -43,6 +43,17 @@
   PNG/WAV 的产物冒烟。
 - 工程包导入在 Electron 仍用 `<input type=file>`（可用，但不是原生对话框）。
 
+# 0.3 交付前复核（2026-10-19）
+
+计划（`docs/plan-0.3-hardening.md`）W0–W5 逐条核对：`bun run check` 0 error 0 warning，
+单测 2902 全绿，E2E 419 全绿。复核修掉三处漂移：
+
+- `mcp/index.mjs` 的 `APP_VERSION` 从写死的 `0.2.2` 改成读 `package.json`（版本号
+  单一真源，否则 MCP 面报的是旧版本）。
+- `MediaPool.svelte` 的 `menuTarget` 改 `$state.raw`（svelte-check 把它报成疑似漏写
+  `$state`；`raw` 不做深代理，闭包语义不变）。
+- README / AGENTS 跟上报废结论：发行版是桌面壳、素材默认引用、自动保存与回收站。
+
 # 本轮已完成（2026-10-19 · 0.3 加固 W1「素材生命周期」）
 
 按 `docs/plan-0.3-hardening.md` 的 W1（三个子阶段，沿用 W0 的「文件不销毁」前提）：

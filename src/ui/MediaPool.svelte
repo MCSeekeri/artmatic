@@ -132,12 +132,16 @@
   /** ⋯ 菜单开在哪个条目上（非 null 时渲染菜单）。只用于**渲染**。 */
   let menuFor = $state<{ item: PoolItem; anchor: HTMLElement } | null>(null);
   /**
-   * 菜单当前作用的条目。**普通变量，不是 $state** —— 这是刻意的：
+   * 菜单当前作用的条目。**不能从 `menuFor` 派生**：
    * `Menu.activate()` 是「先 `onclose()` 再跑 `onselect()`」（见 controls/Menu.svelte），
    * 那时 `menuFor` 已经是 null。闭包里读 `menuFor.item`（或模板里用 `{@const}`
    * 从它派生）都会在那一刻抛 TypeError —— 表现是「点菜单项什么都不发生」。
+   *
+   * `$state.raw` 而不是普通 `let`：模板不读它（只供闭包），但 svelte-check 会把
+   * 「在组件里重新赋值的普通变量」报成疑似漏写 `$state`。`raw` 不做深代理，
+   * `PoolItem` 保持导入时那个对象，语义与普通变量一致。
    */
-  let menuTarget: PoolItem | null = null;
+  let menuTarget = $state.raw<PoolItem | null>(null);
   /**
    * 待确认的移除。**引用数在按下那一刻算一次**并存在这里 ——
    * 弹窗期间工程还能被改（另一只手在拖片段），实时重算会让文案在用户眼皮底下跳。

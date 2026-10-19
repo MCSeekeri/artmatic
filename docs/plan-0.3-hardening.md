@@ -4,6 +4,25 @@
 > 目标不是加功能，是**把边界关上**：素材不再全量驻留内存、删除不再等于销毁、
 > 崩溃不再等于丢工作，然后补两处基本盘（段落 / 插值）。
 
+## 状态（2026-10-19 复核）
+
+| Wave | 状态 | 证据 |
+|---|---|---|
+| W0 止血 | **完成** | `saveProject` 去掉删除段、`checkImportSize`、`saveBeforeExport`、`plugin_try` 审批、`MP4_CODEC_LADDER`；E2E `project` / `media-pool` / `export-mp4` / `agent-in-app` |
+| W1 素材生命周期 | **完成** | `AssetSource = file / handle / path / bytes`、`writeStreamAtomic`、`project/autosave.ts`、`retained` + `assets/.trash/`；单测 `asset-store` / `autosave` / `project-ledger` / `project-io`，E2E `autosave` |
+| W2 时间轴双形态 | **完成** | `Project.sections`、`UiPrefs.timelineMode`、`AudioClip.fadeIn/fadeOut`；E2E `timeline-sections` / `timeline-modes` / `timeline-audio-fade` |
+| W3 关键帧插值 | **完成** | `Key.hOut/hIn` + 曲线编辑器浮层；E2E `curve-editor` |
+| W4 工程卫生 | **完成** | `NumericField`、`runtime-errors`、`check-bundle.mjs`；`SCHEMA_VERSION` 9 |
+| W5 桌面发行版 | **便携产物完成**，安装包 / 签名未做 | `desktop/{main,host,preload,build,smoke}`，实测见 `docs/electron-compat.md` §8 |
+
+**仍未闭合（都是已知项，不是遗漏）**：
+
+1. 干净机器上复测 `sandbox: true`（本机渲染进程崩溃，产物冒烟带 `--nosandbox`）。
+2. 图片 / 音频走 linked 时仍整份读回（视频已按范围读）。真正的修法是流式解码，不在本轮。
+3. 工程包导入在桌面壳里仍用 `<input type=file>`，不是原生对话框。
+4. 缩放没有「按小节对齐」的台阶（W2 状态里有理由）；时间轴不画关键帧曲线。
+
+
 ## 0. 先修正三条前置判断
 
 | 自检时的说法 | 修正后 |
