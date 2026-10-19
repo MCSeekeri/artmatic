@@ -1,9 +1,22 @@
 /**
  * llm/types.ts — 模型层的线格式与事件类型。
  *
- * 这里刻意**贴着 OpenAI Chat Completions 的线格式**（`role` / `content` /
- * `tool_calls` / `tool_call_id`），不另造一套抽象：DeepSeek 是 OpenAI 兼容的，
- * 换 baseUrl 就能接别的服务，多一层映射只会多一处 bug。
+ * ## 为什么历史消息继续用 OpenAI 形状
+ *
+ * `WireMessage`（`role` / `content` / `tool_calls` / `tool_call_id`）是**内部表示**，
+ * 不是「我们只支持 OpenAI」。选它当历史格式的理由：
+ *
+ *   1. `trimMessages` / `recentTail` / `estimateMessagesTokens` 全靠 `role` 与
+ *      `tool_call_id` 的邻接关系判断「哪里能切」，换一套中性模型要把这些纯函数
+ *      连同 5 条单测一起重写，收益只是「看起来更抽象」。
+ *   2. `role:'tool'` 是无损表示。Anthropic 的「tool_result 塞进 user content」
+ *      是**确定性折叠**，出站时做一次就够，不需要在历史里长期维持两套形状。
+ *   3. DeepSeek 的请求体可以做到**逐字节不变**（`tests/unit/fixtures/
+ *      deepseek-request.golden.json` 钉着），因为 OpenAI 序列化器对没有内部字段的
+ *      消息是恒等映射。换成中性模型后这个锚点就没了。
+ *
+ * 代价：`WireMessage` 从此有**内部字段**（`providerMeta`），任何代码都不许直接
+ * `JSON.stringify(messages)` 上线，必须走 `protocol/` 的适配器。
  *
  * 一条硬约束（来自官方文档）：**Chat Completions 下图片只能出现在 `user`
  * 消息里**。工具结果（`role:'tool'`）只能带文本，所以截图要在工具轮结束后
@@ -13,38 +26,39 @@
 /* ------------------------------------------------------------------ 配置 */
 
 /**
- * 思考强度（DeepSeek 原生 `reasoning_effort`）。
+ * 思考强度（界面上的四档）。
  *
- * 官方实际只有 **low / high / max** 三档（`minimal→low`、`medium→high`、
- * `xhigh→high`、`ultra→max`），`off` 走 `thinking:{type:'disabled'}`。
- * 这里直接用原生三档 + 关闭，不再把档位翻译成提示词。
+ * 这是**UI 词汇**，不是任何一家的原生参数：`off` 在 DeepSeek 是
+ * `thinking:{type:'disabled'}`，在 OpenAI 是「干脆不发 `reasoning_effort`」，
+ * 在 Anthropic 是不发 `thinking`。翻译全部发生在
+ * `providers/reasoning.ts::thinkingParamsFor` —— 那是唯一一处。
  */
 export type ReasoningEffort = 'off' | 'low' | 'high' | 'max';
 
 export interface LlmConfig {
-  /** `https://api.deepseek.com`（不带 `/chat/completions`）。 */
+  /** 注册表里的 provider id（决定端点、鉴权、思考形态、代理路由）。 */
+  providerId: string;
+  /** 有效 baseUrl（不带 `/chat/completions`）。自定义服务商时由用户填。 */
   baseUrl: string;
   apiKey: string;
-  /** `deepseek-flash`（原生多模态）。 */
   model: string;
-  /** 采样温度。**DeepSeek 忽略它**（不报错），保留给自定义兼容服务。 */
+  /** 采样温度。部分推理模型会忽略或拒绝（见 `ModelRule.temperature`）。 */
   temperature: number;
-  /** 输出上限。省略 = 服务端默认。 */
+  /** 输出上限。省略 = 服务端默认（Anthropic 例外：它是必填项）。 */
   maxTokens?: number;
-  /**
-   * 思考强度。**原生参数**，不是提示词：`off` → `thinking:{type:'disabled'}`；
-   * 其余 → `thinking:{type:'enabled'}` + `reasoning_effort: 'low'|'high'|'max'`。
-   */
+  /** 思考强度。**原生参数**，不是提示词 —— 见 `providers/reasoning.ts`。 */
   effort: ReasoningEffort;
   /**
    * 直连失败时的同源兜底路径。`null` = 不兜底。
    *
-   * 由 `vite.config.ts` 的 `llmProxy()` 中间件提供（dev 与 preview 都注册）。
+   * 由 `vite.config.ts` 的 `llmProxy()` 中间件提供（dev 与 preview 都注册），
+   * 实际路径是 `<proxyPath>/<providerId>/<端点>`。
    */
   proxyPath: string | null;
 }
 
 export const DEFAULT_LLM_CONFIG: LlmConfig = {
+  providerId: 'deepseek',
   baseUrl: 'https://api.deepseek.com',
   apiKey: '',
   model: 'deepseek-flash',
@@ -65,18 +79,47 @@ export interface WireToolCall {
   function: { name: string; arguments: string };
 }
 
+/**
+ * 不透明载荷：协议要求**原样回传**、但我们不该解释的东西。
+ *
+ *   anthropic-blocks     Anthropic 的 thinking / redacted_thinking 块。
+ *                        `signature` 是密码学校验，改一个字节下一轮就 400；
+ *                        `redacted_thinking` 连 `signature` 都没有，只有 `data`。
+ *   openrouter-details   OpenRouter 的 `reasoning_details[]`（带 format / index / signature）。
+ *
+ * 存进历史、出站时由适配器决定用不用。**session 只写不读**。
+ */
+export type AnthropicBlock =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown };
+
+export type ReasoningRaw =
+  | { kind: 'anthropic-blocks'; blocks: AnthropicBlock[] }
+  | { kind: 'openrouter-details'; details: unknown[] };
+
+/** 挂在消息上的内部元数据。**任何序列化器都必须剥掉它**。 */
+export interface WireProviderMeta {
+  /** 产出这条消息的 provider。切家之后旧载荷不该被回传给新家。 */
+  providerId: string;
+  reasoning?: ReasoningRaw;
+}
+
 export interface WireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content?: string | WirePart[] | null;
   tool_calls?: WireToolCall[];
   tool_call_id?: string;
   /**
-   * 思维链。**携带 `tools` 的请求必须完整回传**（官方文档：漏传 = 400），
-   * 即使该轮没有实际发起工具调用。`session` 在构造 assistant 消息时回填。
+   * 思维链**文本**。带 `tools` 请求时 DeepSeek 要求每一轮都回传（漏传 = 400），
+   * 所以 session 无条件写；至于发不发，由适配器按 provider 的 `echo` 策略决定。
    */
   reasoning_content?: string;
   /** 部分兼容服务要求 tool 消息带函数名；DeepSeek 不要求，带上无害。 */
   name?: string;
+  /** 内部字段，见 `WireProviderMeta`。**不上线**。 */
+  providerMeta?: WireProviderMeta;
 }
 
 export interface LlmUsage {
@@ -98,6 +141,8 @@ export interface ChatResult {
   toolCalls: ToolCallResult[];
   usage: LlmUsage | null;
   finishReason: string | null;
+  /** 需要原样回传的不透明载荷（Anthropic 块 / OpenRouter details）。 */
+  reasoningRaw?: ReasoningRaw;
 }
 
 /* ------------------------------------------------------------------ 错误 */
@@ -111,7 +156,13 @@ export type LlmErrorCode =
   | 'timeout'
   | 'cancelled'
   | 'bad-response'
-  | 'server';
+  | 'server'
+  /** 传输路径不可用（例如 provider 禁止浏览器直连、又没配代理）。 */
+  | 'transport'
+  /** 上下文超限：要**压缩**，不能像普通 400 那样清空历史。 */
+  | 'context'
+  /** 这个 provider / 模型组合不支持当前操作。 */
+  | 'unsupported';
 
 export class LlmError extends Error {
   constructor(

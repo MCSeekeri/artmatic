@@ -22,6 +22,7 @@
   import PluginApprovalCard from './PluginApprovalCard.svelte';
   import AskUserCard from './AskUserCard.svelte';
   import ReasoningBlock from './ReasoningBlock.svelte';
+  import ProviderLogo from './ProviderLogo.svelte';
   import { agentState, type AgentEffort } from './agent-state.svelte';
   import { appState } from '../app-state.svelte';
   import { DENSITY } from '../tokens';
@@ -47,15 +48,17 @@
   const MAX_IMAGES = 4;
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-  /** 可切换的模型（也允许在设置里填任意兼容服务的模型名）。 */
-  const MODELS = ['deepseek-flash', 'deepseek-chat'];
-
-  const EFFORTS: { id: AgentEffort; key: 'agent.effort.off' | 'agent.effort.low' | 'agent.effort.high' | 'agent.effort.max' }[] = [
-    { id: 'off', key: 'agent.effort.off' },
-    { id: 'low', key: 'agent.effort.low' },
-    { id: 'high', key: 'agent.effort.high' },
-    { id: 'max', key: 'agent.effort.max' },
-  ];
+  /*
+   * 模型与思考档位**都从注册表派生**（`agentState.modelPresets` / `agentState.efforts`）。
+   * 写一份常量在这里的后果是：换了提供商之后菜单还列着上一家的模型，
+   * 点下去得到 404 —— 而「列表里有」看起来就像「应该能用」。
+   */
+  const EFFORT_LABEL: Record<AgentEffort, 'agent.effort.off' | 'agent.effort.low' | 'agent.effort.high' | 'agent.effort.max'> = {
+    off: 'agent.effort.off',
+    low: 'agent.effort.low',
+    high: 'agent.effort.high',
+    max: 'agent.effort.max',
+  };
 
   /* ------------------------------------------------------------- 发送 */
 
@@ -346,9 +349,7 @@
     }
   });
 
-  const effortKey = $derived(
-    EFFORTS.find((e) => e.id === agentState.prefs.effort)?.key ?? 'agent.effort.high',
-  );
+  const effortKey = $derived(EFFORT_LABEL[agentState.prefs.effort]);
   const totalTokens = $derived(
     agentState.usage ? agentState.usage.prompt + agentState.usage.completion : 0,
   );
@@ -548,11 +549,11 @@
     {#if attachments.length}
       <div class="attachments">
         {#each attachments as a, i (a.url)}
-          <div class="thumb">
+          <div class="agent-thumb">
             <img src={a.url} alt={a.name} />
             <button
               type="button"
-              class="thumb-x"
+              class="agent-thumb-x"
               aria-label={tr('agent.removeImage')}
               data-testid="agent-remove-image"
               onclick={() => removeAttachment(i)}
@@ -565,40 +566,54 @@
     {/if}
 
     {#if menuOpen}
-      <div class="menu" bind:this={menuEl} data-testid="agent-composer-menu">
-        <div class="menu-label">{tr('agent.composer.model')}</div>
-        {#each MODELS as m (m)}
+      <div class="agent-menu" bind:this={menuEl} data-testid="agent-composer-menu">
+        {#each agentState.modelPresets as m (m)}
           <button
             type="button"
-            class="menu-item"
-            class:active={agentState.prefs.model === m}
+            class="agent-menu-item"
+            class:active={agentState.model === m}
             data-testid={`agent-model-option-${m}`}
             onclick={() => {
-              agentState.setPrefs({ model: m });
+              agentState.setModel(m);
               menuOpen = false;
             }}
           >
-            <span class="grow">{m}</span>
-            {#if agentState.prefs.model === m}<Icon name="check" size={11} />{/if}
+            <span class="agent-grow">{m}</span>
+            {#if agentState.model === m}<Icon name="check" size={11} />{/if}
           </button>
         {/each}
-        <div class="menu-sep"></div>
-        <div class="menu-label">{tr('agent.composer.effort')}</div>
-        {#each EFFORTS as e (e.id)}
+        <div class="agent-menu-sep"></div>
+        <div class="agent-menu-label">{tr('agent.composer.effort')}</div>
+        {#each agentState.efforts as e (e)}
           <button
             type="button"
-            class="menu-item"
-            class:active={agentState.prefs.effort === e.id}
-            data-testid={`agent-effort-option-${e.id}`}
+            class="agent-menu-item"
+            class:active={agentState.prefs.effort === e}
+            data-testid={`agent-effort-option-${e}`}
             onclick={() => {
-              agentState.setPrefs({ effort: e.id });
+              agentState.setPrefs({ effort: e });
               menuOpen = false;
             }}
           >
-            <span class="grow">{tr(e.key)}</span>
-            {#if agentState.prefs.effort === e.id}<Icon name="check" size={11} />{/if}
+            <span class="agent-grow">{tr(EFFORT_LABEL[e])}</span>
+            {#if agentState.prefs.effort === e}<Icon name="check" size={11} />{/if}
           </button>
         {/each}
+        <div class="agent-menu-sep"></div>
+        <!-- 换提供商在设置里做（那里有分组与品牌图）；这里只留一个入口。 -->
+        <button
+          type="button"
+          class="agent-menu-item"
+          data-testid="agent-menu-provider"
+          onclick={() => {
+            menuOpen = false;
+            agentState.openSettings();
+          }}
+        >
+          <ProviderLogo id={agentState.prefs.providerId} size={13} />
+          <span class="agent-grow">{tr(agentState.provider.labelKey)}</span>
+          <Icon name="chevron-right" size={11} />
+        </button>
       </div>
     {/if}
 
@@ -640,7 +655,8 @@
           aria-expanded={menuOpen}
           onclick={() => (menuOpen = !menuOpen)}
         >
-          <span class="model-name">{agentState.prefs.model}</span>
+          <ProviderLogo id={agentState.prefs.providerId} size={12} />
+          <span class="model-name">{agentState.model}</span>
           <span class="sep">·</span>
           <span class="effort">{tr(effortKey)}</span>
           <Icon name="chevron-up" size={10} />
@@ -657,7 +673,7 @@
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
             <circle class="track" cx="8" cy="8" r={CTX_R} />
             <circle
-              class="fill"
+              class="agent-ring-fill"
               cx="8"
               cy="8"
               r={CTX_R}
@@ -1087,7 +1103,7 @@
     stroke: var(--border);
     stroke-width: 2;
   }
-  .ctx-ring .fill {
+  .ctx-ring .agent-ring-fill {
     fill: none;
     /* 关键：让弧从 12 点方向开始（配合 rotate(-90)） */
     stroke: currentColor;
@@ -1145,11 +1161,11 @@
     padding: 0 2px var(--sp-2);
     overflow-x: auto;
   }
-  .thumb {
+  .agent-thumb {
     position: relative;
     flex-shrink: 0;
   }
-  .thumb img {
+  .agent-thumb img {
     display: block;
     width: 48px;
     height: 48px;
@@ -1157,7 +1173,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
   }
-  .thumb-x {
+  .agent-thumb-x {
     position: absolute;
     top: -5px;
     right: -5px;
@@ -1174,7 +1190,7 @@
     cursor: pointer;
   }
 
-  .menu {
+  .agent-menu {
     position: absolute;
     left: 0;
     bottom: calc(100% + 4px);
@@ -1185,14 +1201,14 @@
     border-radius: var(--radius-sm);
     z-index: 3;
   }
-  .menu-label {
+  .agent-menu-label {
     padding: 2px var(--sp-2);
     color: var(--text-muted);
     font-size: 10px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-  .menu-item {
+  .agent-menu-item {
     display: flex;
     align-items: center;
     width: 100%;
@@ -1205,19 +1221,19 @@
     text-align: left;
     cursor: pointer;
   }
-  .menu-item:hover {
+  .agent-menu-item:hover:not(.active) {
     background: var(--surface-hover);
     color: var(--text-primary);
   }
-  .menu-item.active {
+  .agent-menu-item.active {
     color: var(--accent);
   }
-  .menu-sep {
+  .agent-menu-sep {
     height: 1px;
     margin: var(--sp-2) 0;
     background: var(--border);
   }
-  .grow {
+  .agent-grow {
     flex: 1;
     min-width: 0;
     overflow: hidden;

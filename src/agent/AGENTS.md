@@ -87,33 +87,53 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 
 ## 模型运行时（`llm/`）
 
+分层：`transport`（fetch / SSE 取帧 / 直连降级）→ `protocol/*`（请求体 · 鉴权 ·
+流式归约）→ `session`（工具循环）→ `executor`（控制平面）。
+
+- **协议只有两种**：`openai`（Chat Completions，覆盖 15 家）与 `anthropic`
+  （Messages）。差异全部在 `providers/registry.ts` 的数据里，别在适配器里写
+  `if (providerId === ...)` —— **`session.ts` 里一个 provider 分支都不许有**。
+- 新增一家 = 往 `PROVIDERS` 加一条 + 一张 logo（`src/assets/providers/<id>.svg`）。
+  端点 / 思考形态 / 回传策略 / 代理白名单 / UI 下拉全部由这条数据派生。
+  自检：`tests/unit/agent-providers.test.ts` 的注册表守卫。
 - **手写 SSE**（不引 SDK）：`delta.tool_calls[i].function.arguments` 是**分片**，
-  按 `index` 累积再拼。
-- **思考强度是原生参数**：`thinking` + `reasoning_effort`（low/high/max），
-  不要把它写成提示词。
-- **`reasoning_content` 必须回传**：请求带 `tools` 时，每一轮 assistant 消息都要
-  带上该 Turn 的思维链（没有就空串）。漏传 = 400，这是官方硬要求。
-- **图片只能出现在 user 消息**（Chat Completions 的限制）。截图在工具轮结束后
-  以一条 user 消息注入；工具结果只带文本。
+  按 `index` 累积再拼。Anthropic 的 `partial_json` / `signature` 同理，
+  且 `signature` 是**追加到块上**而不是拼进正文。
+- **思考参数有五形态**（`thinking` / `enable_thinking`+`thinking_budget` /
+  `reasoning_effort` / `reasoning.effort` / `thinking.budget_tokens`），
+  翻译**只在** `providers/reasoning.ts::thinkingParamsFor`。UI 档位固定四档，
+  不要把档位写成提示词。
+- **「关不掉思考」是模型级的**（GLM 5.3 / MiniMax M3）：传 `disabled` 直接 400。
+  写在 `ModelRule.alwaysThinking` 上，UI 据此隐藏「关闭」档。
+- **思维链回传策略是 per-provider 的** `thinking.echo`：
+  `required`（DeepSeek 带 tools 漏传 = 400、Anthropic 的 signature 必须原样）、
+  `optional`、`never`（智谱明确不回传）。判据在适配器的 `serializeMessages`，
+  session 只管把 `reasoning_content` 与 `providerMeta` 写进历史。
+- **`WireMessage` 是内部表示**，`providerMeta`（Anthropic 的 thinking 块、
+  OpenRouter 的 `reasoning_details`）**绝不上线**，任何序列化器都要剥掉它。
+- **图片只能出现在 user 消息**。不支持图片的模型（`ModelRule.noImages`）要
+  **跳过注入**，否则模型会凭空描述画面。截图在工具轮结束后以一条 user 消息注入。
 - `t` 是秒；工具表里帧号字段一律带 `Frame`。
-- 直连失败（CORS / 网络）→ 同一个 `preferProxy` 记忆切到 `/__llm`；
-  已经吐过字之后**不重试**（会重放半截回答）。
+- 传输：**先直连**，在收到第一个字节之前失败才切 `<proxyPath>/<providerId>/<端点>`。
+  `preferProxy` 按 provider 记忆。已经吐过字之后**不重试**（会重放半截回答）。
+  OpenAI 官方端点拒绝带 `Origin` 的请求，`transport.browserDirect: false` 只走代理。
+- **响应必须是 `text/event-stream`**：静态站点会把 `/__llm/*` 回落成 200 + HTML，
+  没有这条守卫时表现为「一条空回答且没有任何错误」。
 - **重复调用先引导、别掐断**：同一个「工具 + 参数」第 3 / 6 次把引导**附加在
-  那条 tool 结果末尾**（换参数 / 读结果 / 用 `ask_user`），第 12 次才判死。
-  ⚠️ 不能插 system 消息：DeepSeek 带 tools 时会 400，且坏历史会让之后每条都 400。
-- **400 自愈**：`bad-response + 400` 之后清空模型历史（UI 消息保留）并提示；
-  错误卡片显示响应体，历史面板可导出 JSON 日志。
-- `ask_user` 是 **appOnly** 工具：由 session 直接拦截并向 UI 要答案（`onAskUser`），
-  不经过控制平面、不写 MCP（网关没有「正在看着面板的人」）。
-- **上下文管理**：窗口按 1M token 计；75% 时用同一个模型（不带 tools）把前半段
-  压成交接说明，保留最近 8 条（从 user 边界切）。用量优先取服务端 usage；
-  面板环形进度条读 `context` 事件。硬裁剪是兜底，**绝不能切在 assistant/tool
-  之间**（孤立 `tool_call_id` = 400）。
+  那条 tool 结果末尾**，第 12 次才判死。⚠️ 不能插 system 消息（DeepSeek 带 tools
+  会 400，且坏历史会让之后每条都 400）。
+- **400 自愈**：`bad-response + 400` 之后清空模型历史并提示。**上下文超限例外**
+  （归 `context`）：那是装不下，不是历史被污染 —— 压缩，不要清空。
+- `ask_user` 是 **appOnly** 工具：由 session 直接拦截并向 UI 要答案（`onAskUser`）。
+- **上下文窗口按 `(provider, model)` 取**（`contextLimitOf`，从 32k 到 1M）；
+  75% 时用同一个模型（不带 tools）把前半段压成交接说明，保留最近 8 条。
+  硬裁剪兜底，**绝不能切在 assistant/tool 之间**。
 - `AbortController` 贯穿请求；单请求超时 300s。
-- 步数默认 200、上限 2000（`MAX_STEPS` / `MAX_STEPS_LIMIT`）：真实的刹车是
-  重复调用阶梯、`stop()` 与服务端错误，不是步数。
-- Key 只存 `localStorage` 的 `artmatic.agent`，**不进 `project.json`**；
-  设置面板要如实说明「本机脚本能读到」。
+- 步数默认 200、上限 2000（`MAX_STEPS` / `MAX_STEPS_LIMIT`）。
+- **配置**：`agent-prefs.ts` 是纯函数层（迁移 / 解析），`agent-state.svelte.ts`
+  只负责接到 `$state` 上。key / 模型 / 端点**按 provider 各存一份**，只覆盖与
+  注册表不同的部分。Key 只存 `localStorage` 的 `artmatic.agent`，**不进
+  `project.json`**；`sessionOnly` 在落盘时剥掉所有 key。
 
 ## 测试
 

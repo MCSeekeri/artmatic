@@ -174,6 +174,11 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   ],
   // Worker 侧回包，只会进 bake-client.ts 的 console.error。
   'algos/bake.worker.ts': ['未知生成器 ${msg.genId}'],
+  /*
+   * 错误体里的中文关键词：腾讯 / 百度的「余额不足」提示本来就是中文，它们是
+   * **匹配模式**而不是界面文案 —— 不进 `tr()`，用户看到的是 `agent.llm.balance`。
+   */
+  'agent/llm/providers/errors.ts': ['账户余额', '余额不足'],
   // 同理：SnapshotRing 的「第 0 帧不见了」。它在正常路径上**不可达** ——
   // 构造函数就放了第 0 帧，而抽稀显式跳过它。只有别人绕过 API 掏了内部 Map
   // 才会抛。属于「代码被改坏了」的诊断，不是用户能看到的提示。

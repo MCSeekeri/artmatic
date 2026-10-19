@@ -659,22 +659,27 @@ export interface OpenAiTool {
   function: { name: string; description: string; parameters: Record<string, unknown> };
 }
 
+/**
+ * 一个工具参数的 JSON Schema（`type:'object'`）。
+ *
+ * 抽出来是因为 **Anthropic 也要用**：它的 `input_schema` 与 OpenAI 的 `parameters`
+ * 是同一份东西，只是外面套的壳不同。写两份的话，某个参数的 `enum` / `required`
+ * 迟早只有一边更新。
+ */
+export function toolParameters(spec: ToolSpec): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const param of spec.params) {
+    properties[param.key] = paramSchema(param);
+    if (param.required) required.push(param.key);
+  }
+  return { type: 'object', properties, required, additionalProperties: false };
+}
+
 /** Chat Completions 的 `tools` 数组。 */
-export function openAiTools(): OpenAiTool[] {
-  return AGENT_TOOLS.map((t) => {
-    const properties: Record<string, unknown> = {};
-    const required: string[] = [];
-    for (const param of t.params) {
-      properties[param.key] = paramSchema(param);
-      if (param.required) required.push(param.key);
-    }
-    return {
-      type: 'function' as const,
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: { type: 'object', properties, required, additionalProperties: false },
-      },
-    };
-  });
+export function openAiTools(specs: readonly ToolSpec[] = AGENT_TOOLS): OpenAiTool[] {
+  return specs.map((t) => ({
+    type: 'function' as const,
+    function: { name: t.name, description: t.description, parameters: toolParameters(t) },
+  }));
 }

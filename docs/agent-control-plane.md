@@ -748,11 +748,17 @@ plugin_list / plugin_discard / plugin_remove / plugin_source
 ### 10.5 应用内模型运行时（`src/agent/llm/`）
 
 ```
-provider.ts  Chat Completions + 手写 SSE（delta.tool_calls 按 index 累积）
-transport   直连 api.deepseek.com；收到第一个字节前失败 → /__llm 同源代理
-session.ts  消息历史 / 工具循环 / 事务 / 取消 / 上下文裁剪 / 截图注入
-executor.ts 工具名 → 控制平面调用（唯一的应用内映射表）
+transport.ts  fetch / SSE 取帧 / 直连 → 代理降级 / content-type 守卫（零协议知识）
+protocol/*    两套协议：openai（Chat Completions）· anthropic（Messages）
+              每种 = buildBody / headers / endpoint / 消息序列化 / 流式归约 / 错误归一
+providers/*   16 家的数据：端点 · 鉴权 · 思考形态 · 回传策略 · 模型规则 · 代理白名单
+session.ts    消息历史 / 工具循环 / 事务 / 取消 / 上下文裁剪 / 截图注入
+executor.ts   工具名 → 控制平面调用（唯一的应用内映射表）
 ```
+
+协议差异与「待实测」清单写在 `docs/provider-matrix.md`。**`session.ts` 里不许有
+任何 provider 分支** —— 那条线一旦破，加第 17 家时必然漏一处，而漏掉的表现通常
+是「某家用到工具的第二轮才 400」。
 
 - **一轮 = 一笔撤销**：session 用 `beginTx` / `endTx` 包住整轮；
   配套修了 `CommandStack.commit` —— 事务打开时它**只通知界面、不单独入栈**。
@@ -761,22 +767,23 @@ executor.ts 工具名 → 控制平面调用（唯一的应用内映射表）
   合成一条 user 消息注入，`role:'tool'` 只带文本。若将来要「工具输出里带图」，
   得换 Responses API（`input_image` 可出现在 `function_call_output`）。
 - **代理只在 dev / preview 存在**（`scripts/llm-proxy.mjs`，与 `capacityEndpoint`
-  同一范式两侧注册）。只转发 `/__llm/chat/completions`，不透传日志、不落 key。
-- **思考是原生的**：`thinking:{type:'enabled'|'disabled'}` + `reasoning_effort`
-  （low / high / max；`medium` 在服务端映射成 high，所以 UI 只给原生三档 + 关闭）。
-  强度**不写成提示词**。
-- **`reasoning_content` 必须回传**：请求带了 `tools` 时，官方要求每一轮
-  （含没有实际工具调用的轮次）都把该 Turn 的思维链完整带回，漏传 = 400。
-  assistant 消息**无条件**带该字段（没有思维链时是空串），中途开关思考也不会
-  让历史消息缺字段。
+  同一范式两侧注册）。路径 `/__llm/<providerId>/<端点>`，转发目标取自注册表
+  （`PROXY_ROUTES` 由它派生，不手写第二份），不透传日志、不落 key。
+- **思考是原生的**，但五家写法不同（`thinking` / `enable_thinking`+`thinking_budget` /
+  `reasoning_effort` / `reasoning.effort` / `thinking.budget_tokens`）。UI 固定四档，
+  翻译只在 `providers/reasoning.ts::thinkingParamsFor`。**强度不写成提示词**。
+- **思维链要不要回传是 per-provider 的**（`thinking.echo`）：DeepSeek 与 Anthropic
+  必须回（漏 = 400），智谱明确不回，其余可选。Anthropic 还要连 `signature` 与块序
+  一起原样回传 —— 这条丢了**第一轮完全正常，用工具的第二轮才 400**。
 - 重复调用是**阶梯**：同工具同参数第 3 / 6 次把引导**附加在那条 tool 结果末尾**
   （不能插 system 消息 —— DeepSeek 带 tools 时会 400 并污染后续历史），第 12 次才停。
-- **上下文管理**：窗口按 1M token 计，75% 触发压缩 —— 用同一个模型（不带 tools）
+- **上下文管理**：窗口按 `(provider, model)` 取（`contextLimitOf`，32k 到 1M），
+  75% 触发压缩 —— 用同一个模型（不带 tools）
   把前半段压成交接说明，保留最近 8 条（从 user 边界切）。面板发送按钮左侧常驻
   环形进度（用量优先取服务端 `usage.prompt_tokens`）。
 - **400 自愈**：请求被 400 拒绝后自动清空模型历史（UI 记录保留）并给出提示，
-  下一次发送不会继续 400。错误卡片会显示响应体（reasoning_content / 工具配对的
-  线索都在里面）。
+  下一次发送不会继续 400。**上下文超限例外**（归 `context`）：那是装不下不是历史
+  被污染 —— 触发压缩，清空等于把用户的会话删了。错误卡片会显示响应体。
 - `AbortController` 贯穿请求与循环；单请求超时 300s。
 
 ### 10.6 面板（`src/ui/agent/`）
@@ -799,11 +806,15 @@ executor.ts 工具名 → 控制平面调用（唯一的应用内映射表）
   `ask_user` 弹问答卡，回答作为 tool result 回给模型（`appOnly`，MCP 不声明）。
 - 截图卡点击放大；插件审批卡可展开看源码。
 - 一轮结束时在消息流末尾显示 token / 用时 / 修改数与「撤销本轮」。
-- 配置（Key / 模型 / baseUrl / 温度 / 最大步数 / 思考 / 截图回传 / 隐私与插件风险）
+- 配置（提供商 / Key / 模型 / 端点 / 温度 / 最大步数 / 思考 / 截图回传 / 隐私与插件风险）
   是**根级独立 modal**（`AgentSettingsModal`，挂在 `App.svelte` 的 `.page` 上），
   不在抽屉里内联展开：抽屉带 `z-index`，modal 挂进去会被右侧检查器盖住遮罩；
   根级也顺带保证两个视图只有一个实例。Key 存 `localStorage` 的 `artmatic.agent`，
   **不进 `project.json`**；面板如实说明「本机脚本能读到它」。
+- **提供商列表带品牌图**（`ProviderLogo` + `assets/providers/`），按国内 / 国外 /
+  自定义分组。用选择列表而不是下拉：17 家挤进自绘下拉既没有分组线索，也放不进图。
+  Key / 模型 / 端点**按 provider 各存一份**（`agent-prefs.ts`），来回切不互相覆盖。
+  抽屉里的模型菜单与思考档位也从注册表派生，换家之后不会残留上一家的模型名。
 
 ### 10.7 测试
 
@@ -817,6 +828,12 @@ executor.ts 工具名 → 控制平面调用（唯一的应用内映射表）
 - E2E `tests/e2e/agent-in-app.spec.ts`：用 `page.route` 伪造 SSE（不需要真 Key），
   覆盖「读场景 → 加片段 → 撤销本轮」「排版加元素 → 截图 → 布局 → 撤销」
   「坏着色器 → 结构化 issue → 好源码进注册表」「安装需要确认」。
+- E2E `tests/e2e/agent-providers.spec.ts`：切到 Anthropic 之后请求真的打
+  `/v1/messages`（且一条都不许漏去 `/chat/completions`）、用工具的第二轮把
+  `thinking` 块连 `signature` 一起带回去、代理只放行注册表里的 provider。
+- 单测 `tests/unit/agent-providers.test.ts`（注册表守卫 / 思考矩阵 / 错误归一 /
+  配置迁移 / 代理路径解析）与 `tests/unit/agent-protocol.test.ts`
+  （DeepSeek 请求体 golden · 两个协议的序列化与流式归约）。
 - 真 Key 冒烟脚本与日志放 `.codebuddy/tmp/<日期>/`，不提交。
 
 ### 10.8 已知限制 / 下一轮

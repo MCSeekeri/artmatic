@@ -31,9 +31,11 @@
 
 import { tr } from '../../i18n/index.svelte';
 import type { AgentControlPlane } from '../control-plane';
-import { TOOL_BY_NAME, openAiTools, type ToolSpec } from '../tools';
+import { AGENT_TOOLS, TOOL_BY_NAME, type ToolSpec } from '../tools';
 import { SUMMARY_SYSTEM, SYSTEM_PROMPT, summaryRequest } from './prompt';
-import { LLM_TIMEOUT_MS, streamChat, parseToolArguments } from './provider';
+import { LLM_TIMEOUT_MS, streamChat } from './transport';
+import { parseToolArguments } from './tool-args';
+import { contextLimitOf, supportsImages } from './providers/registry';
 import type { ToolExecutor } from './executor';
 import {
   LlmError,
@@ -58,7 +60,9 @@ export const MAX_STEPS = 200;
 export const MAX_STEPS_LIMIT = 2000;
 /** 上下文里保留的消息字符预算（粗算，中文按 1 字 ≈ 1 token）。 */
 /**
- * 上下文窗口（token）。DeepSeek 当前是 1M；压缩阈值 75%。
+ * 默认上下文窗口（token）。**只是兜底**：真正生效的值来自
+ * `providers/registry.ts::contextLimitOf(config)` —— 各家的窗口从 32k 到 1M
+ * 不等，写死一个数会让压缩永不触发（然后在跑到一半时 400）。
  *
  * 这是**估算**：真实用量以服务端返回的 `usage.prompt_tokens` 为准，只有它缺席
  * （例如压缩后的第一轮）才回落到「字符数 / 2.5」。
@@ -238,6 +242,8 @@ export class AgentSession {
   private contextTokens = 0;
   /** 最近一次失败（导出日志时带出去，便于排查 400）。 */
   lastError: { code: string; message: string; status?: number; detail?: string } | null = null;
+  /** 「这个模型收不了图片」只提示一次，别每轮刷屏。 */
+  private warnedImages = false;
 
   constructor(private readonly opts: SessionOptions) {
     // 思考强度走原生参数（见 provider 的 thinkingParams），系统提示不随档位变。
@@ -255,11 +261,16 @@ export class AgentSession {
   }
 
   get context(): { tokens: number; limit: number } {
-    return { tokens: this.contextTokens, limit: CONTEXT_LIMIT_TOKENS };
+    return { tokens: this.contextTokens, limit: this.limit() };
+  }
+
+  /** 当前 (provider, model) 的上下文窗口。切换模型后立刻生效。 */
+  private limit(): number {
+    return contextLimitOf(this.opts.config);
   }
 
   private emitContext(): void {
-    this.opts.onEvent({ kind: 'context', tokens: this.contextTokens, limit: CONTEXT_LIMIT_TOKENS });
+    this.opts.onEvent({ kind: 'context', tokens: this.contextTokens, limit: this.limit() });
   }
 
   clear(): void {
@@ -268,6 +279,7 @@ export class AgentSession {
     this.usage = null;
     this.contextTokens = 0;
     this.lastError = null;
+    this.warnedImages = false;
     this.emitContext();
     this.setStatus('idle');
   }
@@ -281,6 +293,22 @@ export class AgentSession {
     this.opts.onStatus(s);
   }
 
+  /**
+   * 这个 (provider, model) 收不收图片。
+   *
+   * 不判断的后果不是报错，而是**模型凭空描述画面** —— 它看不到图，却会顺着
+   * 上下文里「我截图了」的说法编一段出来。所以能力判定必须在注册表里，
+   * 而不是「反正发了也没事」。
+   */
+  private imagesAllowed(): boolean {
+    if (supportsImages(this.opts.config)) return true;
+    if (!this.warnedImages) {
+      this.warnedImages = true;
+      this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.noImages') });
+    }
+    return false;
+  }
+
   /* ------------------------------------------------------------- 一轮 */
 
   /**
@@ -288,7 +316,7 @@ export class AgentSession {
    * 失败不致命：继续用原上下文跑，下一轮再试。
    */
   private async maybeCompact(signal: AbortSignal): Promise<void> {
-    if (!shouldCompact(this.contextTokens)) return;
+    if (!shouldCompact(this.contextTokens, this.limit())) return;
     if (this.messages.length <= KEEP_RECENT_MESSAGES + 1) return;
 
     const before = this.contextTokens;
@@ -353,12 +381,20 @@ export class AgentSession {
     this.messages[0] = { role: 'system', content: SYSTEM_PROMPT };
 
     if (images.length) {
+      const keep = this.imagesAllowed();
       const parts: WirePart[] = [
-        ...(content ? [{ type: 'text' as const, text: content }] : []),
-        ...images.map<WirePart>((img) => ({
-          type: 'image_url',
-          image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'low' },
-        })),
+        {
+          type: 'text',
+          text: keep
+            ? content
+            : `${content}\n\n[the user attached ${images.length} image(s); this model cannot read images]`.trim(),
+        },
+        ...(keep
+          ? images.map<WirePart>((img) => ({
+              type: 'image_url',
+              image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'low' },
+            }))
+          : []),
       ];
       this.messages.push({ role: 'user', content: parts });
     } else {
@@ -371,7 +407,7 @@ export class AgentSession {
 
     try {
       this.setStatus('thinking');
-      const tools = openAiTools();
+      const tools = AGENT_TOOLS;
       const repeat = new Map<string, number>();
       const configured = this.opts.maxSteps ?? MAX_STEPS;
       const maxSteps = Math.max(1, typeof configured === 'function' ? configured() : configured);
@@ -404,10 +440,9 @@ export class AgentSession {
           role: 'assistant',
           content: result.content || (streamed ? streamed : null),
           /*
-           * **必须回传**：请求带了 `tools`，官方文档要求每一轮（包括没有实际
-           * 工具调用的轮次）都把该 Turn 的 `reasoning_content` 完整带回，
-           * 漏传直接 400。**无条件带上**（没有思维链时是空串）：设置里中途
-           * 开关思考也不会让历史消息缺字段 —— 那同样会 400。
+           * 思维链**文本**。存下来是必须的：DeepSeek 带 `tools` 时每一轮都要
+           * 回传（漏传 = 400）。至于发不发出去，由适配器按 provider 的
+           * `thinking.echo` 决定 —— session 不在这个层面做任何 provider 判断。
            */
           reasoning_content: result.reasoning,
           ...(result.toolCalls.length
@@ -419,6 +454,15 @@ export class AgentSession {
                 })),
               }
             : {}),
+          /*
+           * 内部字段：Anthropic 的 thinking/redacted_thinking 原始块、OpenRouter 的
+           * `reasoning_details`。**不能上线** —— 序列化器会剥掉它。
+           * 带 `providerId` 是为了切家之后不再把别家的推理回传过去。
+           */
+          providerMeta: {
+            providerId: this.opts.config.providerId,
+            ...(result.reasoningRaw ? { reasoning: result.reasoningRaw } : {}),
+          },
         };
         this.messages.push(assistant);
 
@@ -581,7 +625,7 @@ export class AgentSession {
         // 截图统一在**工具轮之后**注入成一条 user 消息（见文件头）。
         // 设置里关掉「截图回传」时只留在面板上，不进模型的上下文。
         if (images.length) {
-          if (this.opts.screenshots?.() ?? true) {
+          if ((this.opts.screenshots?.() ?? true) && this.imagesAllowed()) {
             const parts: WirePart[] = [
               { type: 'text', text: images.map((i) => i.caption).join('\n') || 'Rendered frame.' },
               ...images.map<WirePart>((i) => ({
@@ -612,7 +656,16 @@ export class AgentSession {
        * 会一直留在历史里，导致之后每一条消息都 400。清掉模型历史，UI 记录保留。
        * 这不是「静默吞错」——下面仍会报错，同时给一条可读的提示。
        */
-      if (e instanceof LlmError && e.code === 'bad-response' && e.status === 400) {
+      if (e instanceof LlmError && e.code === 'context') {
+        /*
+         * 上下文超限**绝不能走下面那条「清空历史」**：那是为了逃离被污染的
+         * 历史，而这里只是装不下。把用量顶到窗口上，下一轮开头的 `maybeCompact`
+         * 就会触发压缩。
+         */
+        this.contextTokens = Math.max(this.contextTokens, this.limit());
+        this.emitContext();
+        this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.contextOverflow') });
+      } else if (e instanceof LlmError && e.code === 'bad-response' && e.status === 400) {
         this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
         this.contextTokens = 0;
         this.emitContext();
@@ -655,6 +708,12 @@ function describeError(e: unknown): string {
         return tr('agent.llm.timeout', { ms: LLM_TIMEOUT_MS });
       case 'cancelled':
         return tr('agent.llm.cancelled');
+      case 'transport':
+        return tr('agent.llm.transport', { detail: e.detail ?? e.message });
+      case 'context':
+        return tr('agent.llm.context');
+      case 'unsupported':
+        return tr('agent.llm.unsupported', { detail: e.message });
       case 'bad-response':
         // HTTP 400 的响应体是排查的唯一线索（reasoning_content / 工具配对），
         // 别把它吞成一句「HTTP 400」。

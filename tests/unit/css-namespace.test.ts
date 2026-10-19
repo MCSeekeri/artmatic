@@ -28,6 +28,7 @@ const SCANNED_DIRS = [
   'src/ui/algo-picker',
   'src/ui/mascot',
   'src/ui/pattern',
+  'src/ui/agent',
   'lab',
 ];
 
@@ -48,6 +49,9 @@ const SCANNED_DIRS = [
  */
 const ALLOWED_REUSE: Record<string, string[]> = {
   'lab/LabRail.svelte': ['ic-btn'],
+  // 与试炼场的 rail 同一套图标按钮：复用叶子级声明（尺寸 / 颜色 / hover），
+  // 不含容器背景与边框。各写一份的下场是两处 rail 的图标大小迟早不一致。
+  'src/ui/agent/AgentRailButton.svelte': ['ic-btn'],
 };
 
 function globalClassNames(): Set<string> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSseParser } from '../../src/agent/llm/provider';
+import { createSseParser } from '../../src/agent/llm/transport';
 import {
   estimateMessagesTokens,
   recentTail,
@@ -7,7 +7,8 @@ import {
   shouldCompact,
   trimMessages,
 } from '../../src/agent/llm/session';
-import { thinkingParams } from '../../src/agent/llm/provider';
+import { thinkingParamsFor } from '../../src/agent/llm/providers/reasoning';
+import { providerOf } from '../../src/agent/llm/providers/registry';
 import type { WireMessage } from '../../src/agent/llm/types';
 import { EFFECT_HEAD } from '../../src/effects/shader-def';
 import { ALGO_HEAD } from '../../src/algos/shader-lib';
@@ -136,14 +137,18 @@ describe('repeatAction', () => {
 
 /* ------------------------------------------------------------ 思考强度 */
 
-describe('thinkingParams（原生 reasoning_effort）', () => {
+describe('thinkingParams（DeepSeek 原生 reasoning_effort）', () => {
+  const deepseek = providerOf('deepseek');
+
   it('off 只发 thinking.disabled，不带强度', () => {
-    expect(thinkingParams('off')).toEqual({ thinking: { type: 'disabled' } });
+    expect(thinkingParamsFor(deepseek, 'off', 'deepseek-flash')).toEqual({
+      thinking: { type: 'disabled' },
+    });
   });
 
   it('low / high / max 原样作为 reasoning_effort，并显式开启思考', () => {
     for (const effort of ['low', 'high', 'max'] as const) {
-      expect(thinkingParams(effort)).toEqual({
+      expect(thinkingParamsFor(deepseek, effort, 'deepseek-flash')).toEqual({
         thinking: { type: 'enabled' },
         reasoning_effort: effort,
       });

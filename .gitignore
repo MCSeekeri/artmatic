@@ -21,3 +21,5 @@ artmatic.capacity.json
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+# 本地探针/临时日志（desktop 探针与一次性脚本用）
+.tmp-*

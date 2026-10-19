@@ -60,6 +60,34 @@
 - `pattern.monster` / `svelte-svg-patterns` 的 476 条 tile 数据 —— 一期不做策展层，
   二期若接入需按 MIT 边界逐条筛选并在此登记。
 
+## 品牌图标素材（`src/assets/providers/`）
+
+16 张 AI 提供商品牌图取自 [Lobe Icons](https://github.com/lobehub/lobe-icons)
+（`@lobehub/icons-static-svg`，MIT），文件名按本项目的 provider id 重命名后入库，
+没有改图内容。逐个来源：
+
+| 本项目 id | 上游图标 |
+|---|---|
+| `deepseek` | `deepseek-color` |
+| `dashscope` | `qwen-color` |
+| `zhipu` | `zhipu-color` |
+| `kimi` | `moonshot` |
+| `doubao` | `doubao-color` |
+| `hunyuan` | `hunyuan-color` |
+| `qianfan` | `wenxin-color` |
+| `spark` | `spark-color` |
+| `stepfun` | `stepfun-color` |
+| `minimax` | `minimax-color` |
+| `siliconflow` | `siliconcloud-color` |
+| `openai` | `openai` |
+| `anthropic` | `anthropic` |
+| `gemini` | `gemini-color` |
+| `openrouter` | `openrouter` |
+| `xai` | `xai` |
+
+> 集合是 MIT，但**品牌标识本身是各家商标**，此处仅用于「让用户认出自己在跟谁说话」。
+> 不暗示任何背书；要对外分发这份产物时应自行复核各家的商标使用政策。
+
 ## 依赖库
 
 | 包 | 许可 | 用途 |

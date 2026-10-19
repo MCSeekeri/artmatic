@@ -67,6 +67,31 @@ URL 同步可得、字节由浏览器懒加载。它们由 `scripts/` 里的脚�
   整套 < 4 MB）+ `tests/e2e/transition-picker.spec.ts`（每张卡片都有 `<img>`、
   左右两半真的不是同一张图）。
 
+### 提供商品牌图（`src/assets/providers/`）
+
+设置面板的提供商列表与抽屉里的 chip 要显示品牌图。素材来自
+[Lobe Icons](https://lobehub.com/icons)（`@lobehub/icons-static-svg`），
+**文件名 = provider id**（`deepseek.svg` …），由 `ui/agent/provider-logos.ts` 用
+`import.meta.glob('../../assets/providers/*.svg', { eager: true, query: '?url' })`
+取；守卫在 `tests/unit/agent-providers.test.ts`（每个 provider 都有图、没有孤儿）。
+
+国内网络下 GitHub raw 拿不到，用 npmmirror 取：
+
+```
+https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/<lobe-id>-color.svg
+```
+
+两种渲染方式，选错的表现都是「看不见」而不是「报错」：
+
+- **整张 `<img>`**（默认）：彩色 SVG。品牌色在明暗两种主题下都看得见。
+- **蒙版 `mask` + `currentColor`**：品牌色本身就是黑的那几家（OpenAI / Anthropic /
+  xAI / Kimi），贴彩色在暗色主题里是一块黑斑；OpenRouter 反过来是荧光绿，在白底上
+  几乎看不见。名单在 `provider-logos.ts` 的 `MONO_LOGOS`。
+
+补图时注意三点：① `<img>` 拿不到 `currentColor`，单色图只能走蒙版；
+② 蒙版用 alpha 通道，**不透明底的图会蒙出一整块实心方块**；
+③ 彩色 SVG 内部的 `url(#...)` 渐变 id 在 `<img>` 里按文档隔离，不会互相污染。
+
 ### 生成器预览缩略图（静态 WebP + 菜单悬停浮层）
 
 二十多个生成器光看名字（「李雅普诺夫分形」）没人知道插进去长什么样，所以

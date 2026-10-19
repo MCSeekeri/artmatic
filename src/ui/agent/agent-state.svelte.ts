@@ -4,6 +4,9 @@
  * 与 `src/agent/llm/session.ts` 的分工：session 管「模型 ↔ 工具」的循环，
  * 这个类只管「用户看到什么」—— 事件怎么落成消息、待审批卡怎么弹、配置存哪。
  *
+ * 配置的**数据形状与迁移**在 `agent-prefs.ts`（纯函数、可单测）。
+ * 这里只负责把 `$state` 接到那份数据上，并在改动时持久化。
+ *
  * ## 控制平面从哪来
  *
  * `main.ts` 装配完控制平面后调 `registerControlPlane(control)`。不在这里
@@ -14,90 +17,45 @@
  *
  * 存 `localStorage` 的 `artmatic.agent`（独立键，**不进 project.json**）。
  * 这不是「安全存储」—— 本机任何脚本都能读；设置面板里写明了这一点。
- * 「仅本次会话」开关会把 key 留在内存里（`sessionOnly`）。
+ * 「仅本次会话」开关会在落盘时把所有 provider 的 key 剥掉（内存里保留）。
  */
 
 import { tr } from '../../i18n/index.svelte';
 import type { AgentControlPlane } from '../../agent/control-plane';
 import type { AgentStatus, LlmConfig, ReasoningEffort, SessionEvent } from '../../agent/llm/types';
-import { AgentSession, createToolExecutor, DEFAULT_LLM_CONFIG, MAX_STEPS_LIMIT } from '../../agent/llm/index';
+import {
+  AgentSession,
+  canDisableThinking,
+  contextLimitOf,
+  createToolExecutor,
+  DEFAULT_LLM_CONFIG,
+  MAX_STEPS_LIMIT,
+  providerOf,
+} from '../../agent/llm/index';
+import type { ProviderDef } from '../../agent/llm/index';
 import type { AgentSessionRecord, AgentStoredMessage } from '../../core/schema';
+import {
+  PREFS_REV,
+  activeApiKey,
+  activeBaseUrl,
+  activeModel,
+  defaultPrefs,
+  migratePrefs,
+  prefsForStorage,
+  providerOfPrefs,
+  resolveLlmConfig,
+  type AgentPrefs,
+} from './agent-prefs';
 import { appState } from '../app-state.svelte';
 
 const KEY = 'artmatic.agent';
-/**
- * localStorage 的结构版本：
- *  2 → 16 步 / 思考关闭 抬到新默认；
- *  3 → 思考强度改成 DeepSeek 原生三档（旧的 `medium` 迁到 `high`）。
- */
-const PREFS_REV = 3;
 
-/** 界面层的名字；真源在 `agent/llm/types.ts`（原生 `reasoning_effort`）。 */
+/** 界面层的名字；真源在 `agent/llm/types.ts`。 */
 export type AgentEffort = ReasoningEffort;
+export type { AgentPrefs };
 
-export interface AgentPrefs {
-  baseUrl: string;
-  model: string;
-  temperature: number;
-  /** 思考强度：`off` 关思考，其余走原生 `reasoning_effort`。 */
-  effort: AgentEffort;
-  maxSteps: number;
-  /** 每轮允许把截图回传给模型（关掉可以省 token / 不外传画面）。 */
-  screenshots: boolean;
-  /** key 只在内存里（不落 localStorage）。 */
-  sessionOnly: boolean;
-}
-
-const DEFAULT_PREFS: AgentPrefs = {
-  baseUrl: DEFAULT_LLM_CONFIG.baseUrl,
-  model: DEFAULT_LLM_CONFIG.model,
-  temperature: DEFAULT_LLM_CONFIG.temperature,
-  effort: DEFAULT_LLM_CONFIG.effort,
-  maxSteps: 200,
-  screenshots: true,
-  sessionOnly: false,
-};
-
-function loadPrefs(): { prefs: AgentPrefs; apiKey: string } {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return { prefs: { ...DEFAULT_PREFS }, apiKey: '' };
-    const p = JSON.parse(raw) as Partial<AgentPrefs> & {
-      apiKey?: string;
-      prefsRev?: number;
-      /** 旧版字段（已被 effort 取代）。 */
-      thinking?: boolean;
-    };
-    /*
-     * 一次性迁移：旧默认（16 步、思考关闭）在真实任务里明显不够。
-     * 只在新结构缺席时抬一次，之后用户自己的选择原样尊重。
-     */
-    const fresh = (p.prefsRev ?? 1) < PREFS_REV;
-    const effort: AgentEffort =
-      p.effort === 'off' || p.effort === 'low' || p.effort === 'high' || p.effort === 'max'
-        ? p.effort
-        : // 旧版的 `medium`（以及更早的 thinking 字段）统一迁到原生 high。
-          (p.effort as string | undefined) === 'medium' || p.thinking === true
-          ? 'high'
-          : DEFAULT_PREFS.effort;
-    return {
-      prefs: {
-        baseUrl: typeof p.baseUrl === 'string' && p.baseUrl ? p.baseUrl : DEFAULT_PREFS.baseUrl,
-        model: typeof p.model === 'string' && p.model ? p.model : DEFAULT_PREFS.model,
-        temperature: Number.isFinite(Number(p.temperature)) ? Number(p.temperature) : DEFAULT_PREFS.temperature,
-        effort,
-        maxSteps: Number.isFinite(Number(p.maxSteps))
-          ? Math.max(1, Math.min(MAX_STEPS_LIMIT, fresh ? Math.max(200, Number(p.maxSteps)) : Number(p.maxSteps)))
-          : DEFAULT_PREFS.maxSteps,
-        screenshots: typeof p.screenshots === 'boolean' ? p.screenshots : DEFAULT_PREFS.screenshots,
-        sessionOnly: typeof p.sessionOnly === 'boolean' ? p.sessionOnly : DEFAULT_PREFS.sessionOnly,
-      },
-      apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
-    };
-  } catch {
-    return { prefs: { ...DEFAULT_PREFS }, apiKey: '' };
-  }
-}
+/** 思考强度四档的展示顺序。具体某一家能用哪几档由注册表决定。 */
+const ALL_EFFORTS: readonly ReasoningEffort[] = ['off', 'low', 'high', 'max'];
 
 /* ------------------------------------------------------------------ 消息 */
 
@@ -150,9 +108,18 @@ const nextId = (): string => `m${++seq}`;
 
 /* ------------------------------------------------------------------ 状态 */
 
+function loadPrefs(): AgentPrefs {
+  try {
+    const raw = localStorage.getItem(KEY);
+    return raw ? migratePrefs(JSON.parse(raw) as unknown) : defaultPrefs();
+  } catch {
+    // 存储不可用（隐私模式）或内容损坏：回落到默认值，别让面板打不开。
+    return defaultPrefs();
+  }
+}
+
 class AgentUiState {
-  prefs = $state<AgentPrefs>({ ...DEFAULT_PREFS });
-  apiKey = $state('');
+  prefs = $state<AgentPrefs>(defaultPrefs());
   messages = $state<AgentMessage[]>([]);
   status = $state<AgentStatus>('idle');
   busy = $state(false);
@@ -197,11 +164,47 @@ class AgentUiState {
   private cfg: LlmConfig;
 
   constructor() {
-    const { prefs, apiKey } = loadPrefs();
-    this.prefs = prefs;
-    this.apiKey = apiKey;
+    this.prefs = loadPrefs();
     this.cfg = { ...DEFAULT_LLM_CONFIG };
     this.syncConfig();
+    this.context = { tokens: 0, limit: this.contextLimit };
+  }
+
+  /* ---------------------------------------------------------- 派生查询 */
+
+  /** 当前提供商（注册表条目）。 */
+  get provider(): ProviderDef {
+    return providerOfPrefs(this.prefs);
+  }
+
+  /** 当前提供商的 key（渲染时直接读，不用另开一份 `$state` 镜像）。 */
+  get apiKey(): string {
+    return activeApiKey(this.prefs);
+  }
+
+  get model(): string {
+    return activeModel(this.prefs);
+  }
+
+  get baseUrl(): string {
+    return activeBaseUrl(this.prefs);
+  }
+
+  /** 当前 (provider, model) 的上下文窗口 —— 各家从 32k 到 1M 不等。 */
+  get contextLimit(): number {
+    return contextLimitOf({ providerId: this.prefs.providerId, model: this.model });
+  }
+
+  /** 这一家这一型能选的思考档位（有的模型关不掉思考）。 */
+  get efforts(): readonly ReasoningEffort[] {
+    return canDisableThinking(this.provider, this.model)
+      ? ALL_EFFORTS
+      : ALL_EFFORTS.filter((e) => e !== 'off');
+  }
+
+  /** 这一家的预设模型（手填仍然允许）。 */
+  get modelPresets(): readonly string[] {
+    return this.provider.models;
   }
 
   /* ------------------------------------------------------------ 生命周期 */
@@ -235,23 +238,36 @@ class AgentUiState {
     this.lastMs = 0;
     this.usage = null;
     this.toolCalls = 0;
-    this.context = { tokens: 0, limit: 1_000_000 };
+    this.context = { tokens: 0, limit: this.contextLimit };
     this.historyOpen = false;
     this.status = 'idle';
   }
 
+  /**
+   * prefs → 会话持有的 config 对象（**原地改字段**）。
+   *
+   * `providerId` 必须在这里写：漏了的话 UI 切了家、请求还发往旧家 ——
+   * 而如果那家恰好接受任意 key，会**返回正常内容**，用户以为在和新模型说话。
+   */
   private syncConfig(): void {
-    this.cfg.baseUrl = this.prefs.baseUrl;
-    this.cfg.apiKey = this.apiKey.trim();
-    this.cfg.model = this.prefs.model;
-    this.cfg.temperature = this.prefs.temperature;
-    // 强度是原生参数，`off` 也原样传下去（provider 翻译成 thinking.disabled）。
-    this.cfg.effort = this.prefs.effort;
-    this.cfg.proxyPath = DEFAULT_LLM_CONFIG.proxyPath;
+    const next = resolveLlmConfig(this.prefs, DEFAULT_LLM_CONFIG.proxyPath);
+    this.cfg.providerId = next.providerId;
+    this.cfg.baseUrl = next.baseUrl;
+    this.cfg.apiKey = next.apiKey;
+    this.cfg.model = next.model;
+    this.cfg.temperature = next.temperature;
+    // 强度是 UI 词汇，翻译成各家原生参数发生在 providers/reasoning.ts。
+    this.cfg.effort = next.effort;
+    this.cfg.proxyPath = next.proxyPath;
   }
 
   get ready(): boolean {
     return Boolean(this.control) && this.apiKey.trim().length > 0;
+  }
+
+  /** 当前提供商可用的申请地址（`custom` 没有）。 */
+  get needsProxy(): boolean {
+    return this.provider.transport.proxy && !this.provider.transport.browserDirect;
   }
 
   private ensureSession(): AgentSession | null {
@@ -304,8 +320,9 @@ class AgentUiState {
       exportedAt: new Date().toISOString(),
       project: appState.projectName,
       config: {
-        model: this.prefs.model,
-        baseUrl: this.prefs.baseUrl,
+        provider: this.prefs.providerId,
+        model: this.model,
+        baseUrl: this.baseUrl,
         effort: this.prefs.effort,
         temperature: this.prefs.temperature,
         maxSteps: this.prefs.maxSteps,
@@ -353,32 +370,59 @@ class AgentUiState {
 
   setPrefs(patch: Partial<AgentPrefs>): void {
     this.prefs = { ...this.prefs, ...patch };
+    // 切模型会改上下文窗口：环形进度条的刻度要跟着走。
+    this.context = { ...this.context, limit: this.contextLimit };
     this.syncConfig();
     this.persist();
+  }
+
+  /** 切提供商：保留每一家自己的 key / 模型 / 端点，别互相覆盖。 */
+  setProvider(id: string): void {
+    if (id === this.prefs.providerId) return;
+    // 未知 id 直接忽略（下拉里不可能出现，但 localStorage 里的旧值可能）。
+    const def = providerOf(id);
+    this.prefs = { ...this.prefs, providerId: def.id };
+    this.context = { tokens: 0, limit: this.contextLimit };
+    this.syncConfig();
+    this.persist();
+  }
+
+  setModel(model: string): void {
+    this.patchOverride({ model: model.trim() || undefined });
+  }
+
+  setBaseUrl(baseUrl: string): void {
+    this.patchOverride({ baseUrl: baseUrl.trim() || undefined });
   }
 
   setApiKey(key: string): void {
-    this.apiKey = key;
-    this.syncConfig();
-    this.persist();
+    this.patchOverride({ apiKey: key || undefined });
   }
 
   clearApiKey(): void {
-    this.apiKey = '';
+    this.patchOverride({ apiKey: undefined });
+  }
+
+  /** 只改当前 provider 的覆盖项；清空即回到注册表默认。 */
+  private patchOverride(patch: { model?: string; baseUrl?: string; apiKey?: string }): void {
+    const id = this.prefs.providerId;
+    const current = { ...(this.prefs.overrides[id] ?? {}) };
+    for (const [key, value] of Object.entries(patch) as [keyof typeof patch, string | undefined][]) {
+      if (value === undefined) delete current[key];
+      else current[key] = value;
+    }
+    const overrides = { ...this.prefs.overrides };
+    if (Object.keys(current).length) overrides[id] = current;
+    else delete overrides[id];
+    this.prefs = { ...this.prefs, overrides };
+    this.context = { ...this.context, limit: this.contextLimit };
     this.syncConfig();
     this.persist();
   }
 
   private persist(): void {
     try {
-      localStorage.setItem(
-        KEY,
-        JSON.stringify({
-          ...this.prefs,
-          prefsRev: PREFS_REV,
-          apiKey: this.prefs.sessionOnly ? '' : this.apiKey,
-        }),
-      );
+      localStorage.setItem(KEY, JSON.stringify({ ...prefsForStorage(this.prefs), prefsRev: PREFS_REV }));
     } catch {
       // 存储不可用（隐私模式 / 配额）不该打断对话。
     }
