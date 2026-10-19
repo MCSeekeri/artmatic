@@ -23,6 +23,7 @@
    * 同时承担导航、面板内容、导出编排三件事。
    */
   import Modal from './controls/Modal.svelte';
+  import SideNav from './controls/SideNav.svelte';
   import Button from './controls/Button.svelte';
   import NumberInput from './controls/NumberInput.svelte';
   import Select from './controls/Select.svelte';
@@ -48,6 +49,8 @@
     { id: 'habits', labelKey: 'app.settingsNavHabits' },
     { id: 'editor', labelKey: 'app.settingsNavEditor' },
   ];
+  // 分页名在这里解析：`SECTIONS` 是模块级常量，直接在表里调 tr() 会把语言冻结。
+  const navItems = $derived(SECTIONS.map((s) => ({ id: s.id, label: tr(s.labelKey) })));
 
   /*
    * 打开时的基准值，**只在挂载那一刻读一次** —— 不是 `$derived`。
@@ -229,19 +232,13 @@
   {/snippet}
 
   <div class="set">
-    <nav class="set-nav" aria-label={tr('app.settings')} data-testid="settings-nav">
-      {#each SECTIONS as s (s.id)}
-        <button
-          type="button"
-          class="set-nav-item"
-          class:active={section === s.id}
-          data-testid={`settings-nav-${s.id}`}
-          onclick={() => (section = s.id)}
-        >
-          {tr(s.labelKey)}
-        </button>
-      {/each}
-    </nav>
+    <SideNav
+      items={navItems}
+      value={section}
+      label={tr('app.settings')}
+      testidPrefix="settings-nav"
+      onselect={(id) => (section = id)}
+    />
 
     <div class="set-pane" data-testid={`settings-pane-${section}`}>
       {#if section === 'project'}
@@ -578,34 +575,6 @@
     width: 100%;
     min-width: 0;
     min-height: 0;
-  }
-  .set-nav {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: var(--sp-4) var(--sp-3);
-    background: var(--surface-2);
-    border-right: 1px solid var(--border);
-    overflow-y: auto;
-  }
-  .set-nav-item {
-    padding: 5px var(--sp-4);
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    font-size: var(--fs-sm);
-    text-align: left;
-    cursor: pointer;
-  }
-  .set-nav-item:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-  /* 当前分页用主题色 —— 「主题色只出现在选中/激活」的一处。 */
-  .set-nav-item.active {
-    background: var(--accent-weak);
-    color: var(--accent);
   }
   .set-pane {
     min-width: 0;

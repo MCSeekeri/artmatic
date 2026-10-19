@@ -653,8 +653,9 @@ test('从媒体池把素材拖到时间轴：落在指针处，并选中新片�
 test('空工程：媒体池说「还没有素材」，不列出上一份工程的素材', async ({ page }) => {
   await boot(page);
 
-  // Rail → 工程面板 → 新建空白工程（素材仓是**每份工程自己的**）
+  // Rail → 工程面板 → 「操作」页 → 新建空白工程（素材仓是**每份工程自己的**）
   await page.getByTestId('rail-project').click();
+  await page.getByTestId('project-nav-actions').click();
   await page.getByTestId('project-new').click();
   await expect(page.getByTestId('modal-project')).toHaveCount(0);
 

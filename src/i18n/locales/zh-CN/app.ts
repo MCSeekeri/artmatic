@@ -175,12 +175,35 @@ export const app = {
   'app.imported': '已导入「{name}」（{n} 个素材）',
   'app.importNotEmpty': '目标目录里已经有一份工程（project.json），请换一个空目录',
   'app.importPackFailed': '导入工程包失败：{detail}',
-  'app.actions': '动作',
   'app.newBlank': '新建空白',
   'app.loadDemo': '载入演示',
   'app.openProjectEllipsis': '打开工程…',
   'app.saveAsEllipsis': '另存为…',
+  /*
+   * 工程面板的分页（范式同设置面板：左 navside + 右内容）。
+   * 四页按「什么时候会点它」切：看状态 / 回收空间 / 对工程做动作 / 回到上次那份。
+   */
+  'app.projectNavOverview': '概览',
+  'app.projectNavCleanup': '清理',
+  'app.projectNavActions': '操作',
+  'app.projectNavRecent': '最近',
+  'app.nothingToClean': '没有可清理的内容：未使用素材、回收站与未跟踪文件都是空的。',
+  /* 空状态页也要列最近工程，所以这条仍是共用文案（不叫「最近」）。 */
   'app.recentProjects': '最近的工程',
+  'app.noRecentProjects': '还没有打开过工程。新建、打开或保存一份之后会出现在这里。',
+  'app.cleanupNoDir': '还没有连接磁盘目录：回收站与未跟踪文件只存在于磁盘上的工程里。',
+  'app.cleanupTrashHint': '{n} 个文件 · {size}。清空后无法找回。',
+  'app.cleanupOrphansHint': '{n} 个文件 · {size}。它们不在台账里，删除不影响任何片段。',
+  /*
+   * 动作页的逐条说明。几个动作容易混（另存为 / 打包 / 导入），
+   * 说明写清「会动什么、不会动什么」，比标签本身重要。
+   */
+  'app.actionNewDesc': '在同一页里再开一份空白工程，当前这份不动。',
+  'app.actionDemoDesc': '开一份带片段与排版的示例工程，用来熟悉工具。',
+  'app.actionOpenDesc': '从磁盘上的工程目录打开。打开过的会记在「最近」里。',
+  'app.actionSaveAsDesc': '把当前工程写到另一个目录，原来那份保持不动。',
+  'app.actionPackDesc': '连同全部素材打成一个 .artmatic 文件，便于备份或换机。',
+  'app.actionImportDesc': '校验并解包到一个空目录，然后按普通工程打开。',
   /*
    * 工程目录说明被三个 <code> 元素打断，所以拆成四段。
    * 这是 i18n 里的固有麻烦：句子中间嵌了标记就没法整句存。

@@ -297,8 +297,9 @@ test.describe('素材台账', () => {
     expect(state.issues.filter((i) => i.kind === 'untracked')).toHaveLength(0);
     expect(state.retained).toContain('img-keep');
 
-    // 面板里能恢复回工程。
+    // 面板里能恢复回工程（未使用素材在「清理」页）。
     await page.getByTestId('rail-project').click();
+    await page.getByTestId('project-nav-cleanup').click();
     await expect(page.getByTestId('unused-asset')).toHaveCount(1);
     await page.getByTestId('unused-restore').click();
     const restored = await page.evaluate(() => {
@@ -334,6 +335,7 @@ test.describe('素材台账', () => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.open(d), DIR);
 
     await page.getByTestId('rail-project').click();
+    await page.getByTestId('project-nav-cleanup').click();
     await page.getByTestId('unused-trash').click();
     await expect(page.getByTestId('confirm-unused-asset')).toBeVisible();
     await page.getByTestId('confirm-unused-asset-ok').click();

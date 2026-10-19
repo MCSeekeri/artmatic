@@ -422,7 +422,7 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   再 `await platform.allowPath` 登记主进程 allowlist，最后走
   `importLinkedPath`。拿不到路径（浏览器 / 剪贴板）才退化成字节导入。
   **不要**在 drop handler 里自己 `await` 后再取路径 —— 那样会静默退化成 bundled。
-- **「未使用素材」只在工程面板里（`Rail.svelte`）**，数据是 `assets.retainedIds()` /
+- **「未使用素材」只在工程面板的「清理」页（`ProjectModal.svelte`）**，数据是 `assets.retainedIds()` /
   `retainedInput()` / `retainedSize()`（W1.3）。三个动作都有唯一实现：恢复走
   `project-actions.restoreUnusedAsset`（要 await 素材来源重建，之后画面才能出来）、
   清理与真删走 `trashUnusedAsset` / `deleteUnusedAsset`。**不要在组件里直接调
@@ -477,6 +477,10 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   Apply 时写回，取消 = 什么都不做。标签前的 `*` 表示「与**打开面板时**的值不同」。
   那份基准快照是**普通 const，不是 `$derived`** —— 做成派生的话 `version` 一动基准就变，
   星号会在自己刚亮起时又熄掉。
+- **「侧栏 + 内容」型面板只用 `controls/SideNav`**（设置 / 工程）：navside 固定宽、内容列
+  自己滚动、modal 高度固定（切页不跳）。工程面板的四页是**按发生时刻**切开的
+  （概览 / 清理 / 操作 / 最近），动作页是竖排列表而不是一排按钮 —— 六个动作的标签长度
+  差一倍，排一行会被最长那条撑开，「另存为」与「打包」的区别也没地方写。
 - **`.editor` 这类 grid 的行数必须与子项数一一对应**。条件渲染的子项一律先包一层再进 grid，
   否则缺席时后面的子项会落到错误的行上（表现为某条 bar 被拉高或被挤出屏幕）。
 - **`$derived` 返回新对象时，读它的 `$effect` 会每轮重跑**。需要「只在 X 真的变化时做一次」

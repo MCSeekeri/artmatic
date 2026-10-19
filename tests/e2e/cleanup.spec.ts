@@ -147,17 +147,22 @@ async function setupRemovedAsset(page: Page): Promise<string> {
 test('移除 → 回收站 → 清空：文件真的从 .trash 消失，assets/ 不动', async ({ page }) => {
   await setupRemovedAsset(page);
 
+  await page.getByTestId('project-nav-cleanup').click();
   await expect(page.getByTestId('unused-asset')).toHaveCount(1);
   expect((await filesAt(page, 'assets')).some((n) => n.endsWith('.png'))).toBe(true);
 
   await page.getByTestId('unused-trash').click();
   await page.getByTestId('confirm-unused-asset-ok').click();
   await expect(page.getByTestId('unused-asset')).toHaveCount(0);
+  // 数字在「概览」页：清理动作本身不在这页回显总量。
+  await page.getByTestId('project-nav-overview').click();
   await expect(page.getByTestId('usage-trash')).toContainText('1 个');
   expect(await filesAt(page, 'assets/.trash')).toHaveLength(1);
 
+  await page.getByTestId('project-nav-cleanup').click();
   await page.getByTestId('trash-clear').click();
   await page.getByTestId('confirm-cleanup-ok').click();
+  await page.getByTestId('project-nav-overview').click();
   await expect(page.getByTestId('usage-trash')).toContainText('0 个');
   expect(await filesAt(page, 'assets/.trash')).toHaveLength(0);
   expect(await page.evaluate(() => (window as never as W).__artmatic.assets.retainedIds())).toHaveLength(0);
@@ -182,6 +187,7 @@ test('批量清理：两个未使用素材一次全进回收站', async ({ page 
   await page.evaluate(() => (window as never as W).__artmatic.project.save());
 
   await page.getByTestId('rail-project').click();
+  await page.getByTestId('project-nav-cleanup').click();
   await expect(page.getByTestId('unused-asset')).toHaveCount(2);
   await page.getByTestId('unused-trash-all').click();
   await page.getByTestId('confirm-cleanup-ok').click();
@@ -210,8 +216,10 @@ test('未跟踪文件：面板能看见，确认后永久清理', async ({ page 
 
   await page.getByTestId('rail-project').click();
   await expect(page.getByTestId('usage-orphans')).toContainText('1 个');
+  await page.getByTestId('project-nav-cleanup').click();
   await page.getByTestId('orphans-clean').click();
   await page.getByTestId('confirm-cleanup-ok').click();
+  await page.getByTestId('project-nav-overview').click();
   await expect(page.getByTestId('usage-orphans')).toContainText('0 个');
 
   expect(await filesAt(page, 'assets')).not.toContain('stray.png');

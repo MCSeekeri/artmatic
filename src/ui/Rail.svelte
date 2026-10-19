@@ -3,8 +3,15 @@
    * Rail — 窄图标侧栏（44px）。纯图标 + tooltip，从上到下三块：
    *
    *   ① LOGO
-   *   ② 快捷键 · 保存 · 导出
+   *   ② 快捷键 · 保存 ｜ 媒体池 · 工程 · 插件 ｜ Agent ｜ 导出
    *   ③ 设置 · 明暗切换
+   *
+   * ② 的分组按「什么时候会想点它」切，短横线就是组界：
+   *   - 快捷键 / 保存：正在做的那件事上的即时动作（看一眼按键、落盘）；
+   *   - 媒体池 / 工程 / 插件：这份工程里有什么、它能怎么扩展 —— 三个都回答
+   *     「工程的范围」（素材清单 / 生命周期 / 扩展），所以同组；
+   *   - Agent：唯一会主动跟你对话的东西，单独一格；
+   *   - 导出：一件事的终点，与入口分开，免得误触。
    *
    * 四个面板都是**全屏 modal**而不是贴着图标弹的 flyout：flyout 只有两百来像素宽，
    * 快捷键清单或导出信息塞进去就变成带滚动条的小盒子，而这几块只会继续长。
@@ -14,11 +21,10 @@
    * 逐帧/逐拍的操作。这条划分见 AGENTS.md §5。
    */
   import IconButton from './controls/IconButton.svelte';
-  import Button from './controls/Button.svelte';
   import Modal from './controls/Modal.svelte';
-  import ConfirmDialog from './ConfirmDialog.svelte';
   import RailShell from './RailShell.svelte';
   import SettingsModal from './SettingsModal.svelte';
+  import ProjectModal from './ProjectModal.svelte';
   import ExportModal from './ExportModal.svelte';
   import PluginManagerModal from './plugin-manager/PluginManagerModal.svelte';
   import AgentRailButton from './agent/AgentRailButton.svelte';
@@ -29,160 +35,13 @@
   import { theme } from './theme.svelte';
   import { SHORTCUT_GROUPS } from './shortcuts';
   import { tr } from '../i18n/index.svelte';
-  import { formatBytes } from '../core/format';
-  import { ago } from './format-time';
-  import {
-    cleanupOrphanFiles,
-    clearProjectTrash,
-    deleteAllUnused,
-    deleteUnusedAsset,
-    getProjectUsage,
-    newProject,
-    openProjectPicker,
-    openRecentProject,
-    restoreUnusedAsset,
-    saveProjectAs,
-    saveProjectNow,
-    trashAllUnused,
-    trashUnusedAsset,
-    type ProjectUsage,
-  } from './project-actions';
-  import { importProjectPackage, packProjectNow } from './package-actions';
+  import { saveProjectNow } from './project-actions';
 
   type PanelId = 'about' | 'shortcuts' | 'export' | 'settings' | 'project' | 'plugins';
   let panel = $state<PanelId | null>(null);
 
-  /**
-   * 当前工程的素材计数。`void` 那两行是为了让它在工程改动与面板重开时重算。
-   * 读的是 `appState.assets`（**当前工程**的素材仓），不是某个模块级单例。
-   */
-  const assetInfo = $derived.by(() => {
-    void appState.version;
-    void panel;
-    return { count: appState.assets.ids().length, bytes: appState.assets.totalBytes() };
-  });
-
   const exporting = $derived(appState.exportProgress !== null);
 
-  /* ---------------------------------------------- 未使用素材（W1.3） */
-
-  /**
-   * 已从工程移除、但字节文件还在的素材。
-   *
-   * 它是「移除 ≠ 销毁」唯一可操作的出口：没有这一段，`assets/` 里的文件
-   * 就只是磁盘上的一堆垃圾，用户既找不到也删不掉。
-   */
-  const unused = $derived.by(() => {
-    void appState.version;
-    void panel;
-    const store = appState.assets;
-    return store.retainedIds().map((id) => ({
-      id,
-      name: store.retainedInput(id)?.name ?? id,
-      bytes: store.retainedSize(id) ?? 0,
-    }));
-  });
-  const unusedBytes = $derived(unused.reduce((n, u) => n + u.bytes, 0));
-
-  let pendingUnused = $state<{ id: string; name: string; action: 'trash' | 'delete' } | null>(null);
-
-  /* ------------------------------------------------ 占用与批量清理（W1） */
-
-  let usage = $state<ProjectUsage | null>(null);
-  let pendingCleanup = $state<'trash-all' | 'delete-all' | 'clear-trash' | 'orphans' | null>(null);
-
-  async function refreshUsage(): Promise<void> {
-    if (!appState.hasProject) {
-      usage = null;
-      return;
-    }
-    usage = await getProjectUsage();
-  }
-
-  // 面板开着时跟着版本刷新：清理动作不改 rev，所以每个动作结束后也会手动调一次。
-  $effect(() => {
-    if (panel !== 'project') return;
-    void appState.version;
-    void appState.projectDir;
-    void refreshUsage();
-  });
-
-  async function runCleanup(): Promise<void> {
-    const action = pendingCleanup;
-    pendingCleanup = null;
-    if (!action) return;
-    if (action === 'trash-all') {
-      const n = await trashAllUnused();
-      if (n) appState.flash(tr('app.trashAllDone', { n }), 'success');
-    } else if (action === 'delete-all') {
-      const n = await deleteAllUnused();
-      if (n) appState.flash(tr('app.deleteAllDone', { n }), 'success');
-    } else if (action === 'clear-trash') {
-      await clearProjectTrash();
-    } else {
-      const n = await cleanupOrphanFiles();
-      if (n) appState.flash(tr('app.orphansDone', { n }), 'success');
-    }
-    await refreshUsage();
-  }
-
-  const cleanupCopy = $derived.by(() => {
-    const action = pendingCleanup;
-    if (!action) return null;
-    if (action === 'trash-all') {
-      return {
-        title: tr('app.trashAll'),
-        message: tr('app.trashAllConfirm', { n: unused.length, size: formatBytes(unusedBytes) }),
-        label: tr('app.trashAll'),
-      };
-    }
-    if (action === 'delete-all') {
-      return {
-        title: tr('app.deleteAll'),
-        message: tr('app.deleteAllConfirm', { n: unused.length, size: formatBytes(unusedBytes) }),
-        label: tr('app.deleteAll'),
-      };
-    }
-    if (action === 'clear-trash') {
-      return {
-        title: tr('app.clearTrash'),
-        message: tr('app.clearTrashConfirm', {
-          n: usage?.trashCount ?? 0,
-          size: formatBytes(usage?.trashBytes ?? 0),
-        }),
-        label: tr('app.clearTrash'),
-      };
-    }
-    return {
-      title: tr('app.cleanupOrphans'),
-      message: tr('app.cleanupOrphansConfirm', {
-        n: usage?.orphanCount ?? 0,
-        size: formatBytes(usage?.orphanBytes ?? 0),
-      }),
-      label: tr('app.cleanupOrphans'),
-    };
-  });
-
-  async function restoreUnused(u: { id: string; name: string }): Promise<void> {
-    if (await restoreUnusedAsset(u.id)) {
-      appState.flash(tr('app.unusedRestored', { name: u.name }), 'success');
-    }
-  }
-
-  async function confirmUnused(): Promise<void> {
-    const p = pendingUnused;
-    pendingUnused = null;
-    if (!p) return;
-    const ok = p.action === 'trash' ? await trashUnusedAsset(p.id) : await deleteUnusedAsset(p.id);
-    if (ok) {
-      appState.flash(
-        tr(p.action === 'trash' ? 'app.unusedTrashed' : 'app.unusedDeleted', { name: p.name }),
-        'success',
-      );
-    } else {
-      appState.flash(tr('app.unusedFailed', { name: p.name }), 'error');
-    }
-  }
 </script>
 
 <RailShell>
@@ -200,7 +59,7 @@
   {/snippet}
 
   {#snippet main()}
-    <!-- ② 快捷键 · 工程 · 保存 · 导出 -->
+    <!-- ② 快捷键 · 保存 ｜ 媒体池 · 工程 · 插件 ｜ Agent ｜ 导出（组界见文件头） -->
     <IconButton
       icon="keyboard"
       label={tr('app.shortcuts')}
@@ -208,29 +67,20 @@
       onclick={() => (panel = 'shortcuts')}
     />
     <IconButton
-      icon="folder"
-      label={tr('app.project')}
-      tipText={tr('app.projectPanelTip')}
-      testid="rail-project"
-      active={panel === 'project'}
-      onclick={() => (panel = 'project')}
+      icon="save"
+      label={tr('app.saveProject')}
+      tipText={tr(appState.projectDir ? 'app.saveToCurrentDir' : 'app.savePickDir')}
+      testid="rail-save"
+      disabled={appState.projectBusy}
+      onclick={() => void saveProjectNow()}
     />
+
+    <div class="rail-sep" aria-hidden="true"></div>
+
     <!--
-      插件紧挨着「工程」：它们是**工程级**的扩展（每个工程一套，随工程目录走），
-      与「保存 / 导出」那种对当前工程的动作为邻，语义上才连得起来。
-    -->
-    <IconButton
-      icon="puzzle"
-      label={tr('pl.title')}
-      tipText={tr('pl.open')}
-      testid="rail-plugins"
-      active={panel === 'plugins'}
-      onclick={() => (panel = 'plugins')}
-    />
-    <!--
-      媒体池：与「工程 / 插件」同组 —— 它回答的也是「这份工程里有什么」，
-      只是范围收窄到已导入的素材。点它开的是**左边**那条抽屉（检查器在右边，
-      两个开关互不相干）。
+      媒体池与「工程 / 插件」同组：三个都在回答「这份工程的范围」——
+      素材清单 / 生命周期 / 扩展。媒体池点开的是**左边**那条抽屉
+      （检查器在右边，两个开关互不相干）。
 
       两个视图共用同一个开关：时间轴那边是「拖素材建片段」的来源，排版页那边
       是「拖图片进画布」的来源 —— 同一份素材清单，两处各渲染一份抽屉。
@@ -243,20 +93,35 @@
       active={appState.mediaPoolOpen}
       onclick={() => appState.toggleMediaPool()}
     />
+    <IconButton
+      icon="folder"
+      label={tr('app.project')}
+      tipText={tr('app.projectPanelTip')}
+      testid="rail-project"
+      active={panel === 'project'}
+      onclick={() => (panel = 'project')}
+    />
+    <!-- 插件是**工程级**的扩展（每个工程一套，随工程目录走），所以紧挨工程。 -->
+    <IconButton
+      icon="puzzle"
+      label={tr('pl.title')}
+      tipText={tr('pl.open')}
+      testid="rail-plugins"
+      active={panel === 'plugins'}
+      onclick={() => (panel = 'plugins')}
+    />
+
+    <div class="rail-sep" aria-hidden="true"></div>
+
     <!--
-      Agent 与媒体池**同一列**：`appState.setAgentOpen` 会顺手收起媒体池
-      （反之亦然）。图标本身带运行状态（思考那圈弧 / 工具计数 / 待确认点），
-      见 `AgentRailButton` 的注释。
+      Agent 单独一格：`appState.setAgentOpen` 会顺手收起媒体池（反之亦然），
+      所以它俩在布局上是**同一个位置**的两种内容。图标本身带运行状态
+      （思考那圈弧 / 工具计数 / 待确认点），见 `AgentRailButton` 的注释。
     -->
     <AgentRailButton />
-    <IconButton
-      icon="save"
-      label={tr('app.saveProject')}
-      tipText={tr(appState.projectDir ? 'app.saveToCurrentDir' : 'app.savePickDir')}
-      testid="rail-save"
-      disabled={appState.projectBusy}
-      onclick={() => void saveProjectNow()}
-    />
+
+    <div class="rail-sep" aria-hidden="true"></div>
+
     <IconButton
       icon="download"
       label={tr('app.export')}
@@ -345,264 +210,8 @@
 {#if panel === 'export'}
   <ExportModal onclose={() => (panel = null)} />
 {/if}
-
 {#if panel === 'project'}
-  <Modal title={tr('app.project')} testid="modal-project" onclose={() => (panel = null)}>
-    <div class="kv">
-      <span>{tr('app.name')}</span>
-      <span data-testid="project-name">{appState.projectName}</span>
-      <span>{tr('app.location')}</span>
-      <span data-testid="project-location">
-        {tr(appState.projectDir ? 'app.dirConnected' : 'app.dirNotChosen')}
-      </span>
-      <span>{tr('app.status')}</span>
-      <span data-testid="project-dirty">
-        {#if appState.projectDirty}
-          <span class="dirty">{tr('app.unsavedChanges')}</span>
-        {:else if appState.savedAt}
-          {tr('app.savedAgo', { ago: ago(appState.savedAt) })}
-        {:else}
-          {tr('app.notSavedYet')}
-        {/if}
-      </span>
-      <span>{tr('app.assets')}</span>
-      <span class="mono" data-testid="project-assets">
-        {tr('app.assetCount', { n: assetInfo.count, size: formatBytes(assetInfo.bytes) })}
-      </span>
-    </div>
-
-    <!--
-      画幅与帧率**不在这里**：它们已经搬进「设置 → 当前工程」。
-      面板的职责收窄成「这份工程现在是什么状态、能对它做什么」，
-      改参数的入口集中在设置里 —— 同一个值有两个编辑入口迟早会漂移。
-      改分辨率的后果（已有排版不会跟着缩放）在那边有一句小字说明。
-    -->
-
-    {#if appState.projectIssues.length}
-      <section class="setting">
-        <h3>{tr('app.assetAudit')}</h3>        {#each appState.projectIssues as issue (issue.kind + ':' + issue.assetId + ':' + issue.path)}
-          <div class="issue" class:err={issue.severity === 'error'}>
-            <Icon name={issue.severity === 'error' ? 'triangle-alert' : 'info'} size={13} />
-            <span>{issue.message}</span>
-          </div>
-        {/each}
-      </section>
-    {/if}
-
-    <!--
-      占用（W1）：把「工程到底占了多大」摊开。回收站与未跟踪文件都在这里清 ——
-      它们不在台账里，别处没有任何入口。
-    -->
-    {#if usage}
-      <section class="setting">
-        <h3>{tr('app.storageUsage')}</h3>
-        <div class="usage">
-          <span>{tr('app.usageProject')}</span>
-          <span class="mono">{formatBytes(usage.projectBytes)}</span>
-          <span>{tr('app.usageUnused')}</span>
-          <span class="mono">{formatBytes(usage.unusedBytes)}</span>
-          {#if appState.projectDir}
-            <span>{tr('app.usageTrash')}</span>
-            <span class="mono" data-testid="usage-trash">
-              {tr('app.assetCount', { n: usage.trashCount, size: formatBytes(usage.trashBytes) })}
-            </span>
-            <span>{tr('app.usageOrphans')}</span>
-            <span class="mono" data-testid="usage-orphans">
-              {tr('app.assetCount', { n: usage.orphanCount, size: formatBytes(usage.orphanBytes) })}
-            </span>
-          {/if}
-        </div>
-        <div class="row wrap">
-          {#if usage.trashCount}
-            <Button
-              label={tr('app.clearTrash')}
-              icon="trash"
-              variant="outline"
-              testid="trash-clear"
-              onclick={() => (pendingCleanup = 'clear-trash')}
-            />
-          {/if}
-          {#if usage.orphanCount}
-            <Button
-              label={tr('app.cleanupOrphans')}
-              icon="file-x"
-              variant="outline"
-              testid="orphans-clean"
-              onclick={() => (pendingCleanup = 'orphans')}
-            />
-          {/if}
-        </div>
-        <p class="unused-hint">{tr('app.usageHint')}</p>
-      </section>
-    {/if}
-
-    <!--
-      未使用素材（W1.3）：「移除」只是解除关联，文件还在 assets/。
-      三个动作按破坏性递增排列 —— 恢复在最左，彻底删除在最右（红色确认）。
-    -->
-    {#if unused.length}
-      <section class="setting">
-        <h3>{tr('app.unusedAssets')}</h3>
-        <p class="unused-hint">{tr('app.unusedAssetsHint', { n: unused.length, size: formatBytes(unusedBytes) })}</p>
-        {#if unused.length > 1}
-          <div class="row wrap">
-            {#if appState.projectDir}
-              <Button
-                label={tr('app.trashAll')}
-                variant="outline"
-                testid="unused-trash-all"
-                onclick={() => (pendingCleanup = 'trash-all')}
-              />
-            {/if}
-            <Button
-              label={tr('app.deleteAll')}
-              variant="outline"
-              testid="unused-delete-all"
-              onclick={() => (pendingCleanup = 'delete-all')}
-            />
-          </div>
-        {/if}
-        {#each unused as u (u.id)}
-          <div class="unused" data-testid="unused-asset" data-asset-id={u.id}>
-            <span class="grow">{u.name}</span>
-            <span class="mono dim">{formatBytes(u.bytes)}</span>
-            <Button
-              label={tr('app.unusedRestore')}
-              variant="outline"
-              testid="unused-restore"
-              onclick={() => void restoreUnused(u)}
-            />
-            {#if appState.projectDir}
-              <Button
-                label={tr('app.unusedTrash')}
-                variant="outline"
-                testid="unused-trash"
-                onclick={() => (pendingUnused = { id: u.id, name: u.name, action: 'trash' })}
-              />
-            {/if}
-            <Button
-              label={tr('app.unusedDelete')}
-              variant="outline"
-              testid="unused-delete"
-              onclick={() => (pendingUnused = { id: u.id, name: u.name, action: 'delete' })}
-            />
-          </div>
-        {/each}
-      </section>
-    {/if}
-
-    <section class="setting">
-      <h3>{tr('app.actions')}</h3>
-      <div class="row wrap">
-        <Button
-          label={tr('app.newBlank')}
-          icon="file-plus"
-          variant="outline"
-          testid="project-new"
-          onclick={() => {
-            void newProject(false);
-            panel = null;
-          }}
-        />
-        <Button
-          label={tr('app.loadDemo')}
-          icon="sparkles"
-          variant="outline"
-          testid="project-demo"
-          onclick={() => {
-            void newProject(true);
-            panel = null;
-          }}
-        />
-        <Button
-          label={tr('app.openProjectEllipsis')}
-          icon="folder-open"
-          variant="outline"
-          disabled={appState.projectBusy}
-          testid="project-open"
-          onclick={() => void openProjectPicker()}
-        />
-        <Button
-          label={tr('app.saveAsEllipsis')}
-          icon="hard-drive"
-          variant="outline"
-          disabled={appState.projectBusy}
-          testid="project-save-as"
-          onclick={() => void saveProjectAs()}
-        />
-        <Button
-          label={tr('app.pack')}
-          icon="archive"
-          variant="outline"
-          disabled={appState.projectBusy}
-          testid="project-pack"
-          onclick={() => void packProjectNow()}
-        />
-        <Button
-          label={tr('app.importPack')}
-          icon="package-open"
-          variant="outline"
-          disabled={appState.projectBusy}
-          testid="project-import-pack"
-          onclick={() => void importProjectPackage()}
-        />
-      </div>
-    </section>
-
-    {#if appState.recentProjects.length}
-      <section class="setting">
-        <h3>{tr('app.recentProjects')}</h3>
-        {#each appState.recentProjects as r (r.key)}
-          <button
-            type="button"
-            class="recent"
-            data-testid="project-recent"
-            disabled={appState.projectBusy}
-            onclick={() => void openRecentProject(r)}
-          >
-            <Icon name="folder" size={13} />
-            <span class="grow">{r.name}</span>
-            <span class="dim">{tr('app.assetCountShort', { n: r.assetCount ?? 0 })}</span>
-            <span class="dim">{ago(r.openedAt)}</span>
-          </button>
-        {/each}
-      </section>
-    {/if}
-
-    <!-- 这句话被三个 <code> 打断，所以按段取词（见语言文件里的注释）。 -->
-    <p class="hint">
-      {tr('app.projectHintA')}<code class="mono">project.json</code>{tr('app.projectHintB')}<code
-        class="mono">assets.json</code
-      >{tr('app.projectHintC')}<code class="mono">assets/</code>{tr('app.projectHintD')}
-    </p>
-  </Modal>
-{/if}
-
-{#if pendingUnused}
-  <ConfirmDialog
-    title={tr(pendingUnused.action === 'trash' ? 'app.unusedTrash' : 'app.unusedDelete')}
-    message={tr(
-      pendingUnused.action === 'trash' ? 'app.unusedTrashConfirm' : 'app.unusedDeleteConfirm',
-      { name: pendingUnused.name },
-    )}
-    confirmLabel={tr(pendingUnused.action === 'trash' ? 'app.unusedTrash' : 'app.unusedDelete')}
-    danger
-    testid="confirm-unused-asset"
-    onconfirm={() => void confirmUnused()}
-    oncancel={() => (pendingUnused = null)}
-  />
-{/if}
-
-{#if cleanupCopy}
-  <ConfirmDialog
-    title={cleanupCopy.title}
-    message={cleanupCopy.message}
-    confirmLabel={cleanupCopy.label}
-    danger
-    testid="confirm-cleanup"
-    onconfirm={() => void runCleanup()}
-    oncancel={() => (pendingCleanup = null)}
-  />
+  <ProjectModal onclose={() => (panel = null)} />
 {/if}
 
 {#if panel === 'settings'}
@@ -664,14 +273,13 @@
   .mono {
     font-family: 'Cascadia Code', Consolas, monospace;
   }
-  .dim {
-    color: var(--text-muted);
-  }
-  .hint {
-    margin: 0 0 var(--sp-4);
-    color: var(--text-muted);
-    font-size: var(--fs-sm);
-    line-height: 1.5;
+  /* 组界：短横线。比 rail 窄得多，读起来是「分组」而不是「另一条边」。 */
+  .rail-sep {
+    flex-shrink: 0;
+    width: 16px;
+    height: 1px;
+    margin: 2px 0;
+    background: var(--rail-border);
   }
 
   .sc-grid {
@@ -701,114 +309,4 @@
     min-width: 0;
   }
 
-  /* 占用：两列（项目 / 体积），窄面板里也不会挤成一团。 */
-  .usage {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: var(--sp-1) var(--sp-3);
-    margin-bottom: var(--sp-2);
-    font-size: var(--fs-xs);
-    color: var(--text-secondary);
-  }
-
-  /* 未使用素材：一行 = 名字 + 体积 + 三个动作。窄面板里允许换行。 */
-  .unused-hint {
-    margin: 0 0 var(--sp-2);
-    color: var(--text-muted);
-    font-size: var(--fs-xs);
-    line-height: 1.5;
-  }
-  .unused {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--sp-2);
-    padding: var(--sp-1) 0;
-    color: var(--text-secondary);
-    font-size: var(--fs-sm);
-  }
-
-  .setting {
-    padding: var(--sp-4) 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .setting:first-child {
-    padding-top: 0;
-  }
-  .setting h3 {
-    margin: 0 0 var(--sp-2);
-    color: var(--text-muted);
-    font-size: var(--fs-xs);
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-4);
-    color: var(--text-secondary);
-    font-size: var(--fs-sm);
-  }
-  .dim {
-    color: var(--text-muted);
-  }
-  .hint {
-    margin: 0 0 var(--sp-4);
-    color: var(--text-muted);
-    font-size: var(--fs-sm);
-    line-height: 1.5;
-  }
-
-  /* ------------------------------------------------ 工程面板 */
-  /* 未保存用主题色：它是「该做点什么」的提示，不是错误。 */
-  .dirty {
-    color: var(--accent);
-  }
-  .issue {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--sp-2);
-    padding: 3px 0;
-    color: var(--text-secondary);
-    font-size: var(--fs-sm);
-    line-height: 1.45;
-  }
-  /* 图标跟随严重级上色；文字保持中性，免得整块面板变成一片红。 */
-  .issue.err {
-    color: var(--text-primary);
-  }
-  .issue.err > :global(svg) {
-    color: var(--danger);
-    flex-shrink: 0;
-  }
-  .wrap {
-    flex-wrap: wrap;
-  }
-  .recent {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    width: 100%;
-    padding: 6px var(--sp-2);
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    font-size: var(--fs-sm);
-    text-align: left;
-    cursor: pointer;
-  }
-  .recent:hover:not(:disabled) {
-    background: var(--surface-hover);
-  }
-  .recent:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  code {
-    padding: 0 3px;
-    background: var(--surface-active);
-    border-radius: 3px;
-  }
 </style>
