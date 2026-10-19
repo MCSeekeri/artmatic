@@ -69,6 +69,10 @@ export const app = {
   'app.exportMp4': 'MP4',
   'app.exportMp4Hint': 'H.264 + AAC · 约 {size}',
   'app.exportMp4Unsupported': '本机浏览器不支持 WebCodecs，只能导出 PNG 序列。',
+  /* 有 WebCodecs 但没有可用 H.264 profile（W0.5）：诊断与上一条不同。 */
+  'app.exportMp4NoH264': '本机没有可用的 H.264 编码器，只能导出 PNG 序列。',
+  /* 落到 baseline = 走 OpenH264 软件编码：能编，但比硬编慢一个量级。 */
+  'app.exportMp4Software': '本机无硬件编码器（软件编码），导出会明显变慢。',
   'app.exportPng': 'PNG 序列',
   /* 真实采样估算：导出面板打开时渲当前帧、量真实 PNG 字节再乘帧数（见 samplePngFrameBytes）。
      会随画面内容波动，所以是「约」而不是承诺。 */
@@ -221,4 +225,12 @@ export const app = {
   'app.accentCyan': '青',
   'app.accentLime': '黄绿',
   'app.accentAmber': '琥珀',
+
+  /* ------------------------------------------------ 启动能力闸门（main.ts） */
+  /* 缺 WebGL2 / 目录选择时只渲染这段说明，不挂主应用。 */
+  'app.capabilityGate.title': '这个浏览器跑不了 Artmatic',
+  'app.capabilityGate.noWebgl2': '它需要 WebGL2 来做预览与导出，而这个浏览器没有可用的 WebGL2 上下文。',
+  'app.capabilityGate.noDirPicker':
+    '它需要 File System Access（选择本地目录）来保存工程，而这个浏览器不支持它。',
+  'app.capabilityGate.hint': '请改用桌面版，或最新版 Chrome / Edge。',
 } as const;

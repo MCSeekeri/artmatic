@@ -77,8 +77,13 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 
 ## 插件作者面
 
-- 两级：`plugin_try`（内存载入 + 真 GL 编译，可预览）→ `plugin_install`
-  （**必须用户确认**，否则返回 `needs-approval`）。
+- 两级：`plugin_try`（内存载入 + 真 GL 编译，可预览）→ `plugin_install`（写盘）。
+  **两级都必须用户确认**，否则返回 `needs-approval` —— 试挂不是「只看一眼」：
+  `host.importBytes` 会 `import()` 源码，也就是**立刻在主世界执行**。确认必须挡在
+  它之前，否则「未确认时没有实例」这条判据不成立。
+- `plugin_try` 的 `confirm` **不暴露给模型**（工具面没有这个参数，模型不能自批）；
+  它只由 session 在用户点了审批卡之后带 `confirm:true` 重调。MCP 面的 `confirm`
+  由客户端用户决定。「本次会话允许试挂」只活在 UI 会话里，不进协议。
 - 草稿只活在控制平面实例的内存里；安装之后磁盘才是真源。
 - 只写 `plugins/<合法 id>.js`（`isValidPluginSegment`），没有任意路径写、没有 eval。
 - `plugin-spec.ts` 的说明书由 `EFFECT_HEAD` / `ALGO_HEAD` 常量拼出 ——

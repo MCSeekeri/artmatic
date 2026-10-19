@@ -30,9 +30,10 @@
     exportPngSequence,
     fmtSize,
     gifPlan,
-    mp4Supported,
+    probeMp4Availability,
     samplePngFrameBytes,
     totalFrames,
+    type Mp4Availability,
   } from './export';
   import { tr } from '../i18n/index.svelte';
 
@@ -106,7 +107,25 @@
   });
   const pct = $derived(Math.round((appState.exportProgress ?? 0) * 100));
   const exporting = $derived(appState.exportProgress !== null);
-  const canMp4 = $derived(mp4Supported());
+  /**
+   * MP4 能力（W0.5）。**不是同步的**：无硬编的机器要逐档问 `isConfigSupported`，
+   * 才能知道能不能退到 Constrained Baseline。`checking` 期间按钮保持可用 ——
+   * 真点下去时 `exportMp4` 会自己再探一次，并以底栏提示收场。
+   */
+  let mp4 = $state<Mp4Availability | { kind: 'checking' }>({ kind: 'checking' });
+  $effect(() => {
+    // 探测与 coded area 相关，跟着工程分辨率走（`res` 是响应式派生）。
+    void res.w;
+    void res.h;
+    let live = true;
+    void probeMp4Availability().then((a) => {
+      if (live) mp4 = a;
+    });
+    return () => {
+      live = false;
+    };
+  });
+  const mp4Blocked = $derived(mp4.kind === 'no-webcodecs' || mp4.kind === 'no-h264');
   const mp4Size = $derived.by(() => {
     void appState.version;
     return fmtSize(estimateMp4Bytes());
@@ -359,14 +378,21 @@
           variant="accent"
           size="lg"
           testid="export-mp4"
-          disabled={!canMp4}
+          disabled={mp4Blocked}
           onclick={() => void exportMp4(name, trackSel || undefined)}
         />
         <p class="exp-hint" data-testid="export-mp4-hint">
-          {#if canMp4}
-            {tr('app.exportMp4Hint', { size: mp4Size })}
-          {:else}
+          {#if mp4.kind === 'no-h264'}
+            {tr('app.exportMp4NoH264')}
+          {:else if mp4.kind === 'no-webcodecs'}
             {tr('app.exportMp4Unsupported')}
+          {:else}
+            {tr('app.exportMp4Hint', { size: mp4Size })}
+            {#if mp4.kind === 'ok' && mp4.software}
+              <span class="exp-hint-soft" data-testid="export-mp4-software">
+                {tr('app.exportMp4Software')}
+              </span>
+            {/if}
           {/if}
         </p>
       </div>
@@ -496,6 +522,11 @@
     font-size: var(--fs-xs);
     line-height: 1.4;
     text-align: center;
+  }
+  /* 软件编码提示：是警告不是错误（能导，只是慢），所以用 warning 色。 */
+  .exp-hint-soft {
+    display: block;
+    color: var(--warning);
   }
   .exp-progress {
     display: flex;

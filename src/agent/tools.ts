@@ -543,7 +543,8 @@ export const AGENT_TOOLS: ToolSpec[] = [
     description:
       'Validate + import + compile a single-file plugin in memory (no disk write). Returns qualified ' +
       "ids ('<plugin>/<local>') and structured issues. Fix issues and call again with the same id. " +
-      'Call help(plugin-api) before writing source.',
+      'Requires explicit user approval (the source runs in the page immediately): without it this ' +
+      'returns code=needs-approval and the panel asks the user. Call help(plugin-api) before writing source.',
     params: [
       req('id', 'string', 'Plugin id: [a-z0-9][a-z0-9._-]*'),
       req('name', 'string', 'Display name.'),

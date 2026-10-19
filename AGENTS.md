@@ -163,7 +163,7 @@ src/
 ├── assets/        静态资源：三套缩略图（特效 / 转场 / 生成器）+ 品牌 mark，见 `src/assets/AGENTS.md`
 ├── agent/         Agent 控制面（能力声明 · 场景快照 · clip 工厂 · 排版写入 · 插件作者面）
 │                  + `llm/`（应用内模型运行时：transport / protocol / providers / session / executor）
-│                  装配在 main.ts，**不依赖 ui/**，见 `src/agent/AGENTS.md`
+│                  装配在 `app-boot.ts`，**不依赖 ui/**，见 `src/agent/AGENTS.md`
 ├── types/         跨层共用类型
 └── ui/            Svelte 组件 + 控件库（controls/）+ 主题与偏好状态 + `agent/`（对话抽屉）
 

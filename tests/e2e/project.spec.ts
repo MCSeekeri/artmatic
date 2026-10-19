@@ -31,7 +31,7 @@ type W = {
       wipe(name?: string): Promise<void>;
     };
     store: {
-      project: { name: string };
+      project: { name: string; tracks: { clips: { label?: string }[] }[] };
       commit(label: string, fn: (p: Record<string, unknown>) => void): boolean;
     };
     /** 打开的工程列表（摊平的纯数据）。 */
@@ -46,10 +46,11 @@ type W = {
     appState: {
       projectDirty: boolean;
       projectName: string;
-      projectIssues: unknown[];
+      projectIssues: { kind: string; severity: string; message: string; path: string | null }[];
       playT: number;
       seek(t: number): void;
       flash(text: string, level?: 'info' | 'success' | 'error'): void;
+      removeAsset(id: string): void;
     };
     assets: {
       put(id: string, bytes: Uint8Array, input: Record<string, unknown>): void;
@@ -228,6 +229,39 @@ test.describe('素材台账', () => {
     expect(issues.some((i) => i.kind === 'missing' && i.severity === 'error')).toBe(true);
   });
 
+  test('移除素材后保存：文件仍在磁盘上，重开只报一条聚合提示（W0.1）', async ({ page }) => {
+    await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
+    await page.evaluate((bytes) => {
+      (window as never as W).__artmatic.assets.put('img-keep', new Uint8Array(bytes), {
+        kind: 'image',
+        name: '留着文件的图',
+        originName: 'keep.png',
+      });
+    }, ASSET_BYTES);
+    await page.evaluate(() => (window as never as W).__artmatic.project.save());
+
+    const assetFiles = (): Promise<string[]> =>
+      page.evaluate(
+        async (d) =>
+          (await (window as never as W).__artmatic.project.list(`${d}/assets`)).map((i) => i.name),
+        DIR,
+      );
+    expect(await assetFiles()).toContain('img-keep.png');
+
+    // 「移除」只解除引用：字节留在磁盘上。
+    await page.evaluate(() => (window as never as W).__artmatic.appState.removeAsset('img-keep'));
+    await page.evaluate(() => (window as never as W).__artmatic.project.save());
+    expect(await assetFiles()).toContain('img-keep.png');
+
+    // 重开时它是一条聚合提示（不是每个文件一条），并说清占用多少。
+    await page.evaluate((d) => (window as never as W).__artmatic.project.open(d), DIR);
+    const issues = await page.evaluate(() => (window as never as W).__artmatic.appState.projectIssues);
+    const orphans = issues.filter((i) => i.kind === 'untracked');
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0]!.path).toBeNull();
+    expect(orphans[0]!.message).toContain('不再被引用');
+  });
+
   test('素材内容被替换后重开，检出 changed', async ({ page }) => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
     await page.evaluate((bytes) => {
@@ -271,6 +305,45 @@ test.describe('脏标记、多工程与侧栏接线', () => {
       });
     });
     expect(await page.evaluate(() => (window as never as W).__artmatic.appState.projectDirty)).toBe(true);
+  });
+
+  test('导出前会先保存：改片段 → 点导出 → 重新加载后改动还在（W0.3）', async ({ page }) => {
+    await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
+    // 把工程压到 320×180 / 0.5s：PNG 序列只产 15 帧，够证明「走完导出」而不占磁盘。
+    await page.evaluate(() => {
+      (window as never as W).__artmatic.store.commit('e2e: 压缩工程', (p) => {
+        p.resolution = { w: 320, h: 180 };
+        p.duration = 0.5;
+      });
+    });
+    await page.evaluate(() => (window as never as W).__artmatic.project.save());
+
+    // 保存之后的改动（没手动保存）—— 导出入口必须替我们落盘。
+    await page.evaluate(() => {
+      (window as never as W).__artmatic.store.commit('e2e: 导出前的改动', (p) => {
+        p.name = '导出前已保存';
+        const tracks = p.tracks as { clips: { label?: string }[] }[];
+        const first = tracks.find((t) => t.clips.length > 0);
+        if (first) first.clips[0]!.label = '导出前的改动';
+      });
+    });
+
+    await page.getByTestId('rail-export').click();
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByTestId('export-png').click();
+    await downloadPromise;
+
+    // 重新加载 → 从 OPFS 打开：改动来自磁盘，不是内存。
+    await page.reload();
+    await page.waitForFunction(() => (window as never as W).__artmatic);
+    expect(await page.evaluate((d) => (window as never as W).__artmatic.project.open(d), DIR)).toBe(true);
+
+    const labels = await page.evaluate(() =>
+      (window as never as W).__artmatic.store.project.tracks
+        .flatMap((t) => t.clips)
+        .map((c) => c.label ?? ''),
+    );
+    expect(labels).toContain('导出前的改动');
   });
 
   test('侧栏保存按钮能写进已连接的目录，面板如实显示状态', async ({ page }) => {

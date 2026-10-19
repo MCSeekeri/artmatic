@@ -42,8 +42,10 @@ call changes the actual project, and every write is undoable.
 - Workflow: \`plugin_try({id,name,source})\` -> read issues -> fix -> try again.
   Then use the qualified ids (\`<plugin>/<local>\`) in add_effect / add_clip, take a
   screenshot, and only then \`plugin_install({pluginId})\`.
-- \`plugin_install\` requires the user's approval. If it returns \`needs-approval\`,
-  the app shows a confirmation card; do not claim it is installed until
+- BOTH \`plugin_try\` and \`plugin_install\` require the user's approval: trying a
+  plugin already **runs its source in the page**. If either returns
+  \`needs-approval\`, the app shows a confirmation card; wait for the tool result
+  before claiming the plugin works, and do not claim it is installed until
   \`plugin_list\` says so.
 - Plugins are single-file ESM with no imports. Shaders must not redeclare the
   shared uniforms, and every parameter must be dispatched in \`setUniforms\`.

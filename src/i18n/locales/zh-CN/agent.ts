@@ -135,6 +135,8 @@ export const agent = {
   'agent.plugin.notFound': '没有插件 {id}',
   'agent.plugin.blocked': '插件 {id} 还没通过校验（status={status}），不能安装',
   'agent.plugin.needsApproval': '安装插件会在你的工程目录里写入可执行代码，需要用户确认',
+  /* 试挂也执行代码（只是不写盘）—— 诊断文案不要弱化成「只是校验一下」。 */
+  'agent.plugin.tryRisk': '试挂会立刻在页面里执行这份插件代码（主世界、没有沙箱），需要用户确认',
   'agent.plugin.noProject': '没有打开的工程，装不了插件',
   'agent.plugin.persistFailed': '工程没有绑定目录，插件「{id}」只在本次会话可用',
   'agent.plugin.exists': '工程里已经有插件 {id}，先 plugin_remove 再试挂',
@@ -226,6 +228,11 @@ export const agent = {
   'agent.approval.title': '安装插件？',
   'agent.approval.body': '这个插件会在你的工程里执行代码（主世界、没有沙箱）。确认要写入 plugins/ 吗？',
   'agent.approval.install': '安装',
+  /* 试挂（W0.4）：与安装区分开 —— 它不写盘，但源码会**立刻**在页面里执行。 */
+  'agent.approval.tryTitle': '试挂插件？',
+  'agent.approval.tryBody': '试挂会立刻在页面里执行这份代码（主世界、没有沙箱），并做一次真编译校验。不写盘，但确认前不会运行。',
+  'agent.approval.run': '试挂',
+  'agent.approval.allowTry': '本次会话允许试挂，不再询问',
   'agent.approval.reject': '拒绝',
   'agent.approval.source': '查看源码',
   'agent.tool.running': '运行中',

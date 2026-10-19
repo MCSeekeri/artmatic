@@ -59,7 +59,6 @@ export const errors = {
   'err.io.badJson': '{file} 不是合法 JSON：{detail}',
   'err.io.pathConflict': '素材文件名冲突，已中止保存：{detail}',
   'err.io.assetBytesMissing': '素材 {name}（{id}）在内存里没有字节，跳过写入',
-  'err.io.removeFailed': '删除旧素材失败：{path}。这不影响您继续编辑工程。',
   'err.io.ledgerRebuilt': 'assets.json 缺失或不完整，已从 assets/ 目录重建台账',
   'err.io.untrackedFile': 'assets/{name} 不在工程的素材表里，已标为未跟踪',
   'err.io.openFailed': '打开失败：{detail}',
@@ -83,11 +82,19 @@ export const errors = {
   'err.ledger.changed': '文件可能被替换过，{path} 的内容与工程记录不一致',
   'err.ledger.sizeChanged': '{path} 的大小是 {to} 字节，而非预期的 {from} 字节',
   'err.ledger.unhashed': '{path} 没有可用的哈希值',
+  /* 单个未记录文件（`auditLedger` 的逐条形态；保留给直接调用者与测试）。 */
   'err.ledger.untracked': 'assets/ 里有存在未被记录的文件：{path}',
+  /* 打开工程时的聚合形态：保存不再删素材（W0.1），孤儿会成批出现。 */
+  'err.ledger.orphans': '磁盘上有 {n} 个不再被引用的素材，占用 {size}；暂不自动清理，可手动从 assets/ 删除',
 
   /* ------------------------------------------------ 导出（ui/export.ts、exporters/） */
   /* sink 抛出的错会经 `flash('导出失败：' + msg)` 进底栏，所以这些也要抽。 */
   'err.export.noWebCodecs': '本机浏览器不支持 WebCodecs，请改用 PNG 序列导出',
+  /* 有 WebCodecs、但四档 H.264 profile 全被拒（W0.5）——
+     不要与上一条混用：那是「编不了」，这是「编不动这个 profile」。 */
+  'err.export.noH264': '本机没有可用的 H.264 编码器（Main / Baseline 都被拒），只能导出 PNG 序列',
+  /* 导出前会先保存工程（W0.3）。还没落地到目录时只提示，不拦导出。 */
+  'err.export.saveFirstHint': '这个工程还没有保存到目录：导出期间如果崩溃，未保存的改动会丢，建议先保存一次',
   'err.export.silentAudio': '音轨混流结果是静音，本次只导出画面',
   'err.export.mp4Done': '已导出 MP4 ，共 {size}',
   /* 导出落盘方式：预估体积超过内存预算时改成「先选保存位置，再边编边写」
@@ -116,6 +123,9 @@ export const errors = {
   /* 进底栏的 flash。容器认得、轨里没视频、或者编码本机解不动，都归这条 ——
      对用户来说下一步动作是同一个：换一个文件。 */
   'err.video.unreadable': '「{name}」不是能读的视频文件（容器或编码不支持）',
+  /* 导入前的体积闸门（W0.2）：说清「多大、上限多少、下一步怎么办」，
+     而不是只丢一句「太大」。 */
+  'err.video.tooLarge': '这个素材 {size}，超过本机预算 {limit}；请先压缩，或换一个小一点的视频',
 
   /* ------------------------------------------------ 图片素材 */
   /* 与视频同口径：浏览器解不开的字节（扩展名骗人、文件截断、SVG 没有固有尺寸）。 */

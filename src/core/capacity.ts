@@ -289,3 +289,24 @@ export function sanitize(input: Partial<CapacityLimits>): CapacityLimits {
 export function mbToBytes(mb: number): number {
   return Math.round(mb * 1024 * 1024);
 }
+
+export type ImportSizeCheck = { ok: true } | { ok: false; sizeBytes: number; limitBytes: number };
+
+/**
+ * 导入前的单文件体积闸门（W0.2）。
+ *
+ * 用的是 `videoPerAssetMB` —— 它本来是**显存**预算（单个视频素材允许占多少纹理），
+ * 这里拿它当「单个文件的体积代理」。口径是刻意保守的：显存预算普遍小于
+ * 「用户以为能拖进来的文件大小」，而这里挡的是「先把 2 GB 读进 `arrayBuffer()`
+ * 再发现装不下」—— 那一步的内存峰值与后续是否真的用得上无关。
+ *
+ * 边界取**闭区间**（`size === limit` 放行）：等于预算的文件没有任何一条理由被拒。
+ *
+ * ⚠️ W1.1 把素材字节句柄化之后要复看这条：届时视频不再整份进堆，
+ * 「文件体积」与「渲染代价」就彻底解耦了，这个代理口径可能该换成别的判据。
+ */
+export function checkImportSize(sizeBytes: number, limitMB: number): ImportSizeCheck {
+  const limitBytes = mbToBytes(limitMB);
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= limitBytes) return { ok: true };
+  return { ok: false, sizeBytes, limitBytes };
+}

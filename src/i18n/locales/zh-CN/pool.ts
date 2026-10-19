@@ -39,13 +39,13 @@ export const pool = {
   'pool.menu': '素材操作',
   'pool.delete': '从媒体池移除',
   'pool.deleteTitle': '移除素材？',
-  /* 没被任何片段引用时的确认语：说清「磁盘上的文件什么时候才真的没了」。 */
-  'pool.deleteMessage': '「{name}」会从媒体池移除。它引用的字节文件会在下次保存工程时从 assets/ 里删掉。',
+  /* 没被任何片段引用时的确认语：说清「移除 ≠ 销毁文件」（保存不再删素材）。 */
+  'pool.deleteMessage': '「{name}」会从媒体池移除，字节文件保留在 assets/（可在「素材检查」里看到）。',
   /* 被片段引用时多一句实话：画面会空出来（这一步不入撤销栈，撤不回来）。 */
   'pool.deleteUsedMessage':
-    '「{name}」被 {n} 个片段引用，移除后这些片段将没有画面。它引用的字节文件会在下次保存工程时从 assets/ 里删掉。',
+    '「{name}」被 {n} 个片段引用，移除后这些片段将没有画面。字节文件保留在 assets/（可在「素材检查」里看到）。',
   'pool.deleteConfirm': '移除素材',
-  'pool.deleted': '已移除素材「{name}」',
+  'pool.deleted': '已移除素材「{name}」（文件保留）',
   'pool.hint': '双击条目，或点右侧的 + 插入到播放头；条目也能直接拖到时间轴上',
   'pool.hintTypo': '双击条目置入画布中心；图片也能直接拖到画布上',
 

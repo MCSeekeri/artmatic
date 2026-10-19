@@ -495,6 +495,18 @@ test('插件试挂：坏着色器回结构化 issue，好源码进注册表', as
   ]);
 
   await send(page, '写一个插件');
+
+  /*
+   * W0.4：试挂会在主世界执行源码，所以第一份源码先弹卡。
+   * 勾上「本次会话允许试挂」后，第二轮 plugin_try 不再询问 ——
+   * 如果这个开关没生效，下面的收尾文本会等不到（工具循环卡在第二张卡上）。
+   */
+  await expect(page.getByTestId('agent-approval')).toHaveAttribute('data-kind', 'try', {
+    timeout: 30_000,
+  });
+  await page.getByTestId('agent-approval-allow').check();
+  await page.getByTestId('agent-approval-install').click();
+
   await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('试挂成功', { timeout: 30_000 });
 
   // 坏源码的 issue 里有 compile-failed；好源码进了能力清单
@@ -653,8 +665,84 @@ test('插件安装需要确认：未确认时出审批卡，拒绝后不写盘',
   ]);
 
   await send(page, '装一个插件');
-  await expect(page.getByTestId('agent-approval')).toBeVisible({ timeout: 30_000 });
+
+  // 先过试挂那道卡（它会执行源码）
+  await expect(page.getByTestId('agent-approval')).toHaveAttribute('data-kind', 'try', {
+    timeout: 30_000,
+  });
+  await page.getByTestId('agent-approval-install').click();
+
+  // 再是安装的卡：拒绝 → 不写盘
+  await expect(page.getByTestId('agent-approval')).toHaveAttribute('data-kind', 'install');
   await page.getByTestId('agent-approval-reject').click();
   await expect(page.getByTestId('agent-approval')).toHaveCount(0);
   await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('确认');
+
+  const fileName = await page.evaluate(async () => {
+    const C = (window as never as {
+      __artmatic: {
+        control: {
+          pluginList: () => Promise<{
+            ok: boolean;
+            data: { plugins: { id: string; fileName: string | null }[] };
+          }>;
+        };
+      };
+    }).__artmatic.control;
+    const r = await C.pluginList();
+    return r.ok ? (r.data.plugins.find((p) => p.id === 'e2e-approve')?.fileName ?? null) : null;
+  });
+  expect(fileName, '拒绝安装之后磁盘上不该有文件').toBeNull();
+});
+
+test('插件试挂未确认时不执行源码，确认后才产生实例（W0.4）', async ({ page }) => {
+  await openPanel(page);
+
+  const source = `export const plugin = {
+  format: 'artmatic-plugin', apiVersion: 1, id: 'e2e-try-approval', name: 'E2E try approval',
+  effects: [{ id: 'tint', name: 'Tint', params: [],
+    shader: { fragment: 'void main() { outColor = texture(u_texture, vUv); }', setUniforms() {} } }],
+};`;
+
+  const probe = await page.evaluate(async (src) => {
+    const C = (window as never as {
+      __artmatic: {
+        control: {
+          pluginTry: (i: Record<string, unknown>) => Promise<{
+            ok: boolean;
+            error?: { code: string };
+            data?: { effects: string[] };
+          }>;
+          pluginList: () => Promise<{ ok: boolean; data: { plugins: { id: string }[] } }>;
+          getCapabilities: (o: unknown) => Promise<{ ok: boolean; data: { effects: { id: string }[] } }>;
+        };
+      };
+    }).__artmatic.control;
+
+    const first = await C.pluginTry({ id: 'e2e-try-approval', name: 'E2E try approval', source: src });
+    const afterFirst = await C.pluginList();
+    const capsAfterFirst = await C.getCapabilities({ detail: 'ids' });
+    const confirmed = await C.pluginTry({
+      id: 'e2e-try-approval',
+      name: 'E2E try approval',
+      source: src,
+      confirm: true,
+    });
+    return {
+      first,
+      plugins: afterFirst.ok ? afterFirst.data.plugins.map((p) => p.id) : [],
+      effectsBefore: capsAfterFirst.ok ? capsAfterFirst.data.effects.map((e) => e.id) : [],
+      confirmed,
+    };
+  }, source);
+
+  // 未确认：明确要审批，而且**实例一个都没有**（源码没被执行）。
+  expect(probe.first.ok).toBe(false);
+  expect(probe.first.error?.code).toBe('needs-approval');
+  expect(probe.plugins).not.toContain('e2e-try-approval');
+  expect(probe.effectsBefore).not.toContain('e2e-try-approval/tint');
+
+  // 确认后同一份源码进注册表。
+  expect(probe.confirmed.ok).toBe(true);
+  expect(probe.confirmed.data?.effects).toContain('e2e-try-approval/tint');
 });

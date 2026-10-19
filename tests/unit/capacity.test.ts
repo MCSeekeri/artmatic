@@ -3,6 +3,7 @@ import {
   DEFAULT_LIMITS,
   RANGE,
   applyMachine,
+  checkImportSize,
   currentCapacity,
   deriveLimits,
   getLimits,
@@ -151,5 +152,22 @@ describe('运行期持有', () => {
   it('mbToBytes 是 MB → 字节的唯一换算处', () => {
     expect(mbToBytes(1)).toBe(1024 * 1024);
     expect(mbToBytes(1.5)).toBe(1572864);
+  });
+});
+
+describe('导入体积闸门（W0.2）', () => {
+  it('等于上限放行，超一个字节就拒', () => {
+    expect(checkImportSize(mbToBytes(192), 192)).toEqual({ ok: true });
+    const over = checkImportSize(mbToBytes(192) + 1, 192);
+    expect(over.ok).toBe(false);
+    if (!over.ok) {
+      expect(over.sizeBytes).toBe(mbToBytes(192) + 1);
+      expect(over.limitBytes).toBe(mbToBytes(192));
+    }
+  });
+
+  it('空文件与非有限数都不拦（拒绝它们该由解码器说了算）', () => {
+    expect(checkImportSize(0, 8)).toEqual({ ok: true });
+    expect(checkImportSize(Number.NaN, 8)).toEqual({ ok: true });
   });
 });

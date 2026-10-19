@@ -10,20 +10,26 @@
  * ① 新增/变化的素材字节 → assets/
  * ② assets.json
  * ③ project.json（原子 + .bak）
- * ④ 删掉已移除的素材文件
  * ```
  *
  * 逐步崩的后果：
  *
  * | 崩在 | 磁盘状态 | 后果 |
  * |---|---|---|
- * | ① 后 ② 前 | assets/ 里多几个文件 | **无害**（台账没记，下次当成 untracked 提示） |
- * | ② 后 ③ 前 | 台账新、工程旧 | **无害**（旧工程引用的素材都还在，因为 ④ 还没跑） |
- * | ③ 后 ④ 前 | 工程不再引用某些素材，但文件还在 | **无害**（孤儿文件占点空间） |
+ * | ① 后 ② 前 | assets/ 里多几个文件 | **无害**（台账没记，下次当成孤儿素材报告） |
+ * | ② 后 ③ 前 | 台账新、工程旧 | **无害**（旧工程引用的素材都还在） |
  *
- * 把 ④ 放最后是刻意的：先删文件再写工程，一旦写失败就会留下
- * 「工程引用了已经删掉的素材」——那是**有害**的，用户打开就是一堆 missing。
- * 孤儿文件只是浪费空间，缺失引用是数据丢失，两者不对等。
+ * ## 保存**不删**素材文件（W0.1）
+ *
+ * 早期版本在 ③ 之后还有一段「删掉台账里消失的素材」（原 ④）。它消灭了
+ * 「点保存顺手销毁源文件」的下半段风险，却引入了更坏的形态：一次误删 +
+ * 一次保存 = **素材永久消失**，而且磁盘上没有第二个副本。
+ *
+ * 现在删除只剩「从 `Project.assets` 里移除」这一层语义：文件留在 `assets/`，
+ * 变成孤儿。打开工程时它们会被聚合成一条提示（见 `openProject`），
+ * 清理入口留给后续版本（进回收站目录，而不是直接 `remove`）。
+ *
+ * 代价是工程目录会攒孤儿文件 —— 这是**预期状态**，不是残留。
  *
  * ## project.json 里不写 savedAt
  *
@@ -66,6 +72,7 @@ import {
   type AssetLedger,
 } from './ledger';
 import { migrateProject, type Project } from '../core/schema';
+import { formatBytes } from '../core/format';
 
 /** 目录里没有 `project.json` —— 打开时用它给用户一句能看懂的话。 */
 export class NotAProjectError extends Error {
@@ -93,6 +100,10 @@ export interface SaveReport {
   project: { bytes: number; verified: 'hash' | 'size' | 'none'; backup: string | null };
   ledgerBytes: number;
   assetsWritten: number;
+  /**
+   * 语义已废（W0.1 起保存不再删素材），恒为 0。
+   * 保留字段只为不破坏既有调用方与测试的读法。
+   */
   assetsRemoved: number;
   assetBytes: number;
   warnings: string[];
@@ -116,7 +127,6 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
 
   const prev = await readLedgerOrDefault(dir);
   const diff = diffLedger(prev.ledger, ledger);
-  const assetsDir = await resolveDir(dir, [ASSETS_DIR], true);
 
   let assetsWritten = 0;
   let assetBytes = 0;
@@ -139,7 +149,7 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
   }
 
   // ② 台账。放在工程之前：若之后写工程失败，磁盘上是「新台账 + 旧工程」，
-  //    而旧工程引用的素材一个都没被删（④ 还没跑），仍然自洽。
+  //    而旧工程引用的素材一个都没被删（保存从不删文件），仍然自洽。
   const ledgerText = serializeLedger(ledger);
   await writeBytesAtomic(dir, ASSET_LEDGER_FILE, ledgerText, { verify: true });
 
@@ -151,29 +161,16 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
   });
   warnings.push(...pr.warnings);
 
-  // ④ 用户主动移除的素材才删文件。仅仅「没被片段引用」不算 —— 那多半是
-  //    临时从时间轴上拿下来的，自动删掉会让人丢素材。
-  let assetsRemoved = 0;
-  for (const id of diff.removed) {
-    const entry = prev.ledger.entries[id]!;
-    if (!entry.path) continue;
-    try {
-      const segs = splitRelPath(entry.path);
-      const name = segs.pop();
-      if (!name) continue;
-      const parent = await resolveDir(dir, segs, false);
-      await parent.remove(name);
-      assetsRemoved++;
-    } catch (e) {
-      if (!isNotFound(e)) warnings.push(tr('err.io.removeFailed', { path: entry.path }));
-    }
-  }
+  // 用户主动移除的素材**不删文件**（W0.1，理由见文件头）。它们留在 assets/ 里，
+  // 下次打开工程时被聚合成一条「不再被引用」的提示。
+  // `assetsRemoved` 保留在 SaveReport 里是为了不破坏既有调用方，语义已废：
+  // 恒为 0，且**不要**再拿它判断磁盘上发生了什么。
 
   return {
     project: { bytes: pr.bytes, verified: pr.verified, backup: pr.backup?.name ?? null },
     ledgerBytes: new TextEncoder().encode(ledgerText).byteLength,
     assetsWritten,
-    assetsRemoved,
+    assetsRemoved: 0,
     assetBytes,
     warnings,
     durationMs: Date.now() - t0,
@@ -227,7 +224,56 @@ export async function openProject(dir: FsDirHandle): Promise<OpenResult> {
     diskPaths,
   );
 
-  return { project, ledger, issues, warnings };
+  // `auditLedger` 对每个未跟踪文件各发一条 issue。保存不再删素材之后（W0.1），
+  // 这里会有成批的孤儿 —— 逐条铺在面板上会把真正该看的 missing 淹掉。
+  // 所以只在打开工程时收成**一条**聚合提示，`auditLedger` 本身不动
+  // （它的逐文件行为有单测与别的调用方依赖）。
+  const orphaned = await summarizeOrphans(dir, ledger, diskPaths);
+  const merged = issues.filter((i) => i.kind !== 'untracked');
+  if (orphaned) merged.push(orphaned);
+
+  return { project, ledger, issues: merged, warnings };
+}
+
+/**
+ * 把「磁盘上有、台账里没有」的文件收成一条 issue。
+ *
+ * 体积只读 `FsFile.size`，**绝不 `readBytes()`**：孤儿里可能有几 GB 的视频，
+ * 为了显示一句提示把它整份读进堆，等于把 W0.1 换来的安全性又赔回去。
+ */
+async function summarizeOrphans(
+  dir: FsDirHandle,
+  ledger: AssetLedger,
+  diskPaths: string[],
+): Promise<AssetIssue | null> {
+  const tracked = new Set<string>();
+  for (const e of Object.values(ledger.entries)) if (e.path) tracked.add(e.path);
+  const orphans = diskPaths.filter((p) => !tracked.has(p));
+  if (!orphans.length) return null;
+
+  let bytes = 0;
+  for (const path of orphans) bytes += await sizeOf(dir, path);
+  return {
+    assetId: '',
+    kind: 'untracked',
+    severity: 'info',
+    path: null,
+    message: tr('err.ledger.orphans', { n: orphans.length, size: formatBytes(bytes) }),
+  };
+}
+
+/** 一个文件在磁盘上的字节数。读不到（被移走 / 权限失效）按 0 计，不挡打开工程。 */
+async function sizeOf(dir: FsDirHandle, relPath: string): Promise<number> {
+  const segs = splitRelPath(relPath);
+  const name = segs.pop();
+  if (!name) return 0;
+  try {
+    const parent = await resolveDir(dir, segs, false);
+    const fh = await parent.openFile(name, { create: false });
+    return (await fh.get()).size;
+  } catch {
+    return 0;
+  }
 }
 
 /** 打开工程后把 bundled 素材读回内存。丢失的返回 null（`issues` 里已经有记录）。 */

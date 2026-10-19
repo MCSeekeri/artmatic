@@ -5,11 +5,15 @@
  * `avc1.4d0028`（H.264 Main L4）在 1920×1080@60 下 `isConfigSupported` 为 true
  * 且实编出真实码流；`mp4a.40.2`（AAC-LC）同样能实编。
  *
- * > ⚠️ **探测串必须是 L4，不能用 `avc1.42001f`。**
- * > baseline 3.1 的 coded area 上限是 921600（= 1280×720），1080p 直接被拒，
+ * > ⚠️ **`avc1.42001f`（baseline 3.1）不能当唯一探测串。**
+ * > 它的 coded area 上限是 921600（= 1280×720），1080p 直接被拒，
  * > 报错原文 `the maximum coded area (921600) supported by the AVC level (3.1)`。
  * > 看到这一条不要误判成「H.264 不支持」——那是本项目自己踩过的坑，
  * > 连带把 ADR-001 的探测串写错了（已在该 ADR 加补注）。
+ * >
+ * > 2026-10-19（W0.5）起改成**阶梯**（见 `MP4_CODEC_LADDER`）：硬件走 Main，
+ * > 无硬编时退到 OpenH264 的 Constrained Baseline。1080p 的软件路径必须用
+ * > **Baseline 4.0**（`avc1.42e028`），3.1 的那一档只覆盖 ≤720p。
  *
  * 硬约束 1.1：导出走 `runExport` 的紧循环，`submit` 每帧 await =
  * 编码器背压。mediabunny 的 `CanvasSource.add()` 内部已按 VideoEncoder 的
@@ -34,22 +38,142 @@ import { EXPORT_SAMPLE_RATE, toAudioBuffer } from './mixdown';
 import { tr } from '../i18n/index.svelte';
 
 /**
+ * H.264 的 codec 阶梯（W0.5）。**从高到低逐档探测，第一个 `isConfigSupported`
+ * 通过的档位就是这次导出的配置。**
+ *
+ * 为什么不是一档：没有硬件编码器的机器上 Chromium 会回退 OpenH264，而它
+ * **只支持 Constrained Baseline**（`openh264_video_encoder.cc` 里
+ * `profile != H264PROFILE_BASELINE` 直接 unsupported）。写死 Main 会让这类机器
+ * 被误判成「不支持 WebCodecs」—— 其实能编，只是编不了 Main。
+ *
+ * 为什么 baseline 有两档：`avc1.42e01e` 是 **Level 3.1**，coded area 上限
+ * 921600（= 720p），1080p 会被拒（见文件头那条实测）。软件路径要覆盖 1080p
+ * 必须给 **Level 4.0 的 baseline**（`avc1.42e028`）。
+ *
+ * ```
+ * avc1.4d0028  Main 4.0        ← 硬件主路径（1080p+）
+ * avc1.4d401f  Main 3.1        ← 硬件 / 中等尺寸
+ * avc1.42e028  Baseline 4.0    ← OpenH264 软件回退（1080p）
+ * avc1.42e01e  Baseline 3.1    ← OpenH264 软件回退（≤720p）
+ * ```
+ *
+ * 前两档（Main）默认走硬件；后两档（Baseline）意味着软件编码，导出会明显变慢。
+ */
+export const MP4_CODEC_LADDER = [
+  'avc1.4d0028',
+  'avc1.4d401f',
+  'avc1.42e028',
+  'avc1.42e01e',
+] as const;
+
+export type Mp4CodecString = (typeof MP4_CODEC_LADDER)[number];
+
+/**
  * 传给 mediabunny 的编码名。
  *
  * **不是 WebCodecs 的 codec 串。** mediabunny 要的是 `'avc'` / `'aac'` 这类
  * 家族名，level 串（`avc1.4d0028` 里的 `.4d0028`）由它自己按分辨率与帧率算。
  * 传 `avc1.4d0028` 会被 TS 拒绝 —— 这正好挡住了「照抄探测串」这个错误。
  *
- * 那条探测串仍然有意义：它是**探测**用的（本机 Chrome 认不认 H.264），
- * 不是**配置**用的。两者混用是本项目自己踩过的一个坑，见文件头。
+ * 那条探测串仍然有意义：它是**探测**用的（本机 Chrome 认不认这一档 H.264），
+ * 不是**配置**用的。要让阶梯真正生效，必须把选中的串交给 mediabunny 的
+ * `fullCodecString`（否则它会自己拼一个 profile/level，等于把阶梯作废）。
  */
-export const MP4_CODEC = 'avc1.4d0028';
-/** FrameSink.configure 的 codec 参数值 —— 用来做运行期校验。 */
-export const MP4_SINK_CODEC = 'avc1.4d0028';
+export const MP4_CODEC = MP4_CODEC_LADDER[0];
+/** FrameSink.configure 的 codec 参数值 —— 用来做运行期校验（必须是阶梯里的一档）。 */
+export const MP4_SINK_CODEC = MP4_CODEC;
 const ENCODER_VIDEO_CODEC = 'avc';
 const ENCODER_AUDIO_CODEC = 'aac';
 
+/** 一档探测结果。`software` = 落在 baseline（软件编码器）上。 */
+export interface Mp4CodecChoice {
+  codec: Mp4CodecString;
+  /** 命中的档位下标（0 = 硬件主路径，>= 2 = 软件回退）。 */
+  rung: number;
+  /** 只有 baseline 是软件路径：面板据此提示「会明显变慢」。 */
+  software: boolean;
+}
+
+/**
+ * 纯函数：从「每一档支不支持」里挑出第一档。
+ *
+ * 抽出来是为了能单测 —— `isConfigSupported` 在 Node 里不存在，
+ * 而「跳过不支持、全 false 才放弃」这条逻辑恰恰是最容易写错的地方。
+ */
+export function pickMp4Codec(supported: readonly boolean[]): Mp4CodecChoice | null {
+  for (let i = 0; i < MP4_CODEC_LADDER.length; i++) {
+    if (!supported[i]) continue;
+    return { codec: MP4_CODEC_LADDER[i]!, rung: i, software: i >= 2 };
+  }
+  return null;
+}
+
+export interface Mp4ProbeOptions {
+  w: number;
+  h: number;
+  fps: number;
+  hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+}
+
+/**
+ * 探测结果缓存。键含尺寸 / 帧率 / 硬件偏好 —— level 的 coded area 与帧率都参与
+ * 支持判定，只按 codec 缓存会在改分辨率后给出过期答案。
+ *
+ * 容量很小（8 条）就够了：一个页面里会变的组合通常只有「预览尺寸 / 导出尺寸」
+ * 两三个，缓存只为避免每次开面板都再问一遍编码器。
+ */
+const PROBE_CACHE_MAX = 8;
+const probeCache = new Map<string, Mp4CodecChoice | null>();
+
+/**
+ * 按当前导出尺寸逐档探测 H.264 能力。
+ *
+ * 配置形状必须和 mediabunny 真实下发的一致：带 `avc: { format: 'avc' }`
+ * （MP4 走 AVCC 封装，不是 Annex B）。少了它，探测通过而编码失败是可能的。
+ *
+ * 返回 null = WebCodecs 不存在，或四档全不支持 —— 调用方应退回 PNG 序列，
+ * 并按「没有可用 H.264 profile」而不是「不支持 WebCodecs」措辞。
+ */
+export async function probeMp4Codec(opts: Mp4ProbeOptions): Promise<Mp4CodecChoice | null> {
+  if (typeof VideoEncoder === 'undefined') return null;
+  const key = `${opts.w}x${opts.h}@${opts.fps}#${opts.hardwareAcceleration ?? 'no-preference'}`;
+  const hit = probeCache.get(key);
+  if (hit !== undefined) return hit;
+
+  const supported: boolean[] = [];
+  for (const codec of MP4_CODEC_LADDER) {
+    try {
+      const config = {
+        codec,
+        width: opts.w,
+        height: opts.h,
+        framerate: opts.fps,
+        bitrate: defaultBitrate(opts.w, opts.h),
+        avc: { format: 'avc' },
+        ...(opts.hardwareAcceleration ? { hardwareAcceleration: opts.hardwareAcceleration } : {}),
+      } as VideoEncoderConfig;
+      const res = await VideoEncoder.isConfigSupported(config);
+      supported.push(res.supported === true);
+    } catch {
+      // 某些构建对不认识的 codec 串直接抛，而不是回 supported:false。
+      supported.push(false);
+    }
+  }
+  const choice = pickMp4Codec(supported);
+  if (probeCache.size >= PROBE_CACHE_MAX) {
+    probeCache.delete(probeCache.keys().next().value as string);
+  }
+  probeCache.set(key, choice);
+  return choice;
+}
+
 export interface Mp4SinkOptions {
+  /**
+   * 硬件加速偏好。默认不传（= `no-preference`）。
+   *
+   * 产品路径不要写死：只有 E2E / 诊断需要强制 `prefer-software` 去走基线路径。
+   */
+  hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
   /**
    * 离线混流好的音频。为 null 时不带音轨（而不是塞一条静音轨）。
    *
@@ -92,6 +216,9 @@ export class Mp4Sink implements FrameSink {
   private audioBitrate: number | undefined;
   private started = false;
   private readonly stream: SaveStream | null;
+  /** `configure` 收到的、经阶梯选中的 codec 串。交给 mediabunny 的 `fullCodecString`。 */
+  private codec: Mp4CodecString = MP4_CODEC;
+  private readonly hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
   /** 流式模式下已写出的字节数（`byteLength()` 的读数；`BufferTarget` 那条读 buffer）。 */
   private written = 0;
 
@@ -100,6 +227,7 @@ export class Mp4Sink implements FrameSink {
     this.bitrate = opts.bitrate;
     this.audioBitrate = opts.audioBitrate;
     this.stream = opts.stream ?? null;
+    this.hardwareAcceleration = opts.hardwareAcceleration;
   }
 
   async configure(
@@ -108,9 +236,10 @@ export class Mp4Sink implements FrameSink {
     codec: string,
     opts?: FrameSinkConfigureOptions,
   ): Promise<void> {
-    if (codec !== MP4_CODEC) {
-      throw new Error(tr('err.export.sinkCodec', { want: MP4_CODEC, got: codec }));
+    if (!(MP4_CODEC_LADDER as readonly string[]).includes(codec)) {
+      throw new Error(tr('err.export.sinkCodec', { want: MP4_CODEC_LADDER.join(' / '), got: codec }));
     }
+    this.codec = codec as Mp4CodecString;
     if (!opts?.canvas) {
       // 不能静默建一个占位 canvas：CanvasSource 在构造时读尺寸并缓存
       // VideoFrame 工厂，尺寸错了症状是画面被 letterbox 或裁切，控制台无提示。
@@ -152,6 +281,15 @@ export class Mp4Sink implements FrameSink {
     this.video = new CanvasSource(canvas, {
       codec: ENCODER_VIDEO_CODEC,
       bitrate: this.bitrate ?? defaultBitrate(size.w, size.h),
+      /*
+       * **阶梯真正生效的唯一入口。** 不传它，mediabunny 会按分辨率/帧率自己拼
+       * 一个 codec 串（多半是 Main），于是探测选出的 Baseline 被悄悄换掉 ——
+       * 症状是「探测说能编，导出报 unsupported」。
+       */
+      fullCodecString: this.codec,
+      ...(this.hardwareAcceleration
+        ? { hardwareAcceleration: this.hardwareAcceleration }
+        : {}),
     });
     this.output.addVideoTrack(this.video, { frameRate: fps });
 

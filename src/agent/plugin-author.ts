@@ -89,6 +89,8 @@ export async function tryPlugin(opts: {
   projectKey: string | null;
   drafts: DraftStore;
   input: { id: string; name: string; source: string };
+  /** 用户已确认「这次可以在页面里执行」。默认 false = 返回 needs-approval。 */
+  confirm?: boolean;
 }): Promise<PluginTryResult> {
   const { host, projectKey, drafts, input } = opts;
   if (!host) throw new ControlFailure('not-ready', tr('agent.plugin.noHost'));
@@ -103,6 +105,25 @@ export async function tryPlugin(opts: {
   const bytes = encode(input.source);
   if (bytes.byteLength > MAX_PLUGIN_BYTES) {
     throw new ControlFailure('invalid-argument', tr('agent.plugin.tooLarge', { bytes: bytes.byteLength, max: MAX_PLUGIN_BYTES }));
+  }
+
+  /*
+   * 确认必须挡在 `host.importBytes` **之前**（W0.4）。
+   *
+   * 试挂不是「先建个对象看看」：`importBytes` 会 `import()` 这份源码，
+   * 也就是**立刻在主世界执行它**。晚一步再拦，代码已经跑过了，
+   * 「未确认时没有产生实例」这条判据根本不可能成立。
+   *
+   * 控制平面永远要求显式 confirm；「本次会话允许试挂」只活在 UI 会话里
+   * （`agent-state` 自己决定要不要弹卡），不进入协议。
+   */
+  if (opts.confirm !== true) {
+    throw new ControlFailure('needs-approval', tr('agent.plugin.tryRisk'), {
+      kind: 'try',
+      pluginId: input.id,
+      name: input.name || input.id,
+      sourceBytes: bytes.byteLength,
+    });
   }
 
   // 文件名用清单 id 的猜测值；真正的 id 以清单为准（outcome.pluginId）。
@@ -169,6 +190,7 @@ export async function installPlugin(opts: {
   }
   if (!confirm) {
     throw new ControlFailure('needs-approval', tr('agent.plugin.needsApproval'), {
+      kind: 'install',
       pluginId,
       name: draft.name,
       effectCount: info.effectCount,

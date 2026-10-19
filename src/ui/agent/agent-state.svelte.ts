@@ -92,6 +92,8 @@ export interface AgentMessage {
 }
 
 export interface PendingApproval {
+  /** `try` = 立刻执行源码；`install` = 写进工程目录。两者文案与按钮不同。 */
+  kind: 'try' | 'install';
   pluginId: string;
   text: string;
   detail?: unknown;
@@ -133,8 +135,16 @@ class AgentUiState {
    * （见 `ui/AGENTS.md` 的 z 刻度那一段）。放根级只有一个实例，两个视图共用。
    */
   settingsOpen = $state(false);
-  /** 待用户确认的插件安装（null = 没有）。 */
+  /** 待用户确认的插件动作（试挂 / 安装；null = 没有）。 */
   pending = $state<PendingApproval | null>(null);
+  /**
+   * 「本次会话允许试挂」（W0.4）。
+   *
+   * 只活在**这个面板会话**里：不写偏好、不进工程，切工程 / 换控制平面即失效。
+   * 插件迭代期模型往往要连续试挂十几轮，每轮弹卡会让人直接点「全都同意」——
+   * 那比一次明确授权更糟。
+   */
+  allowTryThisSession = $state(false);
   /** 最近一轮改了几处（面板顶部提示「撤销本轮」）。 */
   lastWrites = $state(0);
   usage = $state<{ prompt: number; completion: number } | null>(null);
@@ -212,6 +222,7 @@ class AgentUiState {
   attachControl(control: AgentControlPlane): void {
     this.control = control;
     this.session = null; // 换控制平面 = 换工程容器，旧会话的工具闭包不能再用
+    this.allowTryThisSession = false;
   }
 
   /**
@@ -231,6 +242,7 @@ class AgentUiState {
     this.activeSessionId = null;
     this.sessionCreatedAt = 0;
     this.pending = null;
+    this.allowTryThisSession = false;
     this.pendingAsk = null;
     this.askResolve?.(null);
     this.askResolve = null;
@@ -575,15 +587,30 @@ class AgentUiState {
     return r.ok ? r.data.source : null;
   }
 
-  /** 待确认卡上的按钮。 */
-  resolveApproval(approved: boolean): void {
+  /**
+   * 待确认卡上的按钮。
+   *
+   * `rememberTry` 只对 `kind === 'try'` 有意义：勾了「本次会话允许试挂」之后，
+   * 后续试挂直接放行（不再弹卡）。**安装永远不会被这个开关顺带批准** ——
+   * 写盘是另一种风险，必须每次显式点。
+   */
+  resolveApproval(approved: boolean, rememberTry = false): void {
+    const req = this.pending;
     const resolve = this.approvalResolve;
     this.approvalResolve = null;
     this.pending = null;
+    if (approved && rememberTry && req?.kind === 'try') this.allowTryThisSession = true;
     resolve?.(approved);
   }
 
-  private askApproval(req: { pluginId: string; text: string; detail?: unknown }): Promise<boolean> {
+  private askApproval(req: {
+    kind: 'try' | 'install';
+    pluginId: string;
+    text: string;
+    detail?: unknown;
+  }): Promise<boolean> {
+    // 已授权「本次会话允许试挂」：试挂直接放行，不弹卡（安装照旧弹）。
+    if (req.kind === 'try' && this.allowTryThisSession) return Promise.resolve(true);
     return new Promise<boolean>((resolve) => {
       this.approvalResolve = resolve;
       this.pending = req;

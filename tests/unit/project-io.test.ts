@@ -101,14 +101,16 @@ describe('saveProject', () => {
     expect(f.root.inspect('p/project.json')).toBeNull();
   });
 
-  it('台账里移除的素材，磁盘上的文件跟着删掉', async () => {
+  it('台账里移除的素材，磁盘上的文件**不删**（W0.1）', async () => {
     const f = await fixture();
     await saver(f);
     expect(f.root.inspect('p/assets/img1.png')).not.toBeNull();
 
     const empty = createLedger();
-    await saver(f, { ledger: empty });
-    expect(f.root.inspect('p/assets/img1.png')).toBeNull();
+    const r = await saver(f, { ledger: empty });
+    // 文件留下当孤儿，「点保存顺手销毁源文件」这条链因此断掉。
+    expect(f.root.inspect('p/assets/img1.png')).not.toBeNull();
+    expect(r.assetsRemoved).toBe(0);
   });
 
   it('内存里没有字节的素材跳过写入并给警告', async () => {
@@ -172,6 +174,22 @@ describe('openProject', () => {
     const r = await openProject(f.dir);
     expect(r.issues.some((i) => i.kind === 'untracked')).toBe(true);
     expect(f.root.inspect('p/assets/stray.png')).not.toBeNull();
+  });
+
+  it('多个孤儿素材聚合成一条提示，而不是每个文件一条', async () => {
+    const f = await fixture();
+    await saver(f);
+    f.root.seed('p/assets/orphan-a.bin', 'aaaa');
+    f.root.seed('p/assets/orphan-b.bin', 'bbbbbb');
+
+    const r = await openProject(f.dir);
+    const orphans = r.issues.filter((i) => i.kind === 'untracked');
+    // 逐文件形态是 auditLedger 的行为（3 条），openProject 要把它收成 1 条。
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0]!.path).toBeNull();
+    expect(orphans[0]!.message).toContain('2 个');
+    // 体积取的是 4 + 6 字节，不是「有没有读到字节」。
+    expect(orphans[0]!.message).toContain('10 B');
   });
 
   it('打开旧版本工程时跑迁移', async () => {

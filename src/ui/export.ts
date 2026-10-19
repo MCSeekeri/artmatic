@@ -27,14 +27,16 @@
 
 import { appState } from './app-state.svelte';
 import { ExportCancelled, runExport } from '../exporters/export-runner';
-import { Mp4Sink, MP4_CODEC } from '../exporters/mp4-sink';
+import { Mp4Sink, probeMp4Codec } from '../exporters/mp4-sink';
 import { PngSequenceSink } from '../exporters/png-sequence';
 import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
 import { planGif, type GifPlan } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
 import { browserPlatform } from '../platform/browser';
 import { withExportFrame } from '../render/export-frame';
+import { saveProjectNow } from './project-actions';
 import { getLimits, mbToBytes } from '../core/capacity';
+import { formatBytes } from '../core/format';
 import type { SaveStream } from '../platform/types';
 import { tr } from '../i18n/index.svelte';
 
@@ -50,9 +52,64 @@ export function isExporting(): boolean {
   return appState.exportProgress !== null;
 }
 
-/** 本机是否支持 MP4 主路径。不支持时 UI 应把 MP4 按钮标成不可用。 */
+/**
+ * 本机是否**存在** WebCodecs。
+ *
+ * 这只是第一层：真正能不能编 H.264 还要看 profile / level（无硬编的机器只有
+ * Constrained Baseline）。第二层是 `probeMp4Availability()`。
+ */
 export function mp4Supported(): boolean {
   return typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined';
+}
+
+/** MP4 三态：可用（硬件 / 软件路径）/ 没有 WebCodecs / 没有可用 H.264 profile。 */
+export type Mp4Availability =
+  | { kind: 'ok'; codec: string; software: boolean }
+  | { kind: 'no-webcodecs' }
+  | { kind: 'no-h264' };
+
+/**
+ * 按当前工程尺寸探测 MP4 能力（W0.5）。
+ *
+ * 为什么必须按尺寸探测：H.264 的 level 限制的是 **coded area**，
+ * baseline 3.1（`avc1.42001e`）在 1080p 下会被直接拒绝。所以「MP4 可不可用」
+ * 不是一个与工程无关的常量。
+ *
+ * 面板与导出入口共用这一条 —— 两处各探一次会出现「面板说能导，点了报不支持」。
+ */
+export async function probeMp4Availability(): Promise<Mp4Availability> {
+  if (!mp4Supported()) return { kind: 'no-webcodecs' };
+  const p = appState.store.project;
+  const choice = await probeMp4Codec({ w: p.resolution.w, h: p.resolution.h, fps: p.fps });
+  if (!choice) return { kind: 'no-h264' };
+  return { kind: 'ok', codec: choice.codec, software: choice.software };
+}
+
+/**
+ * 导出前的强制保存（W0.3）。
+ *
+ * 目的只有一个：**别让「导出 OOM 崩标签页」顺手带走未保存的编辑**。
+ * 所以它的语义是「尽力保存」，不是闸门 —— 保存失败、用户取消、工程还没有
+ * 目录，导出都继续。
+ *
+ * 三条纪律：
+ *  1. **不主动弹目录选择器。** 没有目录时只提示一句；真去弹的话，
+ *     导出面板后面紧跟着的「选保存位置」（流式路）会变成第二个对话框，
+ *     而且 `showDirectoryPicker` 在几次 await 之后可能已经失去用户手势。
+ *  2. **先保存再置 `exportProgress`。** 两把锁互不相干：`projectBusy` 是保存的，
+ *     `exportProgress` 是导出的。反过来会让 `saveProjectNow()` 里的
+ *     `if (appState.projectBusy) return false` 直接短路。
+ *  3. **await 之后调用方要复查 `exportProgress`**：两次快速点击会都穿过
+ *     函数开头的互斥判断，而保存是异步的。
+ */
+async function saveBeforeExport(): Promise<void> {
+  if (appState.projectBusy) return;
+  if (!appState.projectDir || !appState.projectKey) {
+    appState.flash(tr('err.export.saveFirstHint'), 'info');
+    return;
+  }
+  // 失败也不拦：保存是保护，不是前置条件。
+  await saveProjectNow();
 }
 
 /**
@@ -75,13 +132,13 @@ function hasAudioClips(): boolean {
   return appState.store.project.tracks.some((t) => t.enabled && t.kind === 'audio' && t.clips.length > 0);
 }
 
-/** 体积的可读文本。UI 与提示共用，避免两处格式不一致。 */
-export function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
+/**
+ * 体积的可读文本。UI 与提示共用，避免两处格式不一致。
+ *
+ * 实现在 `core/format.ts`：`project/io.ts` 也要报孤儿素材的占用，
+ * 而 `project/` 不能 import `ui/`。这里保留原名导出，调用点不动。
+ */
+export const fmtSize = formatBytes;
 
 function baseName(): string {
   return appState.store.project.name || 'artmatic';
@@ -248,6 +305,21 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
     appState.flash(tr('err.export.noWebCodecs'), 'error');
     return;
   }
+  await saveBeforeExport();
+  // 保存是异步的：两次快速点击都能穿过上面的判断，所以这里要复查。
+  if (appState.exportProgress !== null) return;
+
+  // 阶梯探测在开跑之前做（W0.5）。全不支持时说的是「没有可用 H.264」，
+  // 不是「不支持 WebCodecs」—— 后者是误诊。
+  const choice = await probeMp4Codec({
+    w: appState.store.project.resolution.w,
+    h: appState.store.project.resolution.h,
+    fps: appState.store.project.fps,
+  });
+  if (!choice) {
+    appState.flash(tr('err.export.noH264'), 'error');
+    return;
+  }
 
   const project = appState.store.project;
   const audio = mixdown(project, (id) => appState.player.buffer(id));
@@ -268,7 +340,7 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
     // 只导某视觉轨时音轨照常混入（音频不属视觉轨，见 onlyTrackId 语义）。
     const result = await runExport(appState.renderer, project, {
       sink,
-      codec: MP4_CODEC,
+      codec: choice.codec,
       onlyTrackId,
       onProgress: (f) => {
         appState.exportProgress = f;
@@ -298,6 +370,8 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
 
 /** 导出 PNG 序列（zip）。重复调用是空操作。 */
 export async function exportPngSequence(name?: string, onlyTrackId?: string): Promise<void> {
+  if (appState.exportProgress !== null) return;
+  await saveBeforeExport();
   if (appState.exportProgress !== null) return;
 
   const ctrl = new AbortController();
@@ -432,6 +506,8 @@ export async function exportGif(
   opts: GifOptions,
   onlyTrackId?: string,
 ): Promise<void> {
+  if (appState.exportProgress !== null) return;
+  await saveBeforeExport();
   if (appState.exportProgress !== null) return;
 
   const ctrl = new AbortController();

@@ -31,6 +31,7 @@
 
 import { tr } from '../../i18n/index.svelte';
 import type { AgentControlPlane } from '../control-plane';
+import type { ControlResult } from '../types';
 import { AGENT_TOOLS, TOOL_BY_NAME, type ToolSpec } from '../tools';
 import { SUMMARY_SYSTEM, SYSTEM_PROMPT, summaryRequest } from './prompt';
 import { LLM_TIMEOUT_MS, streamChat } from './transport';
@@ -97,6 +98,18 @@ const REPEAT_WARN_AGAIN = 6;
 const REPEAT_HARD = 12;
 
 /** 第 n 次重复同一个「工具 + 参数」时该做什么（纯函数，单测覆盖）。 */
+/** 控制平面结果 → 工具结果。与 `executor` 的包装同形，避免回环里再造一份。 */
+function outcomeOf<T>(r: ControlResult<T>): ToolOutcome {
+  return r.ok
+    ? { ok: true, text: JSON.stringify({ ok: true, data: r.data }) }
+    : {
+        ok: false,
+        code: r.error.code,
+        detail: r.error.detail,
+        text: JSON.stringify({ ok: false, error: r.error }),
+      };
+}
+
 export type RepeatAction = 'none' | 'hint' | 'stop';
 
 export function repeatAction(n: number): RepeatAction {
@@ -112,12 +125,20 @@ export interface SessionOptions {
   onEvent(e: SessionEvent): void;
   onStatus(s: AgentStatus): void;
   /**
-   * 需要用户确认的动作（目前只有插件安装）。返回 true = 已批准。
+   * 需要用户确认的动作（插件试挂 / 安装）。返回 true = 已批准。
    *
-   * 由面板实现：弹一张卡，用户点「安装」才 resolve(true)。session 拿到 true
-   * 之后自己带 `confirm:true` 再调一次控制平面 —— UI 不直接改状态。
+   * `kind` 区分两种语义：`try` 会**立刻执行**源码（载入内存 + 真 GL 编译校验），
+   * `install` 才会写盘。面板按它切换文案与「本次会话允许试挂」。
+   *
+   * 由面板实现：弹一张卡，用户点了才 resolve(true)。session 拿到 true 之后
+   * 自己带 `confirm:true` 再调一次控制平面 —— UI 不直接改状态。
    */
-  onApproval?(req: { pluginId: string; detail?: unknown; text: string }): Promise<boolean>;
+  onApproval?(req: {
+    kind: 'try' | 'install';
+    pluginId: string;
+    detail?: unknown;
+    text: string;
+  }): Promise<boolean>;
   /**
    * 模型调用 `ask_user` 时由面板弹一张问答卡，回答直接作为工具结果回给模型。
    * 返回 `null` = 用户取消（工具结果里写 cancelled）。
@@ -586,22 +607,39 @@ export class AgentSession {
           const startedAt = Date.now();
           let out = await this.opts.execute(call.name, args);
 
-          // 需要审批：交给面板，用户点「安装」后 session 带 confirm:true 再调。
+          /*
+           * 需要审批：交给面板。用户点了之后 session 带 `confirm:true` 再调一次
+           * 控制平面 —— 面板不直接改状态。
+           *
+           * 两条路径（W0.4）：
+           *  · `plugin_try` 会**立刻执行**源码，批准后用同一份参数重试；
+           *  · `plugin_install` 只写盘，批准后按 pluginId 安装。
+           * 工具面不暴露 `confirm`（模型不能自己批准），所以这一层必须按名字分流。
+           */
           if (!out.ok && out.code === 'needs-approval' && this.opts.onApproval) {
             this.setStatus('awaiting-approval');
-            const pluginId = String((out.detail as { pluginId?: unknown } | undefined)?.pluginId ?? args.pluginId ?? '');
-            const approved = await this.opts.onApproval({ pluginId, detail: out.detail, text: out.text });
+            const detail = out.detail as { pluginId?: unknown; kind?: unknown } | undefined;
+            const pluginId = String(detail?.pluginId ?? args.pluginId ?? '');
+            const kind: 'try' | 'install' =
+              call.name === 'plugin_try' || detail?.kind === 'try' ? 'try' : 'install';
+            const approved = await this.opts.onApproval({
+              kind,
+              pluginId,
+              detail: out.detail,
+              text: out.text,
+            });
             this.setStatus('tool');
-            if (approved && pluginId) {
-              const installed = await this.opts.control.pluginInstall(pluginId, true);
-              out = installed.ok
-                ? { ok: true, text: JSON.stringify({ ok: true, data: installed.data }) }
-                : {
-                    ok: false,
-                    code: installed.error.code,
-                    detail: installed.error.detail,
-                    text: JSON.stringify({ ok: false, error: installed.error }),
-                  };
+            if (approved && kind === 'try') {
+              out = outcomeOf(
+                await this.opts.control.pluginTry({
+                  id: String(args.id ?? pluginId),
+                  name: String(args.name ?? ''),
+                  source: String(args.source ?? ''),
+                  confirm: true,
+                }),
+              );
+            } else if (approved && pluginId) {
+              out = outcomeOf(await this.opts.control.pluginInstall(pluginId, true));
             }
           }
 

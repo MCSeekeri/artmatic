@@ -760,11 +760,15 @@ export const TOOLS = [
     kind: 'write',
     description:
       '校验 + 载入内存 + 真 GL 编译一个单文件插件（**不写盘**）。返回限定 id 与结构化 issue，' +
-      '模型据此自修复后再次调用（同一个 id 会热替换草稿）。',
+      '模型据此自修复后再次调用（同一个 id 会热替换草稿）。' +
+      '**需要用户确认**：试挂会在页面主世界立刻执行源码；不传 confirm 时返回 code=needs-approval。',
     args: {
       id: F.string({ required: true, description: '[a-z0-9][a-z0-9._-]*' }),
       name: F.string({ required: true }),
       source: F.string({ required: true, description: '完整 ESM 源码（export const plugin = …）。' }),
+      confirm: F.boolean({
+        description: '由客户端用户明确同意后传 true；MCP 客户端不要替用户做这个决定。',
+      }),
     },
   },
   {

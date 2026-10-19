@@ -371,7 +371,9 @@ async function dispatch(name, args, extra) {
     /* -------------------------------------------------------------- 插件 */
     case 'artmatic_plugin_try':
       return unwrap(
-        await bridge.call('pluginTry', [{ id: args.id, name: args.name, source: args.source }]),
+        await bridge.call('pluginTry', [
+          { id: args.id, name: args.name, source: args.source, confirm: args.confirm === true },
+        ]),
       );
 
     case 'artmatic_plugin_install':

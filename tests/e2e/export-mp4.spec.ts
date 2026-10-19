@@ -136,6 +136,63 @@ test('导出面板：同时提供 MP4 与 PNG 两个入口，且 MP4 显示预�
   expect(hint).toMatch(/\d+(\.\d+)?\s*(KB|MB|B|GB)/);
 });
 
+test('Main 被拒时退到 Constrained Baseline，且产物能被解码器读回（W0.5）', async ({ page }) => {
+  await setupTinyProject(page);
+
+  /*
+   * 模拟「无硬件编码器」的机器：把 Main 两档报成不支持，baseline 照实问。
+   *
+   * 为什么不是 `hardwareAcceleration: 'prefer-software'`：那只是给编码器的
+   * **偏好**，实测在有硬编的机器上它仍会返回 Main 支持（这个构建并不因此
+   * 切换到 OpenH264）。而这条用例要验证的是**阶梯逻辑**——「Main 被拒 →
+   * 用 baseline 编 → 产物 profile 真的是 0x42」；能力报告正是阶梯的唯一输入，
+   * 所以在这层做桩，比去猜驱动的偏好可靠。
+   */
+  await page.evaluate(() => {
+    const real = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+    Object.defineProperty(VideoEncoder, 'isConfigSupported', {
+      configurable: true,
+      value: async (config: VideoEncoderConfig) => {
+        if (String(config.codec).startsWith('avc1.4d')) return { supported: false };
+        return real(config);
+      },
+    });
+  });
+
+  const probe = await page.evaluate(async () => {
+    const A = (window as never as {
+      __artmatic: { exportMp4Probe: () => Promise<Record<string, unknown>> };
+    }).__artmatic;
+    return A.exportMp4Probe();
+  });
+
+  // 断言三件事：选中的是 baseline 档、产物 avcC 的 profile 是 0x42、
+  // 这份 avcC 能被解码器接受（「盒子对」不等于「能播」）。
+  expect(probe.codec, 'Main 全被拒时应当落到 baseline 档').toMatch(/^avc1\.42e0/);
+  expect(probe.bytes as number).toBeGreaterThan(0);
+  expect(probe.avcProfile, 'avcC 里的 profile 应当是 Baseline（0x42）').toBe(0x42);
+  expect(probe.decodable, '产物的 avcC 应当能被 VideoDecoder 接受').toBe(true);
+});
+
+test('H.264 全不支持时文案说「只能导出 PNG 序列」，不是「不支持 WebCodecs」', async ({ page }) => {
+  await setupTinyProject(page);
+
+  // 桩在打开面板**之前**：探测发生在面板挂载时。
+  await page.evaluate(() => {
+    Object.defineProperty(VideoEncoder, 'isConfigSupported', {
+      configurable: true,
+      value: async () => ({ supported: false }),
+    });
+  });
+
+  await page.getByTestId('rail-export').click();
+  const hint = page.getByTestId('export-mp4-hint');
+  await expect(hint).toContainText('只能导出 PNG 序列');
+  // 这是 W0.5 的全部意义：机器能编 H.264，只是编不了这批 profile。
+  await expect(hint).not.toContainText('不支持 WebCodecs');
+  await expect(page.getByTestId('export-mp4')).toBeDisabled();
+});
+
 test('导出管线（不经下载）：产物是含音视频双轨的合法 MP4', async ({ page }) => {
   await setupTinyProject(page);
 

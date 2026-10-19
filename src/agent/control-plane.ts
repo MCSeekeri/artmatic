@@ -59,7 +59,7 @@ import { defaultValues, type ParamDef } from '../effects/types';
 import { defaultEffectValues, getEffect } from '../effects/registry';
 import { getGenerator } from '../algos/registry';
 import { defaultTransitionValues, getTransition } from '../effects/transitions/registry';
-import { Mp4Sink, MP4_CODEC } from '../exporters/mp4-sink';
+import { Mp4Sink, probeMp4Codec } from '../exporters/mp4-sink';
 import { PngSequenceSink } from '../exporters/png-sequence';
 import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
 import { planGif } from '../exporters/gif-plan';
@@ -339,7 +339,17 @@ export interface AgentControlPlane {
   ): Promise<ControlResult<{ elements: number; dropped: number }>>;
 
   /* ------------------------------------------------------------- 插件 */
-  pluginTry(input: { id: string; name: string; source: string }): Promise<ControlResult<PluginTryResult>>;
+  /**
+   * 试挂（载入内存 + 校验）。`confirm: false`（默认）**只返回 `needs-approval`**，
+   * 不 import 源码、不产生任何实例 —— 试挂会在主世界执行这份代码。
+   * 面板弹卡，用户点了才带 `confirm: true` 再调一次。
+   */
+  pluginTry(input: {
+    id: string;
+    name: string;
+    source: string;
+    confirm?: boolean;
+  }): Promise<ControlResult<PluginTryResult>>;
   /**
    * 安装。`confirm: false`（默认）**只返回 `needs-approval`**，不写盘 ——
    * 面板拿到 detail 后弹确认，用户点了才带 `confirm: true` 再调一次。
@@ -1452,9 +1462,13 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         // 复用 UI 那条同义文案：agent 与面板给的是同一个下一步动作。
         throw new ControlFailure('unsupported', tr('err.export.noWebCodecs'));
       }
+      // 与 UI 走同一条阶梯（W0.5）：无硬编的机器只有 Constrained Baseline。
+      const exportSize = size ?? project.resolution;
+      const choice = await probeMp4Codec({ w: exportSize.w, h: exportSize.h, fps: project.fps });
+      if (!choice) throw new ControlFailure('unsupported', tr('err.export.noH264'));
       const audio = mixdown(project, (id) => ctx.getAudioBuffer(id));
       sink = new Mp4Sink({ audio });
-      codec = MP4_CODEC;
+      codec = choice.codec;
     } else if (opt.format === 'png') {
       sink = new PngSequenceSink();
     } else {
@@ -1715,6 +1729,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             name: String(input?.name ?? ''),
             source: String(input?.source ?? ''),
           },
+          // 控制平面永远要求显式确认；「本次会话允许」是 UI 的会话状态。
+          confirm: input?.confirm === true,
         });
       });
     },

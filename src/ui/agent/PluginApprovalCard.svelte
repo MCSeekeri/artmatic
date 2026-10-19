@@ -13,6 +13,18 @@
 
   let source = $state<string | null>(null);
   let loading = $state(false);
+  /** 「本次会话允许试挂」（只在 `kind === 'try'` 时出现）。 */
+  let rememberTry = $state(false);
+
+  function approve(): void {
+    agentState.resolveApproval(true, rememberTry);
+    rememberTry = false;
+  }
+
+  function reject(): void {
+    agentState.resolveApproval(false);
+    rememberTry = false;
+  }
 
   async function toggleSource(): Promise<void> {
     if (source !== null) {
@@ -28,13 +40,20 @@
 </script>
 
 {#if agentState.pending}
-  <div class="approval" data-testid="agent-approval">
+  {@const isTry = agentState.pending.kind === 'try'}
+  <div class="approval" data-testid="agent-approval" data-kind={agentState.pending.kind}>
     <div class="title">
       <Icon name="triangle-alert" size={13} />
-      <span>{tr('agent.approval.title')}</span>
+      <span>{tr(isTry ? 'agent.approval.tryTitle' : 'agent.approval.title')}</span>
       <code>{agentState.pending.pluginId}</code>
     </div>
-    <p>{tr('agent.approval.body')}</p>
+    <p>{tr(isTry ? 'agent.approval.tryBody' : 'agent.approval.body')}</p>
+    {#if isTry}
+      <label class="remember">
+        <input type="checkbox" data-testid="agent-approval-allow" bind:checked={rememberTry} />
+        <span>{tr('agent.approval.allowTry')}</span>
+      </label>
+    {/if}
     <div class="row">
       <Button
         label={tr('agent.approval.source')}
@@ -48,13 +67,13 @@
         label={tr('agent.approval.reject')}
         variant="outline"
         testid="agent-approval-reject"
-        onclick={() => agentState.resolveApproval(false)}
+        onclick={reject}
       />
       <Button
-        label={tr('agent.approval.install')}
+        label={tr(isTry ? 'agent.approval.run' : 'agent.approval.install')}
         variant="accent"
         testid="agent-approval-install"
-        onclick={() => agentState.resolveApproval(true)}
+        onclick={approve}
       />
     </div>
     {#if source !== null}
@@ -97,6 +116,20 @@
     color: var(--text-secondary);
     font-size: 11px;
     line-height: 1.5;
+  }
+  .remember {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 0 0 var(--sp-2);
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.5;
+    cursor: pointer;
+  }
+  .remember input {
+    margin: 0;
+    accent-color: var(--accent);
   }
   .row {
     display: flex;

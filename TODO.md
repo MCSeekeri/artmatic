@@ -1,3 +1,30 @@
+# 本轮已完成（2026-10-19 · 0.3 加固 W0「止血」）
+
+按 `docs/plan-0.3-hardening.md` 的 W0 批次（五项互不相干的小改 + 一条可选闸门）：
+
+- **保存不删素材**（W0.1）：`saveProject` 去掉第 ④ 段；媒体池「移除」只解除引用，
+  字节留在 `assets/`。打开工程时把孤儿聚合成**一条**提示（体积只 stat、不读字节）。
+  删除确认语与完成语同步改成「文件保留」，不再承诺保存时销毁。
+- **导入体积闸门**（W0.2）：`core/capacity.ts::checkImportSize`（闭区间，超一字节即拒）
+  挡在 `probeVideo` / `arrayBuffer` **之前**；文案给出「多大 / 上限多少 / 怎么改」。
+- **导出前强制保存**（W0.3）：MP4 / PNG / GIF 三条入口先 `saveProjectNow()`；
+  无目录时只提示不拦；先保存再置 `exportProgress`，await 后复查一次。
+- **插件试挂需确认**（W0.4）：`plugin_try` 默认返回 `needs-approval`，确认挡在
+  `host.importBytes` 之前（否则源码已经执行）。审批卡按 `kind` 分流，试挂卡带
+  「本次会话允许试挂」；`plugin_try` 的工具面**不加** `confirm`（模型不能自批），
+  MCP 面显式加、由客户端用户确认。
+- **MP4 codec 阶梯**（W0.5）：`avc1.4d0028` → `avc1.4d401f` → `avc1.42e028` →
+  `avc1.42e01e`（补 baseline 4.0：3.1 的 coded area 只到 720p）。探测按导出尺寸
+  + `avc: {format:'avc'}`；选中串交给 `CanvasSource.fullCodecString`，否则 mediabunny
+  会自己拼回 Main。面板区分「无硬编（软件路径，会慢）」与「没有可用 H.264」。
+- **启动能力闸门**（可选）：`main.ts` 只做 WebGL2 / `showDirectoryPicker` 检查，
+  通过后动态 import `app-boot.ts`（原 main.ts 正文逐字搬迁）；缺能力时渲染静态说明。
+- 守卫：`project-io.test.ts`（移除不删 + 孤儿聚合成一条）、`capacity.test.ts`
+  （导入闸门边界）、`mp4-codec.test.ts`（阶梯纯函数）；E2E `project.spec.ts`
+  （移除后重开文件仍在 / 改片段→导出→reload 改动还在）、`media-pool.spec.ts`
+  （超限导入被拒）、`export-mp4.spec.ts`（Main 被拒→Baseline 产物 profile 0x42 且可解码 /
+  全不支持时的文案）、`agent-in-app.spec.ts`（未确认不产生实例 + 会话允许 + 安装拒绝）。
+
 # 本轮已完成（2026-10-18 · 第三轮：400 修复与可用性）
 
 - **修复 400**：重复调用的引导以前作为 **system 消息**插在 assistant/tool 之间，

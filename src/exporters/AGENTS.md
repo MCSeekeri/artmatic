@@ -53,10 +53,15 @@
 - mediabunny 生命周期：加轨（`addVideoTrack` / `addAudioTrack`）→ `output.start()` →
   源 `.add(样本)` → `finalize()`。音频**建源 + 加轨**在 `configure`（start 前必须建好），
   灌 PCM 在第一次 `submit` 之前（`add()` 断言已 started）。灌早了报 `Output has not started`。
-- **探测 H.264 用 `avc1.4d0028`（Main L4）**。`avc1.42001f` 是 **baseline 3.1**，
-  其 coded area 上限 921600 = **720p**，1080p 直接被拒并报
-  `the maximum coded area (921600) supported by the AVC level (3.1)` ——
-  **别把这条读成「H.264 不支持」**。另：`about:blank` 不是 secure context，
+- **H.264 走四档阶梯**（`mp4-sink.ts::MP4_CODEC_LADDER`，W0.5）：
+  `avc1.4d0028`(Main 4.0) → `avc1.4d401f`(Main 3.1) → `avc1.42e028`(Baseline 4.0) →
+  `avc1.42e01e`(Baseline 3.1)。无硬编的机器只有 OpenH264 的 **Constrained Baseline**，
+  写死 Main 会把它们误判成「不支持 WebCodecs」。baseline 必须留 **4.0** 那档：
+  3.1 的 coded area 上限 921600 = **720p**，1080p 被拒并报
+  `the maximum coded area (921600) supported by the AVC level (3.1)` —— **别把这条读成
+  「H.264 不支持」**。探测用 `probeMp4Codec()`（带 `avc: { format: 'avc' }`，与 mediabunny
+  真实配置同构），选中的串必须交给 `CanvasSource` 的 `fullCodecString`，否则 mediabunny
+  会自己拼一个 Main，阶梯等于没做。另：`about:blank` 不是 secure context，
   `VideoEncoder` 压根不存在，探测必须起 `http://localhost`。
 - 无头环境里硬件编解码会失效 ⇒ E2E 只能断言产物**可解析**（ftyp/moov/avc1/mp4a），
   不能断言编码速度。「盒子对」也不等于「能播」—— 真正验证要把产物喂给浏览器 `<video>`

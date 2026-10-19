@@ -23,6 +23,8 @@
  */
 
 import { newId } from '../core/schema';
+import { checkImportSize, getLimits } from '../core/capacity';
+import { formatBytes } from '../core/format';
 import { computeWaveform, decodeAudio } from '../audio/decode';
 import { imageSourceFor, registerImageBytes, registerVideoMedia } from '../engine/media-assets';
 import { probeVideo } from '../engine/video-source';
@@ -96,6 +98,22 @@ export async function importVideoFile(
   file: File,
   target: ImportTarget = {},
 ): Promise<ImportedFile | null> {
+  /*
+   * 体积闸门必须在 `probeVideo` / `arrayBuffer` **之前**（W0.2）：
+   * 那两步都会把整个文件读进堆，先读再拒绝等于白付一次峰值。
+   */
+  const check = checkImportSize(file.size, getLimits().videoPerAssetMB);
+  if (!check.ok) {
+    appState.flash(
+      tr('err.video.tooLarge', {
+        size: formatBytes(check.sizeBytes),
+        limit: formatBytes(check.limitBytes),
+      }),
+      'error',
+    );
+    return null;
+  }
+
   const meta = await probeVideo(file);
   if (!meta) {
     appState.flash(tr('err.video.unreadable', { name: file.name }), 'error');
