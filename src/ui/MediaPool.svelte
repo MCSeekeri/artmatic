@@ -14,6 +14,7 @@
   import Menu from './controls/Menu.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { appState } from './app-state.svelte';
+  import { collectAsset, relinkAsset } from './project-actions';
   import {
     ASSET_DRAG_MIME,
     buildPoolItems,
@@ -215,6 +216,11 @@
                 {#if it.missing}
                   <span class="warn">{tr('pool.missing')}</span>
                 {/if}
+                {#if it.linked}
+                  <span class="badge" title={tr('pool.linkedHint')} data-testid="pool-linked">
+                    {tr('pool.linked')}
+                  </span>
+                {/if}
                 {#if metaOf(it)}<span>{metaOf(it)}</span>{/if}
               </span>
             </span>
@@ -254,10 +260,32 @@
 {#if menuFor}
   <Menu
     items={[
+      ...(menuTarget?.linked
+        ? [
+            {
+              id: 'collect',
+              label: tr('pool.collect'),
+              icon: 'hard-drive' as const,
+              testid: 'pool-menu-collect',
+              onselect: () => {
+                if (menuTarget) void collectAsset(menuTarget.id);
+              },
+            },
+            {
+              id: 'relink',
+              label: tr('pool.relink'),
+              icon: 'link' as const,
+              testid: 'pool-menu-relink',
+              onselect: () => {
+                if (menuTarget) void relinkAsset(menuTarget.id);
+              },
+            },
+          ]
+        : []),
       {
         id: 'delete',
         label: tr('pool.delete'),
-        icon: 'trash',
+        icon: 'trash' as const,
         danger: true,
         testid: 'pool-menu-delete',
         // 读 `menuTarget`（普通变量），**不是** `menuFor`：理由见它的声明。

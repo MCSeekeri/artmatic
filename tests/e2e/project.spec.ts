@@ -31,7 +31,11 @@ type W = {
       wipe(name?: string): Promise<void>;
     };
     store: {
-      project: { name: string; tracks: { clips: { label?: string }[] }[] };
+      project: {
+        name: string;
+        assets: Record<string, unknown>;
+        tracks: { clips: { label?: string }[] }[];
+      };
       commit(label: string, fn: (p: Record<string, unknown>) => void): boolean;
     };
     /** 打开的工程列表（摊平的纯数据）。 */
@@ -55,6 +59,8 @@ type W = {
     assets: {
       put(id: string, bytes: Uint8Array, input: Record<string, unknown>): void;
       ids(): string[];
+      /** W1.3：已移除但字节文件仍保留的素材。 */
+      retainedIds(): string[];
     };
   };
 };
@@ -183,7 +189,7 @@ test.describe('工程目录的保存与打开', () => {
 test.describe('素材台账', () => {
   test.beforeEach(async ({ page }) => boot(page));
 
-  test('素材字节落进 assets/，台账记的哈希与 Node 算的一致', async ({ page }) => {
+  test('素材字节落进 assets/，台账记的采样指纹与 Node 算的一致', async ({ page }) => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
     await page.evaluate((bytes) => {
       (window as never as W).__artmatic.assets.put('img-test', new Uint8Array(bytes), {
@@ -199,14 +205,33 @@ test.describe('素材台账', () => {
     expect(files.map((i) => i.name)).toContain('img-test.png');
 
     const ledgerText = await page.evaluate((d) => (window as never as W).__artmatic.project.read(`${d}/assets.json`), DIR);
-    const entry = (JSON.parse(ledgerText!) as { entries: Record<string, { path: string; hash: string; bytes: number }> })
-      .entries['img-test']!;
+    const entry = (
+      JSON.parse(ledgerText!) as {
+        entries: Record<
+          string,
+          { content: { size: number; fp: string }; locations: { kind: string; path: string }[] }
+        >;
+      }
+    ).entries['img-test']!;
 
-    expect(entry.path).toBe('assets/img-test.png');
-    expect(entry.bytes).toBe(ASSET_BYTES.length);
-    // 独立在 Node 侧算一遍：证明浏览器里那份 sha256 不是自己跟自己对账。
-    const expected = createHash('sha256').update(Buffer.from(ASSET_BYTES)).digest('hex');
-    expect(entry.hash).toBe(expected);
+    expect(entry.locations.find((l) => l.kind === 'project')?.path).toBe('assets/img-test.png');
+    expect(entry.content.size).toBe(ASSET_BYTES.length);
+
+    /*
+     * 独立在 Node 侧算一遍采样指纹：证明浏览器里那份不是自己跟自己对账。
+     * 算法见 `src/project/fingerprint.ts`：fp1:<size>:<sha256(size\nhead\ntail) 前 32>。
+     * 只读首尾各 64 KiB —— 这正是它能用在 2 GB 视频上的原因。
+     */
+    const full = Buffer.from(ASSET_BYTES);
+    const head = full.subarray(0, 64 * 1024);
+    const tail = full.length > 64 * 1024 ? full.subarray(-64 * 1024) : Buffer.alloc(0);
+    const expected =
+      `fp1:${full.length}:` +
+      createHash('sha256')
+        .update(Buffer.concat([Buffer.from(`${full.length}\n`), head, tail]))
+        .digest('hex')
+        .slice(0, 32);
+    expect(entry.content.fp).toBe(expected);
   });
 
   test('素材文件被删掉后重开，检出 missing', async ({ page }) => {
@@ -229,13 +254,20 @@ test.describe('素材台账', () => {
     expect(issues.some((i) => i.kind === 'missing' && i.severity === 'error')).toBe(true);
   });
 
-  test('移除素材后保存：文件仍在磁盘上，重开只报一条聚合提示（W0.1）', async ({ page }) => {
+  test('移除素材后保存：文件仍在，重开是「未使用素材」而不是孤儿（W0.1 / W1.3）', async ({ page }) => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
     await page.evaluate((bytes) => {
       (window as never as W).__artmatic.assets.put('img-keep', new Uint8Array(bytes), {
         kind: 'image',
         name: '留着文件的图',
         originName: 'keep.png',
+      });
+      (window as never as W).__artmatic.store.commit('e2e: 登记素材', (p) => {
+        (p as { assets: Record<string, unknown> }).assets['img-keep'] = {
+          id: 'img-keep',
+          kind: 'image',
+          name: '留着文件的图',
+        };
       });
     }, ASSET_BYTES);
     await page.evaluate(() => (window as never as W).__artmatic.project.save());
@@ -248,18 +280,83 @@ test.describe('素材台账', () => {
       );
     expect(await assetFiles()).toContain('img-keep.png');
 
-    // 「移除」只解除引用：字节留在磁盘上。
+    // 「移除」只解除引用：字节留在磁盘上，台账改记 retained。
     await page.evaluate(() => (window as never as W).__artmatic.appState.removeAsset('img-keep'));
     await page.evaluate(() => (window as never as W).__artmatic.project.save());
     expect(await assetFiles()).toContain('img-keep.png');
 
-    // 重开时它是一条聚合提示（不是每个文件一条），并说清占用多少。
+    // 重开：它不再是「孤儿」（台账知道这个文件），而是可恢复的保留项。
     await page.evaluate((d) => (window as never as W).__artmatic.project.open(d), DIR);
-    const issues = await page.evaluate(() => (window as never as W).__artmatic.appState.projectIssues);
-    const orphans = issues.filter((i) => i.kind === 'untracked');
-    expect(orphans).toHaveLength(1);
-    expect(orphans[0]!.path).toBeNull();
-    expect(orphans[0]!.message).toContain('不再被引用');
+    const state = await page.evaluate(() => {
+      const A = (window as never as W).__artmatic;
+      return {
+        issues: A.appState.projectIssues,
+        retained: A.assets.retainedIds(),
+      };
+    });
+    expect(state.issues.filter((i) => i.kind === 'untracked')).toHaveLength(0);
+    expect(state.retained).toContain('img-keep');
+
+    // 面板里能恢复回工程。
+    await page.getByTestId('rail-project').click();
+    await expect(page.getByTestId('unused-asset')).toHaveCount(1);
+    await page.getByTestId('unused-restore').click();
+    const restored = await page.evaluate(() => {
+      const A = (window as never as W).__artmatic;
+      return {
+        declared: Object.keys(A.store.project.assets),
+        retained: A.assets.retainedIds(),
+      };
+    });
+    expect(restored.declared).toContain('img-keep');
+    expect(restored.retained).not.toContain('img-keep');
+  });
+
+  test('清理未使用素材：文件进 assets/.trash，不再留在 assets/（W1.3）', async ({ page }) => {
+    await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
+    await page.evaluate((bytes) => {
+      (window as never as W).__artmatic.assets.put('img-trash', new Uint8Array(bytes), {
+        kind: 'image',
+        name: '会被清理的图',
+        originName: 'trash.png',
+      });
+      (window as never as W).__artmatic.store.commit('e2e: 登记素材', (p) => {
+        (p as { assets: Record<string, unknown> }).assets['img-trash'] = {
+          id: 'img-trash',
+          kind: 'image',
+          name: '会被清理的图',
+        };
+      });
+    }, ASSET_BYTES);
+    await page.evaluate(() => (window as never as W).__artmatic.project.save());
+    await page.evaluate(() => (window as never as W).__artmatic.appState.removeAsset('img-trash'));
+    await page.evaluate(() => (window as never as W).__artmatic.project.save());
+    await page.evaluate((d) => (window as never as W).__artmatic.project.open(d), DIR);
+
+    await page.getByTestId('rail-project').click();
+    await page.getByTestId('unused-trash').click();
+    await expect(page.getByTestId('confirm-unused-asset')).toBeVisible();
+    await page.getByTestId('confirm-unused-asset-ok').click();
+    /*
+     * 先等界面把这一行去掉：移动是**异步**的（流式写回收站 → 删原文件 → 更新台账），
+     * 点完立刻去列目录会读到「还没搬完」的中间态。
+     */
+    await expect(page.getByTestId('unused-asset')).toHaveCount(0);
+
+    const layout = await page.evaluate(async (d) => {
+      const A = (window as never as W).__artmatic;
+      const assets = await A.project.list(`${d}/assets`);
+      const trash = await A.project.list(`${d}/assets/.trash`);
+      return { assets, trash };
+    }, DIR);
+
+    expect(layout.assets.filter((i) => i.kind === 'file').map((i) => i.name)).not.toContain('img-trash.png');
+    expect(layout.trash.map((i) => i.name).some((n) => n.startsWith('img-trash-'))).toBe(true);
+    // 保留项从台账里消失（文件已进回收站，不再有可恢复的目标）。
+    const retained = await page.evaluate(
+      () => (window as never as W).__artmatic.assets.retainedIds(),
+    );
+    expect(retained).not.toContain('img-trash');
   });
 
   test('素材内容被替换后重开，检出 changed', async ({ page }) => {

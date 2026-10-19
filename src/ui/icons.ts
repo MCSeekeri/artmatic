@@ -53,7 +53,11 @@ import Droplet from '@lucide/svelte/icons/droplet';
 import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 import Eye from '@lucide/svelte/icons/eye';
 import EyeOff from '@lucide/svelte/icons/eye-off';
+import Archive from '@lucide/svelte/icons/archive';
 import FilePlus from '@lucide/svelte/icons/file-plus';
+import FileX from '@lucide/svelte/icons/file-x';
+import LinkIcon from '@lucide/svelte/icons/link';
+import PackageOpen from '@lucide/svelte/icons/package-open';
 import FileTypeCorner from '@lucide/svelte/icons/file-type-corner';
 import FlaskConical from '@lucide/svelte/icons/flask-conical';
 import Folder from '@lucide/svelte/icons/folder';
@@ -195,6 +199,10 @@ export const ICONS = {
   eye: Eye,
   'eye-off': EyeOff,
   'file-plus': FilePlus,
+  'file-x': FileX,
+  archive: Archive,
+  link: LinkIcon,
+  'package-open': PackageOpen,
   'file-type-corner': FileTypeCorner,
   'flask-conical': FlaskConical,
   folder: Folder,

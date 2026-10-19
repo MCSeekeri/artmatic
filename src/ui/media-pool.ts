@@ -8,7 +8,7 @@
  * | 出处 | 有什么 | 没有什么 |
  * |---|---|---|
  * | `Project.assets`（工程文件里那张逻辑表） | kind / 名字 / 时长 / 尺寸 | 字节 |
- * | `AssetStore`（运行期素材仓） | 字节、原始文件名 | 时长 / 尺寸 |
+ * | `AssetStore`（运行期素材仓） | 字节来源与字节数、原始文件名 | 时长 / 尺寸 |
  *
  * 面板以**工程文件为准**（它才是保存、打开之后一定还在的那一份），仓里有而
  * 工程里还没登记的也一并列出 —— 导入是「先 put 字节、再 commit」，中间态不该
@@ -52,10 +52,18 @@ export interface PoolItem {
   bytes: number | null;
   /** 工程登记了它、但仓里没有字节 —— 打开工程时那个文件读不出来。 */
   missing: boolean;
+  /** 引用式素材（W1）：字节不在工程目录里，指向本机原文件。 */
+  linked?: boolean;
 }
 
-/** 只是声明我们用到素材仓的哪几个方法（传真仓或假的都行）。 */
-type PoolSource = Pick<AssetStore, 'ids' | 'input' | 'get'>;
+/**
+ * 只是声明我们用到素材仓的哪几个方法（传真仓或假的都行）。
+ *
+ * W1.1 起读的是 `size()` 而不是 `get()`：视频的字节根本不在内存里，
+ * 而「这一行显示多大」只需要字节数。
+ */
+type PoolSource = Pick<AssetStore, 'ids' | 'input' | 'size'> &
+  Partial<Pick<AssetStore, 'modeOf'>>;
 
 export function buildPoolItems(
   declared: Readonly<Record<string, Asset>>,
@@ -66,19 +74,19 @@ export function buildPoolItems(
 
   for (const [id, a] of Object.entries(declared)) {
     seen.add(id);
-    const bytes = store.get(id);
     out.push({
       id,
       kind: a.kind,
       name: a.name,
       durationSec: a.durationSec ?? null,
       size: a.size ?? null,
-      bytes: bytes?.byteLength ?? null,
+      bytes: store.size(id),
       /*
        * 判据是「仓里有没有这条记录」，**不是**「字节数是不是 0」：generated
        * 素材（演示工程的节拍音频）本来就没有字节，但它随时可重建，不算缺失。
        */
       missing: !store.input(id),
+      linked: store.modeOf?.(id) === 'linked',
     });
   }
 
@@ -92,7 +100,7 @@ export function buildPoolItems(
       name: input.name,
       durationSec: null,
       size: null,
-      bytes: store.get(id)?.byteLength ?? null,
+      bytes: store.size(id),
       missing: false,
     });
   }

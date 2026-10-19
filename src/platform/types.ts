@@ -56,6 +56,22 @@ export interface PickedVideo {
 }
 
 /**
+ * 一份**引用式**素材：文件仍在用户原来的位置，工程里不复制。
+ *
+ * 浏览器给不出真实路径，所以给可持久化的 `FileSystemFileHandle`（存 IndexedDB，
+ * 重开时可能要一次授权）；桌面版给 `path`（主进程直接流式读）。
+ * 两者至少一个非空 —— 都为空时调用方必须退回「拷贝进工程」，不能假装引用成功。
+ */
+export interface PickedLinked {
+  kind: 'audio' | 'image' | 'video';
+  name: string;
+  file: File;
+  handle: unknown | null;
+  path: string | null;
+  size: number;
+}
+
+/**
  * 写图片到剪贴板的四种结果。
  *
  * 分开报而不是布尔值的理由：**调用方的下一步不一样**。
@@ -70,6 +86,15 @@ export interface Platform {
   pickImageFile(): Promise<PickedFile | null>;
   /** 视频：只给句柄不给字节，见 `PickedVideo`。 */
   pickVideoFile(): Promise<PickedVideo | null>;
+  /**
+   * 选一份**引用式**素材（linked）。返回 null = 用户取消。
+   *
+   * 环境不支持时**不会**返回 null 让调用方误以为取消 —— 先看 `supportsLinked`，
+   * 不支持才走 `pick*File()` 的 bundled 路径。
+   */
+  pickLinkedFile(kind: 'audio' | 'image' | 'video'): Promise<PickedLinked | null>;
+  /** 这个宿主能不能给出可持久化的引用（FSA 句柄 / 本机路径）。 */
+  readonly supportsLinked: boolean;
   /**
    * 多选字体文件。浏览器：`<input type=file multiple>`；
    * Electron（M5）：文件对话框 + IPC 读盘。
@@ -89,6 +114,8 @@ export interface Platform {
    * `pickFontFiles` 同一条理由：在这里丢掉会让「我选的插件没反应」变成哑谜。
    */
   pickPluginFile(): Promise<PickedFile | null>;
+  /** 选一个工程包（`.artmatic`）。只读 Blob，不读整份字节。 */
+  pickArchiveFile(): Promise<{ name: string; blob: Blob } | null>;
   /** 触发一次浏览器下载（Electron 版会是写文件对话框）。 */
   download(blob: Blob, filename: string): Promise<void>;
   /**

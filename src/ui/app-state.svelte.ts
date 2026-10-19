@@ -44,7 +44,7 @@ import {
 import type { VideoSourceManager } from '../engine/video-source';
 import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
-import { browserPlatform } from '../platform/browser';
+import { platform } from '../platform/index';
 import { SNAP_MODES, snapTime, timeAtFrame, frameAtTime, type SnapMode } from '../core/time';
 import {
   parseClipboard,
@@ -318,6 +318,14 @@ export interface OpenProject {
   /** 上次保存时的 `store.version`；-1 = 从未保存过。 */
   savedVersion: number;
   savedAt: number;
+  /**
+   * 本地草稿的文件键（W1.2）。每份工程一个，跨「保存到目录」不变。
+   *
+   * 不用 `id`：`id` 是会话内 uuid，草稿要跨会话被找到，所以两者都稳定；
+   * 分开是为了让「同一个会话里恢复一份草稿」不会与工程身份纠缠 ——
+   * 恢复出来的是**新工程**，但草稿要接着写回同一格。
+   */
+  draftKey: string;
   issues: AssetIssue[];
   /** 播放头（秒）。**工程级**：切回来时停在离开的位置。 */
   playT: number;
@@ -358,6 +366,7 @@ function createPlaceholder(): OpenProject {
     // 一个毫无来由的「要保存吗」。
     savedVersion: 0,
     savedAt: 0,
+    draftKey: '__placeholder__',
     issues: [],
     playT: 0,
     selectedClipIds: [],
@@ -382,6 +391,37 @@ class AppState {
   beatAnchorNewKeys = $state(true);
   /** 导出进行中的进度（null = 没在导出）。 */
   exportProgress = $state<number | null>(null);
+  /**
+   * 自动保存降级到本地草稿的原因（null = 一切正常，W1.2）。
+   *
+   * 与 `notice` 分开：`notice` 是一次性的（几秒后消失），这条是**常驻**的 ——
+   * 只要磁盘上的工程不是最新的，用户就该一直看得到。
+   */
+  autosaveFailure = $state<string | null>(null);
+  /** 降级（草稿写成功了）还是彻底失败（草稿也没写进去）。文案不同。 */
+  autosaveFatal = $state(false);
+  /**
+   * 「激活工程的 store 变了」的唯一钩子（自动保存订阅它）。
+   *
+   * 为什么放在 `subscribeActive` 里而不是组件里：那里是**所有**工程切换与
+   * 后台改动的必经之路。组件里监听会漏掉脚本/agent 路径，而漏掉的表现
+   * 正是「自动保存时好时坏」。
+   */
+  onStoreChange: (() => void) | null = null;
+  /**
+   * 「马上要离开当前工程了」的钩子（自动保存用它把这一份冲掉）。
+   *
+   * 在改 `activeProjectId` **之前**调用：快照在同步阶段就把当前工程固定住，
+   * 之后的异步写入按 `draftKey` 找回那一份 —— 所以不会把 A 写进 B。
+   */
+  onProjectSwitch: (() => void) | null = null;
+  /**
+   * 「一份工程被关掉了」（参数是它的草稿键）。
+   *
+   * 关闭是**用户确认过的丢弃**（`closeProject` 的 `'dirty'` 分支），所以这里
+   * 要做的是取消并删掉那份草稿 —— 否则「确认丢弃」之后下次启动还会问一遍。
+   */
+  onProjectClosed: ((draftKey: string) => void) | null = null;
   /** 导出的取消器（非响应式）。 */
   exportAbort: AbortController | null = null;
   /**
@@ -711,7 +751,7 @@ class AppState {
     if (!entries.length) return;
     const text = serializeClips(entries, this.store.project.name);
     this.clipClipboard = parseClipboard(text);
-    void browserPlatform.writeTextToClipboard(text).then((res) => {
+    void platform.writeTextToClipboard(text).then((res) => {
       this.clipClipboardSystemOk = res === 'ok';
       this.flash(
         res === 'ok' ? tr('tl.copied', { n: entries.length }) : tr('tl.copyLocalOnly'),
@@ -727,7 +767,7 @@ class AppState {
     const text = serializeClips(entries, this.store.project.name);
     this.clipClipboard = parseClipboard(text);
     this.removeSelectedClips();
-    void browserPlatform.writeTextToClipboard(text).then((res) => {
+    void platform.writeTextToClipboard(text).then((res) => {
       this.clipClipboardSystemOk = res === 'ok';
       this.flash(
         tr(res === 'ok' ? 'tl.cut' : 'tl.cutLocalOnly', { n: entries.length }),
@@ -896,6 +936,7 @@ class AppState {
       key: init.key ?? null,
       savedVersion: init.savedVersion ?? -1,
       savedAt: init.savedAt ?? 0,
+      draftKey: newId(),
       issues: init.issues ?? [],
       playT: 0,
       selectedClipIds: [],
@@ -918,6 +959,16 @@ class AppState {
         .filter((p): p is OpenProject & { key: string } => !!p.key)
         .map((p) => ({ key: p.key, name: p.dir?.name ?? p.key })),
     );
+  }
+
+  /**
+   * 后台完成的保存（用户在中途切走了）要更新「打开着的工程」记录。
+   *
+   * 正常路径走 `projectKey` setter 就够了；但保存现在可能写几 GB 素材，
+   * 期间切选项卡不是边缘情况 —— 直接写 `p.key` 就得手动补这一步。
+   */
+  refreshOpenTabs(): void {
+    this.syncOpenTabs();
   }
 
   /**
@@ -948,6 +999,8 @@ class AppState {
     // 离开前取消未结算的手势：绝不能让 beginTx 悬空，否则撤销栈会错乱。
     this.pendingGestureCancel?.();
     this.pendingGestureCancel = null;
+    // 同一时刻：把即将离开那一份的自动保存冲掉（此时快照还指向它）。
+    this.onProjectSwitch?.();
 
     this.activeProjectId = id;
     this.subscribeActive();
@@ -980,6 +1033,8 @@ class AppState {
       if (this.playing) this.pause();
       this.pendingGestureCancel?.();
       this.pendingGestureCancel = null;
+      // 关掉 = 用户确认丢弃；取消排队中的自动保存并清掉这份草稿。
+      this.onProjectClosed?.(p.draftKey);
     }
 
     this.projects.splice(i, 1);
@@ -1094,9 +1149,10 @@ class AppState {
    *  - `Project.assets` 里删掉 → 台账下次保存时不再记录它；
    *  - 运行期的仓与缓存放掉（`releaseAsset`）。
    *
-   * **字节文件不删**（W0.1）：`assets/` 里的文件留成孤儿，打开工程时由
-   * 「素材检查」汇总成一条提示。想恢复只重新导入同一个文件即可 —— 所以
-   * 「移除」是可反悔的，只是反悔的成本是自己挑一次文件。
+   * **字节文件不删**（W0.1/W1.3）：素材在台账里变成 `retained: true`，
+   * 文件留在 `assets/`，工程面板的「未使用素材」能把它恢复回来 ——
+   * 所以「移除」是可反悔的。真正的销毁是那边两个动作（进回收站 / 彻底删除），
+   * 各自带一次确认。
    *
    * **刻意不入撤销栈**：撤销栈存的是 `Project` 快照，而素材**字节**不在里面 ——
    * 补不回字节的撤销比不能撤销更坏（画面上会变成「缺失素材」）。所以这里弹确认框
@@ -1107,8 +1163,19 @@ class AppState {
     this.store.commit(tr('pool.deleteConfirm'), (p) => {
       delete p.assets[assetId];
     });
-    this.assets.remove(assetId);
+    /*
+     * W1.3：**解除关联**，不是销毁。字节来源与台账条目一起转到「保留」区
+     * （`retained: true`），保存时照旧写进 `assets/` —— 于是「移除 → 保存 →
+     * 重开」之后素材仍然可以被找回。真正的销毁只有「未使用素材」里的
+     * 「移到回收站 / 彻底删除」两个动作，各带一次确认。
+     */
+    this.assets.retire(assetId);
     this.releaseAsset(assetId);
+    /*
+     * 台账也变了（多了一条 retained），但 `commit` 在「工程里本来就没这条」
+     * 时是空操作、不会 bump version。显式通知一次，否则自动保存不会把它写下去。
+     */
+    this.onStoreChange?.();
   }
 
   /**
@@ -1133,6 +1200,8 @@ class AppState {
     this.version = this.store.version;
     this.unsubActive = this.store.subscribe(() => {
       this.version = this.store.version;
+      // 自动保存只关心「有变更」；是否真的该写由它自己的 dirty() 判定。
+      this.onStoreChange?.();
     });
   }
 
@@ -2020,10 +2089,16 @@ class AppState {
    */
   isAssetOffline(assetId: string): boolean {
     if (!this.hasProject) return false;
-    return (
-      !this.assets.has(assetId) &&
+    // linked 条目在仓里、但本地句柄没接上：同样算脱机，只是原因不同。
+    const linkedUnavailable =
+      this.assets.isUnavailable(assetId) &&
       imageSourceFor(assetId) === null &&
-      videoMediaFor(assetId) === null
+      videoMediaFor(assetId) === null;
+    return (
+      linkedUnavailable ||
+      (!this.assets.has(assetId) &&
+        imageSourceFor(assetId) === null &&
+        videoMediaFor(assetId) === null)
     );
   }
 

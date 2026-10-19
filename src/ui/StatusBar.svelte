@@ -64,6 +64,20 @@
     {project.name || tr('proj.unnamed')}
   </span>
 
+  <!--
+    自动保存降级的**常驻**提示（W1.2）：它与下面那串一次性提示是两种东西 ——
+    那边报「刚才发生了什么」，这边报「现在磁盘上的工程不是最新的」。
+    所以它不参与优先级链，只在故障消失时跟着消失（下一次写入成功）。
+  -->
+  {#if appState.autosaveFailure}
+    <span class="seg danger" data-testid="autosave-degraded">
+      <Icon name="triangle-alert" size={11} />
+      {tr(appState.autosaveFatal ? 'app.autosaveFailed' : 'app.autosaveDegraded', {
+        reason: appState.autosaveFailure,
+      })}
+    </span>
+  {/if}
+
   {#if appState.notice}
     <!-- 一次性提示（保存结果、Alt+↑↓ 被策略挡住…）：优先级最高，压过提示。
          三级颜色：中性 / 成功（绿）/ 失败（红）—— 见下面 .notice 的注释。 -->
@@ -170,6 +184,9 @@
   }
   .hint {
     color: var(--bar-fg);
+  }
+  .danger {
+    color: var(--danger);
   }
   /*
    * 键位角标：`<kbd>` 说明「按什么」，紧跟的标签说明「按下去做什么」。

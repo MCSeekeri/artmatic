@@ -9,7 +9,7 @@
  * 所有写库都经 editorState（commit / 手势事务），这是撤销栈完整的唯一前提。
  */
 
-import { browserPlatform } from '../../platform/browser';
+import { platform } from '../../platform/index';
 import { appState } from '../app-state.svelte';
 import { editorState } from './editor-state.svelte';
 import { newId } from '../../core/schema';
@@ -380,7 +380,9 @@ function placeImageAssetImpl(
   center?: { x: number; y: number },
 ): string | null {
   if (!hasImageAsset(assetId)) {
-    const bytes = appState.assets.get(assetId);
+    // 同步 API 只能拿**已在内存里**的字节（图片从台账读回时就是 bytes 来源）；
+    // 拿不到就是真拿不到 —— 视频那样的句柄来源不该被这里同步读一遍。
+    const bytes = appState.assets.bytesOf(assetId);
     if (!bytes) {
       appState.flash(tr('pool.missing'), 'error');
       return null;
@@ -1177,7 +1179,7 @@ export function createTypographyActions(): TypographyActions {
 
     addImage() {
       void (async () => {
-        const picked = await browserPlatform.pickImageFile();
+        const picked = await platform.pickImageFile();
         if (!picked) return;
         await placeImageBytesImpl(picked.name, picked.data);
       })();
@@ -1734,7 +1736,7 @@ export function createTypographyActions(): TypographyActions {
 
     importFont() {
       void (async () => {
-        const picked = await browserPlatform.pickFontFiles();
+        const picked = await platform.pickFontFiles();
         if (!picked?.length) return;
         let ok = 0;
         for (const f of picked) {

@@ -19,7 +19,7 @@
  *
  * 三条防线：
  * 1. **导出前估算体积并显示**，让用户在点之前就知道要花多少磁盘（见 estimateMp4Bytes）。
- * 2. **下载用完立刻 revoke**，不留 objectURL（`browserPlatform.download` 已有 10s 延迟，
+ * 2. **下载用完立刻 revoke**，不留 objectURL（`platform.download` 已有 10s 延迟，
  *    这里不重复造）。
  * 3. **E2E 一律短时长 + 小分辨率，且产物落临时目录、断言后立刻删**。
  *    测试绝不能靠「导一次看看」—— 一次全量 E2E 有 13 个 spec。
@@ -32,7 +32,7 @@ import { PngSequenceSink } from '../exporters/png-sequence';
 import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
 import { planGif, type GifPlan } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
-import { browserPlatform } from '../platform/browser';
+import { platform } from '../platform/index';
 import { withExportFrame } from '../render/export-frame';
 import { saveProjectNow } from './project-actions';
 import { getLimits, mbToBytes } from '../core/capacity';
@@ -173,7 +173,7 @@ async function pickOutput(
   const budgetBytes = mbToBytes(getLimits().exportMemoryMB);
   if (estimateBytes <= budgetBytes) return null;
 
-  const stream = await browserPlatform.saveStream({
+  const stream = await platform.saveStream({
     suggestedName: format === 'mp4' ? `${name}.mp4` : `${name}-png.zip`,
     description: format === 'mp4' ? tr('err.export.fileTypeMp4') : tr('err.export.fileTypeZip'),
     mime: format === 'mp4' ? 'video/mp4' : 'application/zip',
@@ -356,7 +356,7 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
     } else {
       const size = fmtSize(result.size);
       appState.flash(tr('err.export.mp4Done', { size }), 'success');
-      await browserPlatform.download(result, `${safeBase(name)}.mp4`);
+      await platform.download(result, `${safeBase(name)}.mp4`);
     }
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
@@ -392,7 +392,7 @@ export async function exportPngSequence(name?: string, onlyTrackId?: string): Pr
     if (typeof result === 'string') {
       appState.flash(tr('err.export.streamDone', { name: result, size: '' }), 'success');
     } else {
-      await browserPlatform.download(result, `${safeBase(name)}-png.zip`);
+      await platform.download(result, `${safeBase(name)}-png.zip`);
     }
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
@@ -526,7 +526,7 @@ export async function exportGif(
       onlyTrackId,
     );
     appState.flash(tr('err.export.gifDone', { size: fmtSize(blob.size) }), 'success');
-    await browserPlatform.download(blob, `${safeBase(name)}.gif`);
+    await platform.download(blob, `${safeBase(name)}.gif`);
   } catch (e) {
     if (!(e instanceof ExportCancelled)) {
       appState.flash(tr('err.export.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error');

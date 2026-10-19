@@ -14,7 +14,7 @@
   import { appState } from './app-state.svelte';
   import { beatAtTime, SNAP_MODES, type SnapMode } from '../core/time';
   import type { OverlapBehavior } from '../core/schema';
-  import { browserPlatform } from '../platform/browser';
+  import { platform } from '../platform/index';
   import { tip } from './tip';
   import { tr } from '../i18n/index.svelte';
 
@@ -121,7 +121,7 @@
       return;
     }
     if (!forceDownload) {
-      const res = await browserPlatform.writeImageToClipboard(shot.blob);
+      const res = await platform.writeImageToClipboard(shot.blob);
       if (res === 'ok') {
         appState.flash(
           tr(shot.truncated ? 'tp.snapshotCopiedPartial' : 'tp.snapshotCopied', { frame: shot.frame }),
@@ -129,7 +129,7 @@
         );
         return;
       }
-      await browserPlatform.download(shot.blob, shot.filename);
+      await platform.download(shot.blob, shot.filename);
       appState.flash(
         tr(res === 'denied' ? 'tp.snapshotClipDenied' : 'tp.snapshotClipUnsupported', {
           frame: shot.frame,
@@ -138,7 +138,7 @@
       );
       return;
     }
-    await browserPlatform.download(shot.blob, shot.filename);
+    await platform.download(shot.blob, shot.filename);
     appState.flash(tr('tp.snapshotSaved', { frame: shot.frame }), 'success');
   }
 </script>

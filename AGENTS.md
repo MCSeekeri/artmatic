@@ -319,9 +319,10 @@ bun run desktop      # Electron 探针壳（先 build）；desktop:probe 加探�
 3. **素材重定位 UI**：`auditLedger` 能检出 `missing` / `changed` 并在「工程」面板列出来，
    但**只能报告不能修**。缺的动作是「重选这个文件」→ `showOpenFilePicker()` → 比对哈希 →
    更新台账并回写工程。
-4. **打开工程时素材是全量读进内存的**：`AssetStore.loadFrom()` 连视频一起读回，含 2 GB
-   视频的工程会一次性吃 2 GB 堆。修法是改成**流式**（`FsFile.readBlob()` / `bytesFor`
-   返回 `Blob` / `writeBytesAtomic` 收 Blob）—— 动的是保存 / 打开的公共路径，需单独回归。
+4. **打开工程时图片 / 音频仍是全量读进内存的（视频已解决）**：视频在导入 / 打开时
+   只留 `File` / 句柄 / 本地路径（linked），保存走 `writeStreamAtomic`。但图片 / 音频
+   仍整份读回 —— 它们本来就要整份喂给 `createImageBitmap` / `decodeAudioData`。
+   大音频（几百 MB 的 WAV）仍会顶到堆；流式解码不在本轮范围。
 5. **`analysis/` 与 `thumbs/` 只建了目录**，路径规则就位，缓存还没落地。
 6. **视频解码在无 GPU / 不支持的容器时没有兜底文案**：失败只记进 `stats().failures` 与
    `console.error`，界面表现为「这一层不出画面」。应当在底栏给一条 `err.video.unreadable`。

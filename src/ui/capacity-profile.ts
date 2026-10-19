@@ -28,7 +28,7 @@ import {
   type CapacityLimits,
   type CapacitySnapshot,
 } from '../core/capacity';
-import { browserPlatform } from '../platform/browser';
+import { platform } from '../platform/index';
 
 let loading: Promise<CapacitySnapshot> | null = null;
 
@@ -39,7 +39,7 @@ let loading: Promise<CapacitySnapshot> | null = null;
  */
 export function loadCapacityProfile(): Promise<CapacitySnapshot> {
   loading ??= (async () => {
-    const probed = await browserPlatform.probeCapacity();
+    const probed = await platform.probeCapacity();
     if (!probed) {
       // 纯静态部署 / 探测失败：保持默认，**不报错**（这条路径是可缺的）。
       console.info('[capacity] 拿不到宿主机器能力，使用保守默认预算');

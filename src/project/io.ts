@@ -42,22 +42,26 @@ import {
   ensureDirs,
   exists,
   isNotFound,
-  readBytesIfExists,
   readTextIfExists,
   resolveDir,
   writeBytesAtomic,
+  writeStreamAtomic,
   type FsDirHandle,
+  type FsFileHandle,
 } from './fs';
-import { hashIfReasonable } from './hash';
+import { contentOfBlob } from './fingerprint';
 import { tr } from '../i18n/index.svelte';
 import {
   ASSET_LEDGER_FILE,
+  ASSET_TRASH_DIR,
   PROJECT_BACKUP,
   PROJECT_DIRS,
   PROJECT_FILE,
   ASSETS_DIR,
   assetRelPath,
+  isTrashPath,
   splitRelPath,
+  trashPathSegments,
 } from './layout';
 import {
   auditLedger,
@@ -65,6 +69,7 @@ import {
   detectPathConflicts,
   diffLedger,
   parseLedger,
+  projectPath,
   relinkPaths,
   serializeLedger,
   type AssetEntry,
@@ -92,8 +97,20 @@ export interface SaveInput {
   dir: FsDirHandle;
   project: Project;
   ledger: AssetLedger;
-  /** 取素材字节；返回 null = 内存里没有（generated，或素材已丢失）。 */
-  bytesFor: (assetId: string) => Uint8Array | null;
+  /**
+   * 分块读素材；null = 没有可用来源（generated，或素材已丢失）。
+   *
+   * W1.1 起素材仓把视频存成 `File` / 句柄，所以这里必须是**流**而不是
+   * 整份 `Uint8Array` —— 2 GB 视频的保存峰值从此只有一块的大小。
+   */
+  openFor: (assetId: string) => AsyncIterable<Uint8Array> | null;
+  /**
+   * 是否轮转 `project.json.bak`。默认 true。
+   *
+   * 自动保存传 false：`.bak` 只在手动保存时写，否则它变成「两秒前」，
+   * 失去「上一版手动保存」的兜底意义（W1.2 的三条硬约定之一）。
+   */
+  backup?: boolean;
 }
 
 export interface SaveReport {
@@ -106,13 +123,28 @@ export interface SaveReport {
    */
   assetsRemoved: number;
   assetBytes: number;
+  /**
+   * 保存后**确实在工程目录 `assets/` 里**的素材 id（含早就存在、这次没重写的）。
+   *
+   * 素材仓用它回答「这条素材有没有文件可保留」：从未落盘的素材被移除时
+   * 应当直接丢弃，而不是下一次保存又把它写出来（W1 清理链路）。
+   */
+  persistedAssets: string[];
+  /**
+   * 实际写进 `project.json` 的文本。
+   *
+   * 自动保存靠它做「内容没变就不写」的比对：写入期间用户可能又改了一笔，
+   * 拿**调用前**的快照去记「上次写了什么」会记错，下一次就会误判为「没变」
+   * 而把磁盘停在中间版本上。
+   */
+  projectText: string;
   warnings: string[];
   durationMs: number;
 }
 
 export async function saveProject(input: SaveInput): Promise<SaveReport> {
   const t0 = Date.now();
-  const { dir, project, ledger, bytesFor } = input;
+  const { dir, project, ledger, openFor } = input;
   const warnings: string[] = [];
 
   // 两个素材撞同一个文件名会静默互相覆盖（症状：「换了素材但画面没变」）。
@@ -130,22 +162,27 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
 
   let assetsWritten = 0;
   let assetBytes = 0;
+  const writtenIds: string[] = [];
   const toWrite = [...diff.added, ...diff.changed];
   for (const id of toWrite) {
     const entry = ledger.entries[id]!;
-    if (entry.mode === 'generated' || !entry.path) continue;
-    const bytes = bytesFor(id);
-    if (!bytes) {
+    const rel = projectPath(entry);
+    // linked-only 没有工程副本：保存不写任何字节（它是刻意的，不是缺数据）。
+    if (entry.mode === 'generated' || !rel) continue;
+    const stream = openFor(id);
+    if (!stream) {
       warnings.push(tr('err.io.assetBytesMissing', { name: entry.originName, id }));
       continue;
     }
-    const segs = splitRelPath(entry.path);
+    const segs = splitRelPath(rel);
     const name = segs.pop();
     if (!name) continue;
     const parent = await resolveDir(dir, segs, true);
-    await writeBytesAtomic(parent, name, bytes, { verify: false });
+    // 流式写：视频素材的内存峰值 = 一块 buffer，与文件大小无关（W1.1/W1.2）。
+    const report = await writeStreamAtomic(parent, name, stream, { verify: false });
+    writtenIds.push(id);
     assetsWritten++;
-    assetBytes += bytes.byteLength;
+    assetBytes += report.bytes;
   }
 
   // ② 台账。放在工程之前：若之后写工程失败，磁盘上是「新台账 + 旧工程」，
@@ -154,9 +191,10 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
   await writeBytesAtomic(dir, ASSET_LEDGER_FILE, ledgerText, { verify: true });
 
   // ③ 工程本体。
-  const projectText = `${JSON.stringify(project, null, 2)}\n`;
-  const pr = await writeBytesAtomic(dir, PROJECT_FILE, projectText, {
-    backup: PROJECT_BACKUP,
+  const projectJson = `${JSON.stringify(project, null, 2)}\n`;
+  const pr = await writeBytesAtomic(dir, PROJECT_FILE, projectJson, {
+    // 自动保存不轮转 .bak（见 SaveInput.backup）。
+    backup: input.backup === false ? null : PROJECT_BACKUP,
     verify: true,
   });
   warnings.push(...pr.warnings);
@@ -172,6 +210,13 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
     assetsWritten,
     assetsRemoved: 0,
     assetBytes,
+    // 未变的条目按定义就已经在磁盘上；这次写成功的也在。`changed` 但流为 null 的
+    // 不在其中 —— 那种情况下用户移除它时不该假装「有文件可保留」。
+    persistedAssets: [...new Set([...diff.unchanged, ...writtenIds])].filter((id) => {
+      const e = ledger.entries[id];
+      return !!e && !!projectPath(e) && e.mode !== 'generated';
+    }),
+    projectText: projectJson,
     warnings,
     durationMs: Date.now() - t0,
   };
@@ -220,7 +265,7 @@ export async function openProject(dir: FsDirHandle): Promise<OpenResult> {
 
   const issues = await auditLedger(
     ledger,
-    (path, needHash) => probe(dir, path, needHash),
+    (path, needFp) => probe(dir, path, needFp),
     diskPaths,
   );
 
@@ -247,7 +292,10 @@ async function summarizeOrphans(
   diskPaths: string[],
 ): Promise<AssetIssue | null> {
   const tracked = new Set<string>();
-  for (const e of Object.values(ledger.entries)) if (e.path) tracked.add(e.path);
+  for (const e of Object.values(ledger.entries)) {
+    const p = projectPath(e);
+    if (p) tracked.add(p);
+  }
   const orphans = diskPaths.filter((p) => !tracked.has(p));
   if (!orphans.length) return null;
 
@@ -260,6 +308,11 @@ async function summarizeOrphans(
     path: null,
     message: tr('err.ledger.orphans', { n: orphans.length, size: formatBytes(bytes) }),
   };
+}
+
+/** 一个文件在磁盘上的字节数（只 stat）。读不到按 0 计。 */
+export function assetPathBytes(dir: FsDirHandle, relPath: string): Promise<number> {
+  return sizeOf(dir, relPath);
 }
 
 /** 一个文件在磁盘上的字节数。读不到（被移走 / 权限失效）按 0 计，不挡打开工程。 */
@@ -276,15 +329,19 @@ async function sizeOf(dir: FsDirHandle, relPath: string): Promise<number> {
   }
 }
 
-/** 打开工程后把 bundled 素材读回内存。丢失的返回 null（`issues` 里已经有记录）。 */
-export async function readAssetBytes(dir: FsDirHandle, entry: AssetEntry): Promise<Uint8Array | null> {
-  if (entry.mode === 'generated' || !entry.path) return null;
-  const segs = splitRelPath(entry.path);
+/**
+ * 打开工程里的某个素材文件句柄。**不读字节** —— W1.1 之后视频只留句柄。
+ * 文件不在时返回 null（`issues` 里已经有记录）。
+ */
+export async function openAssetFile(dir: FsDirHandle, entry: AssetEntry): Promise<FsFileHandle | null> {
+  const rel = projectPath(entry);
+  if (entry.mode === 'generated' || !rel) return null;
+  const segs = splitRelPath(rel);
   const name = segs.pop();
   if (!name) return null;
   try {
     const parent = await resolveDir(dir, segs, false);
-    return await readBytesIfExists(parent, name);
+    return await parent.openFile(name, { create: false });
   } catch (e) {
     if (isNotFound(e)) return null;
     throw e;
@@ -302,22 +359,39 @@ export async function listAssetPaths(dir: FsDirHandle): Promise<string[]> {
   try {
     const assetsDir = await resolveDir(dir, [ASSETS_DIR], false);
     const items = await assetsDir.list();
-    return items.filter((i) => i.kind === 'file').map((i) => `${ASSETS_DIR}/${i.name}`);
+    // 回收站是子目录、本来就不在这一层；`isTrashPath` 是第二道判定（见 layout.ts）。
+    return items
+      .filter((i) => i.kind === 'file')
+      .map((i) => `${ASSETS_DIR}/${i.name}`)
+      .filter((rel) => !isTrashPath(rel));
   } catch (e) {
     if (isNotFound(e)) return [];
     throw e;
   }
 }
 
-async function probe(dir: FsDirHandle, relPath: string, needHash: boolean): Promise<{ bytes: number; hash: string | null } | null> {
+/**
+ * 磁盘探测：只返回「在不在、多大、指纹」。
+ *
+ * `needFp === false` 时连首尾 128 KiB 都不读（`File.size` 是元数据）。
+ * `needFp === true` 走**采样指纹**，不是旧版那种整份 sha256 —— 2 GB 视频
+ * 也只读 128 KiB（见 `fingerprint.ts`）。
+ */
+async function probe(
+  dir: FsDirHandle,
+  relPath: string,
+  needFp: boolean,
+): Promise<{ bytes: number; fp: string | null } | null> {
   const segs = splitRelPath(relPath);
   const name = segs.pop();
   if (!name) return null;
   try {
     const parent = await resolveDir(dir, segs, false);
     const fh = await parent.openFile(name, { create: false });
-    const bytes = await (await fh.get()).readBytes();
-    return { bytes: bytes.byteLength, hash: needHash ? await hashIfReasonable(bytes) : null };
+    const file = await fh.get();
+    if (!needFp) return { bytes: file.size, fp: null };
+    const content = await contentOfBlob(file.readBlob ? await file.readBlob() : new Blob([(await file.readBytes()) as unknown as BlobPart]));
+    return { bytes: file.size, fp: content.fp };
   } catch (e) {
     if (isNotFound(e)) return null;
     throw e;
@@ -346,22 +420,189 @@ async function rebuildLedgerFromDir(
     const dot = name.lastIndexOf('.');
     const id = dot > 0 ? name.slice(0, dot) : name;
     const known = project.assets[id];
-    const bytes = await probe(dir, rel, true);
+    const kind = known?.kind ?? 'image';
+    // 采样指纹只读 128 KiB，视频也负担得起（这就是不用全量 sha256 的意义）。
+    const found = await probe(dir, rel, true);
+    const content = found?.fp ? { size: found.bytes, fp: found.fp } : null;
     const entry: AssetEntry = {
       id,
-      kind: known?.kind ?? 'image',
-      path: rel,
-      hash: bytes?.hash ?? null,
-      bytes: bytes?.bytes ?? null,
+      kind,
       // 原始文件名无从得知（台账才是记它的地方），先用重建出来的名字。
       originName: name,
       mode: 'bundled',
       addedAt: 0,
+      content,
+      locations: [
+        {
+          kind: 'project',
+          path: rel,
+          seen: { size: found?.bytes ?? null, fp: found?.fp ?? null, mtime: null },
+        },
+      ],
     };
     ledger.entries[id] = entry;
     if (!known) warnings.push(tr('err.io.untrackedFile', { name }));
   }
   return { ledger, warnings };
+}
+
+/* ------------------------------------------------------ 删除语义（W1.3） */
+
+/** 把文件句柄变成分块流（大素材不整份进堆）。 */
+async function* chunksOfHandle(fh: FsFileHandle): AsyncGenerator<Uint8Array> {
+  const file = await fh.get();
+  if (!file.readStream) {
+    const bytes = await file.readBytes();
+    if (bytes.byteLength) yield bytes;
+    return;
+  }
+  const reader = file.readStream().getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      if (value?.byteLength) yield value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * 把一份素材移进 `assets/.trash/`。返回回收站相对路径。
+ *
+ * 三件事的顺序是刻意的：**先写回收站、再删原文件**。反过来的话，
+ * 写回收站失败就等于直接销毁了源文件 —— 而那正是 W1.3 要消灭的形态。
+ *
+ * 回收站文件名带时间戳（`<assetId>-<stamp><ext>`）：同一素材清理两次时
+ * 不能互相覆盖，第一次进回收站的那份才是用户可能想找回的。
+ */
+export async function moveAssetToTrash(
+  dir: FsDirHandle,
+  entry: AssetEntry,
+  stamp = Date.now(),
+): Promise<string | null> {
+  const rel = projectPath(entry);
+  if (!rel) return null;
+  const segs = splitRelPath(rel);
+  const name = segs.pop();
+  if (!name) return null;
+
+  let parent: FsDirHandle;
+  let fh: FsFileHandle | null;
+  try {
+    parent = await resolveDir(dir, segs, false);
+    fh = await parent.openFile(name, { create: false });
+  } catch (e) {
+    if (isNotFound(e)) return null;
+    throw e;
+  }
+
+  const trashSegs = trashPathSegments(entry.id, entry.originName, stamp);
+  const trashName = trashSegs.pop()!;
+  const trashDir = await resolveDir(dir, trashSegs, true);
+  await writeStreamAtomic(trashDir, trashName, chunksOfHandle(fh), { verify: false });
+  await parent.remove(name);
+  return [...trashSegs, trashName].join('/');
+}
+
+/** 真正删掉素材文件（只该对「已从工程移除」的保留项用）。文件不在 = 已达成目的。 */
+export async function deleteAssetFile(dir: FsDirHandle, entry: AssetEntry): Promise<boolean> {
+  const rel = projectPath(entry);
+  if (!rel) return false;
+  const segs = splitRelPath(rel);
+  const name = segs.pop();
+  if (!name) return false;
+  try {
+    const parent = await resolveDir(dir, segs, false);
+    await parent.remove(name);
+    return true;
+  } catch (e) {
+    if (isNotFound(e)) return true;
+    throw e;
+  }
+}
+
+/** 回收站里的一个文件。 */
+export interface TrashFile {
+  /** 工程根相对路径（`assets/.trash/xxx.png`）。 */
+  path: string;
+  bytes: number;
+}
+
+/** 列出回收站文件（只 stat，不读字节）。目录不存在返回 []。 */
+export async function listTrashFiles(dir: FsDirHandle): Promise<TrashFile[]> {
+  let trash: FsDirHandle;
+  try {
+    trash = await resolveDir(dir, [ASSETS_DIR, ASSET_TRASH_DIR], false);
+  } catch (e) {
+    if (isNotFound(e)) return [];
+    throw e;
+  }
+  const items = await trash.list();
+  const out: TrashFile[] = [];
+  for (const it of items) {
+    if (it.kind !== 'file') continue;
+    let bytes = 0;
+    try {
+      bytes = (await (await trash.openFile(it.name, { create: false })).get()).size;
+    } catch {
+      bytes = 0;
+    }
+    out.push({ path: `${ASSETS_DIR}/${ASSET_TRASH_DIR}/${it.name}`, bytes });
+  }
+  return out;
+}
+
+/** 清空回收站。**只删 `.trash/` 里的文件**，不碰 `assets/` 与本地原文件。 */
+export async function clearTrash(dir: FsDirHandle): Promise<{ removed: number; bytes: number }> {
+  const files = await listTrashFiles(dir);
+  if (!files.length) return { removed: 0, bytes: 0 };
+  const trash = await resolveDir(dir, [ASSETS_DIR, ASSET_TRASH_DIR], false);
+  let removed = 0;
+  let bytes = 0;
+  for (const f of files) {
+    const name = splitRelPath(f.path).pop();
+    if (!name) continue;
+    try {
+      await trash.remove(name);
+      removed += 1;
+      bytes += f.bytes;
+    } catch {
+      /* 单个删不掉不挡其余（权限 / 正被占用） */
+    }
+  }
+  return { removed, bytes };
+}
+
+/** 删除一个 `assets/` 下的文件（孤儿清理用）。不在 = 已达成目的。 */
+export async function deleteAssetPath(dir: FsDirHandle, relPath: string): Promise<boolean> {
+  const segs = splitRelPath(relPath);
+  const name = segs.pop();
+  if (!name) return false;
+  try {
+    const parent = await resolveDir(dir, segs, false);
+    await parent.remove(name);
+    return true;
+  } catch (e) {
+    if (isNotFound(e)) return true;
+    throw e;
+  }
+}
+
+/**
+ * `assets/` 里台账不知道的文件。
+ *
+ * **只列直接子文件**（`.trash/` 是目录，天然不在内）；旧版本留下的孤儿就靠它
+ * 让用户确认清理 —— 永远不自动删。
+ */
+export async function listOrphanPaths(dir: FsDirHandle, ledger: AssetLedger): Promise<string[]> {
+  const tracked = new Set(
+    Object.values(ledger.entries)
+      .map((e) => projectPath(e))
+      .filter((p): p is string => !!p),
+  );
+  return (await listAssetPaths(dir)).filter((p) => !tracked.has(p));
 }
 
 /** 素材在磁盘上的相对路径（写台账时用，保证 path 与 layout 规则一致）。 */

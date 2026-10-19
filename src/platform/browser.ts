@@ -7,7 +7,14 @@
 
 import { tr } from '../i18n/index.svelte';
 import type { MachineCapacity } from '../core/capacity';
-import type { ClipboardWriteResult, PickedFile, PickedVideo, Platform, SaveStream } from './types';
+import type {
+  ClipboardWriteResult,
+  PickedFile,
+  PickedLinked,
+  PickedVideo,
+  Platform,
+  SaveStream,
+} from './types';
 
 /**
  * `showSaveFilePicker` 的最小类型。
@@ -99,15 +106,80 @@ function pickMany(accept: string): Promise<PickedFile[] | null> {
   });
 }
 
+/* ------------------------------------------------------ 引用式（linked） */
+
+interface OpenFileHandleLike {
+  name: string;
+  getFile(): Promise<File>;
+}
+type OpenFilePicker = (opts: unknown) => Promise<OpenFileHandleLike[]>;
+
+function openFilePicker(): OpenFilePicker | null {
+  const p = (window as unknown as Record<string, unknown>).showOpenFilePicker as OpenFilePicker | undefined;
+  return typeof p === 'function' ? p : null;
+}
+
+const LINK_ACCEPT: Record<'audio' | 'image' | 'video', Record<string, string[]>> = {
+  audio: { 'audio/*': ['.mp3', '.wav', '.ogg', '.m4a', '.flac'] },
+  image: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'] },
+  video: { 'video/*': ['.mp4', '.m4v', '.mov', '.webm', '.mkv'] },
+};
+
+async function pickLinked(kind: 'audio' | 'image' | 'video'): Promise<PickedLinked | null> {
+  const picker = openFilePicker();
+  // 没有 showOpenFilePicker（Firefox/Safari）就没有可持久化的句柄：
+  // 返回 null，让调用方明确退回 bundled，而不是假装「引用成功」。
+  if (!picker) return null;
+  try {
+    const [h] = await picker({ multiple: false, types: [{ accept: LINK_ACCEPT[kind] }] });
+    if (!h) return null;
+    const file = await h.getFile();
+    return {
+      kind,
+      name: file.name,
+      file,
+      handle: h,
+      path: null,
+      size: file.size,
+    };
+  } catch (e) {
+    if ((e as { name?: string }).name === 'AbortError') return null;
+    throw e;
+  }
+}
+
 export const browserPlatform: Platform = {
   pickAudioFile: () => pick('audio/*'),
   pickImageFile: () => pick('image/*'),
+  pickLinkedFile: pickLinked,
+  /*
+   * 在装配时固定：`showOpenFilePicker` 不会中途出现/消失，逐次判断只会
+   * 让「取消」与「不支持」两条路混在一起。
+   *
+   * **自动化浏览器里强制走 bundled**：Playwright 驱动不了系统文件对话框
+   * （`waitForEvent('filechooser')` 只认 `<input>`）。真用户拿到 linked，
+   * E2E 拿到它一直在测的 `<input>` 路径 —— linked 的行为由
+   * `linked-assets.spec.ts` 用 OPFS 句柄单独覆盖。
+   */
+  supportsLinked: openFilePicker() !== null && !navigator.webdriver,
   async pickVideoFile(): Promise<PickedVideo | null> {
     const file = await pickFileHandle('video/*,.mp4,.m4v,.mov,.webm,.mkv');
     return file ? { name: file.name, file, size: file.size } : null;
   },
   pickFontFiles: () => pickMany('.ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff2'),
   pickPluginFile: () => pick('.js,text/javascript'),
+  pickArchiveFile: () =>
+    new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.artmatic,application/zip';
+      input.onchange = () => {
+        const f = input.files?.[0];
+        resolve(f ? { name: f.name, blob: f } : null);
+      };
+      window.addEventListener('focus', () => setTimeout(() => resolve(null), 400), { once: true });
+      input.click();
+    }),
 
   async download(blob: Blob, filename: string): Promise<void> {
     const url = URL.createObjectURL(blob);

@@ -21,14 +21,24 @@
  * 台账记录与展示（`assetRelPath`）。
  */
 
-/** 目录格式自身的版本，与 `Project.schemaVersion` 独立。 */
-export const LAYOUT_VERSION = 1;
+/**
+ * 目录格式自身的版本，与 `Project.schemaVersion` 独立。
+ *
+ * v2（W1.3）：台账条目多了 `retained`（已从工程移除、但字节文件保留）。
+ * v3（linked 素材）：条目从「一条 path + 一个 hash」变成
+ * `content = {size, fp}` + `locations[] = project | local`。旧台账由
+ * `parseLedger` 归一化（`path` → project 位置、`hash` 无法换算成采样指纹
+ * 所以置 null，打开时补算）。
+ */
+export const LAYOUT_VERSION = 3;
 
 export const PROJECT_FILE = 'project.json';
 export const PROJECT_BACKUP = 'project.json.bak';
 export const ASSET_LEDGER_FILE = 'assets.json';
 
 export const ASSETS_DIR = 'assets';
+/** 素材回收站：清理未使用素材时移到这里，宁可多占一份磁盘也不直接销毁。 */
+export const ASSET_TRASH_DIR = '.trash';
 export const ANALYSIS_DIR = 'analysis';
 export const AUDIO_ANALYSIS_DIR = 'audio';
 export const THUMBS_DIR = 'thumbs';
@@ -111,6 +121,24 @@ export function assetPathSegments(assetId: string, originName: string): string[]
 /** 素材相对工程根的路径，用于台账记录与 UI 展示。POSIX 分隔符。 */
 export function assetRelPath(assetId: string, originName: string): string {
   return assetPathSegments(assetId, originName).join('/');
+}
+
+/**
+ * 回收站里放一个素材文件时的段数组（W1.3）。
+ *
+ * 文件名带时间戳：同一个素材被清理两次时不能互相覆盖 —— 第一次进回收站的
+ * 那一份才是用户可能想找回的。`stamp` 由调用方给（纯函数不读时钟）。
+ */
+export function trashPathSegments(assetId: string, originName: string, stamp: number): string[] {
+  const base = safeAssetId(assetId);
+  const suffix = stamp > 0 ? `-${stamp}` : '';
+  return [ASSETS_DIR, ASSET_TRASH_DIR, `${base}${suffix}${safeExt(originName)}`];
+}
+
+/** 该相对路径是不是在回收站里。`listAssetPaths` 只列直接子文件，所以这是第二道判定。 */
+export function isTrashPath(rel: string): boolean {
+  const segs = splitRelPath(rel);
+  return segs[0] === ASSETS_DIR && segs[1] === ASSET_TRASH_DIR;
 }
 
 /** 插件文件扩展名。清单是 ESM，所以宿主按模块导入它。 */

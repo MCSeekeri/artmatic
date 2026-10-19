@@ -23,6 +23,14 @@ export const project = {
   /* `{size}` 已是调用方格式化好的 KB 数字，`{ms}` 是毫秒数 —— 数值格式化留在调用处。 */
   'proj.savedAssets': '已保存 · {n} 个本机素材 · {size} KB · {ms} ms',
 
+  /* ------------------------------------------------ 崩溃恢复（W1.2 草稿） */
+  /* 启动横幅：草稿是「自动保存」在没有目录句柄时唯一的落点。 */
+  'proj.draftHint': '有一份未保存的本地草稿「{name}」，保存于 {time}',
+  'proj.draftRestore': '恢复草稿',
+  'proj.draftDismiss': '忽略',
+  'proj.draftRestored': '已从本地草稿恢复「{name}」（尚未保存）',
+  'proj.draftBroken': '这份本地草稿读不出来，已跳过',
+
   /* -------------------------------------------------- 最近工程 / 权限 / 其它 */
   'proj.credentialExpired': '「{name}」的访问凭据已失效，请用「打开工程」重新选择目录',
   'proj.permissionDenied': '没有拿到「{name}」的访问权限',

@@ -23,6 +23,9 @@
  */
 
 import { newId } from '../core/schema';
+import { contentOfBlob, contentOfBytes } from '../project/fingerprint';
+import { adoptFileHandle } from '../project/fs';
+import { putAssetHandle } from '../project/asset-handles';
 import { checkImportSize, getLimits } from '../core/capacity';
 import { formatBytes } from '../core/format';
 import { computeWaveform, decodeAudio } from '../audio/decode';
@@ -69,7 +72,7 @@ function finish(
     name,
     durationSec: meta.durationSec ?? null,
     size: meta.size ?? null,
-    bytes: appState.assets.get(assetId)?.byteLength ?? null,
+    bytes: appState.assets.size(assetId),
     missing: false,
   };
   const clipId = insertAssetClip(appState.store, item, {
@@ -89,18 +92,24 @@ function finish(
  * 导入一份本地视频。
  *
  * 与音频/图片的两处关键差别：
- *  1. **先把 `File` 句柄交给渲染层**（`registerVideoMedia`）：解码从磁盘流式读，
- *     字节进仓只是为了**保存工程**（几 GB 素材唯一的内存峰值就在这里）。
+ *  1. **`File` 句柄同时交给渲染层与素材仓**（`registerVideoMedia` / `putFile`）：
+ *     解码从磁盘流式读，保存也按块流式写 —— 全程没有「整份字节进堆」那一步
+ *     （W1.1）。这是视频与图片/音频在生命周期上的根本区别。
  *  2. 元数据（时长 / 显示尺寸）必须 probe 出来 —— 它决定片段默认长度，
  *     也是「这份字节到底是不是视频」唯一的判据。
  */
 export async function importVideoFile(
   file: File,
   target: ImportTarget = {},
+  linkedHandle?: unknown,
 ): Promise<ImportedFile | null> {
   /*
-   * 体积闸门必须在 `probeVideo` / `arrayBuffer` **之前**（W0.2）：
-   * 那两步都会把整个文件读进堆，先读再拒绝等于白付一次峰值。
+   * 体积闸门在 `probeVideo` 之前（W0.2）。
+   *
+   * W1.1 之后导入**不再把整份视频读进堆**（`putFile` 只存 `File` 句柄），
+   * 所以这条闸门不再防内存，而是一条**策略**上限：单个素材的体积超过本机
+   * 预算就不收。它挡的下一步动作是「把这个文件整份拷进工程目录」——
+   * 磁盘占用与解码代价仍然是真实成本。口径见 `core/capacity.ts::checkImportSize`。
    */
   const check = checkImportSize(file.size, getLimits().videoPerAssetMB);
   if (!check.ok) {
@@ -120,13 +129,88 @@ export async function importVideoFile(
     return null;
   }
 
+  /*
+   * 内容身份（W1 去重）：只读首尾各 64 KiB，**不整份读**。
+   * 命中同一份内容就复用它 —— 反复导入同一个文件不该在 assets/ 里堆副本。
+   */
+  const content = await contentOfBlob(file);
+  const existing = appState.assets.findByFp(content.fp);
+  if (existing) {
+    const wasRetained = appState.assets.isRetained(existing);
+    appState.assets.activate(existing);
+    registerVideoMedia(existing, file);
+    if (linkedHandle) {
+      const fh = adoptFileHandle(linkedHandle as FileSystemFileHandle);
+      appState.assets.putLinkedHandle(
+        existing,
+        fh,
+        file.size,
+        { kind: 'video', name: file.name, originName: file.name },
+        content,
+      );
+      void putAssetHandle(existing, linkedHandle);
+    } else {
+      appState.assets.putFile(
+        existing,
+        file,
+        { kind: 'video', name: file.name, originName: file.name },
+        content,
+      );
+    }
+    const declared = appState.store.project.assets[existing];
+    if (!declared) {
+      appState.store.commit(tr('tl.importVideo'), (p) => {
+        p.assets[existing] = {
+          id: existing,
+          kind: 'video',
+          name: file.name,
+          durationSec: meta.duration,
+          size: { w: meta.width, h: meta.height },
+        };
+      });
+    }
+    appState.flash(
+      tr(wasRetained ? 'pool.reusedRestored' : 'pool.reusedAsset', { name: file.name }),
+      'info',
+    );
+    return finish(
+      existing,
+      'video',
+      declared?.name ?? file.name,
+      { durationSec: meta.duration, size: { w: meta.width, h: meta.height } },
+      target,
+    );
+  }
+
   const assetId = newId();
+  /*
+   * W1.1：**不整份读**。`File` 是磁盘背书的句柄 —— 解码器从它 seek 读，
+   * 保存时按块流式写。原先这里 `await file.arrayBuffer()` 是「导入 2 GB 视频 =
+   * 2 GB JS 堆」的唯一来源，而它换来的字节没有任何一处消费方需要。
+   */
   registerVideoMedia(assetId, file);
-  appState.assets.put(assetId, new Uint8Array(await file.arrayBuffer()), {
-    kind: 'video',
-    name: file.name,
-    originName: file.name,
-  });
+  if (linkedHandle) {
+    const fh = adoptFileHandle(linkedHandle as FileSystemFileHandle);
+    appState.assets.putLinkedHandle(
+      assetId,
+      fh,
+      file.size,
+      { kind: 'video', name: file.name, originName: file.name },
+      content,
+    );
+    void putAssetHandle(assetId, linkedHandle);
+  } else {
+    appState.assets.putFile(
+      assetId,
+      file,
+      {
+        kind: 'video',
+        name: file.name,
+        originName: file.name,
+      },
+      content,
+    );
+  }
   appState.store.commit(tr('tl.importVideo'), (p) => {
     p.assets[assetId] = {
       id: assetId,
@@ -157,8 +241,15 @@ export async function importImageBlob(
   name: string,
   data: ArrayBuffer,
   target: ImportTarget = {},
+  linkedHandle?: unknown,
 ): Promise<ImportedFile | null> {
-  const assetId = newId();
+  const bytes = new Uint8Array(data);
+  const content = await contentOfBytes(bytes);
+  const existing = appState.assets.findByFp(content.fp);
+  const assetId = existing ?? newId();
+  const wasRetained = existing ? appState.assets.isRetained(existing) : false;
+  if (existing) appState.assets.activate(existing);
+
   const mime = mimeForImageFilename(name);
   /*
    * 解码放在最前面：后面几步都是「落了地就难收回」的登记，而解不开的字节
@@ -177,23 +268,34 @@ export async function importImageBlob(
   putImageBytes(assetId, data, mime);
   // 字节进仓。直接持有 `data` 上的视图，不额外拷贝：这份 buffer 是刚读出来的，
   // 没有第二个持有者（`putImageBytes` 与 `registerImageBytes` 各自内部拷贝）。
-  appState.assets.put(assetId, new Uint8Array(data), {
-    kind: 'image',
-    name,
-    originName: name,
-  });
-  appState.store.commit(tr('tl.importImage'), (p) => {
-    p.assets[assetId] = {
-      id: assetId,
-      kind: 'image',
-      name,
-      ...(decoded ? { size: { w: decoded.w, h: decoded.h } } : {}),
-    };
-  });
+  const input = { kind: 'image' as const, name, originName: name };
+  if (linkedHandle) {
+    appState.assets.putLinkedBytes(assetId, bytes, input, content);
+    void putAssetHandle(assetId, linkedHandle);
+  } else {
+    appState.assets.put(assetId, bytes, input, content);
+  }
+  const declared = appState.store.project.assets[assetId];
+  if (!declared) {
+    appState.store.commit(tr('tl.importImage'), (p) => {
+      p.assets[assetId] = {
+        id: assetId,
+        kind: 'image',
+        name,
+        ...(decoded ? { size: { w: decoded.w, h: decoded.h } } : {}),
+      };
+    });
+  }
+  if (existing) {
+    appState.flash(
+      tr(wasRetained ? 'pool.reusedRestored' : 'pool.reusedAsset', { name }),
+      'info',
+    );
+  }
   return finish(
     assetId,
     'image',
-    name,
+    declared?.name ?? name,
     decoded ? { size: { w: decoded.w, h: decoded.h } } : {},
     target,
   );
@@ -209,7 +311,14 @@ export async function importAudioBlob(
   name: string,
   data: ArrayBuffer,
   target: ImportTarget = {},
+  linkedHandle?: unknown,
 ): Promise<ImportedFile | null> {
+  const content = await contentOfBytes(new Uint8Array(data));
+  const existing = appState.assets.findByFp(content.fp);
+  const assetId = existing ?? newId();
+  const wasRetained = existing ? appState.assets.isRetained(existing) : false;
+  if (existing) appState.assets.activate(existing);
+
   let buf: AudioBuffer;
   try {
     // decode 会 detach 传进去的 buffer，所以给它一份自己的 slice
@@ -219,7 +328,6 @@ export async function importAudioBlob(
     return null;
   }
 
-  const assetId = newId();
   appState.player.register(assetId, buf);
   appState.waveforms = { ...appState.waveforms, [assetId]: await computeWaveform(buf) };
   /*
@@ -227,16 +335,34 @@ export async function importAudioBlob(
    * —— 引用还在、文件没有，重开就是一段哑音。用独立拷贝：上面 decode 那一支
    * 已经吃掉了自己的 slice，这份要留给保存，不能被任何下游 detach。
    */
-  appState.assets.put(assetId, new Uint8Array(data.slice(0)), {
-    kind: 'audio',
-    name,
-    originName: name,
-  });
-  appState.store.commit(tr('tl.importAudio'), (p) => {
-    p.assets[assetId] = { id: assetId, kind: 'audio', name, durationSec: buf.duration };
-  });
+  const input = { kind: 'audio' as const, name, originName: name };
+  const copy = new Uint8Array(data.slice(0));
+  if (linkedHandle) {
+    appState.assets.putLinkedBytes(assetId, copy, input, content);
+    void putAssetHandle(assetId, linkedHandle);
+  } else {
+    appState.assets.put(assetId, copy, input, content);
+  }
+  const declared = appState.store.project.assets[assetId];
+  if (!declared) {
+    appState.store.commit(tr('tl.importAudio'), (p) => {
+      p.assets[assetId] = { id: assetId, kind: 'audio', name, durationSec: buf.duration };
+    });
+  }
+  if (existing) {
+    appState.flash(
+      tr(wasRetained ? 'pool.reusedRestored' : 'pool.reusedAsset', { name }),
+      'info',
+    );
+  }
 
-  const out = finish(assetId, 'audio', name, { durationSec: buf.duration }, target);
+  const out = finish(
+    assetId,
+    'audio',
+    declared?.name ?? name,
+    { durationSec: buf.duration },
+    target,
+  );
 
   // 拍网格还是默认值（120/0）时顺手估一次 —— 用户没动过它，就是在等这个。
   // 动过就绝不覆盖：手调过的卡点比自动估计更值钱。

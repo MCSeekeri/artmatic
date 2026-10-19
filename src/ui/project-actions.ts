@@ -13,10 +13,24 @@
  * 留下一个半成品工程。
  */
 
-import { appState } from './app-state.svelte';
+import { appState, type OpenProject } from './app-state.svelte';
+import { platform } from '../platform/index';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
-import { NotAProjectError, openProject, saveProject } from '../project/io';
 import {
+  NotAProjectError,
+  assetPathBytes,
+  clearTrash,
+  deleteAssetFile,
+  deleteAssetPath,
+  listOrphanPaths,
+  listTrashFiles,
+  moveAssetToTrash,
+  openProject,
+  saveProject,
+} from '../project/io';
+import { autosave, discardDraft, readDraft } from './autosave';
+import {
+  adoptFileHandle,
   adoptNativeDir,
   hasDirectoryPicker,
   isNativeBacked,
@@ -26,6 +40,12 @@ import {
   type FsDirHandle,
 } from '../project/fs';
 import {
+  getAssetHandle,
+  putAssetHandle,
+  requestReadPermission,
+} from '../project/asset-handles';
+import { contentOfBlob } from '../project/fingerprint';
+import {
   getHandle,
   keyForHandle,
   listRecentProjects,
@@ -34,11 +54,13 @@ import {
   type ProjectRef,
 } from '../project/handles';
 import { ProjectStore } from '../core/project-store';
+import { migrateProject } from '../core/schema';
 import { createBlankProject, createDemoProject, DEMO_ASSET_ID } from '../core/demo-project';
 import { renderDemoAudio } from '../audio/demo-audio';
 import { decodeAudio, computeWaveform } from '../audio/decode';
 import { mimeForImageFilename, putImageBytes } from '../typography/image-assets';
 import { registerImageBytes, registerVideoMedia } from '../engine/media-assets';
+import { formatBytes } from '../core/format';
 import { tr } from '../i18n/index.svelte';
 
 function msg(e: unknown): string {
@@ -105,6 +127,8 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     const store = new ProjectStore(res.project);
     const assetStore = createAssetStore();
     const loaded = await assetStore.loadFrom(dir, res.ledger, res.project);
+    // linked 素材的句柄不在工程目录里：从 IndexedDB 接回来（失败只影响那一条）。
+    await resolveLocalHandles(assetStore);
 
     const k = key ?? (await keyForHandle(raw, dir.name));
     if (raw) await putHandle(k, raw);
@@ -224,26 +248,52 @@ export async function openRecentProject(ref: ProjectRef): Promise<boolean> {
 /* ------------------------------------------------------------ 保存 */
 
 /**
- * 保存**当前激活的那份**工程。
+ * 保存指定的那份工程。
  *
- * 注意所有 `appState.*` 都是转发到激活工程的 getter/setter ——
- * 保存的是前台那一份，不会误写到后台的工程上。
+ * **必须显式给 `p`**，不能在里面读 `appState.store`：W1.2 起一次保存可能
+ * 要流式写几 GB 素材，期间用户切选项卡是正常操作 —— 用「当前」会把 A 的内容
+ * 记成 B 已保存（脏标记从此撒谎，而磁盘上多出一份不该有的文件）。
  */
-async function writeTo(dir: FsDirHandle, key: string): Promise<boolean> {
+async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<boolean> {
+  /*
+   * **手动保存优先**（W1.2 第 3 条）：先取消排队中的自动保存，再等正在跑的
+   * 那一轮写完。不等的话两边会同时 `createWritable({mode:'exclusive'})` ——
+   * 后到的那个拿到 `NoModificationAllowedError`，而它可能正是用户按的 Ctrl+S。
+   */
+  autosave.cancel();
+  await autosave.idle();
+
   appState.projectBusy = true;
   try {
-    const ledger = await appState.assets.buildLedger();
+    const ledger = await p.assets.buildLedger();
     const report = await saveProject({
       dir,
-      project: appState.store.project,
+      project: p.store.project,
       ledger,
-      bytesFor: (id) => appState.assets.get(id),
+      openFor: (id) => p.assets.open(id),
     });
 
-    appState.projectDir = dir;
-    appState.projectKey = key;
-    appState.savedVersion = appState.store.version;
-    appState.savedAt = Date.now();
+    // 让素材仓记住「这些字节确实在 assets/ 里」：之后移除时才知道有没有文件可保留。
+    p.assets.markPersisted(report.persistedAssets);
+
+    const isActive = appState.activeProject === p;
+    if (isActive) {
+      appState.projectDir = dir;
+      appState.projectKey = key;
+    } else {
+      // 后台完成：直接写字段，再补一次「打开着的工程」同步（setter 里那条只在激活时跑）。
+      p.dir = dir;
+      p.key = key;
+      appState.refreshOpenTabs();
+    }
+    p.savedVersion = p.store.version;
+    p.savedAt = Date.now();
+    // 有正式落点了，本地草稿退休；降级提示也该消失（下一次写失败会重新亮）。
+    if (isActive) {
+      appState.autosaveFailure = null;
+      appState.autosaveFatal = false;
+    }
+    void discardDraft(p.draftKey);
     appState.recentProjects = rememberProject({
       key,
       name: dir.name,
@@ -283,20 +333,21 @@ export async function saveProjectAs(): Promise<boolean> {
     appState.flash(tr('err.platform.saveDirUnsupported'), 'error');
     return false;
   }
+  // 选择器可能开着很久；先固定「这次保存的是哪一份」。
+  const p = appState.activeProject;
   const picked = await pickDirectory({ mode: 'readwrite', id: 'artmatic-save' });
   if (!picked) return false;
   const key = await keyForHandle(picked.raw, picked.dir.name);
   await putHandle(key, picked.raw);
-  return writeTo(picked.dir, key);
+  return writeTo(p, picked.dir, key);
 }
 
 /** 保存。没有位置时自动走「另存为」—— 第一次保存本来就要问位置。 */
 export async function saveProjectNow(): Promise<boolean> {
   if (appState.projectBusy) return false;
-  const dir = appState.projectDir;
-  const key = appState.projectKey;
-  if (!dir || !key) return saveProjectAs();
-  return writeTo(dir, key);
+  const p = appState.activeProject;
+  if (!p.dir || !p.key) return saveProjectAs();
+  return writeTo(p, p.dir, p.key);
 }
 
 /* ------------------------------------------------------- 渲染期素材恢复 */
@@ -304,49 +355,418 @@ export async function saveProjectNow(): Promise<boolean> {
 /**
  * 把某个素材仓里的字节重新变成「能画出来的东西」。
  *
- * 持久化层存的是字节，渲染层要的是 objectURL / AudioBuffer，两者之间
- * 必须有一次重建。**单条素材解不开不中断整个流程**：画面照旧能开，
- * 只是那一条没声音/不显示，而 `issues` 里通常已经有记录了。
+ * 持久化层存的是**来源**（W1.1），渲染层要的是 objectURL / AudioBuffer /
+ * 视频 `Blob`，两者之间必须有一次重建。**单条素材解不开不中断整个流程**：
+ * 画面照旧能开，只是那一条没声音/不显示，而 `issues` 里通常已经有记录了。
+ *
+ * 视频走 `openVideo()`（`File` / 句柄直接交给解码器），**不读字节**。
  */
+/**
+ * 把 `fsa:<id>` 的本地句柄接回素材仓。
+ *
+ * 视频保留句柄（零读取）；图片/音频读出字节（同步 API `bytesOf` 要它）。
+ * 权限申请失败、句柄丢失都只让这一条变成「脱机」，**不挡打开工程**。
+ */
+async function resolveLocalHandles(store: AssetStore): Promise<void> {
+  for (const id of store.ids()) {
+    const local = store.localOf(id);
+    if (!local?.startsWith('fsa:')) continue;
+    try {
+      const raw = await getAssetHandle(id);
+      if (!raw) continue;
+      if (!(await requestReadPermission(raw))) continue;
+      const fh = adoptFileHandle(raw as FileSystemFileHandle);
+      const input = store.input(id);
+      if (!input) continue;
+      if (input.kind === 'video') {
+        store.attachLocalHandle(id, fh, (await fh.get()).size);
+      } else {
+        const bytes = await (await fh.get()).readBytes();
+        store.putLinkedBytes(id, bytes, input, store.contentOf(id));
+      }
+    } catch {
+      /* 单条失败：画面走脱机占位 */
+    }
+  }
+}
+
 async function hydrateRenderAssets(store: AssetStore): Promise<void> {
   for (const id of store.ids()) {
-    const bytes = store.get(id);
-    const input = store.input(id);
-    if (!bytes || !input) continue;
-
-    if (input.kind === 'image') {
-      const arr = bytes.slice().buffer as ArrayBuffer;
-      const mime = mimeForImageFilename(input.originName);
-      putImageBytes(id, arr, mime);
-      // 排版文档用 objectURL（snapDOM 要从 DOM 取 <img>），
-      // 而 image **片段**要的是 WebGL 纹理 —— 两条路都得喂。
-      // 这里漏过一整个 M4/M5a 周期：`setImage` 零调用方，
-      // 于是「转为图片」产出的片段在画面上一律空白。
-      try {
-        await registerImageBytes(id, new Blob([arr], { type: mime }));
-      } catch {
-        /* 单条解不开不挡打开（与下面的音频同理） */
-      }
-      continue;
+    // W1.1 起视频要 `handle.get()`（可能因权限失效而抛）：单条失败不挡打开。
+    try {
+      await hydrateAsset(store, id);
+    } catch {
+      /* 见函数头：那一条没画面，`issues` 里通常已有记录 */
     }
+  }
+}
 
+/** 单条素材的渲染期重建（打开工程与「恢复未使用素材」共用）。 */
+async function hydrateAsset(store: AssetStore, id: string): Promise<void> {
+  const input = store.input(id);
+  if (!input) return;
+
+  if (input.kind === 'video') {
+    const media = await store.openVideo(id);
+    if (media) registerVideoMedia(id, media);
+    return;
+  }
+
+  // 图片与音频本来就小，`readAll` 对 bytes 来源是零拷贝、对句柄来源读一份。
+  const bytes = await store.readAll(id);
+  if (!bytes) return;
+
+  if (input.kind === 'image') {
+    // ArrayBuffer 必须是这一份自己的：`putImageBytes` 会把它包成 Blob，
+    // 而 registerImageBytes 也要一份；`slice()` 复制一份只在这里发生一次。
+    const arr = bytes.slice().buffer as ArrayBuffer;
+    const mime = mimeForImageFilename(input.originName);
+    putImageBytes(id, arr, mime);
+    // 排版文档用 objectURL（snapDOM 要从 DOM 取 <img>），
+    // 而 image **片段**要的是 WebGL 纹理 —— 两条路都得喂。
+    // 这里漏过一整个 M4/M5a 周期：`setImage` 零调用方，
+    // 于是「转为图片」产出的片段在画面上一律空白。
+    try {
+      await registerImageBytes(id, new Blob([arr], { type: mime }));
+    } catch {
+      /* 单条解不开不挡打开（与下面的音频同理） */
+    }
+    return;
+  }
+
+  if (input.kind === 'audio') {
+    try {
+      // slice() 是为了给 decodeAudio 一份可被 detach 的拷贝：
+      // 它会把传进去的 ArrayBuffer 用掉，而素材仓里那份还要留着保存。
+      const buf = await decodeAudio(bytes.slice().buffer as ArrayBuffer);
+      appState.player.register(id, buf);
+      appState.waveforms = { ...appState.waveforms, [id]: await computeWaveform(buf) };
+    } catch {
+      /* 见函数头：单条失败不挡打开 */
+    }
+  }
+}
+
+/* -------------------------------------------------- 未使用素材（W1.3） */
+
+/**
+ * 把一条「已移除但字节还在」的素材恢复成工程素材。
+ *
+ * 恢复的元信息只能从素材仓拿（`project.assets` 那条在移除时就删了）。
+ * 时长 / 尺寸**丢掉了** —— 台账不记它们。后果只有「素材池里那一行不显示
+ * 时长、新拖出来的片段按默认长度」，已有片段照常播放（它们自带几何）。
+ */
+export async function restoreUnusedAsset(assetId: string): Promise<boolean> {
+  if (!appState.hasProject) return false;
+  const p = appState.activeProject;
+  const input = p.assets.retainedInput(assetId);
+  if (!input) return false;
+
+  // 先把字节来源恢复好（同步 API `bytesOf` 之后才可用），再写工程表。
+  await p.assets.restore(assetId);
+  p.store.commit(tr('pool.restoreAsset'), (proj) => {
+    proj.assets[assetId] = { id: assetId, kind: input.kind, name: input.name };
+  });
+  try {
+    await hydrateAsset(p.assets, assetId);
+  } catch {
+    /* 字节读不出来：素材回表了，画面走「脱机媒体」占位（比假装恢复成功好） */
+  }
+  return true;
+}
+
+/**
+ * 清理未使用素材：文件移进 `assets/.trash/`（**不是删除**）。
+ *
+ * 没有目录句柄的工程没有磁盘文件可清 —— 只有 `assets/` 存在时这个动作才有意义。
+ * 走 `store.touch()` 让工程变脏：台账变了，必须被下一次保存写下去，
+ * 否则「文件已进回收站」这件事只发生在内存里。
+ */
+export async function trashUnusedAsset(assetId: string): Promise<boolean> {
+  if (!appState.hasProject) return false;
+  const p = appState.activeProject;
+  if (!p.dir) return false;
+  const ledger = await p.assets.buildLedger();
+  const entry = ledger.entries[assetId];
+  if (!entry?.retained) return false;
+  const moved = await moveAssetToTrash(p.dir, entry);
+  if (!moved) return false;
+  p.assets.remove(assetId);
+  p.store.touch();
+  autosave.schedule();
+  return true;
+}
+
+/** 彻底删除源文件（只对已移除的保留项出现；二次确认由调用方做）。 */
+export async function deleteUnusedAsset(assetId: string): Promise<boolean> {
+  if (!appState.hasProject) return false;
+  const p = appState.activeProject;
+  const ledger = await p.assets.buildLedger();
+  const entry = ledger.entries[assetId];
+  if (!entry?.retained) return false;
+  if (p.dir) await deleteAssetFile(p.dir, entry);
+  p.assets.remove(assetId);
+  p.store.touch();
+  autosave.schedule();
+  return true;
+}
+
+/* ------------------------------------------------------ 占用与清理（W1） */
+
+export interface ProjectUsage {
+  /** 活动素材的体积（含只有本地引用的）。 */
+  projectBytes: number;
+  /** 「未使用素材」的体积。 */
+  unusedBytes: number;
+  trashCount: number;
+  trashBytes: number;
+  orphanCount: number;
+  orphanBytes: number;
+}
+
+const EMPTY_USAGE: ProjectUsage = {
+  projectBytes: 0,
+  unusedBytes: 0,
+  trashCount: 0,
+  trashBytes: 0,
+  orphanCount: 0,
+  orphanBytes: 0,
+};
+
+/**
+ * 工程相关磁盘占用。**只 stat，不读字节** —— 视频素材也不会因此进堆。
+ *
+ * 没有目录句柄时只有「活动 / 未使用」两项有意义：回收站与孤儿都是磁盘概念。
+ */
+export async function getProjectUsage(): Promise<ProjectUsage> {
+  if (!appState.hasProject) return { ...EMPTY_USAGE };
+  const p = appState.activeProject;
+  const store = p.assets;
+  const unusedBytes = store.retainedIds().reduce((n, id) => n + (store.retainedSize(id) ?? 0), 0);
+  if (!p.dir) {
+    return { ...EMPTY_USAGE, projectBytes: store.totalBytes(), unusedBytes };
+  }
+
+  let trashCount = 0;
+  let trashBytes = 0;
+  let orphanCount = 0;
+  let orphanBytes = 0;
+  try {
+    const trash = await listTrashFiles(p.dir);
+    trashCount = trash.length;
+    trashBytes = trash.reduce((n, f) => n + f.bytes, 0);
+    const ledger = await store.buildLedger();
+    const orphans = await listOrphanPaths(p.dir, ledger);
+    orphanCount = orphans.length;
+    for (const rel of orphans) orphanBytes += await assetPathBytes(p.dir, rel);
+  } catch {
+    /* 统计失败不该挡住面板：少显示一行比整块报错好 */
+  }
+  return {
+    projectBytes: store.totalBytes(),
+    unusedBytes,
+    trashCount,
+    trashBytes,
+    orphanCount,
+    orphanBytes,
+  };
+}
+
+/** 清空 `assets/.trash/`。只删回收站里的文件，**不碰本地原文件**。 */
+export async function clearProjectTrash(): Promise<{ removed: number; bytes: number } | null> {
+  if (!appState.hasProject) return null;
+  const p = appState.activeProject;
+  if (!p.dir) return null;
+  try {
+    const res = await clearTrash(p.dir);
+    appState.flash(tr('app.trashCleared', { n: res.removed, size: formatBytes(res.bytes) }), 'success');
+    return res;
+  } catch (e) {
+    appState.flash(tr('app.cleanupFailed', { detail: msg(e) }), 'error');
+    return null;
+  }
+}
+
+/**
+ * 批量清理未使用素材（进回收站）。
+ *
+ * 与逐条动作共用 `moveAssetToTrash`；台账只构建一次 —— 逐条调
+ * `trashUnusedAsset` 会为每条素材重算一遍台账（哈希缓存虽然省算力，但
+ * `buildLedger` 仍是 O(素材数)）。
+ */
+export async function trashAllUnused(): Promise<number> {
+  if (!appState.hasProject) return 0;
+  const p = appState.activeProject;
+  if (!p.dir) return 0;
+  const ledger = await p.assets.buildLedger();
+  let moved = 0;
+  for (const id of p.assets.retainedIds()) {
+    const entry = ledger.entries[id];
+    if (!entry?.retained) continue;
+    try {
+      if (await moveAssetToTrash(p.dir, entry)) {
+        p.assets.remove(id);
+        moved += 1;
+      }
+    } catch {
+      /* 单条失败继续；结束后用 moved 如实报数 */
+    }
+  }
+  if (moved) {
+    p.store.touch();
+    autosave.schedule();
+  }
+  return moved;
+}
+
+/** 批量彻底删除未使用素材（含工程副本；本地原文件永远不碰）。 */
+export async function deleteAllUnused(): Promise<number> {
+  if (!appState.hasProject) return 0;
+  const p = appState.activeProject;
+  const ledger = await p.assets.buildLedger();
+  let removed = 0;
+  for (const id of [...p.assets.retainedIds()]) {
+    const entry = ledger.entries[id];
+    if (!entry?.retained) continue;
+    try {
+      if (p.dir) await deleteAssetFile(p.dir, entry);
+      p.assets.remove(id);
+      removed += 1;
+    } catch {
+      /* 同上 */
+    }
+  }
+  if (removed) {
+    p.store.touch();
+    autosave.schedule();
+  }
+  return removed;
+}
+
+/**
+ * 清理 `assets/` 里台账不知道的文件（旧版本留下的孤儿）。
+ *
+ * **只删「不在当前台账里」的直接子文件**：`.trash/` 是目录，不会被 `listAssetPaths`
+ * 列进来；也没有任何路径来自用户输入。仍然要求调用方二次确认。
+ */
+export async function cleanupOrphanFiles(): Promise<number> {
+  if (!appState.hasProject) return 0;
+  const p = appState.activeProject;
+  if (!p.dir) return 0;
+  const ledger = await p.assets.buildLedger();
+  const orphans = await listOrphanPaths(p.dir, ledger);
+  let removed = 0;
+  for (const rel of orphans) {
+    try {
+      if (await deleteAssetPath(p.dir, rel)) removed += 1;
+    } catch {
+      /* 同上 */
+    }
+  }
+  return removed;
+}
+
+/* ------------------------------------------------------ 引用式素材（W1） */
+
+/**
+ * 把一条 linked 素材收集进工程（`assets/` 里加一份副本，本地位置保留）。
+ *
+ * 有目录就立刻保存一次；没有目录只标记，等用户第一次保存。
+ * **本地原文件永远不动。**
+ */
+export async function collectAsset(assetId: string): Promise<boolean> {
+  if (!appState.hasProject) return false;
+  const p = appState.activeProject;
+  if (!p.assets.markBundled(assetId)) return false;
+  p.store.touch();
+  autosave.schedule();
+  if (!p.dir) {
+    appState.flash(tr('pool.collectPending'), 'info');
+    return true;
+  }
+  const ok = await saveProjectNow();
+  if (ok) appState.flash(tr('pool.collected'), 'success');
+  return ok;
+}
+
+/**
+ * 重新链接一条 linked 素材（源文件被移动 / 改名 / 权限丢了）。
+ *
+ * **只接受内容相同的新文件**：指纹不同意味着「这是另一份素材」，静默换掉会让
+ * 已经排好的片段在用户没察觉时换了画面。要换内容请走「作为新素材导入」。
+ */
+export async function relinkAsset(assetId: string): Promise<boolean> {
+  if (!appState.hasProject || appState.projectBusy) return false;
+  const p = appState.activeProject;
+  const input = p.assets.input(assetId);
+  if (!input) return false;
+  const picked = await platform.pickLinkedFile(input.kind);
+  if (!picked) return false;
+  if (!picked.file) {
+    // 桌面版 path-only 的取字节路径要等 W5 的 readRange 接上。
+    appState.flash(tr('pool.relinkUnsupported'), 'error');
+    return false;
+  }
+  const content = await contentOfBlob(picked.file);
+  const known = p.assets.contentOf(assetId);
+  if (known && known.fp !== content.fp) {
+    appState.flash(tr('pool.relinkMismatch'), 'error');
+    return false;
+  }
+  try {
     if (input.kind === 'video') {
-      // 走 Uint8Array 而不是再包一层 Blob：字节已经在这份内存里了，
-      // 包 Blob 会多一份拷贝（几 GB 素材下这一步就是压垮堆的那一下）。
-      registerVideoMedia(id, bytes);
-      continue;
+      const fh = adoptFileHandle(picked.handle as FileSystemFileHandle);
+      p.assets.putLinkedHandle(assetId, fh, picked.size, input, content);
+      registerVideoMedia(assetId, picked.file);
+    } else {
+      const bytes = new Uint8Array(await picked.file.arrayBuffer());
+      p.assets.putLinkedBytes(assetId, bytes, input, content);
+      await hydrateAsset(p.assets, assetId);
     }
+    if (picked.handle) await putAssetHandle(assetId, picked.handle);
+    p.store.touch();
+    autosave.schedule();
+    appState.flash(tr('pool.relinked', { name: input.name }), 'success');
+    return true;
+  } catch (e) {
+    appState.flash(tr('app.cleanupFailed', { detail: msg(e) }), 'error');
+    return false;
+  }
+}
 
-    if (input.kind === 'audio') {
-      try {
-        // slice() 是为了给 decodeAudio 一份可被 detach 的拷贝：
-        // 它会把传进去的 ArrayBuffer 用掉，而素材仓里那份还要留着保存。
-        const buf = await decodeAudio(bytes.slice().buffer as ArrayBuffer);
-        appState.player.register(id, buf);
-        appState.waveforms = { ...appState.waveforms, [id]: await computeWaveform(buf) };
-      } catch {
-        /* 见函数头：单条失败不挡打开 */
-      }
-    }
+/* ------------------------------------------------------ 崩溃恢复（W1.2） */
+
+/**
+ * 从本地草稿恢复一份工程。
+ *
+ * 落成一份**带未保存标记**的新工程（`savedVersion: -1`）：它还没有目录，
+ * 首次保存会走「另存为」。恢复成功后草稿文件删除 —— 否则每次启动都会
+ * 再问一遍同一份草稿；新工程的下一次编辑会重新写一份（新的 `draftKey`）。
+ */
+export async function restoreDraftProject(key: string): Promise<boolean> {
+  if (appState.projectBusy) return false;
+  const rec = await readDraft(key);
+  if (!rec) {
+    appState.flash(tr('proj.draftBroken'), 'error');
+    return false;
+  }
+  appState.projectBusy = true;
+  try {
+    // 草稿可能来自更早的版本 —— 与打开工程走同一条迁移。
+    const project = migrateProject(rec.project as Record<string, unknown>);
+    const store = new ProjectStore(project);
+    const proj = appState.adoptProject({ store, savedVersion: -1, savedAt: 0 });
+    await hydrateRenderAssets(proj.assets);
+    await discardDraft(key);
+    appState.flash(tr('proj.draftRestored', { name: rec.name }), 'success');
+    // 恢复出来的工程是脏的，但 adopt 不会触发 store 变更 —— 主动排一次，
+    // 让下一次 2 s 之后的新草稿与本工程重新绑定。
+    autosave.schedule();
+    return true;
+  } catch (e) {
+    appState.flash(tr('err.io.openFailed', { detail: msg(e) }), 'error');
+    return false;
+  } finally {
+    appState.projectBusy = false;
   }
 }

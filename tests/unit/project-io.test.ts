@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { memoryRoot, writeBytesAtomic, type FsDirHandle, type MemoryRoot } from '../../src/project/fs';
-import { NotAProjectError, listAssetPaths, openProject, saveProject } from '../../src/project/io';
-import { sha256Hex } from '../../src/project/hash';
-import { createLedger, type AssetLedger } from '../../src/project/ledger';
+import {
+  NotAProjectError,
+  clearTrash,
+  deleteAssetFile,
+  deleteAssetPath,
+  listAssetPaths,
+  listOrphanPaths,
+  listTrashFiles,
+  moveAssetToTrash,
+  openProject,
+  saveProject,
+} from '../../src/project/io';
+import { contentOfBytes } from '../../src/project/fingerprint';
+import { createLedger, projectPath, type AssetLedger } from '../../src/project/ledger';
 import { defaultProject, SCHEMA_VERSION, type Project } from '../../src/core/schema';
 
 const enc = new TextEncoder();
@@ -24,20 +35,19 @@ async function fixture(name = 'Demo'): Promise<Fixture> {
   const dir = await root.openDir('p', { create: true });
   const project = defaultProject(name);
   const bytes = enc.encode('fake-png-bytes');
-  const hash = await sha256Hex(bytes);
+  const content = await contentOfBytes(bytes);
   const payload = new Map<string, Uint8Array>([['img1', bytes]]);
   const ledger = createLedger();
   ledger.entries.img1 = {
     id: 'img1',
     kind: 'image',
-    path: 'assets/img1.png',
-    hash,
-    bytes: bytes.byteLength,
     originName: 'img1.png',
     mode: 'bundled',
     addedAt: 1,
+    content,
+    locations: [{ kind: 'project', path: 'assets/img1.png', seen: null }],
   };
-  project.assets.img1 = { id: 'img1', kind: 'image', name: '测试图', hash };
+  project.assets.img1 = { id: 'img1', kind: 'image', name: '测试图' };
   return { root, dir, project, ledger, payload, assetBytes: bytes.byteLength };
 }
 
@@ -46,7 +56,14 @@ function saver(f: Fixture, over: Partial<{ project: Project; ledger: AssetLedger
     dir: f.dir,
     project: over.project ?? f.project,
     ledger: over.ledger ?? f.ledger,
-    bytesFor: (id) => f.payload.get(id) ?? null,
+    // W1.1 起保存走**分块流**：素材仓的 `open()` 就是这个形状。
+    openFor: (id) => {
+      const bytes = f.payload.get(id);
+      if (!bytes) return null;
+      return (async function* () {
+        yield bytes;
+      })();
+    },
   });
 }
 
@@ -96,7 +113,11 @@ describe('saveProject', () => {
 
   it('素材文件名冲突时拒绝保存（否则会静默互相覆盖）', async () => {
     const f = await fixture();
-    f.ledger.entries.other = { ...f.ledger.entries.img1!, id: 'other', path: 'assets/img1.png' };
+    f.ledger.entries.other = {
+      ...f.ledger.entries.img1!,
+      id: 'other',
+      locations: [{ kind: 'project', path: 'assets/img1.png', seen: null }],
+    };
     await expect(saver(f)).rejects.toThrow(/冲突/);
     expect(f.root.inspect('p/project.json')).toBeNull();
   });
@@ -123,6 +144,111 @@ describe('saveProject', () => {
   });
 });
 
+describe('saveProject：自动保存的 .bak 约定（W1.2）', () => {
+  it('backup:false 时不写 .bak，也不改动已有的 .bak', async () => {
+    const f = await fixture();
+    // 先手动保存一次并制造一个 .bak
+    await saver(f);
+    await saver(f, { project: { ...f.project, name: '手动保存版' } });
+    const bakBefore = dec(f.root.inspect('p/project.json.bak')!);
+    expect(bakBefore).toContain('Demo');
+
+    // 自动保存（不轮转 .bak）
+    await saveProject({
+      dir: f.dir,
+      project: { ...f.project, name: '自动保存版' },
+      ledger: f.ledger,
+      openFor: (id) => {
+        const bytes = f.payload.get(id);
+        return bytes ? (async function* () { yield bytes; })() : null;
+      },
+      backup: false,
+    });
+
+    expect(JSON.parse(dec(f.root.inspect('p/project.json')!)).name).toBe('自动保存版');
+    // .bak 仍然停在上一次**手动**保存之前那一版 —— 这就是它存在的意义。
+    expect(dec(f.root.inspect('p/project.json.bak')!)).toBe(bakBefore);
+  });
+});
+
+describe('删除语义：回收站与真删（W1.3）', () => {
+  it('moveAssetToTrash 先写回收站再删原文件', async () => {
+    const f = await fixture();
+    await saver(f);
+    const entry = f.ledger.entries.img1!;
+
+    const moved = await moveAssetToTrash(f.dir, entry, 1700000000000);
+    expect(moved).toBe('assets/.trash/img1-1700000000000.png');
+    expect(f.root.inspect('p/assets/img1.png'), '原文件已经不在了').toBeNull();
+    expect(dec(f.root.inspect('p/assets/.trash/img1-1700000000000.png')!)).toBe('fake-png-bytes');
+  });
+
+  it('同一个素材清理两次不会互相覆盖（文件名带时间戳）', async () => {
+    const f = await fixture();
+    await saver(f);
+    const entry = f.ledger.entries.img1!;
+    await moveAssetToTrash(f.dir, entry, 111);
+    // 模拟「又放回 assets/ 再清理一次」
+    f.root.seed('p/assets/img1.png', 'second-copy');
+    await moveAssetToTrash(f.dir, entry, 222);
+    expect(dec(f.root.inspect('p/assets/.trash/img1-111.png')!)).toBe('fake-png-bytes');
+    expect(dec(f.root.inspect('p/assets/.trash/img1-222.png')!)).toBe('second-copy');
+  });
+
+  it('文件不在时 move 返回 null（不报错）；delete 把「不在」当成已达目的', async () => {
+    const f = await fixture();
+    const entry = f.ledger.entries.img1!;
+    expect(await moveAssetToTrash(f.dir, entry, 1)).toBeNull();
+
+    await saver(f);
+    expect(await deleteAssetFile(f.dir, entry)).toBe(true);
+    expect(f.root.inspect('p/assets/img1.png')).toBeNull();
+  });
+
+  it('回收站里的文件不进 listAssetPaths（不参与审计）', async () => {
+    const f = await fixture();
+    await saver(f);
+    await moveAssetToTrash(f.dir, f.ledger.entries.img1!, 5);
+    expect(await listAssetPaths(f.dir)).toEqual([]);
+  });
+});
+
+describe('清理：回收站与孤儿（W1）', () => {
+  it('listTrashFiles 只列 .trash 里的文件并给出体积', async () => {
+    const f = await fixture();
+    await saver(f);
+    await moveAssetToTrash(f.dir, f.ledger.entries.img1!, 100);
+    const trash = await listTrashFiles(f.dir);
+    expect(trash).toHaveLength(1);
+    expect(trash[0]!.path).toBe('assets/.trash/img1-100.png');
+    expect(trash[0]!.bytes).toBe('fake-png-bytes'.length);
+  });
+
+  it('clearTrash 只清回收站，assets/ 里的活文件不动', async () => {
+    const f = await fixture();
+    await saver(f);
+    await moveAssetToTrash(f.dir, f.ledger.entries.img1!, 100);
+    f.root.seed('p/assets/keep.png', 'keep');
+    const res = await clearTrash(f.dir);
+    expect(res.removed).toBe(1);
+    expect(await listTrashFiles(f.dir)).toEqual([]);
+    expect(f.root.inspect('p/assets/keep.png'), 'assets/ 里的活文件还在').not.toBeNull();
+    expect(await clearTrash(f.dir), '重复清空不报错').toEqual({ removed: 0, bytes: 0 });
+  });
+
+  it('listOrphanPaths 只列台账不知道的文件；deleteAssetPath 真删', async () => {
+    const f = await fixture();
+    await saver(f);
+    f.root.seed('p/assets/orphan.png', 'stray');
+    const orphans = await listOrphanPaths(f.dir, f.ledger);
+    expect(orphans).toEqual(['assets/orphan.png']);
+
+    expect(await deleteAssetPath(f.dir, 'assets/orphan.png')).toBe(true);
+    expect(f.root.inspect('p/assets/orphan.png')).toBeNull();
+    expect(await deleteAssetPath(f.dir, 'assets/orphan.png'), '不在 = 已达成目的').toBe(true);
+  });
+});
+
 describe('openProject', () => {
   it('保存后重开，工程内容完全一致', async () => {
     const f = await fixture();
@@ -136,7 +262,8 @@ describe('openProject', () => {
     const f = await fixture();
     await saver(f);
     const r = await openProject(f.dir);
-    expect(r.ledger.entries.img1).toMatchObject({ hash: f.ledger.entries.img1!.hash, bytes: f.assetBytes });
+    expect(r.ledger.entries.img1!.content).toEqual(f.ledger.entries.img1!.content);
+    expect(projectPath(r.ledger.entries.img1!)).toBe('assets/img1.png');
     expect(r.issues).toHaveLength(0);
   });
 
@@ -163,8 +290,9 @@ describe('openProject', () => {
 
     const r = await openProject(f.dir);
     expect(r.warnings.some((w) => w.includes('重建'))).toBe(true);
-    expect(r.ledger.entries.img1).toMatchObject({ path: 'assets/img1.png', bytes: f.assetBytes });
-    expect(r.ledger.entries.img1!.hash).toBe(f.ledger.entries.img1!.hash);
+    expect(projectPath(r.ledger.entries.img1!)).toBe('assets/img1.png');
+    expect(r.ledger.entries.img1!.content?.size).toBe(f.assetBytes);
+    expect(r.ledger.entries.img1!.content?.fp).toBe(f.ledger.entries.img1!.content!.fp);
   });
 
   it('assets/ 里的未跟踪文件只提示，不删', async () => {

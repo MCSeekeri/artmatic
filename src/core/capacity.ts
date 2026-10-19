@@ -302,8 +302,10 @@ export type ImportSizeCheck = { ok: true } | { ok: false; sizeBytes: number; lim
  *
  * 边界取**闭区间**（`size === limit` 放行）：等于预算的文件没有任何一条理由被拒。
  *
- * ⚠️ W1.1 把素材字节句柄化之后要复看这条：届时视频不再整份进堆，
- * 「文件体积」与「渲染代价」就彻底解耦了，这个代理口径可能该换成别的判据。
+ * ⚠️ **W1.1 已复看（结论：保留）**。视频不再整份进堆之后，这条闸门不再是
+ * 「防内存峰值」，而是一条**策略上限**：它挡的下一步动作是「把整个文件拷进
+ * 工程目录」以及按素材时长解码的代价。口径仍是 `videoPerAssetMB`
+ *（预算本来就是「只占一小块」的保守估计）；要放宽就改预算，别在这里另写阈值。
  */
 export function checkImportSize(sizeBytes: number, limitMB: number): ImportSizeCheck {
   const limitBytes = mbToBytes(limitMB);

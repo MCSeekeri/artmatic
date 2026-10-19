@@ -21,7 +21,7 @@ import {
  * 落点顺延、撑长工程时长、撤销栈都是它的行为，替身会把被测对象换掉。
  */
 
-type PoolSource = Pick<AssetStore, 'ids' | 'input' | 'get'>;
+type PoolSource = Pick<AssetStore, 'ids' | 'input' | 'size'>;
 
 interface FakeItem {
   kind: Asset['kind'];
@@ -37,7 +37,7 @@ function fakeStore(items: Record<string, FakeItem>): PoolSource {
       const it = items[id];
       return it ? { kind: it.kind, name: it.name, originName: `${it.name}.bin` } : null;
     },
-    get: (id) => items[id]?.bytes ?? null,
+    size: (id) => items[id]?.bytes?.byteLength ?? null,
   };
 }
 

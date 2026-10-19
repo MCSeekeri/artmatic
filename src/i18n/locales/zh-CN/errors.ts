@@ -61,6 +61,21 @@ export const errors = {
   'err.io.assetBytesMissing': '素材 {name}（{id}）在内存里没有字节，跳过写入',
   'err.io.ledgerRebuilt': 'assets.json 缺失或不完整，已从 assets/ 目录重建台账',
   'err.io.untrackedFile': 'assets/{name} 不在工程的素材表里，已标为未跟踪',
+
+  /* ------------------------------------------------ 工程包（.artmatic） */
+  'err.pack.notZip': '这个文件不是工程包（不是 ZIP，或文件已损坏）',
+  'err.pack.noManifest': '这个文件不是 Artmatic 工程包（缺少 manifest.json）',
+  'err.pack.badManifest': '工程包的清单损坏或不受支持',
+  'err.pack.tooNew': '工程包格式版本 {format} 比本应用新，请升级 Artmatic',
+  'err.pack.noProject': '工程包里没有 project.json',
+  'err.pack.corruptProject': '工程包里的 project.json 校验失败（文件可能损坏）',
+  'err.pack.corruptAsset': '工程包里的素材「{path}」校验失败（文件可能损坏）',
+  'err.pack.missingAsset': '工程包缺少素材「{path}」',
+  'err.pack.unsafePath': '工程包里有不安全的路径：{path}',
+  'err.pack.unknownEntry': '工程包里有无法识别的文件：{path}',
+  'err.pack.tooLarge': '工程包解压后 {size}，超过上限 {limit}',
+  'err.pack.pluginsIgnored': '已跳过包里的 {n} 个插件文件（导入他人工程不执行代码）',
+  'err.pack.duplicatePath': '工程包里有重复的素材路径：{path}',
   'err.io.openFailed': '打开失败：{detail}',
   'err.io.saveFailed': '保存失败：{detail}',
 

@@ -16,6 +16,7 @@
   import IconButton from './controls/IconButton.svelte';
   import Button from './controls/Button.svelte';
   import Modal from './controls/Modal.svelte';
+  import ConfirmDialog from './ConfirmDialog.svelte';
   import RailShell from './RailShell.svelte';
   import SettingsModal from './SettingsModal.svelte';
   import ExportModal from './ExportModal.svelte';
@@ -29,12 +30,22 @@
   import { SHORTCUT_GROUPS } from './shortcuts';
   import { tr } from '../i18n/index.svelte';
   import {
+    cleanupOrphanFiles,
+    clearProjectTrash,
+    deleteAllUnused,
+    deleteUnusedAsset,
+    getProjectUsage,
     newProject,
     openProjectPicker,
     openRecentProject,
+    restoreUnusedAsset,
     saveProjectAs,
     saveProjectNow,
+    trashAllUnused,
+    trashUnusedAsset,
+    type ProjectUsage,
   } from './project-actions';
+  import { importProjectPackage, packProjectNow } from './package-actions';
 
   type PanelId = 'about' | 'shortcuts' | 'export' | 'settings' | 'project' | 'plugins';
   let panel = $state<PanelId | null>(null);
@@ -69,6 +80,126 @@
   }
 
   const exporting = $derived(appState.exportProgress !== null);
+
+  /* ---------------------------------------------- 未使用素材（W1.3） */
+
+  /**
+   * 已从工程移除、但字节文件还在的素材。
+   *
+   * 它是「移除 ≠ 销毁」唯一可操作的出口：没有这一段，`assets/` 里的文件
+   * 就只是磁盘上的一堆垃圾，用户既找不到也删不掉。
+   */
+  const unused = $derived.by(() => {
+    void appState.version;
+    void panel;
+    const store = appState.assets;
+    return store.retainedIds().map((id) => ({
+      id,
+      name: store.retainedInput(id)?.name ?? id,
+      bytes: store.retainedSize(id) ?? 0,
+    }));
+  });
+  const unusedBytes = $derived(unused.reduce((n, u) => n + u.bytes, 0));
+
+  let pendingUnused = $state<{ id: string; name: string; action: 'trash' | 'delete' } | null>(null);
+
+  /* ------------------------------------------------ 占用与批量清理（W1） */
+
+  let usage = $state<ProjectUsage | null>(null);
+  let pendingCleanup = $state<'trash-all' | 'delete-all' | 'clear-trash' | 'orphans' | null>(null);
+
+  async function refreshUsage(): Promise<void> {
+    if (!appState.hasProject) {
+      usage = null;
+      return;
+    }
+    usage = await getProjectUsage();
+  }
+
+  // 面板开着时跟着版本刷新：清理动作不改 rev，所以每个动作结束后也会手动调一次。
+  $effect(() => {
+    if (panel !== 'project') return;
+    void appState.version;
+    void appState.projectDir;
+    void refreshUsage();
+  });
+
+  async function runCleanup(): Promise<void> {
+    const action = pendingCleanup;
+    pendingCleanup = null;
+    if (!action) return;
+    if (action === 'trash-all') {
+      const n = await trashAllUnused();
+      if (n) appState.flash(tr('app.trashAllDone', { n }), 'success');
+    } else if (action === 'delete-all') {
+      const n = await deleteAllUnused();
+      if (n) appState.flash(tr('app.deleteAllDone', { n }), 'success');
+    } else if (action === 'clear-trash') {
+      await clearProjectTrash();
+    } else {
+      const n = await cleanupOrphanFiles();
+      if (n) appState.flash(tr('app.orphansDone', { n }), 'success');
+    }
+    await refreshUsage();
+  }
+
+  const cleanupCopy = $derived.by(() => {
+    const action = pendingCleanup;
+    if (!action) return null;
+    if (action === 'trash-all') {
+      return {
+        title: tr('app.trashAll'),
+        message: tr('app.trashAllConfirm', { n: unused.length, size: fmtBytes(unusedBytes) }),
+        label: tr('app.trashAll'),
+      };
+    }
+    if (action === 'delete-all') {
+      return {
+        title: tr('app.deleteAll'),
+        message: tr('app.deleteAllConfirm', { n: unused.length, size: fmtBytes(unusedBytes) }),
+        label: tr('app.deleteAll'),
+      };
+    }
+    if (action === 'clear-trash') {
+      return {
+        title: tr('app.clearTrash'),
+        message: tr('app.clearTrashConfirm', {
+          n: usage?.trashCount ?? 0,
+          size: fmtBytes(usage?.trashBytes ?? 0),
+        }),
+        label: tr('app.clearTrash'),
+      };
+    }
+    return {
+      title: tr('app.cleanupOrphans'),
+      message: tr('app.cleanupOrphansConfirm', {
+        n: usage?.orphanCount ?? 0,
+        size: fmtBytes(usage?.orphanBytes ?? 0),
+      }),
+      label: tr('app.cleanupOrphans'),
+    };
+  });
+
+  async function restoreUnused(u: { id: string; name: string }): Promise<void> {
+    if (await restoreUnusedAsset(u.id)) {
+      appState.flash(tr('app.unusedRestored', { name: u.name }), 'success');
+    }
+  }
+
+  async function confirmUnused(): Promise<void> {
+    const p = pendingUnused;
+    pendingUnused = null;
+    if (!p) return;
+    const ok = p.action === 'trash' ? await trashUnusedAsset(p.id) : await deleteUnusedAsset(p.id);
+    if (ok) {
+      appState.flash(
+        tr(p.action === 'trash' ? 'app.unusedTrashed' : 'app.unusedDeleted', { name: p.name }),
+        'success',
+      );
+    } else {
+      appState.flash(tr('app.unusedFailed', { name: p.name }), 'error');
+    }
+  }
 </script>
 
 <RailShell>
@@ -275,6 +406,108 @@
       </section>
     {/if}
 
+    <!--
+      占用（W1）：把「工程到底占了多大」摊开。回收站与未跟踪文件都在这里清 ——
+      它们不在台账里，别处没有任何入口。
+    -->
+    {#if usage}
+      <section class="setting">
+        <h3>{tr('app.storageUsage')}</h3>
+        <div class="usage">
+          <span>{tr('app.usageProject')}</span>
+          <span class="mono">{fmtBytes(usage.projectBytes)}</span>
+          <span>{tr('app.usageUnused')}</span>
+          <span class="mono">{fmtBytes(usage.unusedBytes)}</span>
+          {#if appState.projectDir}
+            <span>{tr('app.usageTrash')}</span>
+            <span class="mono" data-testid="usage-trash">
+              {tr('app.assetCount', { n: usage.trashCount, size: fmtBytes(usage.trashBytes) })}
+            </span>
+            <span>{tr('app.usageOrphans')}</span>
+            <span class="mono" data-testid="usage-orphans">
+              {tr('app.assetCount', { n: usage.orphanCount, size: fmtBytes(usage.orphanBytes) })}
+            </span>
+          {/if}
+        </div>
+        <div class="row wrap">
+          {#if usage.trashCount}
+            <Button
+              label={tr('app.clearTrash')}
+              icon="trash"
+              variant="outline"
+              testid="trash-clear"
+              onclick={() => (pendingCleanup = 'clear-trash')}
+            />
+          {/if}
+          {#if usage.orphanCount}
+            <Button
+              label={tr('app.cleanupOrphans')}
+              icon="file-x"
+              variant="outline"
+              testid="orphans-clean"
+              onclick={() => (pendingCleanup = 'orphans')}
+            />
+          {/if}
+        </div>
+        <p class="unused-hint">{tr('app.usageHint')}</p>
+      </section>
+    {/if}
+
+    <!--
+      未使用素材（W1.3）：「移除」只是解除关联，文件还在 assets/。
+      三个动作按破坏性递增排列 —— 恢复在最左，彻底删除在最右（红色确认）。
+    -->
+    {#if unused.length}
+      <section class="setting">
+        <h3>{tr('app.unusedAssets')}</h3>
+        <p class="unused-hint">{tr('app.unusedAssetsHint', { n: unused.length, size: fmtBytes(unusedBytes) })}</p>
+        {#if unused.length > 1}
+          <div class="row wrap">
+            {#if appState.projectDir}
+              <Button
+                label={tr('app.trashAll')}
+                variant="outline"
+                testid="unused-trash-all"
+                onclick={() => (pendingCleanup = 'trash-all')}
+              />
+            {/if}
+            <Button
+              label={tr('app.deleteAll')}
+              variant="outline"
+              testid="unused-delete-all"
+              onclick={() => (pendingCleanup = 'delete-all')}
+            />
+          </div>
+        {/if}
+        {#each unused as u (u.id)}
+          <div class="unused" data-testid="unused-asset" data-asset-id={u.id}>
+            <span class="grow">{u.name}</span>
+            <span class="mono dim">{fmtBytes(u.bytes)}</span>
+            <Button
+              label={tr('app.unusedRestore')}
+              variant="outline"
+              testid="unused-restore"
+              onclick={() => void restoreUnused(u)}
+            />
+            {#if appState.projectDir}
+              <Button
+                label={tr('app.unusedTrash')}
+                variant="outline"
+                testid="unused-trash"
+                onclick={() => (pendingUnused = { id: u.id, name: u.name, action: 'trash' })}
+              />
+            {/if}
+            <Button
+              label={tr('app.unusedDelete')}
+              variant="outline"
+              testid="unused-delete"
+              onclick={() => (pendingUnused = { id: u.id, name: u.name, action: 'delete' })}
+            />
+          </div>
+        {/each}
+      </section>
+    {/if}
+
     <section class="setting">
       <h3>{tr('app.actions')}</h3>
       <div class="row wrap">
@@ -314,6 +547,22 @@
           testid="project-save-as"
           onclick={() => void saveProjectAs()}
         />
+        <Button
+          label={tr('app.pack')}
+          icon="archive"
+          variant="outline"
+          disabled={appState.projectBusy}
+          testid="project-pack"
+          onclick={() => void packProjectNow()}
+        />
+        <Button
+          label={tr('app.importPack')}
+          icon="package-open"
+          variant="outline"
+          disabled={appState.projectBusy}
+          testid="project-import-pack"
+          onclick={() => void importProjectPackage()}
+        />
       </div>
     </section>
 
@@ -344,6 +593,33 @@
       >{tr('app.projectHintC')}<code class="mono">assets/</code>{tr('app.projectHintD')}
     </p>
   </Modal>
+{/if}
+
+{#if pendingUnused}
+  <ConfirmDialog
+    title={tr(pendingUnused.action === 'trash' ? 'app.unusedTrash' : 'app.unusedDelete')}
+    message={tr(
+      pendingUnused.action === 'trash' ? 'app.unusedTrashConfirm' : 'app.unusedDeleteConfirm',
+      { name: pendingUnused.name },
+    )}
+    confirmLabel={tr(pendingUnused.action === 'trash' ? 'app.unusedTrash' : 'app.unusedDelete')}
+    danger
+    testid="confirm-unused-asset"
+    onconfirm={() => void confirmUnused()}
+    oncancel={() => (pendingUnused = null)}
+  />
+{/if}
+
+{#if cleanupCopy}
+  <ConfirmDialog
+    title={cleanupCopy.title}
+    message={cleanupCopy.message}
+    confirmLabel={cleanupCopy.label}
+    danger
+    testid="confirm-cleanup"
+    onconfirm={() => void runCleanup()}
+    oncancel={() => (pendingCleanup = null)}
+  />
 {/if}
 
 {#if panel === 'settings'}
@@ -440,6 +716,33 @@
   .grow {
     flex: 1;
     min-width: 0;
+  }
+
+  /* 占用：两列（项目 / 体积），窄面板里也不会挤成一团。 */
+  .usage {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--sp-1) var(--sp-3);
+    margin-bottom: var(--sp-2);
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+  }
+
+  /* 未使用素材：一行 = 名字 + 体积 + 三个动作。窄面板里允许换行。 */
+  .unused-hint {
+    margin: 0 0 var(--sp-2);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
+  }
+  .unused {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    padding: var(--sp-1) 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
   }
 
   .setting {

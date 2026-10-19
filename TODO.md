@@ -1,3 +1,75 @@
+# 进行中（2026-10-19 · W1 续：linked 素材 / 工程包 / Electron 宿主）
+
+按 `docs/plan-0.3-hardening.md` 之后的追加计划（用户 2026-10-19 确认）：
+
+- **1/2/3 已完成**：采样指纹（`fp1:<size>:head/tail64k`）、导入去重（含复活未使用
+  素材）、回收站清空 / 孤儿清理 / 未使用素材批量清理、**未落盘素材被移除时不再写盘**。
+- **台账 v3 已完成**：`content = {size, fp}` + `locations[] = project | local`；
+  `asset-resolve.ts` 纯函数判定 `ok / stale / conflict / missing`；v2 迁移。
+- **linked 已完成（浏览器）**：`AssetSource` 加 `path`；`platform.pickLinkedFile`
+  （FSA 句柄，存 IndexedDB）；默认 linked，`collect` 才写工程副本；媒体池「引用」
+  徽标 + 右键收集；排版/视频按来源取字节。
+  - 自动化浏览器（`navigator.webdriver`）强制 bundled：Playwright 驱动不了系统
+    文件对话框，linked 的判据由 `linked-assets.spec.ts` 用 OPFS 句柄覆盖。
+- **`.artmatic` 工程包已完成**：store-only ZIP64 流式写（data descriptor + CRC）、
+  清单校验、路径安全、CRC 校验、插件不执行；工程面板「打包 / 导入工程包」。
+  包内容 = 全部未移除素材（含未使用），linked 会被物化进 `assets/`。
+- **测试**：单测 2808 全绿（新增 fingerprint / asset-resolve / archive / package）；
+  E2E `dedupe` / `cleanup` / `linked-assets` / `package` 新增，相关 37 条全绿。
+
+**未完成（下一步）**：
+- `desktop/preload.cjs` / `host.mjs`、`src/platform/electron.ts`、`artmatic-asset`
+  自定义协议 + Range、路径 linked 视频（mediabunny `CustomSource`）、文件监视。
+- 回归全量 E2E 与 Electron 冒烟；更新 `src/ui/AGENTS.md` 的工程包/徽标约定。
+
+# 本轮已完成（2026-10-19 · 0.3 加固 W1「素材生命周期」）
+
+按 `docs/plan-0.3-hardening.md` 的 W1（三个子阶段，沿用 W0 的「文件不销毁」前提）：
+
+- **W1.1 素材字节句柄化**：`AssetStore` 的 `bytes` 换成 `AssetSource =
+  file | handle | bytes | none`。视频导入 `putFile()`（一个字节都不读），打开工程
+  `putHandle()`；图片 / 音频仍是 `bytes`（它们本来就要整份喂解码器）。读接口收口成
+  `open()`（分块，保存用）与 `readAll()`（一次性），`bytesOf()` 只返回已在内存的字节。
+  - `FsFile` 增 `readStream()` / `readBlob()`（原生 `File` 零拷贝直通）；
+    `writeStreamAtomic()` 边读边写，2 GB 素材的保存峰值只剩一块 buffer。
+  - **视频不算哈希**（`hash: null`）：`crypto.subtle` 不能流式，为 200 MB 视频算哈希
+    就等于把它整份读进堆 —— 与 W1.1 的目标直接冲突。代价是视频退化成大小指纹，
+    收益是「没变的视频，打开与保存零读取」。
+  - `auditLedger` 的 `probe` 在不需要哈希时只读 `File.size`（原先每次打开工程都会把
+    所有素材整份读一遍，视频也在内）。
+- **W1.2 流式写 + 自动保存 + 崩溃恢复**：`project/autosave.ts`（纯编排：防抖 / 单飞 /
+  手动优先 / 失败降级，全走 `memoryRoot` 单测）；`ui/autosave.ts` 接线。
+  - 有目录 → `saveProject({backup:false})`；无目录 → OPFS `drafts/<draftKey>.json`。
+  - 三条硬约定都落了：不轮转 `.bak`、不动 `savedVersion` / 不 bump version / 不入撤销栈、
+    单飞（手动保存 `cancel + idle`，自动保存以 `canWrite:false` 让路）。
+  - **内容没变不写**（`lastWritten` 比对 + `SaveReport.projectText`）：`store.touch()`
+    在播放视频时每帧都会 bump version，没有这一层就会每两秒重写一遍 `project.json`。
+  - `RestoreTabsBanner` 扩成两段：目录句柄恢复（现状）+ 草稿恢复；底栏常驻
+    `app.autosaveDegraded`（带原因）。
+- **W1.3 删除语义**：台账 `retained`（`LAYOUT_VERSION` 1 → 2，缺字段 = false）。
+  - 媒体池「移除」= `assets.retire()`：离开活动素材、进「未使用素材」，保存时按
+    `retained: true` 写台账，**文件不动**。
+  - 「工程」面板新增「未使用素材」：恢复 / 移到 `assets/.trash/`（先写回收站再删原文件）/
+    彻底删除（二次确认）。`auditLedger` 跳过 retained（文件丢了也不报 error）；
+    `listAssetPaths` 天然不含 `.trash/`（只列直接子文件）。
+- **与 W0 的关系**：W0.1「保存不删文件」保留；W1.3 把「孤儿提示」升级成「可恢复的保留项」，
+  所以 `project.spec` 里那条 W0.1 断言改成了新语义（不再报 untracked，改为可恢复）。
+  W0.2 的导入闸门**保留**（复看结论：它已从「防内存峰值」变成「单素材策略上限」）；
+  W0.3 的导出前保存与自动保存共用同一条 `writeTo` 路径（先 `cancel + idle`）。
+- 守卫：`tests/unit/asset-store.test.ts`（File 来源零读取 / 句柄读回 / retain·restore）、
+  `autosave.test.ts`（防抖合并 / 单飞 / 手动优先 / 让路 / 双失败）、
+  `project-ledger.test.ts`（retained 解析·序列化·审计跳过·不算 changed）、
+  `project-io.test.ts`（自动保存不碰 `.bak` / 回收站 / 真删）；
+  E2E `autosave.spec.ts`（草稿→刷新→恢复且仍脏 / 自动保存不轮转 `.bak` / 内容没变不重写）、
+  `project.spec.ts`（移除→重开→恢复 / 清理进 `.trash`）。
+
+**未做（刻意的）**：
+- W1.1 判据里的「导入视频后 `performance.memory` 增量 < 文件一半」没有写成 E2E：
+  现成的测试视频只有几 KB，量不出区别；改为单测里直接断言 `arrayBuffer()/stream()`
+  调用次数为 0（更强、且不依赖 Chromium 私有 API）。
+- 图片 / 音频仍是整份读回（见根 `AGENTS.md` §7 第 4 条）。真正的修法是流式解码，不在本轮。
+- 草稿只有 `Project` JSON，没有素材字节 —— 从草稿恢复的工程缺素材是实话，不是 bug。
+
 # 本轮已完成（2026-10-19 · 0.3 加固 W0「止血」）
 
 按 `docs/plan-0.3-hardening.md` 的 W0 批次（五项互不相干的小改 + 一条可选闸门）：

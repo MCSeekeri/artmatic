@@ -28,19 +28,22 @@ import { unzipSync } from 'fflate';
 import { opfsRoot, readBytesIfExists, resolveDir, writeBytesAtomic } from './project/fs';
 import { splitRelPath, pluginFileName } from './project/layout';
 import { writePluginFile } from './project/plugins';
+import { packProject, unpackProject } from './project/package';
 import { editorState } from './ui/typography/editor-state.svelte';
 import {
   attachProjectDirectory,
+  collectAsset,
   openProjectDirectory,
   openProjectPicker,
   refreshRecentProjects,
   registerDemoAssets,
   saveProjectNow,
 } from './ui/project-actions';
+import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave';
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
-import { importVideoFile } from './ui/media-import';
+import { importAudioBlob, importImageBlob, importVideoFile } from './ui/media-import';
 import { applyMachine, currentCapacity, resetCapacity, setLimits } from './core/capacity';
 import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
@@ -68,6 +71,13 @@ applyFontScale(theme.fontScale);
  * 渲染服务在 Preview.onMount → `appState.attachPreview` 里随 canvas 惰性创建。
  */
 appState.init();
+
+/*
+ * 自动保存（W1.2）必须在 mount 之前接上：`appState.init()` 之后任何一次
+ * `store.commit` 都应该被它看见。晚接的代价是「打开页面后第一笔改动
+ * 没被自动保存」—— 而那是用户最可能丢的一笔（还在试）。
+ */
+startAutosave();
 
 const app = mount(App, { target: document.getElementById('app')! });
 
@@ -161,6 +171,96 @@ const projectDebug = {
     if (!name) return;
     const dir = await resolveDir(root, segs, true);
     await writeBytesAtomic(dir, name, new Uint8Array(bytes), { verify: true });
+  },
+
+  /* ------------------------------------------- 自动保存 / 草稿（W1.2） */
+
+  /**
+   * 立即跑一轮自动保存（测试不等 2 s 防抖）。
+   *
+   * 判据仍然是自动保存自己的：工程不脏就什么都不写 —— 与生产同一条路径。
+   */
+  autosaveNow: () => autosave.flushNow(),
+  /** 自动保存的状态（降级时 `failure` 是底栏那一句的原因）。 */
+  autosaveState: () => ({
+    status: autosave.status,
+    detail: autosave.detail,
+    failure: appState.autosaveFailure,
+  }),
+  /** OPFS 里的本地草稿。只回元信息：工程本体可能很大。 */
+  drafts: async () => (await listDrafts()).map((d) => ({ key: d.key, name: d.name, savedAt: d.savedAt })),
+  /** 清掉全部草稿（用例之间隔离；草稿跨用例残留会让「没有草稿」的断言假红）。 */
+  wipeDrafts: async () => {
+    for (const d of await listDrafts()) await discardDraft(d.key);
+  },
+  /** 当前工程的草稿键（读 `drafts/<key>.json` 时要用）。 */
+  draftKey: () => (appState.hasProject ? appState.activeProject.draftKey : null),
+  /** 把一条 linked 素材收集进工程（E2E 与将来的批量收集共用）。 */
+  collect: (assetId: string) => collectAsset(assetId),
+
+  /**
+   * 把当前工程打包到 OPFS（E2E 用；`showSaveFilePicker` 驱动不了）。
+   * 返回包字节数，便于断言「linked 素材也被收集进去了」。
+   */
+  async packToOpfs(name = 'e2e-package.artmatic'): Promise<{ bytes: number; assets: number }> {
+    const chunks: Uint8Array[] = [];
+    const report = await packProject({
+      project: appState.store.project,
+      store: appState.assets,
+      sink: (c) => {
+        chunks.push(c.slice());
+      },
+      appVersion: 'e2e',
+    });
+    const all = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
+    let o = 0;
+    for (const c of chunks) {
+      all.set(c, o);
+      o += c.byteLength;
+    }
+    const root = await opfsRoot();
+    await writeBytesAtomic(root, name, all, { verify: true });
+    return { bytes: all.byteLength, assets: report.assets };
+  },
+
+  /** 从 OPFS 里的包导入到一个新目录并打开（E2E 用）。 */
+  async importPackFromOpfs(packName: string, destName: string): Promise<boolean> {
+    const root = await opfsRoot();
+    const bytes = await readBytesIfExists(root, packName);
+    if (!bytes) return false;
+    const dir = await root.openDir(destName, { create: true });
+    await unpackProject(new Blob([bytes as unknown as BlobPart]), dir);
+    return openProjectDirectory(dir, {
+      raw: (dir as { raw?: unknown }).raw,
+      key: `opfs:${destName}`,
+    });
+  },
+
+  /**
+   * 用 OPFS 里的文件模拟「引用本机文件」（linked）导入。
+   *
+   * `showOpenFilePicker` 是系统对话框，Playwright 驱动不了；OPFS 的
+   * `FileSystemFileHandle` 与它**同一个类型**，所以这条路径除了「怎么拿到句柄」
+   * 之外与生产完全一致（包括存 IndexedDB、重开时申请权限）。
+   */
+  async importLinkedFromOpfs(
+    kind: 'audio' | 'image',
+    dirPath: string,
+    name: string,
+    target: { trackId?: string | null; start?: number } = {},
+  ): Promise<string | null> {
+    const root = await opfsRoot();
+    const dir = await resolveDir(root, splitRelPath(dirPath), false);
+    const rawDir = (dir as { raw?: FileSystemDirectoryHandle }).raw;
+    if (!rawDir) return null;
+    const native = await rawDir.getFileHandle(name);
+    const file = await native.getFile();
+    const bytes = await file.arrayBuffer();
+    const out =
+      kind === 'image'
+        ? await importImageBlob(name, bytes, target, native)
+        : await importAudioBlob(name, bytes, target, native);
+    return out?.assetId ?? null;
   },
 };
 

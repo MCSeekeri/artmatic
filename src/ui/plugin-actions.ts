@@ -21,7 +21,7 @@
  */
 
 import { appState } from './app-state.svelte';
-import { browserPlatform } from '../platform/browser';
+import { platform } from '../platform/index';
 import { writePluginFile } from '../project/plugins';
 import { pluginFileName } from '../project/layout';
 import { tr } from '../i18n/index.svelte';
@@ -34,7 +34,7 @@ export interface PickedPlugin {
 
 /** ① 选一个插件文件。用户取消返回 null。 */
 export async function pickPluginFile(): Promise<PickedPlugin | null> {
-  const picked = await browserPlatform.pickPluginFile();
+  const picked = await platform.pickPluginFile();
   if (!picked) return null;
   return { name: picked.name, bytes: new Uint8Array(picked.data) };
 }

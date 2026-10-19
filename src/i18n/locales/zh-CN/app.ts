@@ -103,6 +103,14 @@ export const app = {
    * 否则用户会以为预览坏了。
    */
   'app.simCatchUp': '模拟追赶中',
+  /*
+   * 自动保存降级（W1.2）。**常驻**底栏直到下一次写入成功 ——
+   * 它与 `notice` 那条一次性提示分开，因为「磁盘上的工程不是最新的」
+   * 是一个持续状态，不是一件事。
+   */
+  'app.autosaveDegraded': '自动保存已降级到本地草稿：{reason}',
+  'app.autosaveFailed': '自动保存失败：{reason}',
+  'app.autosaveUnknownReason': '未知原因',
 
   /* ------------------------------------------------ 工程面板 */
   'app.name': '名称',
@@ -116,6 +124,57 @@ export const app = {
   'app.assetCount': '{n} 个 · {size}',
   'app.assetCountShort': '{n} 素材',
   'app.assetAudit': '素材检查',
+  /*
+   * 未使用素材（W1.3）：媒体池「移除」之后字节文件仍在 assets/。
+   * 这一段是「移除 ≠ 销毁」唯一可操作的出口 —— 没有它，「文件保留」
+   * 就只是一句安慰，用户找不到那个文件。
+   */
+  'app.unusedAssets': '未使用素材',
+  'app.unusedAssetsHint': '{n} 个 · {size}。已不在工程里，字节文件仍留在 assets/。',
+  'app.unusedRestore': '恢复',
+  'app.unusedTrash': '移到回收站',
+  'app.unusedDelete': '彻底删除',
+  'app.unusedTrashConfirm': '把「{name}」移到 assets/.trash/？文件不会消失，需要时还能手动找回。',
+  'app.unusedDeleteConfirm': '彻底删除「{name}」的源文件？这一步无法撤销。',
+  'app.unusedTrashed': '「{name}」已移到回收站',
+  'app.unusedDeleted': '已删除「{name}」的源文件',
+  'app.unusedRestored': '「{name}」已恢复为工程素材',
+  'app.unusedFailed': '「{name}」处理失败（文件可能已被移走或没有权限）',
+  /* W1 清理链路：占用统计与批量动作。 */
+  'app.storageUsage': '占用',
+  'app.usageProject': '工程内副本',
+  'app.usageUnused': '未使用素材',
+  'app.usageTrash': '回收站',
+  'app.usageOrphans': '未跟踪文件',
+  'app.usageHint': '只统计体积，不读取素材内容。',
+  'app.trashAll': '全部移入回收站',
+  'app.trashAllConfirm': '把 {n} 个未使用素材（{size}）全部移到 assets/.trash/？',
+  'app.deleteAll': '全部彻底删除',
+  'app.deleteAllConfirm': '彻底删除 {n} 个未使用素材（{size}）的源文件？这一步无法撤销。',
+  'app.clearTrash': '清空回收站',
+  'app.clearTrashConfirm': '清空 assets/.trash/ 里的 {n} 个文件（{size}）？这一步无法撤销。',
+  'app.trashCleared': '已清空回收站（{n} 个文件，{size}）',
+  'app.cleanupOrphans': '清理未跟踪文件',
+  'app.cleanupOrphansConfirm':
+    'assets/ 里有 {n} 个文件不属于当前台账（{size}，旧版本或手工放进去的）。永久删除它们？',
+  'app.trashAllDone': '{n} 个素材已移到回收站',
+  'app.deleteAllDone': '{n} 个素材已彻底删除',
+  'app.orphansDone': '已清理 {n} 个未跟踪文件',
+  'app.cleanupFailed': '清理失败：{detail}',
+
+  /* ------------------------------------------------ 工程包（W1） */
+  'app.pack': '打包工程…',
+  'app.importPack': '导入工程包…',
+  'app.packDescription': 'Artmatic 工程包（工程 + 全部素材）',
+  'app.packing': '正在打包工程…',
+  'app.packed': '工程包已保存（{n} 个素材，{size}）',
+  'app.packedWithMissing': '已保存，但有 {n} 个素材没有字节、未打进包：{names}…',
+  'app.packNoStream': '当前环境不支持流式保存，无法打包大工程',
+  'app.packFailed': '打包失败：{detail}',
+  'app.importingPack': '正在校验并导入工程包…',
+  'app.imported': '已导入「{name}」（{n} 个素材）',
+  'app.importNotEmpty': '目标目录里已经有一份工程（project.json），请换一个空目录',
+  'app.importPackFailed': '导入工程包失败：{detail}',
   'app.actions': '动作',
   'app.newBlank': '新建空白',
   'app.loadDemo': '载入演示',

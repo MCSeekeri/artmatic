@@ -1,39 +1,65 @@
 /**
- * asset-store.ts — 运行期素材仓（M5a）。
+ * asset-store.ts — 运行期素材仓（M5a / W1.1 句柄化）。
  *
- * 存的是**素材字节**，不是对象 URL。对象 URL 那边是
+ * 存的是**素材的来源**，不是「一律摊开的字节」。对象 URL 那边是
  * `typography/image-assets.ts` 的事，两者职责不同：
  *
  * ```
- * 导入 ──┬─→ assetStore.put(id, bytes)     ← 持久化用（保存时写进 assets/）
- *        └─→ putImageBytes(id, url)       ← 渲染用（snapDOM 要能取到 <img>）
+ * 导入 ──┬─→ assetStore.put(id, bytes)     ← 图片 / 音频（本来就小）
+ *        ├─→ assetStore.putFile(id, file)   ← 视频（磁盘背书，一个字节都不读）
+ *        └─→ putImageBytes(id, url)         ← 渲染用（snapDOM 要能取到 <img>）
  * ```
  *
- * 分开是因为**渲染期解引用是各类型自己的事**（图片给 objectURL、音频给
- * AudioBuffer、视频给 VideoFrame 源），而「存字节」对所有类型都一样。
- * 把两者塞进一个模块会让它同时依赖 typography 与 audio，位置就错了。
+ * ## 为什么必须区分来源（W1.1）
  *
- * 字节在内存里是**只读的**：`put()` 整体替换而不是原地改。
- * 哈希缓存的键就是那个 `Uint8Array` 的对象引用，所以原地改会让缓存
- * 悄悄失效（算出旧哈希）。这条不是洁癖——它是增量哈希能成立的前提。
+ * `platform/types.ts::PickedVideo` 的注释早就写明「只给 `File` 句柄，10 GB 素材
+ * 也不会把堆撑爆」。视频解码（mediabunny）本来就是从 `Blob` seek 读的，所以
+ * 把整份字节读进 `Uint8Array` **没有任何一处消费方需要**，唯一的作用是
+ * 「打开 2 GB 视频工程 = 2 GB JS 堆」。
  *
- * ## 走「拷贝进工程」而不是「引用外部路径」
+ * ```
+ * type AssetSource =
+ *   | { kind: 'file';   file: File }            // 本地导入，磁盘背书
+ *   | { kind: 'handle'; handle: FsFileHandle }  // 从工程目录读回（视频）
+ *   | { kind: 'bytes';  bytes: Uint8Array }     // 图片 / 音频（保存时要写出）
+ *   | { kind: 'none' }                          // generated（程序生成，不落盘）
+ * ```
  *
- * M5 原本写的是「素材用引用而非拷贝：绝对路径 + 内容哈希」。在纯浏览器上
- * 这条路走不通，原因是 API 边界而不是设计选择：
- *  - `<input type=file>` 只给字节，不给句柄 → 不拷就没法留
- *  - `showOpenFilePicker()` / 拖放给的句柄**不能被序列化成可移植路径**
- *    → 存进工程就绑死这台机器，工程目录搬走即失效
+ * ## 两条纪律
  *
- * 所以 Web 上的「引用」只能是「工程根相对路径 + 内容哈希」，
- * 前提是字节得留在工程里。代价是视频素材要占一份空间（见 AGENTS.md 的取舍记录）。
+ * 1. **`bytesOf()` 只返回「已经在内存里」的字节**，绝不为了它去读盘 ——
+ *    调用方（排版置图）本来就是同步 API，异步那条路走 `readAll()`。
+ * 2. **字节是只读的**：`put()` 整体替换而不是原地改。哈希缓存的键就是那个
+ *    source 对象引用，原地改会算出旧哈希。这条不是洁癖 —— 它是增量哈希能
+ *    成立的前提。
+ *
+ * ## 视频不算哈希（刻意的降级）
+ *
+ * `crypto.subtle.digest` **不能流式**（见 `hash.ts` 的 `MAX_HASH_BYTES`），
+ * 所以给 200 MB 视频算哈希的唯一办法是先把它整份读进堆 —— 那正是这一轮要
+ * 消灭的动作。于是 video 的 `hash` 恒为 `null`，台账退化成「大小」弱指纹；
+ * 而代价换来的是一条硬保证：**没变的视频素材，打开与保存都零读取**。
+ * 外部改过的视频只能靠大小发现（`auditLedger` 会把它标成 `unhashed`）。
  */
-
-import { hashIfReasonable } from './hash';
+import {
+  contentOfBlob,
+  contentOfBytes,
+  contentOfHandle,
+  isStrongFp,
+  type AssetContent,
+} from './fingerprint';
 import { assetRelPath } from './layout';
-import { createLedger, type AssetEntry, type AssetLedger, type AssetMode } from './ledger';
-import { readAssetBytes } from './io';
-import type { FsDirHandle } from './fs';
+import {
+  createLedger,
+  localPath,
+  projectPath,
+  type AssetEntry,
+  type AssetLedger,
+  type AssetLocation,
+  type AssetMode,
+} from './ledger';
+import { openAssetFile } from './io';
+import type { FsDirHandle, FsFileHandle } from './fs';
 import type { Project } from '../core/schema';
 
 export interface AssetInput {
@@ -45,46 +71,224 @@ export interface AssetInput {
   mode?: AssetMode;
 }
 
+/** 素材来源。见文件头。 */
+export type AssetSource =
+  | { kind: 'file'; file: File }
+  | { kind: 'handle'; handle: FsFileHandle; size: number }
+  | { kind: 'bytes'; bytes: Uint8Array }
+  /** 桌面版 linked：本机绝对路径（读取走 platform 的 readRange，见 W5）。 */
+  | { kind: 'path'; path: string; size: number }
+  | { kind: 'none' };
+
 interface Item {
   input: AssetInput;
-  bytes: Uint8Array | null;
+  source: AssetSource;
   addedAt: number;
+  /**
+   * 从台账读回来的原始条目。视频/保留项的 `hash` 与 `bytes` 靠它保留 ——
+   * 否则一次保存就会把历史上算好的哈希抹成 null，`diffLedger` 会误判成 changed。
+   */
+  entry: AssetEntry | null;
+  /** 内容身份（sampling fingerprint）。null = 还没算（旧台账 / 从未落盘）。 */
+  content: AssetContent | null;
+  /** 本机原文件位置（桌面版 linked）。浏览器 linked 用句柄，这里是句柄键。 */
+  local: string | null;
+}
+
+/** 「已从工程移除、但字节文件还在」的条目（W1.3）。 */
+interface RetainedItem {
+  input: AssetInput;
+  source: AssetSource;
+  addedAt: number;
+  entry: AssetEntry | null;
+  content: AssetContent | null;
+  local: string | null;
+}
+
+/** 台账里有、仓里没有（打开工程时文件读不出来）。 */
+export interface LoadReport {
+  loaded: number;
+  missing: string[];
 }
 
 export class AssetStore {
   private items = new Map<string, Item>();
   /**
-   * 增量哈希缓存。键是字节对象的**引用**：`put()` 换掉字节就自然失效，
-   * 不需要任何显式的 invalidate 调用——那种调用迟早会有人忘记加。
+   * 已移除但保留字节文件的素材。**不在 `items` 里** —— 它们不参与渲染、
+   * 不进口媒体池，只在台账里以 `retained: true` 存在，并出现在「未使用素材」里。
    */
-  private hashCache = new Map<string, { ref: Uint8Array; hash: string | null }>();
+  private retained = new Map<string, RetainedItem>();
+  /**
+   * 曾经真正写进工程目录 `assets/` 的 id。
+   *
+   * 存在的唯一理由：**「移除」只在有文件可保留时才保留**。刚导入、还没保存过的
+   * 素材如果也进保留区，下一次保存会把它凭空写进 `assets/` —— 用户明明删掉了它，
+   * 磁盘上却多出一份（正是「反复换素材来源制造垃圾」的一半来源）。
+   */
+  private persisted = new Set<string>();
 
-  put(id: string, bytes: Uint8Array, input: AssetInput): void {
+  /* ------------------------------------------------------------ 登记 */
+
+  /** 登记一份**已在内存里**的字节（图片 / 音频）。 */
+  put(id: string, bytes: Uint8Array, input: AssetInput, content?: AssetContent | null): void {
     const prev = this.items.get(id);
     this.items.set(id, {
       input: { ...input, mode: input.mode ?? 'bundled' },
-      bytes,
+      source: { kind: 'bytes', bytes },
       addedAt: prev?.addedAt ?? Date.now(),
+      entry: prev?.entry ?? null,
+      content: content ?? prev?.content ?? null,
+      local: prev?.local ?? null,
     });
+    this.retained.delete(id);
+  }
+
+  /**
+   * 登记一份**本地文件**（视频）：一个字节都不读。
+   *
+   * `File` 是磁盘背书的句柄，保存时按块流式写、解码时按 seek 读。
+   */
+  putFile(id: string, file: File, input: AssetInput, content?: AssetContent | null): void {
+    const prev = this.items.get(id);
+    this.items.set(id, {
+      input: { ...input, mode: input.mode ?? 'bundled' },
+      source: { kind: 'file', file },
+      addedAt: prev?.addedAt ?? Date.now(),
+      entry: prev?.entry ?? null,
+      content: content ?? prev?.content ?? null,
+      local: prev?.local ?? null,
+    });
+    this.retained.delete(id);
+  }
+
+  /**
+   * 登记一份**本机绝对路径**（桌面版 linked）：一个字节都不读。
+   *
+   * 浏览器没有真实路径，这条只给 `platform/electron.ts` 用；图片/音频的
+   * 字节由 platform 的 `readRange` 按需取（W5）。
+   */
+  putPath(id: string, path: string, size: number, input: AssetInput, content?: AssetContent | null): void {
+    const prev = this.items.get(id);
+    this.items.set(id, {
+      input: { ...input, mode: input.mode ?? 'linked' },
+      source: { kind: 'path', path, size },
+      addedAt: prev?.addedAt ?? Date.now(),
+      entry: prev?.entry ?? null,
+      content: content ?? prev?.content ?? null,
+      local: path,
+    });
+    this.retained.delete(id);
+  }
+
+  /**
+   * 登记一份**浏览器 linked 素材**（视频）：来源是文件句柄，零读取。
+   *
+   * `local` 记成 `fsa:<assetId>` —— 浏览器不暴露真实路径，句柄本体存在
+   * IndexedDB（`asset-handles.ts`），台账里这个键只是「这条素材有一份本地引用」。
+   */
+  putLinkedHandle(
+    id: string,
+    handle: FsFileHandle,
+    size: number,
+    input: AssetInput,
+    content?: AssetContent | null,
+  ): void {
+    const prev = this.items.get(id);
+    this.items.set(id, {
+      input: { ...input, mode: 'linked' },
+      source: { kind: 'handle', handle, size },
+      addedAt: prev?.addedAt ?? Date.now(),
+      entry: prev?.entry ?? null,
+      content: content ?? prev?.content ?? null,
+      local: `fsa:${id}`,
+    });
+    this.retained.delete(id);
+  }
+
+  /** 登记一份浏览器 linked 素材（图片 / 音频）：字节在内存里，本地位置另有句柄。 */
+  putLinkedBytes(id: string, bytes: Uint8Array, input: AssetInput, content?: AssetContent | null): void {
+    const prev = this.items.get(id);
+    this.items.set(id, {
+      input: { ...input, mode: 'linked' },
+      source: { kind: 'bytes', bytes },
+      addedAt: prev?.addedAt ?? Date.now(),
+      entry: prev?.entry ?? null,
+      content: content ?? prev?.content ?? null,
+      local: `fsa:${id}`,
+    });
+    this.retained.delete(id);
+  }
+
+  /** 打开工程时把 IndexedDB 里的句柄接回素材（不读字节；图片/音频由 hydrate 读）。 */
+  attachLocalHandle(id: string, handle: FsFileHandle, size: number): void {
+    const item = this.items.get(id);
+    if (!item) return;
+    item.source = item.input.kind === 'video' ? { kind: 'handle', handle, size } : item.source;
+  }
+
+  /** linked 条目但本地来源没接上（句柄丢了 / 没授权）—— 不等于「工程里没有这条」。 */
+  isUnavailable(id: string): boolean {
+    const it = this.items.get(id);
+    return !!it && it.input.mode === 'linked' && it.source.kind === 'none';
+  }
+
+  localOf(id: string): string | null {
+    return this.items.get(id)?.local ?? this.retained.get(id)?.local ?? null;
+  }
+
+  modeOf(id: string): AssetMode | null {
+    const it = this.items.get(id) ?? this.retained.get(id);
+    return it ? (it.input.mode ?? (it.local ? 'linked' : 'bundled')) : null;
+  }
+
+  /** 收集到工程：下一次保存写一份工程副本（本地位置保留）。 */
+  markBundled(id: string): boolean {
+    const item = this.items.get(id);
+    if (!item) return false;
+    item.input = { ...item.input, mode: 'bundled' };
+    return true;
+  }
+
+  /** 登记一份**工程目录里的文件句柄**（打开工程时用，同样不读字节）。 */
+  putHandle(
+    id: string,
+    handle: FsFileHandle,
+    size: number,
+    input: AssetInput,
+    entry?: AssetEntry,
+    content?: AssetContent | null,
+  ): void {
+    const prev = this.items.get(id);
+    this.items.set(id, {
+      input: { ...input, mode: input.mode ?? 'bundled' },
+      source: { kind: 'handle', handle, size },
+      addedAt: prev?.addedAt ?? entry?.addedAt ?? Date.now(),
+      entry: entry ?? prev?.entry ?? null,
+      content: content ?? prev?.content ?? null,
+      local: prev?.local ?? (entry ? localPath(entry) : null),
+    });
+    this.retained.delete(id);
   }
 
   /**
    * 登记一份「由代码确定性生成、无需落盘」的素材。
-   * 演示工程的节拍音频走这条：它是几行代码算出来的，存进 assets/ 反而
+   * 演示工程的节拍音频走这条：它是几行代码算出来的，存进 `assets/` 反而
    * 让工程目录带着一份可以随时重建的字节。
    */
   putGenerated(id: string, input: AssetInput): void {
     const prev = this.items.get(id);
     this.items.set(id, {
       input: { ...input, mode: 'generated' },
-      bytes: null,
+      source: { kind: 'none' },
       addedAt: prev?.addedAt ?? Date.now(),
+      entry: prev?.entry ?? null,
+      content: null,
+      local: null,
     });
+    this.retained.delete(id);
   }
 
-  get(id: string): Uint8Array | null {
-    return this.items.get(id)?.bytes ?? null;
-  }
+  /* ------------------------------------------------------------ 查询 */
 
   has(id: string): boolean {
     return this.items.has(id);
@@ -94,114 +298,473 @@ export class AssetStore {
     return this.items.get(id)?.input ?? null;
   }
 
+  /** 素材的字节数。none / 未知返回 null。**不读盘**。 */
+  size(id: string): number | null {
+    return sizeOf(this.items.get(id)?.source ?? null);
+  }
+
+  /**
+   * **已经在内存里**的字节；没有就返回 null。
+   *
+   * 刻意不读盘：图片/音频从工程打开时本来就是 bytes 来源，而视频的字节
+   * 不该为了同步 API 被整份读回来（`readAll` / `open` 才是异步那条路）。
+   */
+  bytesOf(id: string): Uint8Array | null {
+    const src = this.items.get(id)?.source;
+    return src?.kind === 'bytes' ? src.bytes : null;
+  }
+
+  /** 内容身份（可能为 null：还没算 / generated）。 */
+  contentOf(id: string): AssetContent | null {
+    return this.items.get(id)?.content ?? this.retained.get(id)?.content ?? null;
+  }
+
+  /**
+   * 按内容指纹找同一条素材（去重）。只认 `fp1:` —— `fp0:` 是弱指纹，
+   * 拿它去重会把两个同大小的不同文件合并成一条。
+   *
+   * 同时搜活动素材与「未使用素材」：后者被重新导入时应当**复活**而不是
+   * 再存一份。
+   */
+  findByFp(fp: string | null | undefined): string | null {
+    if (!isStrongFp(fp)) return null;
+    for (const [id, it] of this.items) if (it.content?.fp === fp) return id;
+    for (const [id, it] of this.retained) if (it.content?.fp === fp) return id;
+    return null;
+  }
+
+  isRetained(id: string): boolean {
+    return this.retained.has(id);
+  }
+
+  /** 把「未使用素材」放回活动素材（不读盘、不重建来源）。 */
+  activate(id: string): boolean {
+    const r = this.retained.get(id);
+    if (!r) return false;
+    this.retained.delete(id);
+    this.items.set(id, {
+      input: r.input,
+      source: r.source,
+      addedAt: r.addedAt,
+      entry: r.entry,
+      content: r.content,
+      local: r.local,
+    });
+    return true;
+  }
+
+  /**
+   * 记录「这些 id 的字节确实在工程目录里」。
+   *
+   * 由保存成功之后调用（`SaveReport.persistedAssets`），不是由 `buildLedger`
+   * 顺手标记 —— 台账里有一条不代表文件写成功了（`openFor` 可能返回 null）。
+   */
+  markPersisted(ids: readonly string[]): void {
+    for (const id of ids) this.persisted.add(id);
+  }
+
+  isPersisted(id: string): boolean {
+    return this.persisted.has(id);
+  }
+
   remove(id: string): void {
     this.items.delete(id);
-    this.hashCache.delete(id);
+    this.retained.delete(id);
+    this.persisted.delete(id);
   }
 
   clear(): void {
     this.items.clear();
-    this.hashCache.clear();
+    this.retained.clear();
+    this.persisted.clear();
   }
 
   ids(): string[] {
     return [...this.items.keys()];
   }
 
-  /** 磁盘占用估算（generated 不计）。 */
+  /** 磁盘占用估算（generated 不计；已移除的保留项不计）。 */
   totalBytes(): number {
     let n = 0;
-    for (const it of this.items.values()) n += it.bytes?.byteLength ?? 0;
+    for (const it of this.items.values()) n += sizeOf(it.source) ?? 0;
     return n;
   }
 
+  /* ------------------------------------------------------------ 读 */
+
   /**
-   * 构建完整台账。哈希是增量的：字节引用没变就复用上次的结果。
+   * 分块读。保存时全程走这条 —— 2 GB 素材的内存峰值只有一块的大小。
    *
-   * 首次保存要给所有素材算一遍 sha256，之后每次保存几乎零成本 ——
-   * 「每次保存都重算全部哈希」是这类实现最常见的性能悬崖，
-   * 素材一多就会让保存从毫秒变成秒级。
+   * 返回 null = 没有可用来源（generated / 已丢失）。
+   */
+  open(id: string): AsyncIterable<Uint8Array> | null {
+    const src = this.items.get(id)?.source;
+    if (!src || src.kind === 'none') return null;
+    // path 的字节在 platform（W5）。返回 null 让保存记一条警告，
+    // 而不是拿空流写出一个 0 字节文件。
+    if (src.kind === 'path') return null;
+    return chunksOf(src);
+  }
+
+  /** 一次性读全（只给已知小体量用：图片喂 `createImageBitmap`、音频喂 `decodeAudioData`）。 */
+  async readAll(id: string): Promise<Uint8Array | null> {
+    const item = this.items.get(id);
+    if (!item) return null;
+    if (item.source.kind === 'bytes') return item.source.bytes;
+    if (item.source.kind === 'path') return null;
+    return readAllOf(item.source);
+  }
+
+  /**
+   * 视频解码器要的载体：`Blob`（本地文件 / 工程目录里的文件）或内存字节。
+   *
+   * 原生 `File` 本身就是 `Blob`，所以本地导入这条路零拷贝。
+   */
+  async openVideo(id: string): Promise<Blob | Uint8Array | null> {
+    const src = this.items.get(id)?.source;
+    if (!src || src.kind === 'none' || src.kind === 'path') return null;
+    if (src.kind === 'bytes') return src.bytes;
+    if (src.kind === 'file') return src.file;
+    const file = await src.handle.get();
+    if (file.readBlob) return file.readBlob();
+    return file.readBytes();
+  }
+
+  /* -------------------------------------------------- 移除 / 保留（W1.3） */
+
+  /**
+   * 解除关联：从活动素材里挪到「保留」区。
+   *
+   * 字节来源与哈希缓存都留着 —— 同一会话里「恢复」不需要重新读盘，
+   * 保存时也不会因为重新构造条目而丢掉哈希。
+   */
+  retire(id: string): boolean {
+    const item = this.items.get(id);
+    if (!item) return false;
+    /*
+     * 从未落盘 = `assets/` 里没有可恢复的文件。这时「保留」只会让下一次保存
+     * 把它凭空写出来（用户已经删了它）。直接丢弃，返回 false 让 UI 知道
+     * 「没有进未使用素材」。
+     */
+    if (!this.persisted.has(id)) {
+      this.remove(id);
+      return false;
+    }
+    this.items.delete(id);
+    this.retained.set(id, {
+      input: item.input,
+      source: item.source,
+      addedAt: item.addedAt,
+      entry: item.entry,
+      content: item.content,
+      local: item.local,
+    });
+    return true;
+  }
+
+  /**
+   * 把保留项恢复成活动素材。
+   *
+   * 图片/音频若是从台账读回的 `handle` 来源，这里**把它重新读成 bytes** ——
+   * 排版置图走的是同步的 `bytesOf()`，恢复之后那条路必须立刻可用。
+   * 视频保持句柄（一个字节都不读）。
+   */
+  async restore(id: string): Promise<boolean> {
+    const r = this.retained.get(id);
+    if (!r) return false;
+    let source = r.source;
+    if (source.kind === 'handle' && r.input.kind !== 'video') {
+      // 读不出来就保留句柄来源：条目仍然恢复，只是画面会走「脱机媒体」，
+      // 比「什么都没恢复、还把保留项弄丢了」好。
+      const bytes = await readAllOf(source).catch(() => null);
+      if (bytes) source = { kind: 'bytes', bytes };
+    }
+    this.retained.delete(id);
+    this.items.set(id, {
+      input: r.input,
+      source,
+      addedAt: r.addedAt,
+      entry: r.entry,
+      content: r.content,
+      local: r.local,
+    });
+    return true;
+  }
+
+  retainedIds(): string[] {
+    return [...this.retained.keys()];
+  }
+
+  retainedInput(id: string): AssetInput | null {
+    return this.retained.get(id)?.input ?? null;
+  }
+
+  retainedSize(id: string): number | null {
+    const r = this.retained.get(id);
+    if (!r) return null;
+    const seen = r.entry?.content?.size ?? null;
+    return sizeOf(r.source) ?? seen;
+  }
+
+  /* ------------------------------------------------------------ 台账 */
+
+  /**
+   * 构建完整台账（v3：content + locations）。
+   *
+   * 身份是**增量的**：来源对象没换就复用 `item.content`。首次给一个素材算
+   * 身份只读 128 KiB（采样指纹），不是旧版那种整份 sha256 —— 视频也不会因此
+   * 变成「保存前先读一遍」。
    */
   async buildLedger(): Promise<AssetLedger> {
     const ledger = createLedger();
     for (const [id, item] of this.items) {
-      const mode = item.input.mode ?? 'bundled';
-      let hash: string | null = null;
-      if (item.bytes && mode === 'bundled') {
-        const cached = this.hashCache.get(id);
-        if (cached && cached.ref === item.bytes) {
-          hash = cached.hash;
-        } else {
-          hash = await hashIfReasonable(item.bytes);
-          this.hashCache.set(id, { ref: item.bytes, hash });
-        }
-      }
-      const entry: AssetEntry = {
-        id,
-        kind: item.input.kind,
-        path: mode === 'generated' ? null : assetRelPath(id, item.input.originName),
-        hash,
-        bytes: item.bytes?.byteLength ?? null,
-        originName: item.input.originName,
-        mode,
-        addedAt: item.addedAt,
-      };
-      ledger.entries[id] = entry;
+      // 旧台账 / 直接 `put()` 进来的字节可能还没有身份：保存前补一次（读 128 KiB）。
+      if (!item.content) item.content = await this.contentFor(item.source);
+      ledger.entries[id] = this.entryFor(id, item, false);
+    }
+    for (const [id, r] of this.retained) {
+      if (!r.content) r.content = await this.contentFor(r.source);
+      ledger.entries[id] = this.entryFor(id, r, true);
     }
     return ledger;
   }
 
+  /** 按来源算内容身份；generated / 丢失返回 null。 */
+  private async contentFor(source: AssetSource): Promise<AssetContent | null> {
+    if (source.kind === 'bytes') return contentOfBytes(source.bytes);
+    if (source.kind === 'file') return contentOfBlob(source.file);
+    if (source.kind === 'handle') return contentOfHandle(source.handle);
+    return null;
+  }
+
+  private entryFor(id: string, item: Item | RetainedItem, retained: boolean): AssetEntry {
+    const mode = item.input.mode ?? (item.local ? 'linked' : 'bundled');
+    const prevProject = item.entry ? projectPath(item.entry) : null;
+    const prevLocal = item.entry ? localPath(item.entry) : null;
+    const local = item.local ?? prevLocal;
+
+    const locations: AssetLocation[] = [];
+    if (mode !== 'generated') {
+      if (local) {
+        locations.push({
+          kind: 'local',
+          path: local,
+          seen: { size: item.content?.size ?? null, fp: item.content?.fp ?? null, mtime: null },
+        });
+      }
+      /*
+       * 工程副本只在两种情况下存在：
+       *  - bundled（默认就要有一份）；
+       *  - 之前 collect 过（`prevProject`），即使现在 mode 是 linked。
+       * linked-only 的素材不凭空造一条 project 位置 —— 那会让保存去写文件。
+       */
+      if (mode === 'bundled' || prevProject) {
+        locations.push({
+          kind: 'project',
+          path: prevProject ?? assetRelPath(id, item.input.originName),
+          seen: { size: item.content?.size ?? null, fp: item.content?.fp ?? null, mtime: null },
+        });
+      }
+    }
+
+    const entry: AssetEntry = {
+      id,
+      kind: item.input.kind,
+      originName: item.input.originName,
+      mode,
+      addedAt: item.addedAt,
+      content: item.content,
+      locations,
+    };
+    if (retained) entry.retained = true;
+    return entry;
+  }
+
   /**
-   * 从磁盘台账把素材读回内存（打开工程时调）。
+   * 从磁盘台账把素材登记回来（打开工程时调）。
+   *
+   * **视频与保留项只开句柄、不读字节**；图片/音频整份读回（它们本来就是
+   * 喂 `createImageBitmap` / `decodeAudioData` 的，且没有第二种消费方式）。
    *
    * 磁盘上的哈希直接灌进缓存，省掉一次「读一遍再算一遍」——
-   * 打开工程时 `auditLedger` 刚刚算过同一个哈希。
+   * 打开工程时 `auditLedger` 刚刚算过同一个哈希（若它真的算过）。
    */
-  async loadFrom(
-    dir: FsDirHandle,
-    ledger: AssetLedger,
-    project?: Project,
-  ): Promise<{ loaded: number; missing: string[] }> {
+  async loadFrom(dir: FsDirHandle, ledger: AssetLedger, project?: Project): Promise<LoadReport> {
     const missing: string[] = [];
     let loaded = 0;
     for (const entry of Object.values(ledger.entries)) {
       const declared = project?.assets[entry.id];
-      if (entry.mode === 'generated') {
-        this.putGenerated(entry.id, {
-          kind: entry.kind,
-          name: declared?.name ?? entry.originName,
-          originName: entry.originName,
-        });
-        continue;
-      }
-      const bytes = await readAssetBytes(dir, entry);
-      if (!bytes) {
-        missing.push(entry.id);
-        continue;
-      }
       const input: AssetInput = {
         kind: entry.kind,
         name: declared?.name ?? entry.originName,
         originName: entry.originName,
-        mode: 'bundled',
+        mode: entry.mode,
       };
-      this.items.set(entry.id, { input, bytes, addedAt: entry.addedAt });
-      this.hashCache.set(entry.id, { ref: bytes, hash: entry.hash });
+      if (entry.mode === 'generated') {
+        this.putGenerated(entry.id, input);
+        loaded++;
+        continue;
+      }
+
+      const local = localPath(entry);
+      const handle = await openAssetFile(dir, entry).catch(() => null);
+      // v3 台账里的身份直接可用；v2 迁移过来的为 null，下面按需补算。
+      const known = entry.content;
+
+      if (entry.retained) {
+        // 保留项：文件不在也不报错（它本来就不再被工程引用）。
+        const source: AssetSource = handle
+          ? { kind: 'handle', handle, size: known?.size ?? 0 }
+          : { kind: 'none' };
+        // 文件在 = 曾经落过盘，可以进「未使用素材」；文件不在的保留项只是台账残留。
+        if (handle) this.persisted.add(entry.id);
+        const content = known ?? (handle ? await contentOfHandle(handle).catch(() => null) : null);
+        this.retained.set(entry.id, {
+          input,
+          source,
+          addedAt: entry.addedAt,
+          entry,
+          content,
+          local,
+        });
+        loaded++;
+        continue;
+      }
+
+      if (!handle) {
+        /*
+         * 没有工程副本不一定等于「素材丢了」：linked-only 的条目本来就只有
+         * 本地位置（W5 由 platform 接上）。只有**一个位置都没有**才算 missing。
+         */
+        if (local) {
+          this.items.set(entry.id, {
+            input,
+            source: { kind: 'none' },
+            addedAt: entry.addedAt,
+            entry,
+            content: known,
+            local,
+          });
+          loaded++;
+        } else {
+          missing.push(entry.id);
+        }
+        continue;
+      }
+
+      if (entry.kind === 'video') {
+        /*
+         * `content.size` 缺失（旧台账 / 重建出来的）时补一次元数据 ——
+         * `getFile()` 只读 stat，不是 `readBytes()`。否则素材池会显示「0 字节」。
+         */
+        let size = known?.size ?? 0;
+        if (!size) {
+          try {
+            size = (await handle.get()).size;
+          } catch {
+            size = 0;
+          }
+        }
+        const content = known ?? (await contentOfHandle(handle).catch(() => null));
+        this.persisted.add(entry.id);
+        this.putHandle(entry.id, handle, size, input, entry, content);
+      } else {
+        const bytes = await (await handle.get()).readBytes();
+        const source: AssetSource = { kind: 'bytes', bytes };
+        const content = known ?? (await contentOfBytes(bytes));
+        this.persisted.add(entry.id);
+        this.items.set(entry.id, {
+          input,
+          source,
+          addedAt: entry.addedAt,
+          entry,
+          content,
+          local,
+        });
+      }
       loaded++;
     }
     return { loaded, missing };
   }
 
-  /** 台账里有、内存里没有的 id（保存前提示用，正常情况下应为空）。 */
+  /** 台账里有、仓里没有的 id（保存前提示用，正常情况下应为空）。 */
   missingFromMemory(ledger: AssetLedger): string[] {
     const out: string[] = [];
     for (const [id, e] of Object.entries(ledger.entries)) {
-      if (e.mode === 'generated') continue;
+      if (e.mode === 'generated' || e.retained) continue;
       const it = this.items.get(id);
-      if (!it?.bytes) out.push(id);
+      if (!it || it.source.kind === 'none') out.push(id);
     }
     return out;
   }
+}
+
+/* ------------------------------------------------------------ 来源工具 */
+
+function sizeOf(src: AssetSource | null): number | null {
+  if (!src) return null;
+  if (src.kind === 'bytes') return src.bytes.byteLength;
+  if (src.kind === 'file') return src.file.size;
+  if (src.kind === 'handle') return src.size || null;
+  if (src.kind === 'path') return src.size || null;
+  return null;
+}
+
+async function* chunksOf(src: AssetSource): AsyncGenerator<Uint8Array> {
+  if (src.kind === 'bytes') {
+    if (src.bytes.byteLength) yield src.bytes;
+    return;
+  }
+  if (src.kind === 'file') {
+    yield* streamChunks(src.file.stream());
+    return;
+  }
+  if (src.kind === 'handle') {
+    const file = await src.handle.get();
+    if (file.readStream) {
+      yield* streamChunks(file.readStream());
+      return;
+    }
+    const bytes = await file.readBytes();
+    if (bytes.byteLength) yield bytes;
+    return;
+  }
+  /*
+   * `path` 来源由 platform 的 `readRange` 提供字节（W5）。
+   * 在内核还拿不到那条能力时**什么都不产出** —— 绝不能返回空字节让
+   * `writeStreamAtomic` 把工程副本写成 0 字节（那会静默毁掉一份素材）。
+   */
+  if (src.kind === 'path') return;
+}
+
+/** `ReadableStream` → 异步迭代。不依赖 `DOM.AsyncIterable` 的 lib 版本。 */
+async function* streamChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      if (value?.byteLength) yield value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function readAllOf(src: AssetSource): Promise<Uint8Array | null> {
+  if (src.kind === 'bytes') return src.bytes;
+  if (src.kind === 'file') return new Uint8Array(await src.file.arrayBuffer());
+  if (src.kind === 'handle') {
+    const file = await src.handle.get();
+    return file.readBytes();
+  }
+  // 同 `chunksOf`：path 的读取在 platform（W5），这里不假装读到了空字节。
+  return null;
+}
+
+/** 仅供测试与诊断：这条来源是不是「不读字节」的那一类。 */
+export function isLazySource(src: AssetSource): boolean {
+  return src.kind === 'file' || src.kind === 'handle' || src.kind === 'path';
 }
 
 /**

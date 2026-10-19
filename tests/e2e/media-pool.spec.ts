@@ -232,10 +232,10 @@ async function assetInfo(
             assets: Record<string, { kind: string; name: string; durationSec?: number; size?: { w: number; h: number } }>;
           };
         };
-        assets: { get: (id: string) => Uint8Array | null };
+        assets: { size: (id: string) => number | null };
       };
     }).__artmatic;
-    return { ...A.store.project.assets[assetId]!, bytes: A.assets.get(assetId)?.byteLength ?? 0 };
+    return { ...A.store.project.assets[assetId]!, bytes: A.assets.size(assetId) ?? 0 };
   }, id);
 }
 
@@ -264,10 +264,10 @@ test('导入图片：右键菜单 → image 片段，且画面真的画得出来
     const A = (window as never as {
       __artmatic: {
         store: { project: { assets: Record<string, { kind: string; name: string; size?: { w: number; h: number } }> } };
-        assets: { get: (id: string) => Uint8Array | null };
+        assets: { size: (id: string) => number | null };
       };
     }).__artmatic;
-    return { ...A.store.project.assets[id]!, bytes: A.assets.get(id)?.byteLength ?? 0 };
+    return { ...A.store.project.assets[id]!, bytes: A.assets.size(id) ?? 0 };
   }, assetId);
   expect(asset.kind).toBe('image');
   expect(asset.name).toBe('e2e-pic.png');

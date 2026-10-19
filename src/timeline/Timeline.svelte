@@ -16,7 +16,7 @@
   import { startMarquee, type MarqueeBox } from './marquee';
   import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
   import { xOfTime, timeAtX, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
-  import { browserPlatform } from '../platform/browser';
+  import { platform } from '../platform/index';
   import {
     newId,
     type AudioClip,
@@ -487,25 +487,47 @@
    */
   async function addAudio(trackId: string, at?: number): Promise<void> {
     closeMenus();
-    const picked = await browserPlatform.pickAudioFile();
+    const target = { trackId, start: startFor(at) };
+    // 默认 linked：文件留在原处，工程里不复制（换机器/打包时再 collect）。
+    if (platform.supportsLinked) {
+      const linked = await platform.pickLinkedFile('audio');
+      if (!linked) return;
+      await importAudioBlob(linked.name, await linked.file.arrayBuffer(), target, linked.handle);
+      return;
+    }
+    const picked = await platform.pickAudioFile();
     if (!picked) return;
-    await importAudioBlob(picked.name, picked.data, { trackId, start: startFor(at) });
+    await importAudioBlob(picked.name, picked.data, target);
   }
 
   /** 导入视频。细节见 `ui/media-import.ts::importVideoFile`（含「先给句柄」的理由）。 */
   async function addVideo(trackId: string, at?: number): Promise<void> {
     closeMenus();
-    const picked = await browserPlatform.pickVideoFile();
+    const target = { trackId, start: startFor(at) };
+    if (platform.supportsLinked) {
+      const linked = await platform.pickLinkedFile('video');
+      if (!linked) return;
+      await importVideoFile(linked.file, target, linked.handle);
+      return;
+    }
+    const picked = await platform.pickVideoFile();
     if (!picked) return;
-    await importVideoFile(picked.file, { trackId, start: startFor(at) });
+    await importVideoFile(picked.file, target);
   }
 
   /** 导入图片（`fit: 'contain'`、长度 4 拍 —— 理由见 `ui/media-pool.ts::clipForAsset`）。 */
   async function addImage(trackId: string, at?: number): Promise<void> {
     closeMenus();
-    const picked = await browserPlatform.pickImageFile();
+    const target = { trackId, start: startFor(at) };
+    if (platform.supportsLinked) {
+      const linked = await platform.pickLinkedFile('image');
+      if (!linked) return;
+      await importImageBlob(linked.name, await linked.file.arrayBuffer(), target, linked.handle);
+      return;
+    }
+    const picked = await platform.pickImageFile();
     if (!picked) return;
-    await importImageBlob(picked.name, picked.data, { trackId, start: startFor(at) });
+    await importImageBlob(picked.name, picked.data, target);
   }
 
   /* ------------------------------------------------------------ 轨道操作 */

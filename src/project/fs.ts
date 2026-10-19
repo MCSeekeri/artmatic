@@ -49,6 +49,18 @@ export interface FsEntryInfo {
 export interface FsFile {
   readBytes(): Promise<Uint8Array>;
   readText(): Promise<string>;
+  /**
+   * 流式读（W1.1）。大文件（视频）用它，**不要**先 `readBytes()` ——
+   * 那是把整份素材摊进堆的那一步。
+   *
+   * 可选：不实现时上层退回 `readBytes()`（memory 与旧实现）。
+   */
+  readStream?(): ReadableStream<Uint8Array>;
+  /**
+   * 当 Blob 用。视频交给解码器（mediabunny）时需要的正是它 ——
+   * `File` 本身就是 Blob，原生实现零拷贝。
+   */
+  readBlob?(): Promise<Blob>;
   readonly size: number;
   /** 毫秒时间戳；memory 与部分实现可能给 0（说明它不参与任何判据）。 */
   readonly lastModified: number;
@@ -275,6 +287,80 @@ export async function writeBytesAtomic(
   };
 }
 
+/** 流式写入的选项。比 `WriteBytesOptions` 少了逐字节校验（没有整份字节可比）。 */
+export interface WriteStreamOptions {
+  /** 传了就在写入前把旧内容另存到这个文件名。 */
+  backup?: string | null;
+  /** 读回校验（只比大小）。默认 true —— 磁盘满而 close 没报错时靠它抓。 */
+  verify?: boolean;
+}
+
+/**
+ * 流式原子写（W1.1/W1.2）：边读边 `write()`，**整份素材从不进堆**。
+ *
+ * 与 `writeBytesAtomic` 的关系：
+ *  - 原子性同源（`createWritable` 的 siloed 语义 + `close()` 才提交）；
+ *  - `.bak` 逻辑同源（素材从不传 backup，只有工程 json 需要）；
+ *  - **校验只比大小**：流式写入没有一份完整字节可以逐字节比对。
+ *    这也正是大素材该有的代价 —— 读回一遍 2 GB 去比对，比不校验更糟。
+ */
+export async function writeStreamAtomic(
+  dir: FsDirHandle,
+  name: string,
+  source: AsyncIterable<Uint8Array> | Uint8Array | string,
+  opts: WriteStreamOptions = {},
+): Promise<WriteReport> {
+  const warnings: string[] = [];
+  let backup: WriteReport['backup'] = null;
+
+  if (opts.backup) {
+    try {
+      const old = await readBytesIfExists(dir, name);
+      if (old) {
+        await writeBytesAtomic(dir, opts.backup, old, { verify: false });
+        backup = { name: opts.backup, bytes: old.byteLength };
+      }
+    } catch (e) {
+      warnings.push(tr('err.fs.backupFailed', { detail: errText(e) }));
+    }
+  }
+
+  const fh = await dir.openFile(name, { create: true });
+  let total = 0;
+  let w: FsWritable | null = null;
+  try {
+    w = await fh.openWrite({ mode: 'exclusive' });
+    const put = async (chunk: Uint8Array): Promise<void> => {
+      if (!chunk.byteLength) return;
+      await w!.write(chunk);
+      total += chunk.byteLength;
+    };
+    if (typeof source === 'string') {
+      await put(new TextEncoder().encode(source));
+    } else if (source instanceof Uint8Array) {
+      await put(source);
+    } else {
+      for await (const chunk of source) await put(chunk);
+    }
+    await w.close();
+    w = null;
+  } catch (e) {
+    if (w) await w.abort(e).catch(() => {});
+    throw e;
+  }
+
+  let verified: WriteReport['verified'] = 'none';
+  if (opts.verify !== false && total <= VERIFY_ANY_MAX) {
+    const size = (await fh.get()).size;
+    if (size !== total) {
+      throw new Error(tr('err.fs.writeMismatch', { name, want: total, got: size }));
+    }
+    verified = 'size';
+  }
+
+  return { name, bytes: total, hash: null, verified, backup, warnings };
+}
+
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.byteLength !== b.byteLength) return false;
   for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
@@ -360,6 +446,9 @@ export function memoryRoot(): MemoryRoot {
         return {
           readBytes: async () => bytes.slice(),
           readText: async () => new TextDecoder().decode(bytes),
+          // Blob 会自己拷一份内部副本；不要再 slice() 一次。
+          readStream: () => new Blob([bytes as unknown as BlobPart]).stream(),
+          readBlob: async () => new Blob([bytes as unknown as BlobPart]),
           size: bytes.byteLength,
           lastModified: node && node.kind === 'file' ? node.mtime : 0,
         };
@@ -479,6 +568,17 @@ export function memoryRoot(): MemoryRoot {
 
 /* ------------------------------------------------------------ 原生适配 */
 
+/**
+ * 把一个**原生文件句柄**接入 `FsFileHandle`（浏览器 linked 素材用）。
+ *
+ * 与目录句柄里的 `openFile()` 返回的是同一个包装 —— 两条路必须给出一模一样的
+ * 语义（`readBlob()` 零拷贝返回 File），否则「从工程打开的视频」与「引用本地
+ * 的视频」在解码器眼里会是两种东西。
+ */
+export function adoptFileHandle(fh: FileSystemFileHandle): FsFileHandle {
+  return wrapNativeFile(fh);
+}
+
 function wrapNativeFile(fh: FileSystemFileHandle): FsFileHandle {
   return {
     name: fh.name,
@@ -487,6 +587,10 @@ function wrapNativeFile(fh: FileSystemFileHandle): FsFileHandle {
       return {
         readBytes: async () => new Uint8Array(await f.arrayBuffer()),
         readText: async () => f.text(),
+        // 原生 File 是磁盘背书的：stream() 只在小块之间持有字节，
+        // readBlob() 直接返回 File 本身（零拷贝，正是视频解码要的形态）。
+        readStream: () => f.stream(),
+        readBlob: async () => f,
         size: f.size,
         lastModified: f.lastModified,
       };

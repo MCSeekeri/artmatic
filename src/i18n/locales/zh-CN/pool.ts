@@ -45,7 +45,22 @@ export const pool = {
   'pool.deleteUsedMessage':
     '「{name}」被 {n} 个片段引用，移除后这些片段将没有画面。字节文件保留在 assets/（可在「素材检查」里看到）。',
   'pool.deleteConfirm': '移除素材',
-  'pool.deleted': '已移除素材「{name}」（文件保留）',
+  'pool.deleted': '已移除素材「{name}」（文件保留，可在「工程」面板恢复）',
+  /* 恢复的撤销标签（W1.3：移除只是解除关联，字节一直都在）。 */
+  'pool.restoreAsset': '恢复素材',
+  /* 去重命中（W1）：内容相同就复用同一条，不再新建副本 / 不再复制文件。 */
+  'pool.reusedAsset': '内容相同，已复用「{name}」',
+  'pool.reusedRestored': '内容相同，已恢复「{name}」（不再新建副本）',
+  /* 引用式素材（W1）：字节不在工程目录里，指向本机原文件。 */
+  'pool.linked': '引用',
+  'pool.linkedHint': '引用本机原文件，工程里不复制。打包工程或换机器前可「收集到工程」。',
+  'pool.collect': '收集到工程',
+  'pool.collectPending': '已标记为收集：保存工程时会把文件复制进 assets/',
+  'pool.collected': '已收集到工程（assets/ 里现在有一份副本）',
+  'pool.relink': '重新链接…',
+  'pool.relinkMismatch': '选择的文件内容与这条素材不一致，已取消（要换内容请作为新素材导入）',
+  'pool.relinkUnsupported': '这个环境暂时只能重新链接图片 / 音频 / 带文件句柄的视频',
+  'pool.relinked': '「{name}」已重新链接',
   'pool.hint': '双击条目，或点右侧的 + 插入到播放头；条目也能直接拖到时间轴上',
   'pool.hintTypo': '双击条目置入画布中心；图片也能直接拖到画布上',
 

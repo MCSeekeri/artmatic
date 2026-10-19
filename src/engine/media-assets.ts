@@ -18,8 +18,9 @@
  * 关键设计：**视频只存 Blob/File 引用，绝不在内存里摊开字节**。
  * 浏览器给的文件句柄是磁盘背书的，mediabunny 从它 seek 读；10 MB 的素材
  * 占 10 MB 磁盘缓存而不是 10 MB 堆内存，几 GB 的素材也不会把页面撑爆。
- * 这一点是硬要求 —— 工程打开时 `AssetStore.loadFrom` 会把所有素材
- * 读回内存（见 AGENTS §8 第 12 条），视频若跟着走那条路会直接 OOM。
+ * 这一点是硬要求，而且 W1.1 起是**全链路**的：`AssetStore.loadFrom` 对视频
+ * 只开 `File` / 句柄，保存走 `writeStreamAtomic` —— 打开与保存都不再把
+ * 几 GB 素材摊进堆。
  *
  * ## 生命周期
  *

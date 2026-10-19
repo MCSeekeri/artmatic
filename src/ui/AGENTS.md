@@ -356,9 +356,16 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   把 id 转成 `agent.toolName.<camelCase>`；状态用名字前的小圆点编码，
   不用左边框色条。整轮结束后所有过程卡自动折叠。
 - **媒体池的列表是「合成」出来的**：`Project.assets`（kind / 名字 / 时长 / 尺寸）与
-  `AssetStore`（字节）各说一半，合成规则与「素材 → 片段」的默认值都在 `ui/media-pool.ts`
-  （纯函数，有单测）；面板只管把 `appState` 喂进去。想改「图片默认几拍 / 什么 fit」时
-  改那一处 —— 抄进组件就意味「导入」与「从池里插入」两条路会给出两个结果。
+  `AssetStore`（来源 / 字节数）各说一半，合成规则与「素材 → 片段」的默认值都在
+  `ui/media-pool.ts`（纯函数，有单测）；面板只管把 `appState` 喂进去。想改
+  「图片默认几拍 / 什么 fit」时改那一处 —— 抄进组件就意味「导入」与「从池里插入」
+  两条路会给出两个结果。
+- **「未使用素材」只在工程面板里（`Rail.svelte`）**，数据是 `assets.retainedIds()` /
+  `retainedInput()` / `retainedSize()`（W1.3）。三个动作都有唯一实现：恢复走
+  `project-actions.restoreUnusedAsset`（要 await 素材来源重建，之后画面才能出来）、
+  清理与真删走 `trashUnusedAsset` / `deleteUnusedAsset`。**不要在组件里直接调
+  `moveAssetToTrash` / `fs.remove`** —— 少了 `store.touch()` 台账就不会被下一次
+  保存写下去，表现是「删了又回来」。
 - **素材进来有五个入口，一份实现**：时间轴菜单（文件选择器）、从系统拖文件到时间轴
   （落成片段）、从系统拖到媒体池（只登记素材）、从池子里拖条目到时间轴、**剪贴板粘贴**。
   全部走 `ui/media-import.ts`（素材那一半）+ `ui/media-pool.ts::insertAssetClip`（片段
