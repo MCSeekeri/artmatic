@@ -98,6 +98,8 @@ import MoveUp from '@lucide/svelte/icons/move-up';
 import Music from '@lucide/svelte/icons/music';
 import PaintBrush from '@lucide/svelte/icons/paintbrush';
 import PaintBucket from '@lucide/svelte/icons/paint-bucket';
+import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
+import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
 import PanelRight from '@lucide/svelte/icons/panel-right';
 import Palette from '@lucide/svelte/icons/palette';
 import Pause from '@lucide/svelte/icons/pause';
@@ -245,6 +247,8 @@ export const ICONS = {
   music: Music,
   'paint-bucket': PaintBucket,
   paintbrush: PaintBrush,
+  'panel-left-close': PanelLeftClose,
+  'panel-left-open': PanelLeftOpen,
   'panel-right': PanelRight,
   palette: Palette,
   pause: Pause,

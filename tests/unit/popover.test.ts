@@ -3,6 +3,7 @@ import {
   ANCHOR_GAP,
   EDGE_MARGIN,
   computePopoverPosition,
+  computePreviewPosition,
 } from '../../src/ui/controls/popover';
 
 const VP = { width: 1280, height: 720 };
@@ -11,6 +12,40 @@ const rect = (left: number, top: number, w = 24, h = 22) => ({
   top,
   right: left + w,
   bottom: top + h,
+});
+
+describe('computePreviewPosition — 预览浮层不遮菜单', () => {
+  const preview = { width: 260, height: 180 };
+
+  it('空间足够时贴在当前菜单右侧', () => {
+    const cur = rect(100, 100, 200, 300);
+    const p = computePreviewPosition(cur, [cur], 120, preview, VP);
+    expect(p.x).toBe(300 + ANCHOR_GAP);
+    expect(p.y).toBe(120);
+  });
+
+  it('二级菜单翻到左侧时，预览贴二级菜单左边（这是截图里的 bug）', () => {
+    // 一级菜单贴右边缘，二级菜单翻到它左边
+    const parent = rect(1104, 100, 156, 300);
+    const sub = rect(880, 100, 220, 300);
+    const p = computePreviewPosition(sub, [parent, sub], 120, preview, VP);
+    // 贴 sub 右边会压住 parent（且越界），正确落点是 sub 左边
+    expect(p.x).toBe(880 - preview.width - ANCHOR_GAP);
+  });
+
+  it('一级菜单靠右：预览翻到菜单左侧，而不是越界', () => {
+    const cur = rect(1000, 100, 260, 300);
+    const p = computePreviewPosition(cur, [cur], 110, preview, VP);
+    expect(p.x).toBe(1000 - preview.width - ANCHOR_GAP);
+  });
+
+  it('四面都放不下时钳进视口，不返回负坐标', () => {
+    const vp = { width: 300, height: 200 };
+    const cur = rect(20, 10, 260, 180);
+    const p = computePreviewPosition(cur, [cur], 20, preview, vp);
+    expect(p.x).toBeGreaterThanOrEqual(EDGE_MARGIN);
+    expect(p.x + preview.width).toBeLessThanOrEqual(vp.width - EDGE_MARGIN);
+  });
 });
 
 describe('computePopoverPosition — bottom-start', () => {

@@ -46,7 +46,16 @@ export function upsertCurveKey(
   const localT = beatAnchor ? t - timeAtBeat(beatAnchor.beat, grid) : t - clip.start;
   const cur: Curve | undefined = clip.curves[key];
   if (cur) {
-    cur.keys = upsertKey(cur.keys, { t: localT, v, interp: 'linear' });
+    /*
+     * 播放头处已有 key 时**只改值**，不覆盖 interp / handles。
+     * 覆盖的形态是：用户把一段设成 step 或手调过贝塞尔手柄，随后拖一下滑杆，
+     * 整条段静默退回匀速 —— 没有任何报错，只是动画变了。
+     */
+    const existing = cur.keys.find((k) => Math.abs(k.t - localT) <= 1e-3);
+    cur.keys = upsertKey(
+      cur.keys,
+      existing ? { ...existing, v } : { t: localT, v, interp: 'linear' },
+    );
     if (beatAnchor !== null || cur.beatAnchor == null) cur.beatAnchor = beatAnchor;
   } else {
     clip.curves[key] = { keys: [{ t: localT, v, interp: 'linear' }], beatAnchor };

@@ -26,7 +26,7 @@
     type MenuItem,
     type MenuState,
   } from './menu-model';
-  import { attachDismiss, computePopoverPosition } from './popover';
+  import { attachDismiss, computePopoverPosition, computePreviewPosition } from './popover';
 
   interface Props {
     items: MenuItem[];
@@ -134,15 +134,13 @@
       const level = menu.levels.length - 1;
       const row = panels[level]?.querySelector<HTMLElement>(`[data-menu-index="${menu.levels[level]}"]`);
       const r = row?.getBoundingClientRect();
-      if (r) {
+      const curPanel = panels[level]?.getBoundingClientRect();
+      const rects = panels
+        .map((p) => p?.getBoundingClientRect())
+        .filter((x): x is DOMRect => Boolean(x));
+      if (r && curPanel) {
         const size = { width: panel.offsetWidth, height: panel.offsetHeight };
-        const p = computePopoverPosition(
-          { left: r.right, top: r.top, right: r.right, bottom: r.bottom },
-          size,
-          vp,
-          'right-start',
-        );
-        nextPreview = { x: p.x, y: p.y };
+        nextPreview = computePreviewPosition(curPanel, rects, r.top, size, vp);
       }
     }
     if (JSON.stringify(nextPreview) !== JSON.stringify(previewAt)) previewAt = nextPreview;

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { evalCurve, upsertKey, type Curve } from '../../src/core/curve';
+import {
+  autoHandles,
+  evalCurve,
+  segmentHandles,
+  upsertKey,
+  withInterp,
+  type Curve,
+  type Key,
+} from '../../src/core/curve';
 import type { BeatGrid } from '../../src/core/time';
 
 const linear: Curve = {
@@ -46,7 +54,7 @@ describe('keyframe 求值', () => {
     expect(evalCurve(c, 0.75)).toBeGreaterThan(0.75);
   });
 
-  it('bezier：端点精确，handles 缺省 ≈ 线性', () => {
+  it('bezier：端点精确，缺省是缓入缓出（中点仍是 0.5）', () => {
     const c: Curve = {
       keys: [
         { t: 0, v: 0, interp: 'bezier' },
@@ -56,6 +64,7 @@ describe('keyframe 求值', () => {
     expect(evalCurve(c, 0)).toBeCloseTo(0, 6);
     expect(evalCurve(c, 1)).toBeCloseTo(1, 6);
     expect(evalCurve(c, 0.5)).toBeCloseTo(0.5, 2);
+    expect(evalCurve(c, 0.25)).toBeLessThan(0.25);
   });
 
   it('bezier：拉平 handles 产生缓入缓出', () => {
@@ -180,5 +189,123 @@ describe('upsertKey', () => {
     expect(keys).toHaveLength(3);
     expect(keys[1]!.v).toBe(9);
     expect(keys[1]!.interp).toBe('step');
+  });
+});
+
+/* ---------------------------------------------------------- 贝塞尔手柄 */
+
+const A: Key = { t: 0, v: 0, interp: 'bezier' };
+const B: Key = { t: 2, v: 10, interp: 'linear' };
+
+describe('贝塞尔手柄（段级，值域偏移）', () => {
+  it('hOut / hIn 优先于旧版归一化 handles', () => {
+    const legacy: Key = { ...A, handles: [0.42, 0, 0.58, 1] };
+    const modern: Key = { ...A, hOut: [0.1, 1], hIn: [-0.1, -1] };
+    expect(evalCurve({ keys: [legacy, B] }, 0.5)).not.toBeCloseTo(
+      evalCurve({ keys: [modern, B] }, 0.5),
+      3,
+    );
+    // 端点仍然精确 —— 手柄只改中段形状
+    expect(evalCurve({ keys: [modern, B] }, 0)).toBe(0);
+    expect(evalCurve({ keys: [modern, B] }, 2)).toBe(10);
+  });
+
+  it('旧版 handles 换算成值域偏移后形状不变（smooth == 水平手柄）', () => {
+    const h = segmentHandles({ ...A, handles: [0.42, 0, 0.58, 1] }, B)!;
+    expect(h.out[0]).toBeCloseTo(0.84, 9);
+    expect(h.out[1]).toBeCloseTo(0, 9);
+    expect(h.in[0]).toBeCloseTo(-0.84, 9);
+    expect(h.in[1]).toBeCloseTo(0, 9);
+
+    const smooth = segmentHandles({ ...A, interp: 'smooth' }, B)!;
+    expect(smooth).toEqual({ out: [2 / 3, 0], in: [-2 / 3, 0] });
+  });
+
+  it('控制点被钳进「x 单调」的合法域：极端手柄也不会让时间回折', () => {
+    const k: Key = { ...A, hOut: [999, 5], hIn: [-999, -5] };
+    const h = segmentHandles(k, B)!;
+    expect(h.out[0]).toBeLessThanOrEqual(2);
+    expect(h.in[0]).toBeGreaterThanOrEqual(-2);
+    expect(h.out[0] - h.in[0]).toBeLessThanOrEqual(2 + 1e-9);
+
+    // t 递增 ⇒ 求值有限且不出现 NaN；端点仍被精确钳到 key 的值
+    let prev = -Infinity;
+    for (let t = 0; t <= 2; t += 0.05) {
+      const v = evalCurve({ keys: [k, B] }, t);
+      expect(Number.isFinite(v)).toBe(true);
+      prev = v;
+    }
+    expect(Number.isFinite(prev)).toBe(true);
+  });
+
+  it('dv = 0 时值域手柄仍能表达过冲（归一化坐标会把手柄乘成 0）', () => {
+    // hOut 属于段起点、hIn 属于段终点 —— 与 Key 注释里的归属一致
+    const flat: Key = { t: 0, v: 3, interp: 'bezier', hOut: [0.4, 5] };
+    const end: Key = { t: 1, v: 3, interp: 'linear', hIn: [-0.4, -5] };
+    expect(evalCurve({ keys: [flat, end] }, 0)).toBeCloseTo(3);
+    expect(evalCurve({ keys: [flat, end] }, 1)).toBeCloseTo(3);
+    const vs = Array.from({ length: 19 }, (_, i) => evalCurve({ keys: [flat, end] }, (i + 1) / 20));
+    // 两端同值，但控制点把中段拱起来/压下去 —— 这正是值域偏移买到的表达能力
+    expect(Math.max(...vs)).toBeGreaterThan(3.5);
+    expect(Math.min(...vs)).toBeLessThan(2.5);
+    // 对称手柄 ⇒ 中点仍回到两端值
+    expect(evalCurve({ keys: [flat, end] }, 0.5)).toBeCloseTo(3);
+  });
+});
+
+describe('withInterp / autoHandles', () => {
+  it('切到 bezier 时补水平手柄（缓入缓出），不改入参数组', () => {
+    const keys: Key[] = [
+      { t: 0, v: 0, interp: 'linear' },
+      { t: 2, v: 10, interp: 'linear' },
+    ];
+    const out = withInterp(keys, [0], 'bezier');
+    expect(out[0]!.interp).toBe('bezier');
+    expect(out[0]!.hOut).toEqual([2 / 3, 0]);
+    expect(out[1]!.hIn).toEqual([-2 / 3, 0]);
+    expect(keys[0]!.interp).toBe('linear');
+    expect(keys[0]!.hOut).toBeUndefined();
+  });
+
+  it('切到 bezier 时把旧版 handles 物化，形状不变', () => {
+    const keys: Key[] = [
+      { t: 0, v: 0, interp: 'bezier', handles: [0.42, 0, 0.58, 1] },
+      { t: 2, v: 10, interp: 'linear' },
+    ];
+    const out = withInterp(keys, [0], 'bezier');
+    expect(out[0]!.hOut![0]).toBeCloseTo(0.84, 9);
+    expect(out[1]!.hIn![0]).toBeCloseTo(-0.84, 9);
+    // 同一个 t 的求值不变
+    for (const t of [0.2, 0.5, 1.4]) {
+      expect(evalCurve({ keys: out }, t)).toBeCloseTo(evalCurve({ keys }, t), 9);
+    }
+  });
+
+  it('切回 linear 保留手柄（再切回 bezier 时形状还在）', () => {
+    const keys: Key[] = [
+      { t: 0, v: 0, interp: 'bezier', hOut: [0.2, 1] },
+      { t: 1, v: 1, interp: 'linear', hIn: [-0.2, -1] },
+    ];
+    const out = withInterp(keys, [0], 'linear');
+    expect(out[0]!.interp).toBe('linear');
+    expect(out[0]!.hOut).toEqual([0.2, 1]);
+  });
+
+  it('autoHandles 只重置相邻的两段，不碰更远的段', () => {
+    const keys: Key[] = [
+      { t: 0, v: 0, interp: 'bezier', hOut: [0.1, 3] },
+      { t: 1, v: 1, interp: 'bezier', hOut: [0.1, 3], hIn: [-0.1, -3] },
+      { t: 2, v: 2, interp: 'bezier', hOut: [0.1, 3] },
+      { t: 3, v: 3, interp: 'linear' },
+    ];
+    const out = autoHandles(keys, [1]);
+    // 出向段 1→2 与入向段 0→1 都归 key 1，两段都重置
+    expect(out[1]!.hOut).toEqual([1 / 3, 0]);
+    expect(out[2]!.hIn).toEqual([-1 / 3, 0]);
+    expect(out[0]!.hOut).toEqual([1 / 3, 0]);
+    expect(out[1]!.hIn).toEqual([-1 / 3, 0]);
+    // 2→3 段不邻接 key 1，保持原样
+    expect(out[2]!.hOut).toEqual([0.1, 3]);
+    expect(out[3]!.hIn).toBeUndefined();
   });
 });

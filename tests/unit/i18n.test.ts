@@ -13,6 +13,7 @@ import { app } from '../../src/i18n/locales/zh-CN/app';
 import { project } from '../../src/i18n/locales/zh-CN/project';
 import { timeline } from '../../src/i18n/locales/zh-CN/timeline';
 import { inspector } from '../../src/i18n/locales/zh-CN/inspector';
+import { curve } from '../../src/i18n/locales/zh-CN/curve';
 import { transitions } from '../../src/i18n/locales/zh-CN/transitions';
 import { typography } from '../../src/i18n/locales/zh-CN/typography';
 import { ribbon } from '../../src/i18n/locales/zh-CN/ribbon';
@@ -93,6 +94,7 @@ describe('文案表结构', () => {
     project,
     timeline,
     inspector,
+    curve,
     transitions,
     typography,
     ribbon,

@@ -82,6 +82,51 @@ export function computePopoverPosition(
   };
 }
 
+/**
+ * 菜单预览浮层的位置。
+ *
+ * 与子菜单不同：子菜单只能贴在父菜单项的左侧/右侧（翻到左侧时它就在左边），
+ * 而预览浮层**不能盖住任何一层菜单**。只按「高亮项右边」算的话，二级菜单
+ * 在屏幕右侧翻到左边时，预览仍会画到该项右边 —— 正好压住一级菜单
+ * （2026-10-19 截图实拍）。
+ *
+ * 候选顺序：当前菜单右侧 → 当前菜单左侧 → 整个菜单栈左侧 → 整个菜单栈右侧。
+ * 取第一个「放得下且不与任何面板相交」的；都放不下才退回钳制（有总比没有好）。
+ */
+export function computePreviewPosition(
+  current: Rect,
+  panelRects: readonly Rect[],
+  rowTop: number,
+  panel: Size,
+  viewport: Size,
+  gap = ANCHOR_GAP,
+): { x: number; y: number } {
+  const fits = (x: number): boolean =>
+    x >= EDGE_MARGIN && x + panel.width <= viewport.width - EDGE_MARGIN;
+  const overlaps = (x: number): boolean =>
+    panelRects.some(
+      (r) => x < r.right - 0.5 && x + panel.width > r.left + 0.5,
+    );
+
+  const lefts = panelRects.map((r) => r.left);
+  const rights = panelRects.map((r) => r.right);
+  const candidates = [
+    current.right + gap,
+    current.left - panel.width - gap,
+    Math.min(current.left, ...lefts) - panel.width - gap,
+    Math.max(current.right, ...rights) + gap,
+  ];
+  const x =
+    candidates.find((c) => fits(c) && !overlaps(c)) ??
+    candidates.find((c) => fits(c)) ??
+    candidates[0]!;
+
+  return {
+    x: clampAxis(x, panel.width, viewport.width),
+    y: clampAxis(rowTop, panel.height, viewport.height),
+  };
+}
+
 /* ------------------------------------------------------------ 关闭 */
 
 export interface DismissOptions {

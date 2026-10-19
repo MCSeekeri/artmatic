@@ -7,7 +7,13 @@ import {
   snapTimeWithSections,
   sortSections,
 } from '../../src/core/sections';
-import { defaultProject, migrateProject, validateProject, type Section } from '../../src/core/schema';
+import {
+  SCHEMA_VERSION,
+  defaultProject,
+  migrateProject,
+  validateProject,
+  type Section,
+} from '../../src/core/schema';
 import { ProjectStore } from '../../src/core/project-store';
 import { createBlankProject } from '../../src/core/demo-project';
 import { snapTime, type BeatGrid } from '../../src/core/time';
@@ -150,17 +156,53 @@ describe('nextSectionName', () => {
   });
 });
 
+describe('schema v9：贝塞尔手柄', () => {
+  it('v8 → v9 恒等迁移：hOut / hIn 原样保留', () => {
+    const p = createBlankProject('handles');
+    p.schemaVersion = 8;
+    const track = p.tracks[0]!;
+    if (track.kind !== 'visual') throw new Error('unreachable');
+    track.clips.push({
+      id: 'c',
+      start: 0,
+      end: 4,
+      label: 'c',
+      fadeSec: 0,
+      curves: {
+        opacity: {
+          keys: [
+            { t: 0, v: 0, interp: 'bezier', hOut: [1, 2] },
+            { t: 1, v: 1, interp: 'linear', hIn: [-1, -2] },
+          ],
+        },
+      },
+      kind: 'source',
+      source: { type: 'solid', color: '#000' },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'contain',
+    });
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'source') throw new Error('unreachable');
+    expect(clip.curves.opacity!.keys[0]!.hOut).toEqual([1, 2]);
+    expect(clip.curves.opacity!.keys[1]!.hIn).toEqual([-1, -2]);
+  });
+});
+
 describe('schema v8：sections', () => {
   it('defaultProject 自带空数组（读取方不必到处 ?? []）', () => {
     expect(defaultProject('p').sections).toEqual([]);
   });
 
-  it('v7 → v8 恒等迁移：缺字段补空数组，已存在的段落原样保留', () => {
+  it('v7 → 当前版本：缺 sections 字段补空数组，已存在的段落原样保留', () => {
     const bare = defaultProject('old') as unknown as Record<string, unknown>;
     delete bare.sections;
     bare.schemaVersion = 7;
     const out = migrateProject(bare);
-    expect(out.schemaVersion).toBe(8);
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
     expect(out.sections).toEqual([]);
 
     const withSections = defaultProject('old2');

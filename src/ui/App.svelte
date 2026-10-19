@@ -20,6 +20,11 @@
   import TypographyEditor from './typography/TypographyEditor.svelte';
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
+  import CurveEditor from './curve-editor/CurveEditor.svelte';
+  import {
+    curveEditorTargets,
+    openCurveEditor,
+  } from './curve-editor/curve-editor-state.svelte';
   import { handleTypographyKey, handleTypingFormatKey } from './typography/keys';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
@@ -182,6 +187,19 @@
        */
       if (appState.editorOpen) {
         handleTypographyKey(e);
+        return;
+      }
+
+      /*
+       * K = 打开关键帧曲线编辑器（选中片段后）。
+       *
+       * 单键的理由与 S（切分）相同：它是时间轴视图里的高频动作，而 Ctrl+K 在
+       * 其他方案里已经被「切分」占了（见 shortcuts.ts 的方案表）。`isExempt`
+       * 已经挡掉了输入框与自研控件，所以只有真正的「没在打字」才会命中。
+       */
+      if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'k' && appState.selectedClipId) {
+        e.preventDefault();
+        openCurveEditor(appState.selectedClipId);
         return;
       }
 
@@ -484,6 +502,17 @@
 
 {#if !appState.hasProject}
   <EmptyState />
+{/if}
+
+<!--
+  关键帧曲线编辑器：根级浮层（不在抽屉 / 时间轴里）。
+  放在 shell 外面是为了不进任何祖先的层叠上下文 —— 与 modal 的理由相同；
+  它自己只到 `--z-popover`，菜单与 tooltip 仍然盖得住它。
+-->
+{#if !appState.editorOpen}
+  {#each curveEditorTargets() as t, i (t.clipId)}
+    <CurveEditor target={t} layer={i} />
+  {/each}
 {/if}
 
 <!--

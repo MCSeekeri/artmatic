@@ -9,6 +9,17 @@ Canvas2D 绘制 + DOM 片段：轨道行、标尺、波形、选中框、拖拽 
 
 ---
 
+- **片段内的迷你曲线只画一条**：`ClipView` 读 `lastCurveKeyOf(clip.id)`（曲线编辑器里
+  最后显示的那个属性），用 `curve-geometry.ts::clipCurvePath` 生成路径、曲线下方整块
+  加深。**一个片段只画一条**，因为片段高度只够一条；多条叠在一起读不出任何东西。
+  `lastCurveKeyOf` 是会话级视图状态，退出编辑器后仍保留 —— 这是「右键重开时显示的
+  就是片段上画的那条」的实现基础。x 轴映射片段范围而不是全部 key 的范围：被 trim
+  过的片段关键帧常在片段外，按 key 范围映射会把片段内的形状压扁 / 错位。
+- **右键落在片段上时，菜单顶部先给片段级动作**（当前是「编辑关键帧曲线…」）。
+  `ClipView` 不处理 `contextmenu`（右键统一归 Timeline），所以 `openCtx` 用
+  `elementFromPoint(...).closest('[data-clip-id]')` 反查 —— 不要给片段再挂一套
+  contextmenu（两条事件路径必然出现两种菜单行为）。空白行右键时 `clipId` 为 null，
+  菜单与原来完全一致。
 - **新建片段菜单的层级**：一级平铺（纯色 / 排版 / 特效 / 图片 / 视频 / 算法）；
   「特效片段」「算法片段」各展开一级，子菜单只放**最近用过的 5 个 + 「全部…」**。
   最近项在 `ui/recent-defs.ts`（localStorage），菜单构造在

@@ -280,13 +280,16 @@ export const CONTENT: Record<ThemeMode, Record<ContentKey, string>> = {
 
 /* ------------------------------------------------------------ static
  *
- * 与 mode 和品牌都无关。**刻意不含任何 shadow token**——层次感只靠
- *  surface-0→3 的纯色深度 + 1px 实线边框，这是本项目的视觉纪律。
+ * 与 mode 和品牌都无关。**层次感只靠 surface-0→3 的纯色深度 + 1px 实线边框**，
+ * 这是本项目的视觉纪律。唯一的例外是 `shadow-float`：根级浮动面板（曲线编辑器）
+ * 没有自己的布局槽位，纯靠边框与背景色分不开，需要一层阴影把它「托」起来。
+ * 不要把它用在普通面板 / 卡片上。
  */
 
 export const STATIC: Record<string, string> = {
   'radius-sm': '4px',
   'radius-md': '6px',
+  'shadow-float': '0 12px 32px rgba(0, 0, 0, 0.28), 0 3px 10px rgba(0, 0, 0, 0.16)',
 
   'fs-xs': '10px',
   'fs-sm': '11px',

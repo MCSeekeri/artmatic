@@ -92,6 +92,8 @@ export const agent = {
   'agent.curve.mode': '未知曲线模式 {mode}',
   'agent.curve.key': 'curves.{param}.keys[{index}] 需要有限的 t / v',
   'agent.curve.interp': 'curves.{param}.keys[{index}].interp 非法',
+  'agent.curve.handles': 'curves.{param}.keys[{index}].handles 需要 4 个有限数',
+  'agent.curve.handle': 'curves.{param}.keys[{index}] 的贝塞尔手柄必须是 [秒, 值] 两个有限数',
   'agent.curve.order': 'keys 必须按 t 升序',
 
   /* -------------------------------------------------- 整体改写 / 事务 */

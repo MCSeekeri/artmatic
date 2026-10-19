@@ -16,14 +16,37 @@ import { timeAtBeat, type BeatGrid } from './time';
 
 export type Interp = 'linear' | 'step' | 'smooth' | 'bezier';
 
+/**
+ * 一个关键帧。
+ *
+ * `interp` 是**出向**语义：它只决定「从本 key 到下一个 key」这一段怎么走。
+ * 入向由前一个 key 的 `interp` 决定 —— 想同时改两侧就把相邻两个 key 都选上。
+ * 这条约定是曲线编辑器的全部手势（选中一个 key 只出现它的出向手柄）的依据。
+ */
 export interface Key {
   /** 秒。曲线无 beatAnchor 时相对片段起点，有 beatAnchor 时相对锚定拍。 */
   t: number;
   v: number;
   /** 离开这个 key 进入下一段时使用的插值方式。 */
   interp: Interp;
-  /** bezier 段的两个控制点 [x1,y1,x2,y2]，归一化在段内（y 为 0..1 段进度）。 */
+  /**
+   * **旧版**段级控制点 [x1,y1,x2,y2]，归一化在段内（y 为 0..1 段进度）。
+   *
+   * 只在 `hOut` / `hIn` 都不存在时参与求值（早期工程与手工 JSON 里只有它）。
+   * 新写入一律用 `hOut` / `hIn` —— 归一化坐标没法表达「手柄被拖过段的边界」，
+   * 而值域归一化在 `dv = 0` 时还会把纵向拖动吃掉。
+   */
   handles?: [number, number, number, number];
+  /**
+   * 出向控制点偏移：相对**本 key** 的 `[秒, 值]`。本 key 的 `interp === 'bezier'`
+   * 时，它与下一个 key 的 `hIn` 一起构成该段的两个控制点。
+   */
+  hOut?: [number, number];
+  /**
+   * 入向控制点偏移：相对**本 key** 的 `[秒, 值]`（秒为负）。前一个 key 的
+   * `interp === 'bezier'` 时参与求值。
+   */
+  hIn?: [number, number];
 }
 
 export type CurveMode = 'keyframe' | 'impulse' | 'follower';
@@ -89,28 +112,113 @@ export function evalKeyframes(keys: Key[], t: number): number {
     case 'smooth':
       return a.v + (b.v - a.v) * smoothstep(u);
     case 'bezier':
-      return a.v + (b.v - a.v) * bezierY(u, a.handles);
+      return bezierSegmentValue(a, b, t);
     default:
       return a.v + (b.v - a.v) * u;
   }
 }
 
-/**
- * 三次贝塞尔段的 y(u)：P0=(0,0)，P3=(1,1)，P1/P2 来自 handles（缺省 1/3、2/3，
- * 即退化为线性）。对 x 做牛顿迭代求参数，再取 y。
- */
-function bezierY(u: number, handles?: [number, number, number, number]): number {
-  const [x1, y1, x2, y2] = handles ?? [1 / 3, 1 / 3, 2 / 3, 2 / 3];
-  let tt = u;
-  for (let i = 0; i < 8; i++) {
-    const x = cubic(tt, 0, x1, x2, 1) - u;
-    const dx = cubicDeriv(tt, 0, x1, x2, 1);
-    if (Math.abs(dx) < 1e-6) break;
-    const next = tt - x / dx;
-    if (Math.abs(next - tt) < 1e-6) { tt = next; break; }
-    tt = clamp01(next);
+/* ------------------------------------------------------- bezier 控制点 */
+
+/** 段 `a → b` 的两个控制点，**各自相对所属 key** 的 `[秒, 值]` 偏移。 */
+export interface SegmentHandles {
+  /** 相对 `a`（出向）。 */
+  out: [number, number];
+  /** 相对 `b`（入向），秒为负。 */
+  in: [number, number];
+}
+
+/** 段是否由贝塞尔描述（`smooth` 也是 —— 它就是水平手柄的贝塞尔）。 */
+export function segmentHandles(a: Key, b: Key): SegmentHandles | null {
+  if (a.interp !== 'bezier' && a.interp !== 'smooth') return null;
+  const span = b.t - a.t;
+  if (span <= 1e-9) return null;
+  // smoothstep 恒等于「控制点在 1/3、2/3 处且水平」的贝塞尔，所以两者可以共用
+  // 同一套手柄显示；从 smooth 拖一下手柄只是把同一形状物化成 hOut/hIn。
+  if (a.interp === 'smooth') return { out: [span / 3, 0], in: [-span / 3, 0] };
+
+  const dv = b.v - a.v;
+  let out: [number, number];
+  let inn: [number, number];
+  if (a.hOut || b.hIn) {
+    out = a.hOut ? [a.hOut[0], a.hOut[1]] : [span / 3, 0];
+    inn = b.hIn ? [b.hIn[0], b.hIn[1]] : [-span / 3, 0];
+  } else if (a.handles) {
+    const [x1, y1, x2, y2] = a.handles;
+    out = [x1 * span, y1 * dv];
+    inn = [(x2 - 1) * span, (y2 - 1) * dv];
+  } else {
+    // 缺省 = 缓入缓出（水平手柄）。旧版注释说「缺省退化为线性」，但那是
+    // 归一化坐标下的巧合；真要线性请用 `linear`，选 bezier 的人要的是缓动。
+    out = [span / 3, 0];
+    inn = [-span / 3, 0];
   }
-  return cubic(tt, 0, y1, y2, 1);
+  return clampHandles(out, inn, span);
+}
+
+/**
+ * 把两个控制点钳进「x 单调」的合法域。
+ *
+ * 三次贝塞尔的 x(s) 只有在 `0 ≤ x1 ≤ x2 ≤ span` 时才单调；越界时 `x(s) = t`
+ * 可能有多解，画面表现为「曲线在时间上回折」——而求值器只会取其中一个解，
+ * 于是和编辑器里看到的形状对不上。值（y）不钳：允许过冲是贝塞尔的正常表达能力。
+ */
+function clampHandles(
+  out: [number, number],
+  inn: [number, number],
+  span: number,
+): SegmentHandles {
+  const o: [number, number] = [Math.min(Math.max(out[0], 0), span), out[1]];
+  const i: [number, number] = [Math.min(Math.max(inn[0], -span), 0), inn[1]];
+  if (o[0] - i[0] > span) {
+    // 两个手柄在时间上交叉了：保留入向手柄，把出向推到最左的合法位置。
+    // `i[0] >= -span` 保证 `span + i[0]` 不会小于 0，不需要再兜一次。
+    o[0] = span + i[0];
+  }
+  return { out: o, in: i };
+}
+
+/** 段 `a → b` 在绝对（同一时间基准）时刻 t 的贝塞尔值。 */
+function bezierSegmentValue(a: Key, b: Key, t: number): number {
+  const span = b.t - a.t;
+  if (span <= 1e-9) return b.v;
+  const h = segmentHandles(a, b);
+  if (!h) return a.v + (b.v - a.v) * clamp01((t - a.t) / span);
+  const s = solveBezierParam(
+    clamp01((t - a.t) / span),
+    h.out[0] / span,
+    1 + h.in[0] / span,
+  );
+  return cubic(s, a.v, a.v + h.out[1], b.v + h.in[1], b.v);
+}
+
+/**
+ * 已知 x 求贝塞尔参数 s（P0.x=0、P3.x=1）。牛顿为主，**越界或导数为零时
+ * 退回二分** —— 只写牛顿时遇到近乎竖直的控制点会停在段外，求值结果会跳到
+ * 相邻段去（表现为曲线在某帧突然塌陷，而不是报错）。
+ */
+function solveBezierParam(x: number, x1: number, x2: number): number {
+  let s = x;
+  for (let i = 0; i < 8; i++) {
+    const err = cubic(s, 0, x1, x2, 1) - x;
+    if (Math.abs(err) < 1e-7) return s;
+    const d = cubicDeriv(s, 0, x1, x2, 1);
+    if (Math.abs(d) < 1e-6) break;
+    const next = s - err / d;
+    if (!(next >= 0 && next <= 1)) break;
+    s = next;
+  }
+  let lo = 0;
+  let hi = 1;
+  s = x;
+  for (let i = 0; i < 32; i++) {
+    const v = cubic(s, 0, x1, x2, 1);
+    if (Math.abs(v - x) < 1e-7) break;
+    if (v < x) lo = s;
+    else hi = s;
+    s = (lo + hi) / 2;
+  }
+  return s;
 }
 
 function cubic(t: number, p0: number, p1: number, p2: number, p3: number): number {
@@ -194,4 +302,74 @@ export function upsertKey(keys: Key[], key: Key): Key[] {
 
 export function removeKeyAt(keys: Key[], index: number): Key[] {
   return keys.filter((_, i) => i !== index);
+}
+
+/**
+ * 把选中的 key 的出向插值改成 `interp`，返回**新数组**（不改入参）。
+ *
+ * 切到 `bezier` 时补齐两个控制点，否则用户会得到一条「选了贝塞尔但看不出
+ * 任何变化」的曲线（旧版 `handles` 缺省在归一化坐标下恰好近似线性）：
+ *   - 已有旧版 `handles` 且两端都没有新字段 → 换算成 `hOut` / `hIn`，形状不变；
+ *   - 否则给水平手柄（缓入缓出）。
+ *
+ * 切到 `linear / step / smooth` 时**保留** `hOut` / `hIn`：它们不参与求值，
+ * 但用户再切回 `bezier` 时手调过的形状还在。
+ */
+export function withInterp(keys: Key[], indices: readonly number[], interp: Interp): Key[] {
+  const wanted = new Set(indices);
+  const out = keys.map((k) => ({ ...k }));
+  for (const i of wanted) {
+    const k = out[i];
+    if (!k) continue;
+    k.interp = interp;
+    if (interp !== 'bezier') continue;
+    const next = out[i + 1];
+    if (!next) continue;
+    const span = next.t - k.t;
+    if (span <= 1e-9) continue;
+    if (!k.hOut) {
+      if (k.handles && !next.hIn) {
+        const [x1, y1, x2, y2] = k.handles;
+        const dv = next.v - k.v;
+        k.hOut = [x1 * span, y1 * dv];
+        next.hIn = [(x2 - 1) * span, (y2 - 1) * dv];
+      } else {
+        k.hOut = [span / 3, 0];
+      }
+    }
+    if (!next.hIn) next.hIn = [-span / 3, 0];
+  }
+  return out;
+}
+
+/**
+ * 把选中 key 两侧的贝塞尔手柄重置为水平（缓入缓出）。
+ *
+ * 只重置与选中 key 相邻的段：一个段的手柄归它两端的 key 所有，越界重置会
+ * 悄悄改掉别的段。
+ */
+export function autoHandles(keys: Key[], indices: readonly number[]): Key[] {
+  const wanted = new Set(indices);
+  const out = keys.map((k) => ({ ...k }));
+  for (const i of wanted) {
+    const k = out[i];
+    if (!k) continue;
+    const next = out[i + 1];
+    if (next) {
+      const span = next.t - k.t;
+      if (span > 1e-9) {
+        k.hOut = [span / 3, 0];
+        next.hIn = [-span / 3, 0];
+      }
+    }
+    const prev = out[i - 1];
+    if (prev && prev.interp === 'bezier') {
+      const span = k.t - prev.t;
+      if (span > 1e-9) {
+        prev.hOut = [span / 3, 0];
+        k.hIn = [-span / 3, 0];
+      }
+    }
+  }
+  return out;
 }

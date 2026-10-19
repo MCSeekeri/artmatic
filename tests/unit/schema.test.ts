@@ -428,7 +428,6 @@ describe('片段级抠图 / 四角（SourceClip.key / quad，v7）', () => {
     p.schemaVersion = 6;
     const out = migrateProject(JSON.parse(JSON.stringify(p)));
     expect(out.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(out.schemaVersion).toBe(8);
     const clip = out.tracks[0]!.clips[0]!;
     if (clip.kind !== 'source') throw new Error('unreachable');
     expect(clip.key).toEqual(key);

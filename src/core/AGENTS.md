@@ -221,12 +221,39 @@ placement pass（`src/engine/placement.frag.ts`）。
 ## 关键帧锚拍与包络
 
 ```ts
+interface Key {
+  t: number
+  v: number
+  /** **出向**语义：只决定「本 key → 下一个 key」这一段。 */
+  interp: 'linear' | 'step' | 'smooth' | 'bezier'
+  /** 旧版段级归一化控制点 [x1,y1,x2,y2]（只在没有 hOut/hIn 时读）。 */
+  handles?: [number, number, number, number]
+  /** 出向手柄，相对本 key 的 [秒, 值]。 */
+  hOut?: [number, number]
+  /** 入向手柄，相对本 key 的 [秒, 值]（秒为负）。 */
+  hIn?: [number, number]
+}
 interface Curve {
-  keys: { t: number; v: number; interp: Interp; handles?: [number, number, number, number] }[]
+  keys: Key[]
   mode?: 'keyframe' | 'impulse' | 'follower'
   beatAnchor?: { beat: number } | null
 }
 ```
+
+- `hOut` / `hIn` 是 **schema v9** 新增的可选字段（8 → 9 恒等迁移）；旧工程读进来
+  没有它们仍然合法，求值走缺省水平手柄或旧版 `handles`。
+- **`interp` 只看左 key**：想改一段的两侧就把相邻两个 key 都设上。曲线编辑器
+  的手柄显示与工具栏全部按这条约定实现。
+- **手柄归属**：`a.hOut` + `b.hIn` 构成 `a → b` 段的两个控制点。`withInterp`
+  切到 `bezier` 时负责补齐；`segmentHandles` 是求值与 UI 的唯一换算处。
+- **旧版 `handles` 不要删也不要再写**：它只在 `hOut` / `hIn` 都不存在时参与求值；
+  保留是为了让 0.3 之前的工程逐像素不变。新写入一律用值域偏移（归一化坐标在
+  `dv = 0` 时把手柄纵向分量乘成 0，表达不了过冲）。
+- **控制点必须钳进 x 单调域**（`0 ≤ out.t ≤ span`、`-span ≤ in.t ≤ 0`、
+  `out.t - in.t ≤ span`）。越界会让 `x(s) = t` 多解，编辑器里看到的形状与求值
+  结果对不上，而不会报错。
+- **`bezier` 缺省 = 缓入缓出**（水平手柄）。旧注释「缺省近似线性」已作废：
+  要匀速请用 `linear`。
 
 `beatAnchor` 必须在 `Curve` 结构本身里，不是事后补 —— 改了 BPM 或微调 `offset` 之后
 **所有卡点自动跟着走，不用重排**。

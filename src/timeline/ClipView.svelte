@@ -2,6 +2,10 @@
   import { appState } from '../ui/app-state.svelte';
   import { pxPerSec, xOfTime } from './view-model';
   import { startClipDrag, type DragPeer, type DragMode } from './drag';
+  import { clipCurvePath, curveAreaPath } from '../ui/curve-editor/curve-geometry';
+  import { curveParamOf } from '../ui/curve-editor/curve-meta';
+  import { lastCurveKeyOf } from '../ui/curve-editor/curve-editor-state.svelte';
+  import { timeAtBeat } from '../core/time';
   import type { AnyClip, Track } from '../core/schema';
   import { tr } from '../i18n/index.svelte';
 
@@ -57,6 +61,31 @@
     void appState.version;
     if (clip.kind !== 'audio') return 0;
     return (clip.fadeOut ?? 0) * pxPerSec(appState.pxPerBeat, grid);
+  });
+
+  /**
+   * 片段内绘制的迷你曲线：**最后一次在曲线编辑器里显示的那个属性**。
+   *
+   * 只画一个属性是刻意的：片段高度只够一条曲线，多条叠在一起什么都读不出来。
+   * 数据源是 `lastCurveKeyOf`（会话级视图状态），退出编辑器后仍然保留，所以
+   * 用户下次右键打开的就是同一条曲线。
+   *
+   * x 轴映射片段范围而非全部关键帧范围：被 trim 过的片段，关键帧常在片段外，
+   * 按 key 范围映射会把片段内的形状压扁 / 错位。
+   */
+  const curvePreview = $derived.by(() => {
+    void appState.version;
+    const key = lastCurveKeyOf(clip.id);
+    if (!key) return null;
+    const cv = clip.curves[key];
+    if (!cv || cv.keys.length === 0) return null;
+    const origin = cv.beatAnchor ? timeAtBeat(cv.beatAnchor.beat, grid) : clip.start;
+    const keys = cv.keys.map((k) => ({ ...k, t: k.t + origin }));
+    const meta = curveParamOf(clip, key);
+    const box = { left: 0, top: 0, width: 100, height: 100 };
+    const d = clipCurvePath(keys, clip.start, clip.end, meta?.min ?? -1, meta?.max ?? 1, box);
+    if (!d) return null;
+    return { key, d, area: curveAreaPath(d, box) };
   });
 
   function down(e: PointerEvent, mode: DragMode): void {
@@ -152,6 +181,28 @@
   onpointerdown={(e) => down(e, 'move')}
   ondblclick={dblclick}
 >
+  {#if curvePreview}
+    <!--
+      迷你曲线：曲线下方整块加深 + 一条更实的线。颜色取片段自己的 border 色
+      （content 层，随亮暗变）—— 它是这套类别色里与底色对比最稳定的那一档。
+      `preserveAspectRatio="none"` 允许横向/纵向各自拉伸；没有文字，不怕变形。
+    -->
+    <svg
+      class="curve-preview"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      data-testid="clip-curve-preview"
+      data-curve-key={curvePreview.key}
+    >
+      <path class="curve-area" d={curvePreview.area} />
+      <path
+        class="curve-line"
+        d={curvePreview.d}
+        vector-effect="non-scaling-stroke"
+      />
+    </svg>
+  {/if}
   {#if renaming}
     <!--
       svelte-ignore a11y_autofocus
@@ -261,6 +312,43 @@
     background: var(--clip-audio-bg);
     border-color: var(--clip-audio-border);
     color: var(--clip-audio-text);
+  }
+  /*
+   * 片段内的关键帧曲线。`pointer-events: none` 必须保留：片段本体的拖动 /
+   * 双击都靠指针事件落到 `.clip` 上（与 `.label` 同一条纪律）。
+   */
+  .curve-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .curve-area {
+    fill: var(--clip-source-border);
+    opacity: 0.3;
+    stroke: none;
+  }
+  .curve-line {
+    fill: none;
+    stroke: var(--clip-source-border);
+    stroke-width: 1;
+    opacity: 0.9;
+  }
+  .clip.effect .curve-area {
+    fill: var(--clip-effect-border);
+  }
+  .clip.effect .curve-line {
+    stroke: var(--clip-effect-border);
+  }
+  /* 音频的底色是半透明的（波形在下面），填充再淡一档，别把波形盖没了 */
+  .clip.audio .curve-area {
+    fill: var(--clip-audio-border);
+    opacity: 0.16;
+  }
+  .clip.audio .curve-line {
+    stroke: var(--clip-audio-border);
   }
   /*
    * 名字区与改名输入框盖的是同一块地方。名字**必须** `pointer-events: none`：

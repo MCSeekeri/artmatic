@@ -14,8 +14,8 @@
 - key 是**扁平点分命名**（`'tl.importAudio'`），`keyof typeof zhCN` 直接就是 `MessageKey`，
   编译期可检查，不需要类型体操。按域拆文件只是为了让 600+ 条找得到，合并后就是一张平表。
   域清单见 `tests/unit/i18n.test.ts` 的 `DOMAINS`（common · media · pool · effects · app ·
-  project · timeline · inspector · transitions · typography · ribbon · shortcuts · errors ·
-  lab · agent · plugins）。**加一个域 = 加一个文件 + 在 `zh-CN/index.ts` 与那份 `DOMAINS` 各登记一行**
+  project · timeline · inspector · curve · transitions · typography · ribbon · shortcuts ·
+  errors · lab · agent · plugins）。**加一个域 = 加一个文件 + 在 `zh-CN/index.ts` 与那份 `DOMAINS` 各登记一行**
   （漏登记的表现是「文案写对了但跨文件重名检测覆盖不到它」）。
 - **`i18n/index.svelte.ts` 必须是 `.svelte.ts`**：locale 是 `$state`，而 `tr()` 每次调用都读它
   ⇒ 模板里任何一处 `tr()` 都自动建立依赖，切语言时整棵树重渲。用普通模块 + 订阅回调的做法

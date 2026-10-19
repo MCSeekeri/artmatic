@@ -49,6 +49,7 @@
   import { reorder } from '../ui/drag-reorder';
   import { theme } from '../ui/theme.svelte';
   import { appState } from '../ui/app-state.svelte';
+  import { openCurveEditor } from '../ui/curve-editor/curve-editor-state.svelte';
   import { registryRevision } from '../ui/registry-revision.svelte';
   import { statusHint } from '../ui/status-hint.svelte';
   import type { HintTarget } from '../ui/hints';
@@ -73,6 +74,8 @@
     kind: Track['kind'];
     name: string;
     time: number;
+    /** 右键落在哪个片段上（不是空白行）。用来在菜单顶部给出片段级动作。 */
+    clipId: string | null;
   }
   let ctxMenu = $state<CtxMenu | null>(null);
 
@@ -944,7 +947,29 @@
     if (!m) return [];
     const track = appState.store.track(m.trackId);
     if (!track) return [];
-    return trackMenuItems(track, m.time, 'ctx-');
+    const base = trackMenuItems(track, m.time, 'ctx-');
+    if (!m.clipId) return base;
+    const found = appState.store.findClip(m.clipId);
+    if (!found) return base;
+    /*
+     * 片段级动作放在「新建片段」前面：右键一个片段时，用户想的多半是
+     * 「改这一个」而不是「在这里再加一个」。曲线入口不看有没有关键帧 ——
+     * 没有时编辑器会显示空白参数表，点一下就能建，比禁用一个菜单项好懂。
+     */
+    return [
+      {
+        id: 'ctx-edit-curves',
+        label: tr('curve.openMenu'),
+        icon: 'spline',
+        testid: 'ctx-edit-curves',
+        onselect: () => {
+          appState.selectClip(found.clip.id);
+          openCurveEditor(found.clip.id);
+        },
+      },
+      separator('ctx-clip-sep'),
+      ...base,
+    ];
   }
 
   function closeMenus(): void {
@@ -1065,6 +1090,13 @@
     e.preventDefault();
     e.stopPropagation();
     rowMenu = null;
+    /*
+     * 右键落在片段上时记下它：ClipView 自己不处理 contextmenu（右键归 Timeline），
+     * 所以这里用 `elementFromPoint` 反查 —— 比给每个片段再挂一个 contextmenu
+     * 处理器少一条事件路径，也不会出现「片段菜单与轨道菜单各有各的实现」。
+     */
+    const hit = document.elementFromPoint(e.clientX, e.clientY);
+    const clipId = hit?.closest('[data-clip-id]')?.getAttribute('data-clip-id') ?? null;
     ctxMenu = {
       x: e.clientX,
       y: e.clientY,
@@ -1072,6 +1104,7 @@
       kind: track.kind,
       name: track.name,
       time: timeAtClientX(e.clientX),
+      clipId,
     };
   }
 

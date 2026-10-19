@@ -145,6 +145,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** 定长数值数组（贝塞尔手柄）。`Number.isFinite(Number(x))` 会把字符串 "1" 放进来。 */
+function isNumberArray(v: unknown, len: number): v is number[] {
+  return (
+    Array.isArray(v) &&
+    v.length === len &&
+    v.every((x) => typeof x === 'number' && Number.isFinite(x))
+  );
+}
+
 /** `Record<string, number | string>` 的校验 + 拷贝（拒绝 NaN / 对象 / 数组）。 */
 function checkScalars(values: unknown, what: string): Record<string, number | string> {
   if (!isRecord(values)) {
@@ -1273,6 +1282,20 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       }
       if (!['linear', 'step', 'smooth', 'bezier'].includes(String(k.interp))) {
         throw new ControlFailure('invalid-argument', tr('agent.curve.interp', { param, index: i }));
+      }
+      /*
+       * 手柄是渲染侧直接参与求值的数：形状不对会在 `segmentHandles` 里变成
+       * NaN，然后整条曲线在**画面上静默消失**（参数恒定 / 不透明度 0）。
+       * 这里只校验「有限数 + 维度」，方向与越界交给求值时的 clamp。
+       */
+      if (k.handles !== undefined && !isNumberArray(k.handles, 4)) {
+        throw new ControlFailure('invalid-argument', tr('agent.curve.handles', { param, index: i }));
+      }
+      if (k.hOut !== undefined && !isNumberArray(k.hOut, 2)) {
+        throw new ControlFailure('invalid-argument', tr('agent.curve.handle', { param, index: i }));
+      }
+      if (k.hIn !== undefined && !isNumberArray(k.hIn, 2)) {
+        throw new ControlFailure('invalid-argument', tr('agent.curve.handle', { param, index: i }));
       }
       if (Number(k.t) < prev) throw new ControlFailure('invalid-argument', tr('agent.curve.order'));
       prev = Number(k.t);

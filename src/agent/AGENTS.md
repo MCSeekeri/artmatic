@@ -44,6 +44,8 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   这个字段、恢复时保留当前值。否则一次 Ctrl+Z 会把聊天记录一起退回去。
   历史上限见 `sanitizeAgentSessions`（30 会话 / 400 条 / 20k 字），图片只留说明。
 - 校验全部**前置**：参数不合法时在改动之前抛 `ControlFailure`，绝不半途修改。
+  `setCurve` 额外校验贝塞尔手柄的形状（`handles` 4 元组 / `hOut` / `hIn` 2 元组，
+  全是有限数）—— 形状不对会在求值侧变成 NaN，表现为「整条曲线在画面上静默消失」。
 
 ## 工具面
 

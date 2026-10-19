@@ -33,6 +33,15 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
     必须有格子在变」（这条直接抓「冻死」）。
   - `tests/e2e/algo-sim.spec.ts` —— sim 的渲染断言。**sim 一律用 `settle`，
     不要用 `waitForSourceReady`**（后者的 minMean 判据是给整幅非黑准备的）。
+  - `tests/unit/curve-meta.test.ts` —— 曲线编辑器的参数量纲与「能不能打关键帧」
+    判据（realtime 全部 range / bake 只有 speed / sim 全不可 / 特效按 instanceId
+    展开 / 音频只有 gain / 已失效曲线仍要列出来）。它与 `Inspector.svelte::keyframable`
+    是同一条判据的两处落点，改一处必须同时改另一处。
+  - `tests/unit/curve-geometry.test.ts` —— 曲线的屏幕映射、step 直角折线、片段迷你
+    曲线（纯函数；别在 E2E 里读 SVG 路径来替代它）。
+  - `tests/unit/popover.test.ts` 的 `computePreviewPosition` —— 菜单预览浮层在任何
+    翻边情况下都不能与菜单面板相交。`tests/e2e/insert-menu.spec.ts` 有一条真界面
+    回归（靠右右键 → 二级左翻 → 悬停预览）。
     ⚠️ **空转探针红旗**：任何「两个配置 hash 不同」的断言，前面必须先有一条
     `meanAt > 阈值` —— 否则两张黑图不同也会「通过」。
 

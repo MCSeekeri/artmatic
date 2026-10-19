@@ -27,7 +27,7 @@ import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 import { sanitizeSections } from './sections';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -444,6 +444,17 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 覆盖成空数组等于替用户删数据。
    */
   7: (p) => ({ ...p, schemaVersion: 8 }),
+
+  /**
+   * v8 → v9：`Key` 新增可选的 `hOut` / `hIn`（贝塞尔手柄，相对所属 key 的
+   * `[秒, 值]` 偏移；见 `core/curve.ts`）。
+   *
+   * **恒等迁移**：两个字段都可选，v8 的工程读进来天然合法。抬版本号的唯一目的
+   * 仍然是让「新版存出的工程被旧版打开」走 `versionTooNew` 明确报错 —— 旧版会
+   * 静默忽略这两个字段再保存，用户手调的贝塞尔形状就退化成缺省缓动了
+   * （静默数据丢失，最难查的一类）。
+   */
+  8: (p) => ({ ...p, schemaVersion: 9 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {

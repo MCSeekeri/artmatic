@@ -101,6 +101,42 @@ test('最近使用：最多 5 项、跳过失效 id、悬停有缩略图', async
   expect((await readRecents(page, EFFECTS_KEY))[0]).toBe('slices');
 });
 
+test('靠右的右键菜单：二级菜单左翻时预览不盖住任何菜单', async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem('artmatic.recentEffects', JSON.stringify(['slices', 'pixelate'])),
+  );
+  await page.goto('/');
+  await page.waitForFunction(() => Boolean((window as never as { __artmatic?: unknown }).__artmatic));
+  await openDemo(page);
+
+  // 在时间轴靠右的位置右键（一级菜单会被钳到右边，二级菜单必须左翻）。
+  // x 取滚动容器的右边缘，不要写死像素 —— 抽屉开着时时间轴宽度随窗口变。
+  const scroll = (await page.getByTestId('tl-scroll').boundingBox())!;
+  const box = (await page.getByTestId('tl-row').first().boundingBox())!;
+  await page.mouse.click(scroll.x + scroll.width - 36, box.y + box.height / 2, {
+    button: 'right',
+  });
+  await expect(page.getByTestId('ctx-effect')).toBeVisible();
+  await page.getByTestId('ctx-effect').hover();
+  const slices = page.getByTestId('ctx-effect-slices');
+  await expect(slices).toBeVisible();
+  await slices.hover();
+
+  const preview = page.getByTestId('menu-preview');
+  await expect(preview).toBeVisible();
+  // 预览矩形与任何一层菜单面板都不能有面积交集
+  const overlaps = await page.evaluate(() => {
+    const p = document.querySelector('[data-testid=menu-preview]')!.getBoundingClientRect();
+    return [...document.querySelectorAll('.menu')].map((el) => {
+      const r = el.getBoundingClientRect();
+      const w = Math.max(0, Math.min(p.right, r.right) - Math.max(p.left, r.left));
+      const h = Math.max(0, Math.min(p.bottom, r.bottom) - Math.max(p.top, r.top));
+      return w * h;
+    });
+  });
+  expect(overlaps.every((n) => n === 0)).toBe(true);
+});
+
 test('没有最近项时只显示「全部特效…」', async ({ page }) => {
   await page.addInitScript((key) => localStorage.removeItem(key), EFFECTS_KEY);
   await boot(page);

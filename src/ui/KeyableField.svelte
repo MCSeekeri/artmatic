@@ -23,6 +23,7 @@
   import NumberInput from './controls/NumberInput.svelte';
   import Slider from './controls/Slider.svelte';
   import { appState } from './app-state.svelte';
+  import { openCurveEditor } from './curve-editor/curve-editor-state.svelte';
   import { evalCurve, type Curve } from '../core/curve';
   import { beatAtTime, snapBeat, timeAtBeat } from '../core/time';
   import { tr } from '../i18n/index.svelte';
@@ -181,6 +182,20 @@
           {k.t.toFixed(2)}s={k.v.toFixed(2)}
         </button>
       {/each}
+      <!--
+        曲线编辑器入口。刻意只在这一行（已有曲线时）出现：检查器本身已经很挤，
+        「打关键帧」旁边再挂一个常驻按钮会与 ◆ 抢注意力。没有曲线时新建曲线的
+        入口在编辑器里（左侧参数表点一下即可）。
+      -->
+      {#if clipId && curveKey}
+        <IconButton
+          icon="spline"
+          label={tr('curve.open')}
+          size="sm"
+          testid="curve-open"
+          onclick={() => openCurveEditor(clipId!, curveKey!)}
+        />
+      {/if}
       <IconButton
         icon="trash"
         label={tr('ctl.clearCurve')}
