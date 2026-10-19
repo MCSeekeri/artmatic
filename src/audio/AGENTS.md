@@ -11,6 +11,10 @@
 
 ---
 
+- **预览播放的响度与导出同源**：`player.ts` 给每个片段挂一个 `GainNode`，曲线由
+  `core/audio-envelope.ts::sampleAudioEnvelope` 采样（gain 曲线 × `fadeSec` ×
+  `fadeIn` / `fadeOut`），用 `setValueCurveAtTime` 排进 WebAudio。导出走
+  `exporters/mixdown.ts` 的逐样本求值。**不要在播放器里另写一条淡变斜坡**。
 - **音频特征层**（`audio/features.ts` + `algos/feature-source.ts`）：
   - **必须离线预计算**。上游的 `Impulse.step(dt)` / `approach` 是逐帧按 `dt` 推进的有状态量，
     与硬约束 1.1 冲突（seek 不可复现）。这里给的是**曲线的查表**：`at(t)` 是 t 的纯函数。

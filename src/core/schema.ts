@@ -25,10 +25,28 @@ import {
 } from '../typography/theme';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
+import { sanitizeSections } from './sections';
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
+
+/**
+ * 段落标记（v8）。**标记，不是容器** —— 片段不归属段落，段落也不裁剪片段。
+ *
+ * 只存起点、不存终点：「这一段的结尾」永远是下一段的开头（最后一段到工程末尾）。
+ * 存 `end` 会立刻出现「相邻两段之间的缝算谁的」这种没有正确答案的问题，而且改
+ * `Project.duration` 时还得跟着修。排序 / 清洗 / 吸附见 `core/sections.ts`。
+ */
+export interface Section {
+  id: string;
+  /** 显示名。标尺上方只画得下十几个字，长度在 `sanitizeSections` 里截断。 */
+  name: string;
+  /** 秒，与 `clip.start` 同一口径。 */
+  start: number;
+  /** 可选色调（`#rrggbb`），画在标尺上方的段落带上。缺省 = 主题色。 */
+  color?: string;
+}
 
 export interface Project {
   schemaVersion: number;
@@ -44,6 +62,12 @@ export interface Project {
   overlapBehavior: OverlapBehavior;
   assets: Record<string, Asset>;
   tracks: Track[];
+  /**
+   * 段落标记（v8）。**只增字段、不改片段几何**：时间轴在标尺上方画一条 12px 带，
+   * 段落边界参与吸附（`core/sections.ts::snapTimeWithSections`），但没有任何
+   * 渲染 / 导出路径读它 —— 所以「段落」不会让既有工程导出结果发生变化。
+   */
+  sections: Section[];
   /**
    * 工程默认的排版配色方案 id（新文本片段的文档默认；也供检查器里的
    * 非排版取色入口解析主题色引用）。缺省 = `DEFAULT_THEME_ID`。
@@ -248,6 +272,16 @@ export interface AudioClip extends ClipBase {
   kind: 'audio';
   assetId: string;
   srcIn: number;
+  /**
+   * 淡入 / 淡出（秒，v8）。缺省 = 0 = 不淡。
+   *
+   * 与 `ClipBase.fadeSec`（头尾各淡这么多）**复合**，不是替代：`fadeSec` 是「剪辑点
+   * 的防爆音」，这两个是「编排用的淡变」（用户拖片段两端的三角手柄）。求值只有一处
+   * ——`core/audio-envelope.ts`——导出混流（`exporters/mixdown.ts`）与预览播放
+   * （`audio/player.ts`）都对着它。
+   */
+  fadeIn?: number;
+  fadeOut?: number;
 }
 
 /* ------------------------------------------------------------- 构造工具 */
@@ -275,6 +309,7 @@ export function defaultProject(name = tr('proj.unnamed')): Project {
     overlapBehavior: 'reject',
     assets: {},
     tracks: [],
+    sections: [],
   };
 }
 
@@ -395,6 +430,20 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 字段再保存，用户调好的抠图与四角就没了（静默数据丢失，最难查的一类）。
    */
   6: (p) => ({ ...p, schemaVersion: 7 }),
+
+  /**
+   * v7 → v8：`Project` 新增 `sections`（段落标记）+ `AudioClip` 新增可选的
+   * `fadeIn` / `fadeOut`（编排用的淡变）。
+   *
+   * **恒等迁移**：`sections` 由 `validateProject` 补成 `[]`（见那里的注释），
+   * 淡变两个字段可选（缺省 0）。抬版本号的唯一目的仍然是让「新版存出的工程被
+   * 旧版打开」走 `versionTooNew` 明确报错 —— 旧版静默忽略 `sections` 再保存，
+   * 用户摆好的段落标记就没了（静默数据丢失，最难查的一类）。
+   *
+   * 这里刻意**不写** `sections: []`：手改过的 v7 JSON 可能已经带着这个字段，
+   * 覆盖成空数组等于替用户删数据。
+   */
+  7: (p) => ({ ...p, schemaVersion: 8 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -511,6 +560,12 @@ export function validateProject(raw: unknown): Project {
   if (sessions.length) (p as { agentSessions?: AgentSessionRecord[] }).agentSessions = sessions;
   else delete (p as { agentSessions?: AgentSessionRecord[] }).agentSessions;
   /*
+   * 段落标记（v8）。与上面两条同一条纪律：坏条目逐条丢弃，工程必须打得开。
+   * 缺字段（v7 工程、手改 JSON）补成 `[]` —— **写成必填**是为了让读取方不必
+   * 到处 `?? []`；那正是「某处忘了兜底 → 时间轴整块空白」的来源。
+   */
+  p.sections = sanitizeSections((p as { sections?: unknown }).sections);
+  /*
    * 顺手修掉历史数据里的「主题色引用跑进非排版颜色参数」。
    *
    * 取色卡对所有颜色入口都提供主题色（`@accent1`），但只有排版文档会在渲染时
@@ -583,6 +638,17 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
   }
   if (trackKind === 'audio') {
     if (c.kind !== 'audio') throw new SchemaError(tr('err.schema.audioTrackHasNonAudio'));
+    /*
+     * 淡变（v8）**钳制而不抛**：坏值的表现是「听不见」或「爆音」，不是数据丢失。
+     * 为它让整份工程打不开不成比例。负秒 / NaN 一律归 0，超过片段长度的由
+     * `core/audio-envelope.ts` 按比例收缩两个淡区（与 `fadeSec` 同一套钳制口径）。
+     */
+    const a = c as AudioClip;
+    for (const key of ['fadeIn', 'fadeOut'] as const) {
+      if (a[key] === undefined) continue;
+      const v = Number(a[key]);
+      a[key] = Number.isFinite(v) ? Math.max(0, v) : 0;
+    }
   } else {
     if (c.kind !== 'source' && c.kind !== 'effect') {
       throw new SchemaError(tr('err.schema.visualTrackHasNonVisual'));

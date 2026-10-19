@@ -45,6 +45,7 @@ function project(tracks: Project['tracks']): Project {
     overlapBehavior: 'reject',
     assets: {},
     tracks,
+    sections: [],
   };
 }
 

@@ -19,6 +19,10 @@ export const inspector = {
   'insp.start': '起点',
   'insp.end': '终点',
   'insp.fade': '淡变',
+  /* 音频片段：编排用的两条斜坡（与时间轴两端的三角手柄同一份数据）。 */
+  'insp.fadeIn': '渐入',
+  'insp.fadeOut': '渐出',
+  'insp.fadeInTip': '渐入 + 渐出 不超过片段长度；也可以直接拖时间轴片段两端的三角',
   'insp.blend': '混合',
   'insp.fit': '适配',
   /* 「适配」的三个取值：目前直接显示英文枚举名，原样保留。 */

@@ -16,11 +16,13 @@ import {
   type AgentSessionRecord,
   type OverlapBehavior,
   type Project,
+  type Section,
   type SourceClip,
   type Track,
   type TransitionRef,
   type VisualTrack,
 } from './schema';
+import { nextSectionName, sortSections } from './sections';
 import {
   MIN_CLIP_LENGTH,
   applyTrimIn,
@@ -42,6 +44,37 @@ import { evalCurve, type Curve } from './curve';
 import type { BeatGrid } from './time';
 import { CommandStack } from './commands';
 import { tr } from '../i18n/index.svelte';
+
+/**
+ * 切分段落时两侧各留的最小长度（秒）。
+ *
+ * 不是为了「听感」而是为了**点得中**：12px 的段落带上，再短的段就是一条
+ * 抓不住的缝，双击改名、右键都落在邻居身上。0.02s 在 56px/s 下约 1px，
+ * 已经小到看不出来，但足以让「切在端点」被判定成无效而不是切出一条 0 长的段。
+ */
+const MIN_SECTION_GAP = 0.02;
+
+/** 淡变写入的钳制：`fadeIn + fadeOut ≤ 片段长度`，负数与非数字归 0。手柄与检查器共用。 */
+function clampFade(clip: AudioClip, which: 'in' | 'out', seconds: number): number {
+  const dur = Math.max(0, clip.end - clip.start);
+  const other = which === 'in' ? (clip.fadeOut ?? 0) : (clip.fadeIn ?? 0);
+  const room = Math.max(0, dur - Math.min(other, dur));
+  return Math.min(Math.max(0, Number.isFinite(seconds) ? seconds : 0), room);
+}
+
+/**
+ * 写入淡变，返回「是否真的变了」。
+ *
+ * 值归 0 时**删掉字段**而不是写 0：`undefined` 与 `0` 语义相同，但 JSON 快照
+ * 不同 —— 否则拖回 0 会在撤销栈里留下一条「什么都没变」的记录。
+ */
+function writeFade(clip: AudioClip, which: 'in' | 'out', v: number): boolean {
+  const key = which === 'in' ? 'fadeIn' : 'fadeOut';
+  if ((clip[key] ?? 0) === v) return false;
+  if (v === 0) delete clip[key];
+  else clip[key] = v;
+  return true;
+}
 
 export class ProjectStore {
   project: Project;
@@ -726,6 +759,137 @@ export class ProjectStore {
   setBeatGrid(grid: Partial<BeatGrid>): void {
     this.commit(tr('tl.setBeatGrid'), (p) => {
       Object.assign(p.beatGrid, grid);
+    });
+  }
+
+  /* ------------------------------------------------------------ 段落（v8） */
+
+  /**
+   * 在 `start`（秒）处加一段。名字缺省「段落 N」，避开已有编号。
+   *
+   * `sections` **始终保持按 `start` 排序**（写入方只有本文件）：时间轴靠「下一段的
+   * 起点」算这一段的宽度，排序散在 UI 里就会有一处忘排 —— 表现是段落带的宽度
+   * 突然变成工程末尾（看起来像「段落丢了」）。
+   */
+  addSection(start: number, name?: string): string {
+    const id = newId();
+    this.commit(tr('tl.addSection'), (p) => {
+      const section: Section = {
+        id,
+        name: name?.trim() || nextSectionName(p.sections, (n) => tr('tl.sectionN', { n })),
+        start: Math.max(0, Number.isFinite(start) ? start : 0),
+      };
+      p.sections = sortSections([...p.sections, section]);
+    });
+    return id;
+  }
+
+  /**
+   * 拖动中的实时位置。**不入撤销栈**：整段手势由 `beginTx` / `endTx` 记一笔
+   * （与片段拖拽同一套，见 `timeline/drag.ts`）。
+   */
+  liveMoveSection(id: string, start: number): void {
+    const section = this.project.sections.find((s) => s.id === id);
+    if (!section) return;
+    const next = Math.max(0, Number.isFinite(start) ? start : 0);
+    if (section.start === next) return;
+    section.start = next;
+    this.project.sections = sortSections(this.project.sections);
+    this.touch();
+  }
+
+  renameSection(id: string, name: string): void {
+    const next = name.trim().slice(0, 60);
+    if (!next) return;
+    this.commit(tr('tl.renameSection'), (p) => {
+      const section = p.sections.find((s) => s.id === id);
+      if (section) section.name = next;
+    });
+  }
+
+  removeSection(id: string): void {
+    this.commit(tr('tl.removeSection'), (p) => {
+      p.sections = p.sections.filter((s) => s.id !== id);
+    });
+  }
+
+  /**
+   * 在 `t`（秒）处切分某一段：**只插入一个新的起点**（右半沿用同一颜色）。
+   *
+   * 为什么需要它：段落只存起点，所以「先标第一个点」等于把整首歌都标成第一段。
+   * 让用户从后往前标是反直觉的，靠拖动去凑也不现实 —— 「在鼠标处切一刀」是
+   * 唯一符合「顺序标记」直觉的操作。左半的终点自动变成新的起点，不需要改任何
+   * 既有数据。
+   *
+   * 返回新段落的 id；`t` 落在段外（或离两端不足 `MIN_SECTION_GAP`）时返回 null
+   * —— 菜单据此置灰，而不是让用户点了没反应。
+   */
+  splitSection(id: string, t: number): string | null {
+    const hit = this.splitPoint(id, t);
+    if (!hit) return null;
+    const { at, color } = hit;
+    const nid = newId();
+    this.commit(tr('tl.splitSection'), (p) => {
+      const section: Section = {
+        id: nid,
+        name: nextSectionName(p.sections, (n) => tr('tl.sectionN', { n })),
+        start: at,
+        ...(color ? { color } : {}),
+      };
+      p.sections = sortSections([...p.sections, section]);
+    });
+    return nid;
+  }
+
+  /** 这一刀切不切得动（菜单据此置灰）。与 `splitSection` 同一判据，不许各写一份。 */
+  canSplitSection(id: string, t: number): boolean {
+    return this.splitPoint(id, t) !== null;
+  }
+
+  /** 段的几何：`at` 已经钳进本段内；两侧太窄时返回 null。 */
+  private splitPoint(id: string, t: number): { at: number; color?: string } | null {
+    const all = this.project.sections;
+    const i = all.findIndex((s) => s.id === id);
+    if (i < 0) return null;
+    const sec = all[i]!;
+    const end = i + 1 < all.length ? all[i + 1]!.start : this.project.duration;
+    const at = Math.min(Math.max(Number.isFinite(t) ? t : sec.start, sec.start), end);
+    if (at - sec.start < MIN_SECTION_GAP || end - at < MIN_SECTION_GAP) return null;
+    return { at, color: sec.color };
+  }
+
+  /* ------------------------------------------------------ 音频淡变（v8） */
+
+  /**
+   * 拖三角手柄期间的实时淡变写入（一笔撤销由手势层结算）。
+   *
+   * 两个淡区**不许交叉**：`fadeIn + fadeOut <= 片段长度`。交叉不是「听感差一点」
+   * 而是「中段被两条斜坡同时压住」——包络那边会按比例收缩，但手柄停在交叉位置
+   * 会让人以为拖不动了。所以在写入处就钳住，手柄的位置与听到的声音永远一致。
+   */
+  liveSetFade(clipId: string, which: 'in' | 'out', seconds: number): void {
+    const found = this.findClip(clipId);
+    if (!found) return;
+    const clip = found.clip;
+    if (clip.kind !== 'audio') return;
+    if (!writeFade(clip, which, clampFade(clip, which, seconds))) return;
+    this.touch();
+  }
+
+  /**
+   * 检查器里改「渐入 / 渐出」：与拖手柄**同一份钳制**，区别只是它是一笔撤销。
+   * 两条写入路径共用 `clampFade` / `writeFade`，不各写一遍 0 与交叉的判断。
+   */
+  setFade(clipId: string, which: 'in' | 'out', seconds: number): void {
+    const found = this.findClip(clipId);
+    if (!found) return;
+    const clip = found.clip;
+    if (clip.kind !== 'audio') return;
+    if ((clip[which === 'in' ? 'fadeIn' : 'fadeOut'] ?? 0) === clampFade(clip, which, seconds)) {
+      return;
+    }
+    this.commit(tr(which === 'in' ? 'tl.setFadeIn' : 'tl.setFadeOut'), () => {
+      writeFade(clip, which, clampFade(clip, which, seconds));
     });
   }
 

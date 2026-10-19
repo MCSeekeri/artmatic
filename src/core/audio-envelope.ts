@@ -1,0 +1,107 @@
+/**
+ * audio-envelope.ts — 音频片段的增益包络：**唯一真源**。
+ *
+ * 三件事叠在一起决定「这一秒响多少」：
+ *
+ * 1. `curves.gain` —— 关键帧曲线（编排用的自动化）。
+ * 2. `ClipBase.fadeSec` —— 头尾各淡这么多秒（剪辑点的防爆音，v1 起就有）。
+ * 3. `AudioClip.fadeIn` / `fadeOut` —— 用户拖片段两端三角手柄设的淡变（v8）。
+ *
+ * 预览播放（`audio/player.ts`）与导出混流（`exporters/mixdown.ts`）都必须对着
+ * **同一份求值**：两边各写一份三角函数的形态是「预览听着对、导出多了一段渐入」，
+ * 而那种偏差没有人会去逐帧比对，只会被当成「玄学」。
+ *
+ * 纯函数、无 WebAudio 依赖 ⇒ 可单测（`tests/unit/audio-envelope.test.ts`）。
+ */
+
+import { evalCurve } from './curve';
+import type { AudioClip } from './schema';
+import type { BeatGrid } from './time';
+
+/** 一个音频片段上决定响度的所有字段（导出/播放共用）。 */
+export type AudioGainSource = Pick<AudioClip, 'start' | 'end' | 'curves'> &
+  Partial<Pick<AudioClip, 'fadeSec' | 'fadeIn' | 'fadeOut'>>;
+
+const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/**
+ * 片内位置 `posSec` 处的淡变包络（0..1）。
+ *
+ * 三条斜坡**相乘**（各自独立钳制，最后一起生效）：
+ *   - `fadeSec`：头尾各 `f = min(fadeSec, dur/2)`，保证两个淡区不相交 ———
+ *     相交的话中段会被压到 `fade/fade`，听感上是一个喘不上气的小坑。
+ *   - `fadeIn + fadeOut` 超出片段长度时**按比例收缩**两边，而不是让后写的赢：
+ *     「拖得太长」的预期是「整段都在淡」，不是「一半突然变成硬的」。
+ *
+ * `posSec` 超出 `[0, dur]` 时按端点算（片段外没有声音，由调用方负责不播放）。
+ */
+export function audioEnvelopeAt(posSec: number, clipDur: number, env: AudioGainSource): number {
+  const dur = Math.max(0, clipDur);
+  if (dur <= 0) return 0;
+  const pos = posSec < 0 ? 0 : posSec > dur ? dur : posSec;
+
+  let v = 1;
+
+  const f0 = Math.min(Math.max(0, env.fadeSec ?? 0), dur / 2);
+  if (f0 > 0) {
+    if (pos < f0) v *= pos / f0;
+    else if (dur - pos < f0) v *= (dur - pos) / f0;
+  }
+
+  const rawIn = Math.max(0, env.fadeIn ?? 0);
+  const rawOut = Math.max(0, env.fadeOut ?? 0);
+  const sum = rawIn + rawOut;
+  const k = sum > dur ? dur / sum : 1;
+  const fi = rawIn * k;
+  const fo = rawOut * k;
+  if (fi > 0 && pos < fi) v *= pos / fi;
+  if (fo > 0 && dur - pos < fo) v *= (dur - pos) / fo;
+
+  return clamp01(v);
+}
+
+/** 片段 `tAbs`（工程绝对秒）处的 gain 曲线值；没有曲线约定为 1（不是 0）。 */
+export function audioGainAt(clip: AudioClip, grid: BeatGrid, tAbs: number): number {
+  const curve = clip.curves.gain;
+  if (!curve) return 1;
+  const g = evalCurve(curve, tAbs, { grid, clipStart: 0 });
+  return Number.isFinite(g) ? Math.max(0, g) : 1;
+}
+
+/**
+ * 导出混流与预览播放共用的**唯一**增益表达式：曲线 × 淡变。
+ *
+ * `tAbs` 是工程时间（秒）。片外返回 0 —— 调用方仍要先判 `tAbs` 是否落在
+ * `[clip.start, clip.end)`，这里只是不让它算出「负数位置」的怪值。
+ */
+export function audioClipGainAt(clip: AudioClip, grid: BeatGrid, tAbs: number): number {
+  const pos = tAbs - clip.start;
+  const dur = clip.end - clip.start;
+  if (pos < 0 || pos > dur) return 0;
+  return audioGainAt(clip, grid, tAbs) * audioEnvelopeAt(pos, dur, clip);
+}
+
+/**
+ * 把包络采样成 `[fromSec, toSec]`（片内时间）上的一条曲线，供 WebAudio 的
+ * `GainNode.setValueCurveAtTime` 用。
+ *
+ * `count` 个点均匀覆盖闭区间（首尾都取到）。点数不是越多越好：这条曲线只是
+ * 「让播放听起来对」，真正的逐样本求值在导出那条路上；128 点对秒级的线性斜坡
+ * 已经远超耳朵的分辨率，而 `setValueCurveAtTime` 的实现是线性插值。
+ */
+export function sampleAudioEnvelope(
+  clip: AudioClip,
+  grid: BeatGrid,
+  fromSec: number,
+  toSec: number,
+  count = 128,
+): Float32Array {
+  const n = Math.max(2, Math.floor(count));
+  const out = new Float32Array(n);
+  const span = toSec - fromSec;
+  for (let i = 0; i < n; i += 1) {
+    const pos = fromSec + (span * i) / (n - 1);
+    out[i] = audioClipGainAt(clip, grid, clip.start + pos);
+  }
+  return out;
+}

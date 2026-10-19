@@ -48,24 +48,26 @@ test('预览工具栏贴在画面右下角，收起后的悬浮球也在角落',
 
 /* ------------------------------------------------- 吸附档位持久化 */
 
-test('吸附档位跨会话保持，非法值回落 beat', async ({ page }) => {
+test('吸附档位跨会话保持，非法值回落到该形态的默认档', async ({ page }) => {
   await boot(page);
   const snap = page.getByTestId('snap-mode');
-  // 默认「拍」
-  await expect(snap).toContainText(zhCN['tl.snapBeat']);
-
-  // 改成「小节」→ 落进 UI 偏好
-  await snap.click();
-  await page.getByTestId('snap-mode-opt-bar').click();
+  // 默认「小节」：默认时间轴形态是节奏模式，它的吸附初值就是小节
+  // （见 `defaultSnapForMode`）。
   await expect(snap).toContainText(zhCN['tl.snapBar']);
 
-  // 重开页面（新会话）后仍是「小节」
+  // 改成「拍」→ 落进 UI 偏好
+  await snap.click();
+  await page.getByTestId('snap-mode-opt-beat').click();
+  await expect(snap).toContainText(zhCN['tl.snapBeat']);
+
+  // 重开页面（新会话）后仍是「拍」
   await page.reload();
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
   await openDemo(page);
-  await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapBar']);
+  await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapBeat']);
 
-  // 手改 localStorage 成一个不存在的档位 → 读回时回落「拍」，而不是整条偏好作废
+  // 手改 localStorage 成一个不存在的档位 → 读回时回落**该形态的默认值**（节奏 = 小节），
+  // 而不是整条偏好作废、也不是一个不属于本形态的值。
   await page.evaluate(() => {
     const raw = localStorage.getItem('artmatic.ui');
     const p = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
@@ -75,7 +77,7 @@ test('吸附档位跨会话保持，非法值回落 beat', async ({ page }) => {
   await page.reload();
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
   await openDemo(page);
-  await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapBeat']);
+  await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapBar']);
 });
 
 /* --------------------------------------------------- 当前帧截图 */

@@ -43,6 +43,8 @@ type AnyA = {
     selectedClipId: string | null;
     waveforms: Record<string, unknown>;
     pxPerBeat: number;
+    /** 吸附档位（夹具按拍摆，见 `seed`）。 */
+    setSnap: (mode: string) => void;
   };
 };
 
@@ -58,6 +60,14 @@ const MK = `(id, start, end) => ({ kind:'source', id, start, end, label:id, fade
 
 /** 建 TEST 轨（A[0,2] + B[3,5]）与空轨 DROP，并把轨道区滚到底让它们都在视野里。 */
 async function seed(page: Page): Promise<void> {
+  /*
+   * 夹具按**拍**摆（0 / 2 / 3 / 5 秒），所以吸附档位固定到拍。
+   * 不依赖 UI 偏好的默认值：节奏模式的默认是「小节」（2s 一格），
+   * 那会把 3s 吸到 4s、5s 吸到 4s，几何假设整个变味。
+   */
+  await page.evaluate(
+    () => (window as never as { __artmatic: AnyA }).__artmatic.appState.setSnap('beat'),
+  );
   await page.evaluate((src) => {
     const a = (window as never as { __artmatic: AnyA }).__artmatic;
     const mk = eval(src) as (id: string, s: number, e: number) => unknown;
@@ -662,16 +672,20 @@ test('轨道头列与画布竖直滚动合一：拖任一侧另一侧跟随', as
     const side = document.querySelector('.side') as HTMLElement;
     const scroll = document.querySelector('[data-testid=tl-scroll]') as HTMLElement;
     return {
-      sideContent: side.scrollHeight,
-      canvasContent: scroll.scrollHeight,
+      sideMax: side.scrollHeight - side.clientHeight,
       canvasMax: scroll.scrollHeight - scroll.clientHeight,
       // 轨道头列的滚动条必须是隐藏的（竖直方向只留画布那一条）
       sideScrollbar: getComputedStyle(side).scrollbarWidth,
     };
   });
-  // 两侧滚动内容等高 —— 加轨按钮是固定页脚，不参与滚动
-  expect(geom.sideContent).toBe(geom.canvasContent);
+  /*
+   * 判据是**量程相等**，不是内容等高：轨道头列底部的加轨页脚占掉 28px 视口，
+   * 画布那列底部有等高的空白带（`.footer-pad`）补在内容里，另外还有横向滚动条
+   * 的 s 像素由轨道头列的底部内边距补回。所以 scrollHeight 会差一截，
+   * 但 `scrollHeight - clientHeight` 必须相等 —— 不等时滚到底两侧会互拽。
+   */
   expect(geom.canvasMax).toBeGreaterThan(0);
+  expect(geom.sideMax).toBe(geom.canvasMax);
   expect(geom.sideScrollbar).toBe('none');
 
   const tops = () =>
@@ -696,6 +710,48 @@ test('轨道头列与画布竖直滚动合一：拖任一侧另一侧跟随', as
   await page.waitForTimeout(200);
   const settled = await tops();
   expect(settled.side).toBe(settled.canvas);
+});
+
+/*
+ * 用户报的第二个形态：滚到底时「添加轨道」页脚把最后一条轨的名字盖住了。
+ *
+ * 根因不是页脚的位置，而是**两侧量程不等**：页脚占掉轨道头列 28px 视口，
+ * 画布那列又有 s 像素被横向滚动条吃掉。量程不等时低位那侧会把高位那侧拽回来，
+ * 于是最后一条轨永远差那几十像素。这里同时钉住「量程相等」与「名字完整露出」。
+ */
+test('滚到底：最后一条轨的名字完整露在加轨页脚上方', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => {
+    const a = (window as never as { __artmatic: AnyA }).__artmatic;
+    for (let i = 0; i < 14; i++) a.store.addTrack('visual');
+  });
+  await page.waitForTimeout(150);
+
+  const info = await page.evaluate(() => {
+    const scroll = document.querySelector('[data-testid=tl-scroll]') as HTMLElement;
+    const side = document.querySelector('.side') as HTMLElement;
+    scroll.scrollTop = Number.MAX_SAFE_INTEGER;
+    side.scrollTop = Number.MAX_SAFE_INTEGER;
+    const rows = [...document.querySelectorAll('[data-testid=track-side-row]')];
+    const last = rows[rows.length - 1] as HTMLElement;
+    const add = document.querySelector('.side-add') as HTMLElement;
+    return {
+      sideMax: side.scrollHeight - side.clientHeight,
+      canvasMax: scroll.scrollHeight - scroll.clientHeight,
+      sideTop: side.scrollTop,
+      canvasTop: scroll.scrollTop,
+      lastBottom: last.getBoundingClientRect().bottom,
+      addTop: add.getBoundingClientRect().top,
+      nameVisible: last.querySelector('[data-testid=track-name]') !== null,
+    };
+  });
+
+  expect(info.sideMax).toBe(info.canvasMax);
+  expect(info.sideTop).toBe(info.canvasTop);
+  expect(info.nameVisible).toBe(true);
+  // 最后一行紧贴现底部（允许亚像素舍入），不被页脚压住
+  expect(info.lastBottom).toBeLessThanOrEqual(info.addTop + 0.5);
+  expect(info.addTop - info.lastBottom).toBeLessThan(1);
 });
 
 /* -------------------------------------------------------- 片段就地改名 */

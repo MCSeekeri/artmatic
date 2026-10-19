@@ -36,8 +36,13 @@ import type { AlignAxis } from '../typography/geometry';
  * v2（2026-10-18）：文本片段的 `source.doc` 从「整份文档」改成摘要
  * （`ClipTextSummary`），详情走 `getTypographyDoc`。这是**读形状变更**，
  * 旧客户端拿到的字段会变成 undefined —— 所以要抬版本而不是静默改。
+ *
+ * v3（2026-10-19，0.3 W2）：场景快照多了 `sections`（段落标记），
+ * audio 片段多了 `fadeIn` / `fadeOut`。**只加字段**，但「工程结构里多了一类
+ * 用户可编辑的实体」值得让网关照版本号判断能力，而不是让旧客户端以为
+ * 时间轴上只有片段。
  */
-export const CONTROL_API_VERSION = 2;
+export const CONTROL_API_VERSION = 3;
 
 export type ControlErrorCode =
   /** 参数形状不对 / 越界 / 枚举里没有这个 id。 */
@@ -184,6 +189,9 @@ export interface ClipView extends ClipIdView {
   /** audio 片段独有的两个字段。 */
   assetId?: string;
   srcIn?: number;
+  /** audio 片段的两段淡变（秒，v3）。缺省 = 0 = 不淡。 */
+  fadeIn?: number;
+  fadeOut?: number;
 }
 
 export interface TrackView {
@@ -210,6 +218,19 @@ export interface TrackIdView {
   clips: ClipIdView[];
 }
 
+/**
+ * 段落标记（v3）。**只给起点**：这一段的结尾永远是下一段的起点
+ * （最后一段到工程末尾）—— 与 `Section` 的存储口径一致，不在快照里再造一份
+ * 「end」，否则 agent 读到的是「视图的算法」而不是数据。
+ */
+export interface SceneSectionView {
+  id: string;
+  name: string;
+  /** 秒。 */
+  start: number;
+  color?: string;
+}
+
 export interface SceneSnapshot {
   /** 秒，已吸附到帧栅格。 */
   t: number;
@@ -219,6 +240,8 @@ export interface SceneSnapshot {
   duration: number;
   beatGrid: { bpm: number; offset: number; beatsPerBar: number };
   seed: number;
+  /** 按 `start` 排好序（与时间轴上的顺序一致）。 */
+  sections: SceneSectionView[];
   tracks: TrackView[];
 }
 
@@ -229,6 +252,7 @@ export interface SceneIdSnapshot {
   duration: number;
   beatGrid: { bpm: number; offset: number; beatsPerBar: number };
   seed: number;
+  sections: SceneSectionView[];
   tracks: TrackIdView[];
 }
 

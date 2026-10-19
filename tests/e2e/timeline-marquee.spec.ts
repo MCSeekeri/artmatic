@@ -32,6 +32,8 @@ type AnyA = {
     selectedClipIds: string[];
     pxPerBeat: number;
     waveforms: Record<string, unknown>;
+    /** 吸附档位（夹具按拍摆，见 `seed`）。 */
+    setSnap: (mode: string) => void;
   };
 };
 
@@ -52,6 +54,13 @@ const MK = `(id, start, end) => ({ kind:'source', id, start, end, label:id, fade
  * （A 贴着内容原点的话那里就直接是片段了）。
  */
 async function seed(page: Page): Promise<void> {
+  /*
+   * 夹具按**拍**摆（1s / 3s），所以吸附档位固定到拍：不依赖 UI 偏好的默认值
+   * （节奏模式默认「小节」= 2s 一格，会把 1s 吸到 2s、3s 吸到 4s）。
+   */
+  await page.evaluate(
+    () => (window as never as { __artmatic: AnyA }).__artmatic.appState.setSnap('beat'),
+  );
   await page.evaluate((src) => {
     const a = (window as never as { __artmatic: AnyA }).__artmatic;
     const mk = eval(src) as (id: string, s: number, e: number) => unknown;

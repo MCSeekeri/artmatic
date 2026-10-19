@@ -29,14 +29,20 @@
  * 缩放**不做组版本**（`peers` 传进来也会被忽略）：一组片段的「那条边」没有唯一定义。
  */
 
-import { snapTime, beatDur, type BeatGrid, type SnapMode } from '../core/time';
+import { beatDur, type BeatGrid, type SnapMode } from '../core/time';
+import { snapTimeWithSections } from '../core/sections';
 import type { ProjectStore } from '../core/project-store';
-import type { AnyClip, Track } from '../core/schema';
+import type { AnyClip, Section, Track } from '../core/schema';
 import { tr } from '../i18n/index.svelte';
 import { statusHint } from '../ui/status-hint.svelte';
 import { dragHint, ILLEGAL_DROP_HINT } from '../ui/hints';
 
-export type DragMode = 'move' | 'resize-l' | 'resize-r';
+/**
+ * `fade-in` / `fade-out` 是音频片段两端的三角手柄：拖的是**淡变时长**（秒），
+ * 不是片段几何 —— 所以它们不进 `settlePlacement` / `settleResize`，松手直接
+ * `endTx`（一笔撤销），也没有重叠策略可言。
+ */
+export type DragMode = 'move' | 'resize-l' | 'resize-r' | 'fade-in' | 'fade-out';
 
 /**
  * 与被按下的片段一起走的**其它**成员（框选出来的组）。
@@ -110,6 +116,15 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
   const origStart = clip.start;
   const origEnd = clip.end;
   const gridAtStart = store.project.beatGrid;
+  /**
+   * 淡变手柄的**手势起点值**。
+   *
+   * 必须在 pointerdown 时快照一次：`clip` 是原地改的对象，若在 `onMove` 里读
+   * `clip.fadeIn + dt`，每一帧的增量会叠到上一帧写进去的值上 —— 拖 56px 会得到
+   * 0.125+0.25+…+1 = 4.5 秒（实测踩过），而且松手前完全看不出规律。
+   */
+  const origFadeIn = clip.kind === 'audio' ? (clip.fadeIn ?? 0) : 0;
+  const origFadeOut = clip.kind === 'audio' ? (clip.fadeOut ?? 0) : 0;
 
   /**
    * 整组的成员 id（含被按下的那个）与各自的原始位置。
@@ -165,10 +180,12 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
    * 只在**真的动过之后**才出现 —— 按一下就松开的一次单击不该闪过一条「松开放置」。
    * 落点被拒收时换成「为什么不能放」（见 `ILLEGAL_DROP_HINT`）。
    */
-  const gestureHint = dragHint(mode === 'move');
+  /** 淡变手柄没有「落点被拒」这回事，也就不需要手势提示（见文件头的 DragMode 注释）。 */
+  const fadeMode = mode === 'fade-in' || mode === 'fade-out';
+  const gestureHint = fadeMode ? null : dragHint(mode === 'move');
   const setIllegal = (illegal: boolean): void => {
     opts.onHint?.(illegal);
-    if (moved) statusHint.setGesture(illegal ? ILLEGAL_DROP_HINT : gestureHint);
+    if (moved && gestureHint) statusHint.setGesture(illegal ? ILLEGAL_DROP_HINT : gestureHint);
   };
 
   store.beginTx();
@@ -182,10 +199,21 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
     if (ev.pointerId !== pointerId) return;
     if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > DRAG_SLOP_PX) {
       moved = true;
-      statusHint.setGesture(gestureHint);
+      if (gestureHint) statusHint.setGesture(gestureHint);
     }
     const p = store.project;
     const g: BeatGrid = p.beatGrid;
+
+    if (fadeMode) {
+      // 淡变**不吸附**：用户拖的是「多长的一段渐入」，秒级自由取值；
+      // 它与拍网格没有关系（包络是连续的），吸到拍只会让手感变钝。
+      const dur = Math.max(0, clip.end - clip.start);
+      const dt = dtSec(ev.clientX);
+      // 左端往右 = 淡入变长；右端往左 = 淡出变长（手柄跟着边界走）。
+      const next = mode === 'fade-in' ? origFadeIn + dt : origFadeOut - dt;
+      store.liveSetFade(clip.id, mode === 'fade-in' ? 'in' : 'out', Math.min(Math.max(0, next), dur));
+      return;
+    }
 
     if (mode === 'move') {
       const dt = dtSec(ev.clientX);
@@ -201,7 +229,11 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
       const cands = ids.map((id) => ({
         id,
         target: p.tracks[(origIdx.get(id) ?? 0) + curD],
-        start: Math.max(0, snapTime((origStarts.get(id) ?? 0) + dt, opts.snapMode, g)),
+        // 段落边界也是吸附点（`core/sections.ts`）：与网格线比谁更近。
+        start: Math.max(
+          0,
+          snapTimeWithSections((origStarts.get(id) ?? 0) + dt, opts.snapMode, g, p.sections, p.fps),
+        ),
       }));
       for (const c of cands) {
         if (c.target) store.liveMoveClip(c.target.id, c.id, c.start);
@@ -216,7 +248,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
 
     const edge = mode === 'resize-l' ? 'start' : 'end';
     const raw = edge === 'start' ? origStart + dtSec(ev.clientX) : origEnd + dtSec(ev.clientX);
-    const cand = snapTime(raw, opts.snapMode, g);
+    const cand = snapTimeWithSections(raw, opts.snapMode, g, p.sections, p.fps);
     // 缩放不换轨；reject 实时钳制（非破坏性），其余策略先自由移动、松手才结算
     if (p.overlapBehavior === 'reject') store.settleResize(curTrackId, clip.id, edge, cand);
     else store.liveResizeClip(curTrackId, clip.id, edge, cand);
@@ -236,6 +268,16 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
   const onUp = (ev: PointerEvent): void => {
     if (ev.pointerId !== pointerId) return;
     cleanup();
+    if (fadeMode) {
+      // 没拖动就是一次误触（三角手柄只有 8px）：整次作废，不留一条空撤销。
+      if (!moved) {
+        store.cancelTx();
+        return;
+      }
+      store.touch();
+      store.endTx(tr(mode === 'fade-in' ? 'tl.setFadeIn' : 'tl.setFadeOut'));
+      return;
+    }
     if (mode === 'move' && !moved) {
       /*
        * 按下但没拖 = 一次单击：整次手势作废，把「点中的是选中集里的哪一个」
@@ -292,6 +334,104 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
   };
 
   /** Esc 中止本次拖拽（撤销栈里的手势事务本来就是为这个准备的）。 */
+  const onKey = (ev: KeyboardEvent): void => {
+    if (ev.key !== 'Escape') return;
+    cleanup();
+    store.cancelTx();
+    store.touch();
+  };
+
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onCancel);
+  window.addEventListener('keydown', onKey);
+}
+
+/* ------------------------------------------------------------ 段落带 */
+
+export interface SectionDragOptions {
+  section: Section;
+  pxPerBeat: number;
+  snapMode: SnapMode;
+  /** 单击（没拖动）= 把播放头挪到段落起点。 */
+  onClick?: () => void;
+}
+
+/**
+ * 拖动段落标记 = 改它的起点（一笔撤销）。
+ *
+ * 与片段拖拽同一套两段式：pointermove 直改（`liveMoveSection` + touch），
+ * pointerup 结算成一条撤销。区别只有一条 —— **段落没有重叠约束**，
+ * 所以不需要 `settlePlacement`（标记不是轨道，两段叠在一起是合法的：
+ * 谁在前谁赢的是排序，不是画法）。
+ *
+ * 吸附用 `snapTimeWithSections`，但**把自己排除在外**：包含自己的话，
+ * 「原来那个位置」永远是最新的候选点，段落会被粘在原地拖不动。
+ */
+export function startSectionDrag(
+  e: PointerEvent,
+  store: ProjectStore,
+  opts: SectionDragOptions,
+): void {
+  e.preventDefault();
+  e.stopPropagation();
+  const { section } = opts;
+  const pointerId = e.pointerId;
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const origStart = section.start;
+  const gridAtStart = store.project.beatGrid;
+  let moved = false;
+
+  const dtSec = (clientX: number): number =>
+    (clientX - startX) / (opts.pxPerBeat / beatDur(gridAtStart));
+
+  store.beginTx();
+
+  const onMove = (ev: PointerEvent): void => {
+    if (ev.pointerId !== pointerId) return;
+    if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > DRAG_SLOP_PX) {
+      moved = true;
+    }
+    if (!moved) return;
+    const p = store.project;
+    const others = p.sections.filter((s) => s.id !== section.id);
+    const raw = origStart + dtSec(ev.clientX);
+    store.liveMoveSection(
+      section.id,
+      Math.max(
+        0,
+        snapTimeWithSections(raw, opts.snapMode, gridAtStart, others, store.project.fps),
+      ),
+    );
+  };
+
+  const cleanup = (): void => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onCancel);
+    window.removeEventListener('keydown', onKey);
+  };
+
+  const onUp = (ev: PointerEvent): void => {
+    if (ev.pointerId !== pointerId) return;
+    cleanup();
+    if (!moved) {
+      // 单击 = 定位播放头（段落是「这一段的起点」，点它就是跳到那儿）。
+      store.cancelTx();
+      opts.onClick?.();
+      return;
+    }
+    store.touch();
+    store.endTx(tr('tl.moveSection'));
+  };
+
+  const onCancel = (): void => {
+    cleanup();
+    store.cancelTx();
+    store.touch();
+  };
+
   const onKey = (ev: KeyboardEvent): void => {
     if (ev.key !== 'Escape') return;
     cleanup();

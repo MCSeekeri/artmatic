@@ -406,9 +406,22 @@ export function createDemoProject(): Project {
           kind: 'audio',
           assetId: DEMO_ASSET_ID,
           srcIn: 0,
+          // 演示淡出：段落收束（S3 之后）的音频自然退场，而不是硬切。
+          fadeOut: 1.5,
         },
       ],
     },
+  ];
+
+  /*
+   * 段落标记（v8）。与文件头那张表一致：每 4 小节一段。
+   * **demo 必须带着它们**：段落带是空的时候没有任何入口提示，用户不会知道
+   * 「标尺上方那条灰带」是可交互的；三段现成的名字同时也是「它长什么样」的样例。
+   */
+  p.sections = [
+    { id: newId(), name: tr('tl.demoSectionIntro'), start: 0 },
+    { id: newId(), name: tr('tl.demoSectionDevelop'), start: S2 },
+    { id: newId(), name: tr('tl.demoSectionOutro'), start: S3 },
   ];
   return p;
 }

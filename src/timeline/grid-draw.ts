@@ -18,7 +18,12 @@
  * 两者差一个 `origin`：`canvasX = contentX - origin`。
  * `view` 一律用 **content 坐标**传进来（调用方在工程空间里想事情更自然），
  * 本文件负责减掉 origin。拍号 x 的换算也按 content 走：
- * `contentX(b) = b * pxPerBeat`（因为 xOfTime(b * beatDur) = b * pxPerBeat）。
+ * `contentX(b) = xOfTime(offset + b * beatDur)`。
+ *
+ * ⚠️ **offset 必须计入**。拍是「offset 之后」才开始数的（ADR-002），吸附也按这个
+ * 定义（`beatAtTime`）。标尺曾经画在 `b * pxPerBeat`，offset ≠ 0 时线在第 0 拍、
+ * 吸附却对齐到 offset 之后的拍 —— 表现是「播放头永远压不上刻度」，看起来像渲染
+ * 错位，其实是两处各写了一份换算。现在统一走 `view-model.ts::xOfBeat`。
  *
  * ---------------------------------------------------------------------------
  * 【两条不变式】(2026-10-02)
@@ -45,11 +50,11 @@
  *      —— `canvas.width = …` 会把整块位图清空。
  */
 
-import { beatDur, type BeatGrid } from '../core/time';
+import { beatAtTime, beatDur, timeAtBeat, type BeatGrid } from '../core/time';
 import type { Project } from '../core/schema';
 import type { WaveformData } from '../audio/decode';
 import type { CanvasPalette } from '../ui/tokens';
-import { xOfTime, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
+import { xOfBeat, xOfTime, RULER_HEIGHT, ROW_HEIGHT, type TimelineMode } from './view-model';
 
 /** 本次要覆盖的区间（**content 坐标**，CSS px）。 */
 export interface DrawRange {
@@ -88,9 +93,20 @@ function clipTo(
   ctx.clip();
 }
 
-/** 可见区间内第一根拍线的拍号（content 坐标里第一根 ≥ cx0 的线）。 */
-function firstBeatIn(cx0: number, pxPerBeat: number, stepBeats: number): number {
-  return Math.max(0, Math.floor(cx0 / pxPerBeat / stepBeats) * stepBeats);
+/**
+ * 可见区间内第一根拍线的拍号（content 坐标里第一根 ≥ cx0 的线）。
+ *
+ * `offsetPx` 是第 0 拍的 content x（offset 秒的位置）：拍线在
+ * `offsetPx + b * pxPerBeat`，所以反解时要先减掉它。不传就会在 offset ≠ 0
+ * 时把起点算偏一整段（可见区左边少画几根线，或者从负拍开始画）。
+ */
+function firstBeatIn(
+  cx0: number,
+  pxPerBeat: number,
+  stepBeats: number,
+  offsetPx: number,
+): number {
+  return Math.max(0, Math.floor((cx0 - offsetPx) / pxPerBeat / stepBeats) * stepBeats);
 }
 
 /** 拍线密度：缩得太小时只画 2/4/8 拍一格。ruler 的阈值更宽（44px），网格更密（22px）。 */
@@ -98,6 +114,41 @@ function beatStep(pxPerBeat: number, minPx: number): number {
   let s = 1;
   while (pxPerBeat * s < minPx) s *= 2;
   return s;
+}
+
+/**
+ * 标准模式的刻度文案：`mm:ss.ff`（分:秒.帧）。
+ *
+ * 帧是**工程帧率**下的帧（`project.fps`），不是屏幕刷新 —— 与导出帧号同一个
+ * 定义域，于是「标尺上写着 00:04.12」用 `frameAtTime` 换算出来就是第 132 帧。
+ * 非整数帧率（29.97）下取 `floor`，只影响小数位，不影响定位。
+ */
+function timecode(t: number, fps: number): string {
+  const rate = Math.max(1, fps);
+  const whole = Math.max(0, Math.floor(t));
+  const mm = Math.floor(whole / 60);
+  const ss = whole % 60;
+  const ff = Math.min(99, Math.floor((t - whole) * rate + 1e-6));
+  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}.${String(ff).padStart(2, '0')}`;
+}
+
+/**
+ * 某根拍线的刻度文案。**纯函数**（有单测）：它同时是「形态切换到底改了什么」
+ * 唯一可以直接断言的产物 —— 标尺是 canvas，测试读不到文字。
+ *
+ * 节奏模式：`小节.拍`，都从 1 数起（音乐人的读法，不是程序员的下标）。
+ * 标准模式：`分:秒.帧`，时间走 `timeAtBeat`（**offset 计入**，否则读数是错的）。
+ */
+export function rulerLabelAt(
+  beat: number,
+  grid: BeatGrid,
+  fps: number,
+  mode: TimelineMode,
+): string {
+  if (mode === 'standard') return timecode(timeAtBeat(beat, grid), fps);
+  const bpb = Math.max(1, Math.floor(grid.beatsPerBar));
+  const b = Math.max(0, Math.round(beat));
+  return `${Math.floor(b / bpb) + 1}.${(b % bpb) + 1}`;
 }
 
 export function drawRuler(
@@ -111,6 +162,11 @@ export function drawRuler(
   /** 画布左端对应的内容坐标。`canvasX = contentX - origin`。 */
   origin: number,
   view: DrawRange,
+  /**
+   * 时间轴形态：只改**刻度文案**（`3.2` 小节.拍 / `00:04.12` 分:秒.帧）与
+   * 刻度的抽稀间距。拍线位置、缩放、吸附步长都不归它管。
+   */
+  mode: TimelineMode,
 ): boolean {
   const g = project.beatGrid;
   const resized = sizeCanvas(canvas, canvasW, RULER_HEIGHT, dpr);
@@ -130,18 +186,24 @@ export function drawRuler(
   ctx.fillRect(px0, 0, x1 - x0, RULER_HEIGHT);
 
   const bpb = g.beatsPerBar;
-  const stepBeats = beatStep(pxPerBeat, 44);
+  /*
+   * 刻度间距 = 文案需要的宽度。标准模式的时间码（`00:04.12`，8 个等宽字符）
+   * 比小节的 `3.2` 宽一倍多，用同一个 44px 阈值会让相邻两个标签叠在一起。
+   */
+  const stepBeats = beatStep(pxPerBeat, mode === 'standard' ? 84 : 44);
+  /** 缩得太小时只在**小节线**上写字；否则每根画出来的刻度都标。 */
+  const labelEvery = stepBeats < bpb;
 
   ctx.font = '10px Cascadia Code, Consolas, monospace';
   ctx.textBaseline = 'top';
-  const beatD = beatDur(g);
-  const lastBeat = Math.floor(project.duration / beatD) + 1;
+  const offsetPx = xOfBeat(0, pxPerBeat, g);
+  const lastBeat = Math.max(0, Math.ceil(beatAtTime(project.duration, g)));
 
   // 只从可见区间左端起头，不再从 0 一路画到工程末尾
-  for (let b = firstBeatIn(x0, pxPerBeat, stepBeats); b <= lastBeat; b += stepBeats) {
-    const t = b * beatD;
+  for (let b = firstBeatIn(x0, pxPerBeat, stepBeats, offsetPx); b <= lastBeat; b += stepBeats) {
+    const t = timeAtBeat(b, g);
     if (t > project.duration) break;
-    const bx = b * pxPerBeat;
+    const bx = offsetPx + b * pxPerBeat;
     if (bx > x1) break;
     const x = Math.round(bx - origin) + 0.5;
     const isBar = b % bpb === 0;
@@ -150,9 +212,9 @@ export function drawRuler(
     ctx.moveTo(x, isBar ? 6 : 16);
     ctx.lineTo(x, RULER_HEIGHT);
     ctx.stroke();
-    if (isBar) {
+    if (isBar || labelEvery) {
       ctx.fillStyle = palette.rulerText;
-      ctx.fillText(String(Math.round(b / bpb) + 1), x + 4, 4);
+      ctx.fillText(rulerLabelAt(b, g, project.fps, mode), x + 4, 4);
     }
   }
 
@@ -171,8 +233,20 @@ export function drawRuler(
 
 export interface GridTrackRow {
   kind: 'visual' | 'audio';
-  /** 音频轨要画的片段（资产 → 波形）。 */
-  waveClips: { start: number; end: number; srcIn: number; assetId: string }[];
+  /**
+   * 音频轨要画的片段（资产 → 波形）。
+   *
+   * `fadeIn` / `fadeOut` 只用来把淡变区压暗 —— **包络求值不在这里**
+   * （`core/audio-envelope.ts` 是唯一真源），这里画的只是「结果会长这样」。
+   */
+  waveClips: {
+    start: number;
+    end: number;
+    srcIn: number;
+    assetId: string;
+    fadeIn?: number;
+    fadeOut?: number;
+  }[];
 }
 
 export function drawGrid(
@@ -236,13 +310,13 @@ export function drawGrid(
   // 拍线
   const bpb = g.beatsPerBar;
   const stepBeats = beatStep(pxPerBeat, 22);
-  const beatD = beatDur(g);
-  const lastBeat = Math.floor(project.duration / beatD) + 1;
+  const offsetPx = xOfBeat(0, pxPerBeat, g);
+  const lastBeat = Math.max(0, Math.ceil(beatAtTime(project.duration, g)));
 
-  for (let b = firstBeatIn(x0, pxPerBeat, stepBeats); b <= lastBeat; b += stepBeats) {
-    const t = b * beatD;
+  for (let b = firstBeatIn(x0, pxPerBeat, stepBeats, offsetPx); b <= lastBeat; b += stepBeats) {
+    const t = timeAtBeat(b, g);
     if (t > project.duration) break;
-    const bx = b * pxPerBeat;
+    const bx = offsetPx + b * pxPerBeat;
     if (bx > x1) break;
     const x = Math.round(bx - origin) + 0.5;
     ctx.strokeStyle = b % bpb === 0 ? palette.barLine : palette.beatLine;
@@ -331,5 +405,32 @@ function drawWaveforms(
       any = true;
     }
     if (any) ctx.fill();
+
+    /*
+     * 淡变区压暗：用**行底色**盖一层半透明，波形就退到背景里去了。
+     * 不逐样本乘系数 —— 包络是逐样本的，而这里只需要「看得出这一段在淡」；
+     * 用同一份底色还能保证亮暗主题下都自然（不写死黑色）。
+     */
+    ctx.save();
+    ctx.globalAlpha = 0.62;
+    ctx.fillStyle = palette.rowAudio;
+    for (const clip of row.waveClips) {
+      const cs = xOfTime(clip.start, pxPerBeat, g);
+      const ce = xOfTime(clip.end, pxPerBeat, g);
+      const w = Math.max(0, ce - cs);
+      let fi = Math.max(0, clip.fadeIn ?? 0) * pxPerSec;
+      let fo = Math.max(0, clip.fadeOut ?? 0) * pxPerSec;
+      // 与 core/audio-envelope 同一条钳制：两段相交时按比例收缩。
+      const sum = fi + fo;
+      if (sum > w && sum > 0) {
+        const k = w / sum;
+        fi *= k;
+        fo *= k;
+      }
+      const y0 = i * ROW_HEIGHT;
+      if (fi > 0.5) ctx.fillRect(cs - origin, y0, fi, ROW_HEIGHT);
+      if (fo > 0.5) ctx.fillRect(ce - fo - origin, y0, fo, ROW_HEIGHT);
+    }
+    ctx.restore();
   });
 }

@@ -2,14 +2,13 @@
  * mixdown.ts — 离线音频混流：把工程里所有启用的音频片段混成一条整段 PCM。
  *
  * 为什么必须有这一步（而不是把 AudioBuffer 直接塞给编码器）：
- * `AudioClip` 有 `start` / `end` / `srcIn` / `fadeSec` / `gain` 曲线，
- * 一次导出要求的是**一条从 0 开始、长度 = 工程时长的连续波形**。
+ * `AudioClip` 有 `start` / `end` / `srcIn` / `fadeSec` / `fadeIn` / `fadeOut` /
+ * `gain` 曲线，一次导出要求的是**一条从 0 开始、长度 = 工程时长的连续波形**。
  * 编码器只认连续 PCM，多片段的定位、裁剪、淡入淡出、增益包络全得先算完。
  *
- * 这里是预览播放（`AudioPlayer`，实时 WebAudio）与导出（离线 PCM）的
- * **唯一共用语义处**：两条路径对「片段在哪、响多少」的理解必须一致，
- * 否则导出声音对不上预览。playback 只做了 `srcIn + intoClip` 定位与
- * `when` 延迟，没做 gain 与 fade —— 那两个是本文件补上的。
+ * 包络求值**不在本文件**：唯一真源是 `core/audio-envelope.ts`，预览播放
+ * （`audio/player.ts`）对着同一份 —— 两边各写一份的形态是「预览听着对、
+ * 导出多了一段渐入」，而那种偏差只会被当成「玄学」。
  *
  * 纯函数、无 Web Audio 依赖（除了要读的 AudioBuffer），所以可单测。
  * 混流本身是 O(duration × sampleRate) 的循环，16s 立体声 48kHz 约 150 万次，
@@ -17,7 +16,7 @@
  */
 
 import type { Project } from '../core/schema';
-import { evalCurve } from '../core/curve';
+import { audioClipGainAt } from '../core/audio-envelope';
 import { isAudioClip } from '../core/project-store';
 
 /** 导出音频的统一采样率。48 kHz 是影视与 AAC 的通用值，浏览器也都支持。 */
@@ -33,30 +32,6 @@ export interface MixedAudio {
   duration: number;
   /** 峰值绝对值。用于 UI 提示与「是不是导出静音」的断言。 */
   peak: number;
-}
-
-/**
- * 单个片段在 `[0, duration)` 区间里的**线性淡入淡出包络**。
- *
- * `fadeSec` 存在 `ClipBase` 上但 player 一直没实现它（见文件头注释）。
- * 这里补上：导出的声音至少要有头尾淡入淡出，否则循环点会咔哒响。
- * fadeSec <= 0 视为不淡。
- */
-function envelopeAt(posSec: number, clipDur: number, fadeSec: number): number {
-  if (fadeSec <= 0) return 1;
-  // 两个淡区不得相交——否则中间有一段被压到 fade/fade。
-  const f = Math.min(fadeSec, clipDur / 2);
-  if (posSec < f) return f > 0 ? posSec / f : 1;
-  const fromEnd = clipDur - posSec;
-  if (fromEnd < f) return f > 0 ? fromEnd / f : 1;
-  return 1;
-}
-
-/** 读片段的 gain。缺曲线时约定为 1（不改变音量）而不是 0。 */
-function gainAt(project: Project, assetClip: { curves: Record<string, import('../core/curve').Curve> }, tAbs: number): number {
-  const curve = assetClip.curves.gain;
-  if (!curve) return 1;
-  return evalCurve(curve, tAbs, { grid: project.beatGrid, clipStart: 0 });
 }
 
 /**
@@ -103,7 +78,8 @@ export function mixdown(
       if (srcIdx < 0 || srcIdx >= buf.length) continue;
 
       const tAbs = clip.start + i / sampleRate;
-      const g = gainAt(project, clip, tAbs) * envelopeAt(i / sampleRate, clipDur, clip.fadeSec);
+      // 曲线 × 淡变（fadeSec + fadeIn/fadeOut）只有一份实现在 core/audio-envelope。
+      const g = audioClipGainAt(clip, project.beatGrid, tAbs);
 
       for (let c = 0; c < EXPORT_CHANNELS; c++) {
         // 单声道素材复制到双声道，否则 srcIdx 可能越界。

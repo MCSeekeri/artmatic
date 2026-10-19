@@ -455,17 +455,47 @@
       />
     </Field>
 
-    <Field label={tr('insp.fade')}>
-      <NumberInput
-        value={clip.fadeSec}
-        min={0}
-        step={0.05}
-        width={64}
-        suffix="s"
-        testid="clip-fade"
-        onchange={(v) => upd(clip, tr('insp.changeFade'), (c) => (c.fadeSec = Math.max(0, v)))}
-      />
-    </Field>
+    {#if clip.kind === 'audio'}
+      <!--
+        音频片段给的是**编排用的**两条斜坡（与时间轴两端三角手柄同一份数据）。
+        `fadeSec` 仍然在数据里（混流用它做剪辑点防爆音），但它对用户不可见：
+        音频的「淡入淡出」就是这里这两条，多摆一个同义的输入框只会让人猜
+        哪个在起作用。
+      -->
+      <Field label={tr('insp.fadeIn')} tipText={tr('insp.fadeInTip')}>
+        <NumberInput
+          value={clip.fadeIn ?? 0}
+          min={0}
+          step={0.05}
+          width={64}
+          suffix="s"
+          testid="insp-fade-in"
+          onchange={(v) => appState.store.setFade(clip.id, 'in', v)}
+        />
+        <span class="dim">{tr('insp.fadeOut')}</span>
+        <NumberInput
+          value={clip.fadeOut ?? 0}
+          min={0}
+          step={0.05}
+          width={64}
+          suffix="s"
+          testid="insp-fade-out"
+          onchange={(v) => appState.store.setFade(clip.id, 'out', v)}
+        />
+      </Field>
+    {:else}
+      <Field label={tr('insp.fade')}>
+        <NumberInput
+          value={clip.fadeSec}
+          min={0}
+          step={0.05}
+          width={64}
+          suffix="s"
+          testid="clip-fade"
+          onchange={(v) => upd(clip, tr('insp.changeFade'), (c) => (c.fadeSec = Math.max(0, v)))}
+        />
+      </Field>
+    {/if}
 
     {#if clip.kind === 'source'}
       <Field label={tr('insp.blend')}>

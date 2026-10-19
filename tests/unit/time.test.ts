@@ -5,6 +5,7 @@ import {
   frameAtTime,
   snapBeat,
   snapStepBeats,
+  snapToleranceSec,
   snapTime,
   timeAtBeat,
   timeAtFrame,
@@ -56,6 +57,20 @@ describe('吸附（唯一一张 SNAP_MODES 表）', () => {
         10,
       );
     }
+  });
+
+  it('帧吸附：步长是 1/fps 秒，与 BPM 无关（标准模式）', () => {
+    // 0.51s @ 30fps → 第 15 帧（0.5s）；@ 25fps → 第 13 帧（0.52s）。
+    expect(snapTime(0.51, 'frame', grid, 30)).toBeCloseTo(0.5, 10);
+    expect(snapTime(0.51, 'frame', grid, 25)).toBeCloseTo(13 / 25, 10);
+    // 改拍网格不该挪动帧吸附
+    expect(snapTime(0.51, 'frame', { ...grid, bpm: 90, offset: 1.5 }, 30)).toBeCloseTo(0.5, 10);
+  });
+
+  it('吸附容差 = 半个步长（段落吸附与网格吸附同源）', () => {
+    expect(snapToleranceSec('bar', grid)).toBeCloseTo(1, 10); // 4 拍 × 0.5s / 2
+    expect(snapToleranceSec('beat', grid)).toBeCloseTo(0.25, 10);
+    expect(snapToleranceSec('frame', grid, 30)).toBeCloseTo(1 / 60, 10);
   });
 });
 

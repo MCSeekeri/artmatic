@@ -1,7 +1,7 @@
 <script lang="ts">
   import { appState } from '../ui/app-state.svelte';
-  import { xOfTime } from './view-model';
-  import { startClipDrag, type DragPeer } from './drag';
+  import { pxPerSec, xOfTime } from './view-model';
+  import { startClipDrag, type DragPeer, type DragMode } from './drag';
   import type { AnyClip, Track } from '../core/schema';
   import { tr } from '../i18n/index.svelte';
 
@@ -42,7 +42,24 @@
     return clip.kind === 'effect' ? (clip.affectDepth ?? 0) : 0;
   });
 
-  function down(e: PointerEvent, mode: 'move' | 'resize-l' | 'resize-r'): void {
+  /**
+   * 音频淡变手柄的横向位置（px，片段内偏移）。
+   *
+   * 两端手柄贴住**淡变区的边界**（而不是片段边缘）：看到的就是听到的 ——
+   * 三角在 1.5s 处，声音就从 1.5s 处淡进来。淡变为 0 时回到边缘。
+   */
+  const fadeInPx = $derived.by(() => {
+    void appState.version;
+    if (clip.kind !== 'audio') return 0;
+    return (clip.fadeIn ?? 0) * pxPerSec(appState.pxPerBeat, grid);
+  });
+  const fadeOutPx = $derived.by(() => {
+    void appState.version;
+    if (clip.kind !== 'audio') return 0;
+    return (clip.fadeOut ?? 0) * pxPerSec(appState.pxPerBeat, grid);
+  });
+
+  function down(e: PointerEvent, mode: DragMode): void {
     // 只有主键起手势：右键归自绘菜单（Timeline 的 contextmenu），中键归浏览器
     if (e.button !== 0) return;
     /*
@@ -175,6 +192,29 @@
     <!-- 淡入淡出标记：纯几何形状，不引图标（这里只有 10px 见方） -->
     <i class="fade" title={tr('tl.fade')}></i>
   {/if}
+  {#if clip.kind === 'audio'}
+    <!--
+      音频淡变手柄（v8）：两端各一个三角，拖的是 `fadeIn` / `fadeOut` 的**秒数**。
+      左下 / 右下两个角 —— 右上角已经被 `fadeSec` 的标记占了。
+      与缩放热区重叠：手柄 z 更高，所以边缘那 8px 归手柄（缩放热区仍是整条边）。
+    -->
+    <i
+      class="fade-handle l"
+      role="presentation"
+      data-testid="clip-fade-in"
+      title={tr('tl.fadeInTip')}
+      style:left={`${fadeInPx}px`}
+      onpointerdown={(e) => down(e, 'fade-in')}
+    ></i>
+    <i
+      class="fade-handle r"
+      role="presentation"
+      data-testid="clip-fade-out"
+      title={tr('tl.fadeOutTip')}
+      style:right={`${fadeOutPx}px`}
+      onpointerdown={(e) => down(e, 'fade-out')}
+    ></i>
+  {/if}
   <i class="edge l" role="presentation" onpointerdown={(e) => down(e, 'resize-l')}></i>
   <i class="edge r" role="presentation" onpointerdown={(e) => down(e, 'resize-r')}></i>
 </div>
@@ -291,5 +331,30 @@
   /* 纯图标/纯热区 hover 不用底色块，只提亮——与全局「图标按钮 hover 只变色」一致 */
   .edge:hover {
     background: color-mix(in srgb, currentColor 22%, transparent);
+  }
+  /*
+   * 淡变手柄：零尺寸 + 两条边框拼出的三角（视觉纪律：不用渐变 / 阴影 / 图标）。
+   * 命中区域是 border-box（8×8），比缩放热区窄 2px —— 挪到片段底部，避开
+   * 「想拖长度却拖到淡变」的主手势。
+   */
+  .fade-handle {
+    position: absolute;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    cursor: ew-resize;
+    opacity: 0.55;
+    z-index: calc(var(--z-edge) + 1);
+  }
+  .fade-handle:hover {
+    opacity: 1;
+  }
+  .fade-handle.l {
+    border-left: 8px solid currentColor;
+    border-top: 8px solid transparent;
+  }
+  .fade-handle.r {
+    border-right: 8px solid currentColor;
+    border-top: 8px solid transparent;
   }
 </style>

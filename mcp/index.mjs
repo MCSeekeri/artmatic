@@ -461,7 +461,7 @@ const server = new Server(
     capabilities: { tools: {} },
     // 网关的版本在 initialize 的 serverInfo 里带上（与控制平面版本分开演进）。
     instructions:
-      `Artmatic 控制平面网关 v${GATEWAY_VERSION}（控制平面契约 v2）。渲染只在浏览器里发生：` +
+      `Artmatic 控制平面网关 v${GATEWAY_VERSION}（控制平面契约 v3）。渲染只在浏览器里发生：` +
       '所有工具都是对**页面上那一台编辑器**的操作，没有第二套求值路径。' +
       '先 get_capabilities 拿合法 id；参数表用 detail:"params" 按需展开。' +
       '写插件前先 artmatic_help(topic:"plugin-api")；安装需要用户在页面上确认。' +
@@ -496,4 +496,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 await server.connect(new StdioServerTransport());
-log(`就绪（control-plane API v2，网关 v${GATEWAY_VERSION}）。日志走 stderr，stdout 只走协议。`);
+log(`就绪（control-plane API v3，网关 v${GATEWAY_VERSION}）。日志走 stderr，stdout 只走协议。`);

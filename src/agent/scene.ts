@@ -153,6 +153,9 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
       ...base,
       assetId: clip.assetId,
       srcIn: clip.srcIn,
+      // 0 = 不淡（缺省），不铺开：agent 读到的键越少越省上下文。
+      ...(clip.fadeIn ? { fadeIn: clip.fadeIn } : {}),
+      ...(clip.fadeOut ? { fadeOut: clip.fadeOut } : {}),
       ...(curves ? { curves } : {}),
     };
   }
@@ -190,6 +193,17 @@ function head(project: Project, t: number) {
     duration: project.duration,
     beatGrid: { ...project.beatGrid },
     seed: project.seed,
+    /*
+     * 段落标记（v3）。**`ids` 与 `full` 两份快照都给**：它不是片段那样的重对象，
+     * 几段名字 + 起点对上下文没有任何压力，而少给它的后果是 agent 在
+     * 「把音乐按段落铺开」这件事上完全没有坐标系（那正是段落存在的理由）。
+     */
+    sections: project.sections.map((s) => ({
+      id: s.id,
+      name: s.name,
+      start: s.start,
+      ...(s.color ? { color: s.color } : {}),
+    })),
   };
 }
 

@@ -418,7 +418,7 @@ describe('片段级抠图 / 四角（SourceClip.key / quad，v7）', () => {
     }
   });
 
-  it('v6 → v7 是恒等迁移：key / quad 原样保留，版本抬到 7', () => {
+  it('v6 → v7 是恒等迁移：key / quad 原样保留，版本一路抬到当前版本', () => {
     const key = { ...defaultKeySettings(), color: '#123abc' };
     // 一般透视四边形（含负坐标，验证迁移 / 校验不会顺手夹到 [0,1]）。
     const quad: QuadCorners = {
@@ -428,7 +428,7 @@ describe('片段级抠图 / 四角（SourceClip.key / quad，v7）', () => {
     p.schemaVersion = 6;
     const out = migrateProject(JSON.parse(JSON.stringify(p)));
     expect(out.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(out.schemaVersion).toBe(7);
+    expect(out.schemaVersion).toBe(8);
     const clip = out.tracks[0]!.clips[0]!;
     if (clip.kind !== 'source') throw new Error('unreachable');
     expect(clip.key).toEqual(key);

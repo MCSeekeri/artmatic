@@ -65,6 +65,9 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - `ParamDef.visibleWhen` 是函数，序列化时必须剥掉（`serializeParam`）。
 - 文本片段的 `source.doc` 在快照里只给摘要（`ClipTextSummary`），详情走
   `getTypographyDoc` —— 这是 `CONTROL_API_VERSION = 2` 的读形状变更。
+- 段落标记（v3）在 `head()` 里给**两份快照**：`sections: { id, name, start, color? }`。
+  只给起点（结尾 = 下一段起点），否则 agent 读到的是「视图的算法」而不是数据。
+  音频片段另给 `fadeIn` / `fadeOut`（0 不铺开）。
 - 抬版本时同步 `mcp/index.mjs` 与 `tests/e2e/agent.spec.ts`（后者 import 常量）。
 
 ## 排版写入

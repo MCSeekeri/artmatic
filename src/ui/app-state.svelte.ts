@@ -45,7 +45,8 @@ import type { VideoSourceManager } from '../engine/video-source';
 import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
 import { platform } from '../platform/index';
-import { SNAP_MODES, snapTime, timeAtFrame, frameAtTime, type SnapMode } from '../core/time';
+import { SNAP_MODES, timeAtFrame, frameAtTime, type SnapMode } from '../core/time';
+import { snapTimeWithSections } from '../core/sections';
 import {
   parseClipboard,
   planPaste,
@@ -61,6 +62,9 @@ import type { ProjectRef } from '../project/handles';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import { loadOpenTabs, saveOpenTabs } from '../project/open-tabs';
 import { DENSITY } from './tokens';
+// `TimelineMode` 的概念属于时间轴（标尺怎么读），值与「每个形态有哪些吸附档位」
+// 都在那边 —— 这里只保管用户选了哪个，不在 UI 层再抄一份表。
+import { defaultSnapForMode, snapFitsMode, type TimelineMode } from '../timeline/view-model';
 import { DEFAULT_TYPO_GRID, normalizeTypoGrid, type TypoGridPrefs } from '../typography/grid';
 import { tr } from '../i18n/index.svelte';
 
@@ -101,6 +105,11 @@ interface UiPrefs {
    * （对手感而言「吸附到拍」还是「自由」是跨工程都一致的），与内容无关。
    */
   snap: SnapMode;
+  /**
+   * 时间轴形态（节奏 / 标准）。与吸附同理：描述「怎么读这条轴」，不进工程。
+   * 只影响三处：标尺文案、工具条显示哪组参数、吸附默认值。
+   */
+  timelineMode: TimelineMode;
   /**
    * 快捷键方案（「操作习惯」）。只影响切分键，见 ui/shortcuts.ts。
    * 存 UI 偏好而不是工程：它描述的是**用的人**，不是这份工程。
@@ -166,8 +175,17 @@ function normalizeScheme(v: unknown): ShortcutScheme {
 /** 合法的吸附档位。`SNAP_MODES` 是全仓库唯一那张表，直接取它的键。 */
 const SNAP_IDS = Object.keys(SNAP_MODES) as SnapMode[];
 
+/**
+ * 偏好里的吸附档位。**这里只管「是不是一个存在过的值」**；
+ * 「它配不配当前形态」由构造函数按形态再筛一次（老偏好里可能存着
+ * 标准模式才有的 `frame`，而当时存的时候还没有形态这个概念）。
+ */
 function normalizeSnap(v: unknown): SnapMode {
-  return SNAP_IDS.includes(v as SnapMode) ? (v as SnapMode) : 'beat';
+  return SNAP_IDS.includes(v as SnapMode) ? (v as SnapMode) : 'bar';
+}
+
+function normalizeTimelineMode(v: unknown): TimelineMode {
+  return v === 'standard' || v === 'beat' ? v : 'beat';
 }
 
 function normalizeDiv(v: unknown): number {
@@ -206,7 +224,13 @@ function loadUiPrefs(): UiPrefs {
     previewScale: 1,
     previewRestoreOnPause: true,
     previewBarCollapsed: false,
-    snap: 'beat',
+    /*
+     * 吸附只存**当前形态**那一份（`snap`），重启后另一份回到该形态的默认值。
+     * 存一份而不是两份是刻意的：两份要在切形态时同时写，任何一条路径漏写
+     * 都会出现「切回来档位变了」，而它只在重启后才看得出来。
+     */
+    snap: 'bar',
+    timelineMode: 'beat',
     shortcutScheme: 'artmatic',
     mascotEnabled: false,
     typoGrid: { ...DEFAULT_TYPO_GRID },
@@ -218,6 +242,8 @@ function loadUiPrefs(): UiPrefs {
     const raw = localStorage.getItem(UI_KEY);
     if (!raw) return fallback;
     const p = JSON.parse(raw) as Partial<UiPrefs>;
+    const timelineMode = normalizeTimelineMode(p.timelineMode);
+    const savedSnap = normalizeSnap(p.snap);
     return {
       drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : fallback.drawerOpen,
       drawerWidth: clampDrawerWidth(Number(p.drawerWidth) || fallback.drawerWidth),
@@ -235,7 +261,9 @@ function loadUiPrefs(): UiPrefs {
         typeof p.previewBarCollapsed === 'boolean'
           ? p.previewBarCollapsed
           : fallback.previewBarCollapsed,
-      snap: normalizeSnap(p.snap),
+      // 档位必须是这个形态真有的（老偏好里可能存着 `frame` 而形态是节奏）。
+      snap: snapFitsMode(savedSnap, timelineMode) ? savedSnap : defaultSnapForMode(timelineMode),
+      timelineMode,
       shortcutScheme: normalizeScheme(p.shortcutScheme),
       mascotEnabled:
         typeof p.mascotEnabled === 'boolean' ? p.mascotEnabled : fallback.mascotEnabled,
@@ -379,7 +407,18 @@ class AppState {
      `playT` 与 `selectedClipId` 就属于后者：它们是工程状态，不是界面状态。 */
   version = $state(0);
   playing = $state(false);
-  snap = $state<SnapMode>('beat');
+  /** 当前生效的吸附档位（永远属于 `timelineMode` 的那一档表）。 */
+  snap = $state<SnapMode>('bar');
+  /** 时间轴形态（标尺文案 / 工具条 / 吸附档位三处分支的唯一开关）。 */
+  timelineMode = $state<TimelineMode>('beat');
+  /**
+   * 每个形态各记一份吸附档位（非响应式：它只在切换形态那一下被读，
+   * 界面上没有任何东西直接读它）。
+   *
+   * 为什么不是「改过就不覆盖」的布尔标记：那样在两态之间来回切一次，
+   * 用户为节奏模式选的「拍」就永久丢了 —— 表现是「切回来吸附变了」。
+   */
+  private snapByMode: Record<TimelineMode, SnapMode> = { beat: 'bar', standard: 'free' };
   pxPerBeat = $state(28);
   /**
    * 拖拽中的落点是否会被 reject 策略拒收（给被拖片段加「不可落」样式）。
@@ -818,7 +857,13 @@ class AppState {
       return;
     }
     const grid = this.store.project.beatGrid;
-    const anchor = snapTime(this.playT, this.snap, grid);
+    const anchor = snapTimeWithSections(
+      this.playT,
+      this.snap,
+      grid,
+      this.store.project.sections,
+      this.store.project.fps,
+    );
     const plans = planPaste(p, {
       tracks: this.store.project.tracks.map((t) => ({ id: t.id, kind: t.kind })),
       preferredTrackId: this.selectedClipId
@@ -1659,7 +1704,16 @@ class AppState {
     this.previewScale = prefs.previewScale;
     this.previewRestoreOnPause = prefs.previewRestoreOnPause;
     this.previewBarCollapsed = prefs.previewBarCollapsed;
-    this.snap = prefs.snap;
+    this.timelineMode = prefs.timelineMode;
+    /*
+     * 只持久化了「当前形态」那一份档位；另一份回到该形态的默认值
+     * （节奏「小节」/ 标准「自由」）。见 `UiPrefs.snap` 的注释。
+     */
+    this.snapByMode = {
+      beat: snapFitsMode(prefs.snap, 'beat') ? prefs.snap : defaultSnapForMode('beat'),
+      standard: snapFitsMode(prefs.snap, 'standard') ? prefs.snap : defaultSnapForMode('standard'),
+    };
+    this.snap = this.snapByMode[this.timelineMode];
     this.shortcutScheme = prefs.shortcutScheme;
     this.mascotEnabled = prefs.mascotEnabled;
     this.typoGrid = prefs.typoGrid;
@@ -1718,9 +1772,27 @@ class AppState {
    * 只有一处写才能保证「改了就落盘」（直赋会绕过 persistUi，重启后回到默认）。
    */
   setSnap(v: SnapMode): void {
-    const next = normalizeSnap(v);
+    // 不属于当前形态的档位（老偏好 / 别处传错）落到该形态的默认值，
+    // 绝不把「小节」写进标准模式的下拉里 —— 那会显示成空白。
+    const next = snapFitsMode(v, this.timelineMode) ? v : defaultSnapForMode(this.timelineMode);
+    this.snapByMode[this.timelineMode] = next;
     if (this.snap === next) return;
     this.snap = next;
+    this.persistUi();
+  }
+
+  /**
+   * 切换时间轴形态。**只在这三处分支**：标尺文案、工具条显示哪组参数、
+   * 吸附档位；不改数据、不改渲染管线、不给片段重排。
+   *
+   * 吸附档位按形态各记一份：切回来是上次在这个形态下用的那一档，
+   * 而不是「切过去时被顺手改掉的那个值」。
+   */
+  setTimelineMode(v: TimelineMode): void {
+    const next = normalizeTimelineMode(v);
+    if (this.timelineMode === next) return;
+    this.timelineMode = next;
+    this.snap = this.snapByMode[next] ?? defaultSnapForMode(next);
     this.persistUi();
   }
 
@@ -1823,6 +1895,7 @@ class AppState {
       previewRestoreOnPause: this.previewRestoreOnPause,
       previewBarCollapsed: this.previewBarCollapsed,
       snap: this.snap,
+      timelineMode: this.timelineMode,
       shortcutScheme: this.shortcutScheme,
       mascotEnabled: this.mascotEnabled,
       typoGrid: this.typoGrid,
@@ -2239,7 +2312,7 @@ class AppState {
   seek(t: number, opts: { snap?: boolean } = {}): void {
     const p = this.store.project;
     let nt = Math.max(0, Math.min(t, p.duration));
-    if (opts.snap) nt = snapTime(nt, this.snap, p.beatGrid);
+    if (opts.snap) nt = snapTimeWithSections(nt, this.snap, p.beatGrid, p.sections, p.fps);
     this.playT = nt;
     this.renderer.onSeek();
     if (this.playing) void this.player.play(p, nt);

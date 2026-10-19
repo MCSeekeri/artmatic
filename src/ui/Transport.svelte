@@ -12,7 +12,8 @@
   import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
   import { appState } from './app-state.svelte';
-  import { beatAtTime, SNAP_MODES, type SnapMode } from '../core/time';
+  import { beatAtTime, SNAP_MODES } from '../core/time';
+  import { SNAP_MODES_FOR, TIMELINE_MODE_ICONS } from '../timeline/view-model';
   import type { OverlapBehavior } from '../core/schema';
   import { platform } from '../platform/index';
   import { tip } from './tip';
@@ -85,14 +86,28 @@
     return `${m}:${s}`;
   }
 
+  const barOptions = [2, 3, 4, 6].map((n) => ({ value: n, label: String(n) }));
+
+  /** 时间轴形态（只改标尺文案 / 这一组控件的可见性 / 吸附档位）。 */
+  const timelineMode = $derived(appState.timelineMode);
+  const modeIcon = $derived(TIMELINE_MODE_ICONS[timelineMode]);
+  const modeLabel = $derived(tr(timelineMode === 'beat' ? 'tp.modeBeat' : 'tp.modeStandard'));
+  const modeTip = $derived(tr(timelineMode === 'beat' ? 'tp.modeTipBeat' : 'tp.modeTipStandard'));
+
+  /**
+   * 吸附档位**按形态列**：半拍 / 拍 / 小节是拍单位，标准模式的标尺上没有拍，
+   * 列出来只会让人选到一个「吸附到哪里都看不出来」的值。标准模式给「自由 / 帧」。
+   */
   const snapOptions = $derived(
-    Object.entries(SNAP_MODES).map(([mode, def]) => ({
-      value: mode as SnapMode,
-      label: tr(def.labelKey),
+    SNAP_MODES_FOR[timelineMode].map((mode) => ({
+      value: mode,
+      label: tr(SNAP_MODES[mode].labelKey),
     })),
   );
-
-  const barOptions = [2, 3, 4, 6].map((n) => ({ value: n, label: String(n) }));
+  const projectFps = $derived.by(() => {
+    void appState.version;
+    return appState.store.project.fps;
+  });
 
   const overlapOptions = $derived<{ value: OverlapBehavior; label: string }[]>([
     { value: 'reject', label: tr('tp.overlapReject') },
@@ -180,56 +195,91 @@
 
     <span class="sep"></span>
 
-    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.bpmTip') }}>
-      <span class="lbl">BPM</span>
-      <NumberInput
-        value={grid.bpm}
-        min={20}
-        max={300}
-        step={0.1}
-        width={58}
-        ariaLabel="BPM"
-        testid="bpm-input"
-        onchange={(v) => appState.store.setBeatGrid({ bpm: Math.max(20, Math.min(300, v || 120)) })}
-      />
-      <!--
-        自动估计（ADR-002）。放在 BPM 右边而不是设置面板里：它是「对着这首曲子
-        调拍网格」这个动作的一部分，离 BPM/offset 越近越顺手。
-      -->
-      <IconButton
-        icon="wand-sparkles"
-        label={tr('tp.estimate')}
-        tipText={appState.beatBusy ? tr('tp.estimateBusy') : tr('tp.estimateTip')}
-        size="sm"
-        disabled={appState.beatBusy}
-        testid="estimate-bpm"
-        onclick={() => void appState.estimateBeatGrid()}
-      />
-    </span>
+    <!--
+      时间轴形态：**两态按钮**，不是下拉 —— 只有两个状态，下拉的两步操作
+      （展开、选另一个）与一次点击相比纯属多余。图标表示当前形态：
+      activity = 节奏（小节.拍）、timer = 标准（分:秒.帧）。
+    -->
+    <button
+      type="button"
+      class="mode-btn"
+      data-testid="timeline-mode"
+      data-mode={timelineMode}
+      aria-label={modeTip}
+      use:tip={{ placement: 'top', text: modeTip }}
+      onclick={() => appState.setTimelineMode(timelineMode === 'beat' ? 'standard' : 'beat')}
+    >
+      <Icon name={modeIcon} size={13} />
+      <span>{modeLabel}</span>
+    </button>
 
-    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.offsetTip') }}>
-      <span class="lbl">offset</span>
-      <NumberInput
-        value={grid.offset}
-        step={0.01}
-        width={58}
-        ariaLabel="offset"
-        testid="offset-input"
-        onchange={(v) => appState.store.setBeatGrid({ offset: v })}
-      />
-    </span>
+    {#if timelineMode === 'beat'}
+      <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.bpmTip') }}>
+        <span class="lbl">BPM</span>
+        <NumberInput
+          value={grid.bpm}
+          min={20}
+          max={300}
+          step={0.1}
+          width={58}
+          ariaLabel="BPM"
+          testid="bpm-input"
+          onchange={(v) => appState.store.setBeatGrid({ bpm: Math.max(20, Math.min(300, v || 120)) })}
+        />
+        <!--
+          自动估计（ADR-002）。放在 BPM 右边而不是设置面板里：它是「对着这首曲子
+          调拍网格」这个动作的一部分，离 BPM/offset 越近越顺手。
+        -->
+        <IconButton
+          icon="wand-sparkles"
+          label={tr('tp.estimate')}
+          tipText={appState.beatBusy ? tr('tp.estimateBusy') : tr('tp.estimateTip')}
+          size="sm"
+          disabled={appState.beatBusy}
+          testid="estimate-bpm"
+          onclick={() => void appState.estimateBeatGrid()}
+        />
+      </span>
 
-    <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.beatsPerBarTip') }}>
-      <span class="lbl">{tr('tp.beatsPerBar')}</span>
-      <Select
-        value={grid.beatsPerBar}
-        options={barOptions}
-        onchange={(v) => appState.store.setBeatGrid({ beatsPerBar: v })}
-        testid="beats-per-bar"
-        optionTestidPrefix="beats-per-bar-opt"
-        minWidth={56}
-      />
-    </span>
+      <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.offsetTip') }}>
+        <span class="lbl">offset</span>
+        <NumberInput
+          value={grid.offset}
+          step={0.01}
+          width={58}
+          ariaLabel="offset"
+          testid="offset-input"
+          onchange={(v) => appState.store.setBeatGrid({ offset: v })}
+        />
+      </span>
+
+      <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.beatsPerBarTip') }}>
+        <span class="lbl">{tr('tp.beatsPerBar')}</span>
+        <Select
+          value={grid.beatsPerBar}
+          options={barOptions}
+          onchange={(v) => appState.store.setBeatGrid({ beatsPerBar: v })}
+          testid="beats-per-bar"
+          optionTestidPrefix="beats-per-bar-opt"
+          minWidth={56}
+        />
+      </span>
+    {:else}
+      <!-- 标准模式：时间码是「分:秒.帧」，帧率直接决定小数位 —— 所以它在工具条上。 -->
+      <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.fpsTip') }}>
+        <span class="lbl">{tr('tp.fps')}</span>
+        <NumberInput
+          value={projectFps}
+          min={1}
+          max={240}
+          step={1}
+          width={52}
+          ariaLabel={tr('tp.fps')}
+          testid="fps-input"
+          onchange={(v) => appState.store.setFps(v || 30)}
+        />
+      </span>
+    {/if}
 
     <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.snapTip') }}>
       <span class="lbl">{tr('tp.snap')}</span>
@@ -377,6 +427,28 @@
     color: var(--text-secondary);
     font-size: var(--fs-sm);
     white-space: nowrap;
+  }
+  /*
+    两态形态按钮。与 `.ic-btn` 同一条外观纪律：**没有底色**，hover 只变前景色，
+    只是它多一个当前形态的词（图标单独一个时读不出「现在是什么」）。
+  */
+  .mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    flex-shrink: 0;
+    height: var(--control-h);
+    padding: 0 var(--sp-2);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+  }
+  .mode-btn:hover {
+    color: var(--text-primary);
   }
   .zoom {
     min-width: 140px;

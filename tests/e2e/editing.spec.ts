@@ -69,6 +69,11 @@ test('新建视觉轨与纯色片段', async ({ page }) => {
 
 test('拖拽移动片段（reject 语义 + 拍吸附）', async ({ page }) => {
   await boot(page);
+  // 这一条守的是「拍」吸附。默认形态是节奏模式的「小节」（2s 一格），显式切到拍。
+  await page.evaluate(() => {
+    (window as never as { __artmatic: { appState: { setSnap: (m: string) => void } } })
+      .__artmatic.appState.setSnap('beat');
+  });
   const demoTracks = await trackCount(page);
   await page.getByTestId('add-visual-track').click();
   await addClipViaMenu(page, demoTracks, 'add-solid');

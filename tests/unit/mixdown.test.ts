@@ -163,6 +163,42 @@ describe('mixdown', () => {
     expect(m.channels[0]![0]).toBeCloseTo(1, 5);
   });
 
+  /*
+   * 编排用的淡变（v8 的 `fadeIn` / `fadeOut`）。与 `fadeSec` 是**复合**关系：
+   * 前者是「把这一段推上来」，后者是「剪辑点防爆音」，两者可以同时存在。
+   * 求值真源在 `core/audio-envelope.ts`（那边有逐点单测），这里守的是接线：
+   * mixdown 真的用了它。
+   */
+  it('fadeIn 在片段开头的能量低于中段', () => {
+    const clip = audioClip(0, 2, { fadeIn: 1 });
+    const m = mixdown(projectWith([clip], 2), () => dc(1, 48000 * 2))!;
+    const at = (s: number) => m.channels[0]![Math.floor(s * EXPORT_SAMPLE_RATE)];
+    expect(at(0)).toBeCloseTo(0, 5);
+    expect(at(0.5)).toBeCloseTo(0.5, 4);
+    expect(at(1.5)).toBeCloseTo(1, 5);
+  });
+
+  it('fadeOut 在片段结尾收掉，且与 gain 曲线相乘', () => {
+    const clip = audioClip(0, 2, {
+      fadeOut: 1,
+      curves: { gain: { keys: [{ t: 0, v: 0.5, interp: 'linear' }] } },
+    });
+    const m = mixdown(projectWith([clip], 2), () => dc(1, 48000 * 2))!;
+    const at = (s: number) => m.channels[0]![Math.floor(s * EXPORT_SAMPLE_RATE)];
+    expect(at(0.5)).toBeCloseTo(0.5, 4); // gain 0.5 × 无淡变
+    expect(at(1.5)).toBeCloseTo(0.25, 4); // gain 0.5 × fadeOut 中点 0.5
+    expect(at(1.99)).toBeLessThan(0.02);
+  });
+
+  it('fadeIn + fadeOut 超过片段长度时整段都在淡（不会中途留一个硬切）', () => {
+    const clip = audioClip(0, 1, { fadeIn: 2, fadeOut: 2 });
+    const m = mixdown(projectWith([clip], 1), () => dc(1, 48000))!;
+    const at = (s: number) => m.channels[0]![Math.floor(s * EXPORT_SAMPLE_RATE)];
+    expect(at(0)).toBeCloseTo(0, 5);
+    expect(at(0.5)).toBeCloseTo(1, 4); // 两段各压到 0.5s，中点在峰值
+    expect(at(0.999)).toBeLessThan(0.02);
+  });
+
   it('单声道素材复制到双声道（不越界、不静音）', () => {
     const m = mixdown(projectWith([audioClip(0, 1)], 1), () => dc(0.5, 48000))!;
     for (let c = 0; c < EXPORT_CHANNELS; c++) {

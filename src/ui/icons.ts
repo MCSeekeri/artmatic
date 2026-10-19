@@ -17,6 +17,7 @@
 
 import AArrowDown from '@lucide/svelte/icons/a-arrow-down';
 import AArrowUp from '@lucide/svelte/icons/a-arrow-up';
+import Activity from '@lucide/svelte/icons/activity';
 import AlignCenterHorizontal from '@lucide/svelte/icons/align-center-horizontal';
 import AlignCenterVertical from '@lucide/svelte/icons/align-center-vertical';
 import AlignEndHorizontal from '@lucide/svelte/icons/align-end-horizontal';
@@ -161,6 +162,8 @@ import TextShadow from './icons/text-shadow.svelte';
 export const ICONS = {
   'a-arrow-down': AArrowDown,
   'a-arrow-up': AArrowUp,
+  /** 时间轴形态「节奏」的图标（与 `timer` 组成两态按钮）。 */
+  activity: Activity,
   'align-center-horizontal': AlignCenterHorizontal,
   'align-center-vertical': AlignCenterVertical,
   'align-end-horizontal': AlignEndHorizontal,

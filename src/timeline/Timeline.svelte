@@ -14,17 +14,26 @@
   import { RECENT_LIMIT } from '../ui/recent-defs';
   import ClipView from './ClipView.svelte';
   import { startMarquee, type MarqueeBox } from './marquee';
+  import { startSectionDrag } from './drag';
   import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
-  import { xOfTime, timeAtX, RULER_HEIGHT, ROW_HEIGHT } from './view-model';
+  import {
+    xOfTime,
+    timeAtX,
+    RULER_HEIGHT,
+    ROW_HEIGHT,
+    SECTION_BAND_HEIGHT,
+  } from './view-model';
   import { platform } from '../platform/index';
   import {
     newId,
     type AudioClip,
     type EffectClip,
+    type Section,
     type SourceClip,
     type Track,
   } from '../core/schema';
-  import { beatDur, snapTime } from '../core/time';
+  import { beatDur } from '../core/time';
+  import { snapTimeWithSections } from '../core/sections';
   import { resolveTransition } from '../core/transitions';
   import {
     importAudioBlob,
@@ -79,6 +88,14 @@
   let rowsEl: HTMLDivElement;
   /** 轨道头列的滚动容器（竖直滚动与画布双向同步，见 `syncVertical`）。 */
   let sideEl: HTMLDivElement;
+  /**
+   * 轨道头列滚动内容末尾的补偿内边距（px）= 画布那列横向滚动条的高度。
+   *
+   * 画布的横向滚动条占掉的是它的视口高度，而这列没有那条滚动条 —— 不补的话
+   * 两侧最大滚动量差 s，滚到底时低位那侧会把高位那侧拽回来（最后一条轨被
+   * 「添加轨道」页脚盖住）。值在 `paint` 里从 `offsetHeight - clientHeight` 读出。
+   */
+  let sidePad = $state(0);
 
   /**
    * 轨道头列与画布**竖直**滚动合一。
@@ -87,14 +104,20 @@
    * （画布要能横向滚几千像素，轨道头列一点都不能动），合并会把 sticky 表头、
    * 横向滚动与 `.rows` 的坐标原点（拖拽/框选/标尺都按 `scrollEl.scrollLeft` 换算）
    * 一起搅进来。而竖直方向**本来就是 1:1 的**：两侧顶部各有一个同高的表头
-   * （`.side-head` / 粘住的 `.ruler`，都是 `RULER_HEIGHT`），行高也一样，
-   * 而且两侧滚动内容等高（见 `.side-add` 的注释）。所以互写 `scrollTop` 就够。
+   * （`.side-head` / 粘住的 `.ruler-wrap`，都是 `RULER_HEIGHT + SECTION_BAND_HEIGHT`），行高也一样。
+   * 所以互写 `scrollTop` 就够 —— 但前提是**两侧的滚动量程必须相等**：
+   *
+   *   - 轨道头列底部有一个 28px 的固定页脚（`添加轨道`），它占掉的是**视口**；
+   *   - 画布那列的底部要被横向滚动条吃掉 s 像素（经典滚动条；overlay 时为 0）。
+   *
+   * 两边各补对方的亏空：画布内容的末尾加一条 28px 空白带（`.footer-pad`），
+   * 轨道头列的滚动内容加 s 像素的底部内边距（`sidePad`，见 `paint`）。
+   * 量程一相等，`scrollTop` 就是同一把尺子 —— 否则滚到底时低位那侧会把高位那侧
+   * 拽回来，表现是「最后一条轨被加轨按钮盖住」。
    *
    * 回环守卫是**值比较**，不是布尔量：写对方会再派发一次 scroll 事件，而 scroll
    * 事件是异步派发的 —— 赋值后立刻复位的布尔量根本来不及挡。等那次事件到达时，
    * 两边的值已经相等，`to.scrollTop === from.scrollTop` 直接返回。
-   * 值比较还顺带解决了「滚到底时两侧 max 不同」：多出来的那几像素会被下一次事件
-   * 拉回低位那一侧，而不是两边各停在自己的极限上。
    */
   function syncVertical(from: HTMLElement | undefined, to: HTMLElement | undefined): void {
     if (!from || !to) return;
@@ -172,6 +195,127 @@
     return map;
   });
 
+  /*
+   * 段落标记（v8）。**画在标尺上方的 DOM 带子里**，不是 canvas ——
+   * 双击改名要输入框、右键要菜单、悬停要 title，这三样在 12px 的画布条里都没有。
+   * 标尺的绘制结构因此没动（只多了一个 `mode` 参数决定刻度文案）。
+   */
+  const sections = $derived.by(() => {
+    void appState.version;
+    return appState.store.project.sections.map((s) => ({ ...s }));
+  });
+
+  /** 段落在带子上的几何：左端 = 起点，右端 = 下一段起点（最后一段到工程末尾）。 */
+  const sectionChips = $derived.by(() => {
+    const px = appState.pxPerBeat;
+    return sections.map((s, i) => {
+      const next = sections[i + 1];
+      const left = xOfTime(s.start, px, grid);
+      const right = xOfTime(next ? next.start : duration, px, grid);
+      return { ...s, left, width: Math.max(10, right - left) };
+    });
+  });
+
+  /** 段落的右键菜单：`id === null` = 在空白处（动作是「在这里加一段」）。 */
+  let sectionMenu = $state<{ x: number; y: number; id: string | null; time: number } | null>(null);
+
+  /** 就地改名的输入框（段落名与坐标）。 */
+  let sectionRenaming = $state<{ id: string; left: number; width: number; value: string } | null>(
+    null,
+  );
+
+  function sectionMenuItems(): MenuItem[] {
+    const m = sectionMenu;
+    if (!m) return [];
+    if (!m.id) {
+      return [
+        {
+          id: 'section-add',
+          label: tr('tl.addSection'),
+          icon: 'plus',
+          testid: 'section-add',
+          onselect: () => appState.store.addSection(m.time),
+        },
+      ];
+    }
+    return [
+      {
+        /*
+         * 「在鼠标处切分」是标记段落的主路径：段落只存起点，所以先标的第一个点
+         * 会把整首歌都圈成第一段；从后往前标又反直觉。切一刀 = 插入一个起点，
+         * 左半的右边界自动变成它 —— 顺序标记与事后补标记都只需要这一下。
+         */
+        id: 'section-split',
+        label: tr('tl.splitSection'),
+        icon: 'scissors',
+        disabled: !appState.store.canSplitSection(m.id, m.time),
+        testid: 'section-split',
+        onselect: () => appState.store.splitSection(m.id!, m.time),
+      },
+      {
+        id: 'section-rename',
+        label: tr('tl.renameSection'),
+        icon: 'pencil',
+        testid: 'section-rename',
+        onselect: () => {
+          const chip = sectionChips.find((c) => c.id === m.id);
+          if (chip) beginSectionRename(chip);
+        },
+      },
+      separator('section-sep'),
+      {
+        id: 'section-remove',
+        label: tr('tl.removeSection'),
+        icon: 'trash',
+        danger: true,
+        testid: 'section-remove',
+        onselect: () => appState.store.removeSection(m.id!),
+      },
+    ];
+  }
+
+  /** 右键段落带：落在某一段上就给它菜单，落在空白处就提供「在这里加一段」。 */
+  function openSectionCtx(e: MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenus();
+    const el = (e.target as HTMLElement)?.closest?.('[data-section-id]');
+    sectionMenu = {
+      x: e.clientX,
+      y: e.clientY,
+      id: el?.getAttribute('data-section-id') ?? null,
+      time: timeAtClientX(e.clientX),
+    };
+  }
+
+  function beginSectionRename(chip: { id: string; left: number; width: number; name: string }): void {
+    sectionMenu = null;
+    sectionRenaming = { id: chip.id, left: chip.left, width: chip.width, value: chip.name };
+  }
+
+  function commitSectionRename(value: string): void {
+    const target = sectionRenaming;
+    sectionRenaming = null;
+    if (!target) return;
+    const name = value.trim();
+    // 空名字保持原名：段落名是唯一的可读标识，删空会变成一个点不中的色块。
+    if (name && name !== sections.find((s) => s.id === target.id)?.name) {
+      appState.store.renameSection(target.id, name);
+    }
+  }
+
+  function sectionDown(e: PointerEvent, section: Section): void {
+    // 只有主键起手势（右键归 sectionMenu，中键归浏览器）。
+    if (e.button !== 0) return;
+    if (sectionRenaming?.id === section.id) return;
+    startSectionDrag(e, appState.store, {
+      section,
+      pxPerBeat: appState.pxPerBeat,
+      snapMode: appState.snap,
+      onClick: () => appState.seek(section.start),
+    });
+  }
+
   /** 实际绘制宽度：工程内容与滚动视口取大者。 */
   const drawWidth = $derived(Math.max(totalWidth, scrollW));
   const playheadX = $derived(xOfTime(appState.playT, appState.pxPerBeat, grid));
@@ -191,6 +335,8 @@
               end: c.end,
               srcIn: c.srcIn,
               assetId: c.assetId,
+              fadeIn: c.fadeIn,
+              fadeOut: c.fadeOut,
             }))
           : [],
     }));
@@ -264,6 +410,19 @@
     if (!el) return;
     const viewW = el.clientWidth;
     if (viewW <= 0) return;
+    /*
+     * 横向滚动条从这一列的**视口**里吃掉 s 像素（经典滚动条；overlay 时为 0）。
+     * 轨道头列用同高的底部内边距补回来 —— 两侧量程相等，`scrollTop` 才是同一把尺子。
+     * 读的是 offsetHeight/clientHeight，与滚动条实现无关（不写死 9px）。
+     *
+     * `clientHeight === 0` 是**还没布局**（首次 paint 早于 layout）：此时两者的差
+     * 等于整个高度，拿它当滚动条会把轨道头列撑出一个巨大的空白。钳到一行以内即可
+     * —— 真实的滚动条高度是 9~17px。
+     */
+    if (el.clientHeight > 0) {
+      const bar = Math.max(0, Math.min(ROW_HEIGHT, el.offsetHeight - el.clientHeight));
+      if (bar !== sidePad) sidePad = bar;
+    }
     const view = viewRange();
 
     // ① 窗口几何：宽度变了、或者可见区跑到窗口外面去了 → 重新定位 + 整窗重画
@@ -293,7 +452,17 @@
     const pal = palette;
     const project = appState.store.project;
     const ppb = appState.pxPerBeat;
-    const r1 = drawRuler(rulerCanvas, project, ppb, dpr, pal, winW, winFrom, gap);
+    const r1 = drawRuler(
+      rulerCanvas,
+      project,
+      ppb,
+      dpr,
+      pal,
+      winW,
+      winFrom,
+      gap,
+      appState.timelineMode,
+    );
     const r2 = drawGrid(
       gridCanvas,
       project,
@@ -319,6 +488,8 @@
     void appState.version;
     void appState.pxPerBeat;
     void appState.snap;
+    // 标尺文案（小节.拍 / 分:秒.帧）只在换形态时变，但它写在位图里 —— 必须重画。
+    void appState.timelineMode;
     void appState.waveforms;
     /* activeProjectId 必须进依赖：切工程时 `subscribeActive` 只是把 version
        换成新工程的计数，**两份工程的 version 撞号时这次赋值不产生变化**，
@@ -351,7 +522,19 @@
   /* ------------------------------------------------------------ 新建 */
 
   function startAtPlayhead(): number {
-    return Math.max(0, Math.min(duration - 0.25, snapTime(appState.playT, appState.snap, grid)));
+    return Math.max(
+      0,
+      Math.min(
+        duration - 0.25,
+        snapTimeWithSections(
+          appState.playT,
+          appState.snap,
+          grid,
+          appState.store.project.sections,
+          appState.store.project.fps,
+        ),
+      ),
+    );
   }
 
   /** 新建片段的起点：右键菜单给位置，按钮给播放头。 */
@@ -866,7 +1049,16 @@
   function timeAtClientX(clientX: number): number {
     const rect = scrollEl.getBoundingClientRect();
     const x = clientX - rect.left + scrollEl.scrollLeft;
-    return Math.max(0, snapTime(timeAtX(x, appState.pxPerBeat, grid), appState.snap, grid));
+    return Math.max(
+      0,
+      snapTimeWithSections(
+        timeAtX(x, appState.pxPerBeat, grid),
+        appState.snap,
+        grid,
+        appState.store.project.sections,
+        appState.store.project.fps,
+      ),
+    );
   }
 
   function openCtx(e: MouseEvent, track: Track): void {
@@ -992,6 +1184,7 @@
     <div
       class="side"
       bind:this={sideEl}
+      style:padding-bottom={`${sidePad}px`}
       onscroll={() => syncVertical(sideEl, scrollEl)}
       use:reorder={{
         axis: 'y',
@@ -999,7 +1192,8 @@
         onReorder: (from, to) => appState.store.moveTrack(from, to),
       }}
     >
-      <div class="side-head" style:height={`${RULER_HEIGHT}px`}>
+      <!-- 与画布列等高：段落带 + 标尺（见 SECTION_BAND_HEIGHT 的注释） -->
+      <div class="side-head" style:height={`${RULER_HEIGHT + SECTION_BAND_HEIGHT}px`}>
         <span class="side-title">{tr('tl.sideTitle')}</span>
       </div>
 
@@ -1076,10 +1270,10 @@
     </div>
 
     <!--
-      加轨按钮是**固定页脚**，不参与竖直滚动。它同时钉住了一条不变量：
-      两侧的滚**动内容**等高 —— 画布那列是 RULER_HEIGHT + N × ROW_HEIGHT，
-      这里也正好是这么多。页脚若留在滚动区里，轨道头列就比画布多出一个行高，
-      滚到底时两边会被各自的 max 钳到不同的位置（表现是「同步了但总差一截」）。
+      加轨按钮是**固定页脚**，不参与竖直滚动。它占掉的是本列的**视口**（28px），
+      所以画布那列的内容末尾补了一条等高的空白带（`.footer-pad`）：
+      两侧的**滚动量程**必须相等，互写 scrollTop 才成立。
+      页脚若留在滚动区里，它会跟着内容滚走（滚到底才看得见加轨按钮）。
     -->
     <div class="side-add" style:height={`${ROW_HEIGHT}px`}>
       <span class="add-label">{tr('tl.addTrack')}</span>
@@ -1113,7 +1307,65 @@
     }}
   >
     <div class="canvas-wrap" data-testid="tl-canvas-wrap" style:width={`${drawWidth}px`}>
-      <canvas class="ruler" data-hint="ruler" bind:this={rulerCanvas} onpointerdown={scrub}></canvas>
+      <!--
+        段落带 + 标尺一起 sticky：两者必须同时吸顶，否则纵向滚动时段落带会
+        跟着内容滚走、而标尺还停在上面（看起来像「段落消失了」）。
+      -->
+      <div class="ruler-wrap" style:height={`${RULER_HEIGHT + SECTION_BAND_HEIGHT}px`}>
+        <div
+          class="section-band"
+          data-testid="tl-section-band"
+          data-hint="ruler"
+          style:height={`${SECTION_BAND_HEIGHT}px`}
+          role="presentation"
+          oncontextmenu={openSectionCtx}
+        >
+          {#each sectionChips as s (s.id)}
+            <!--
+              段落色块 = 从本段起点铺到下一段起点。允许重叠（数据层不禁止），
+              后画的盖住先画的 —— 与「谁的 start 更小谁在前」是同一件事实。
+            -->
+            <div
+              class="section-chip"
+              data-testid="tl-section"
+              data-section-id={s.id}
+              title={s.name}
+              style:left={`${s.left}px`}
+              style:width={`${s.width}px`}
+              style:--section-color={s.color ?? 'var(--accent)'}
+              role="presentation"
+              onpointerdown={(e) => sectionDown(e, s)}
+              ondblclick={() => beginSectionRename(s)}
+            >
+              <span class="section-name">{s.name}</span>
+            </div>
+          {/each}
+          {#if sectionRenaming}
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              class="section-rename"
+              data-testid="section-rename-input"
+              style:left={`${sectionRenaming.left}px`}
+              style:width={`${Math.max(88, sectionRenaming.width)}px`}
+              value={sectionRenaming.value}
+              aria-label={tr('tl.sectionName')}
+              autofocus
+              onpointerdown={(e) => e.stopPropagation()}
+              onblur={(e) => commitSectionRename(e.currentTarget.value)}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitSectionRename(e.currentTarget.value);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  sectionRenaming = null;
+                }
+              }}
+            />
+          {/if}
+        </div>
+        <canvas class="ruler" data-hint="ruler" bind:this={rulerCanvas} onpointerdown={scrub}></canvas>
+      </div>
       <div
         class="rows"
         data-hint="rows"
@@ -1192,6 +1444,13 @@
         {/if}
         <div class="playhead" style:left={`${playheadX}px`}></div>
       </div>
+      <!--
+        与轨道头列「添加轨道」页脚等高的空白带：页脚占掉那一列的 **28px 视口**，
+        这里补 28px 的**内容**，两侧的最大滚动量才相等（见 `.side-add` 的注释）。
+        少了它，滚到底时轨道头列总比画布多走一行 —— 表现就是「最后一条轨的名字
+        被加轨按钮盖住」。纯空白，不接收指针事件。
+      -->
+      <div class="footer-pad" style:height={`${ROW_HEIGHT}px`} aria-hidden="true"></div>
     </div>
   </div>
 </div>
@@ -1216,6 +1475,17 @@
       onclose={closeMenus}
     />
   {/if}
+{/if}
+
+{#if sectionMenu}
+  {@const hit = sectionMenu.id ? sections.find((s) => s.id === sectionMenu!.id) : undefined}
+  <Menu
+    items={sectionMenuItems()}
+    at={{ x: sectionMenu.x, y: sectionMenu.y }}
+    head={{ label: hit ? hit.name : tr('tl.addSection'), value: `${sectionMenu.time.toFixed(2)}s` }}
+    testid="section-menu"
+    onclose={() => (sectionMenu = null)}
+  />
 {/if}
 
 <!--
@@ -1335,7 +1605,8 @@
     gap: var(--sp-2);
     padding: 0 var(--sp-2) 0 var(--sp-3);
     border-bottom: 1px solid var(--tl-gutter);
-    /* 固定页脚：不参与滚动，于是两侧滚动内容等高（见模板里的注释）。 */
+    /* 固定页脚：不参与滚动。它占掉 28px 视口，画布那列用等高的 `.footer-pad`
+       补在内容末尾 —— 两侧量程相等，`syncVertical` 才是 1:1（见模板里的注释）。 */
     flex-shrink: 0;
   }
   .add-label {
@@ -1369,12 +1640,65 @@
   .canvas-wrap {
     position: relative;
   }
-  .ruler {
-    display: block;
-    cursor: ew-resize;
+  /* 底部空白带：与轨道头列的「添加轨道」页脚等高，只负责把这一列的滚动量程
+     撑到和对面一样（见模板注释）。不画任何东西，也不吃指针事件。 */
+  .footer-pad {
+    pointer-events: none;
+  }
+  /*
+   * 段落带 + 标尺一起吸顶。**吸顶的是外层**：两层各自 sticky 会在纵向滚动时
+   * 互相错开（带子跟着内容走、标尺留在上面）。
+   */
+  .ruler-wrap {
     position: sticky;
     top: 0;
     z-index: var(--z-ruler);
+  }
+  .section-band {
+    position: relative;
+    background: var(--tl-gutter);
+    border-bottom: 1px solid var(--tl-border);
+    overflow: hidden;
+  }
+  .section-chip {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    display: flex;
+    align-items: center;
+    padding: 0 3px;
+    background: color-mix(in srgb, var(--section-color) 26%, transparent);
+    border-left: 2px solid var(--section-color);
+    color: var(--text-secondary);
+    font-size: 9px;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: grab;
+    user-select: none;
+  }
+  .section-chip:active {
+    cursor: grabbing;
+  }
+  .section-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+  }
+  .section-rename {
+    position: absolute;
+    top: 0;
+    height: calc(100% - 1px);
+    padding: 0 2px;
+    font-size: 9px;
+    background: var(--surface-1);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    color: var(--text-primary);
+  }
+  .ruler {
+    display: block;
+    cursor: ew-resize;
   }
   .rows {
     position: relative;

@@ -596,6 +596,11 @@ test('导入视频前按本机预算拦截：超限直接拒绝，素材表不�
 
 test('从媒体池把素材拖到时间轴：落在指针处，并选中新片段', async ({ page }) => {
   await boot(page);
+  // 落点按拍算（280px = 5s）。默认形态是节奏模式的「小节」（2s 一格），显式切到拍。
+  await page.evaluate(() => {
+    (window as never as { __artmatic: { appState: { setSnap: (m: string) => void } } })
+      .__artmatic.appState.setSnap('beat');
+  });
   const track = await cleanStage(page);
   await importImage(page, track, 'e2e-pic.png');
   await page.getByTestId('rail-media').click();

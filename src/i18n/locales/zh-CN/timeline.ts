@@ -49,8 +49,24 @@ export const timeline = {
   'tl.clipText': '排版',
   'tl.clipEffect': '特效',
 
+  /* ------------------------------------------------ 段落标记（标尺上方 12px 带） */
+  'tl.addSection': '在此添加段落',
+  'tl.sectionN': '段落 {n}',
+  'tl.renameSection': '重命名段落',
+  'tl.removeSection': '删除段落',
+  'tl.splitSection': '在鼠标处切分',
+  'tl.moveSection': '移动段落',
+  'tl.sectionName': '段落名',
+
   /* ------------------------------------------------ 片段自身（ClipView.svelte） */
   'tl.fade': '淡入淡出',
+  /* 音频片段两端的淡变三角手柄（拖动 = 一笔撤销）。 */
+  'tl.fadeIn': '渐入',
+  'tl.fadeOut': '渐出',
+  'tl.setFadeIn': '调整渐入',
+  'tl.setFadeOut': '调整渐出',
+  'tl.fadeInTip': '拖动设置渐入时长（拖回左端 = 不淡）',
+  'tl.fadeOutTip': '拖动设置渐出时长（拖回右端 = 不淡）',
 
   /* ------------------------------------------------ 拖拽的撤销标签（drag.ts） */
   'tl.moveClip': '移动片段',
@@ -62,6 +78,8 @@ export const timeline = {
   'tl.snapBeat': '拍',
   'tl.snapHalf': '半拍',
   'tl.snapFree': '自由',
+  /* 标准模式专用：步长是 1/fps 秒（时间码的小数位就是帧）。 */
+  'tl.snapFrame': '帧',
 
   /* ------------------------------------------------ 撤销标签（core/project-store.ts） */
   'tl.newTrack': '新建{kind}轨道',
@@ -118,9 +136,20 @@ export const timeline = {
   'tl.demoClipAnt': '兰顿蚂蚁',
   'tl.demoClipSand': '阿贝尔沙堆',
   'tl.demoClipMandelbrot': 'Mandelbrot 推近',
+  /* 演示工程的三个段落标记（标尺上方的段落带）。 */
+  'tl.demoSectionIntro': '序曲',
+  'tl.demoSectionDevelop': '发展',
+  'tl.demoSectionOutro': '收束',
 
   /* ------------------------------------------------ 轨道工具条（Transport.svelte） */
   'tp.play': '播放',
+  /* 时间轴形态（标尺文案 / 吸附档位 / 工具条显示哪一组参数）。两态按钮的提示。 */
+  'tp.modeBeat': '节奏',
+  'tp.modeStandard': '标准',
+  'tp.modeTipBeat': '时间轴：节奏模式（按「小节.拍」读刻度、吸附到拍网格）。点击切到标准模式',
+  'tp.modeTipStandard': '时间轴：标准模式（按「分:秒.帧」读刻度、按帧吸附）。点击切到节奏模式',
+  'tp.fps': '帧率',
+  'tp.fpsTip': '工程帧率：决定时间码的小数位与导出帧数（改它会改变逐帧随机的画面）',
   'tp.pause': '暂停',
   'tp.stop': '停止',
   'tp.timeTip': '工程时间 / 小节.拍',

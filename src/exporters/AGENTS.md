@@ -10,6 +10,10 @@
 
 ---
 
+- **音频包络求值不在本目录**：`mixdown` 逐样本调 `core/audio-envelope.ts` 的
+  `audioClipGainAt`（gain 曲线 × `fadeSec` × `fadeIn` / `fadeOut`）。预览播放
+  （`audio/player.ts`）对的是**同一个函数**。别在这里另写一份斜坡 —— 两边各写一份的
+  形态是「预览听着对、导出多了一段渐入」，没有人会去逐帧比对。
 - 所有导出走统一 `FrameSink`（`exporters/frame-sink.ts`）：`webcodecs`（主路径）、
   `png-sequence`（永远可用的逃生舱）、`gif`（**分享格式**：256 色、无音轨，
   但哪儿都能直接播）。**浏览器没有 GIF 硬件编码**，它是唯一纯 CPU 的后端，

@@ -76,8 +76,54 @@ interface AudioClip extends ClipBase {
   kind: 'audio'
   assetId: string; srcIn: number
   gain: Curve
+  /** v8：编排用的淡变（秒）。与 fadeSec 复合，求值见 core/audio-envelope.ts。 */
+  fadeIn?: number; fadeOut?: number
+}
+
+/** v8：段落标记。标记，不是容器 —— 片段不归属它，它也不裁剪片段。 */
+interface Section {
+  id: string; name: string
+  /** 秒。结尾 = 下一段起点（最后一段到工程末尾），所以不存 end。 */
+  start: number
+  color?: string
 }
 ```
+
+### 段落标记（`Project.sections`，v8）
+
+- **只存起点，不存终点。** 「这一段的结尾」永远是下一段的开头；存 `end` 会立刻
+  出现「相邻两段之间的缝算谁的」这种没有正确答案的问题，而且改 `Project.duration`
+  时还得跟着修。
+- **允许重叠 / 同起点**：它是标记不是轨道。排序稳定（同 start 保持原顺序），
+  排序 / 清洗 / 吸附全在 `core/sections.ts`（纯函数、有单测）。
+- **`sections` 在 `Project` 上是必填**：`validateProject` 把缺失 / 坏条目洗成 `[]`
+  （逐条丢弃，工程必须打得开）。必填是为了让读取方不必到处 `?? []` —— 那正是
+  「某处忘了兜底 → 时间轴整块空白」的来源。
+- **切分而不是逐个新建**：`splitSection(id, t)` 只插一个新的起点（右半继承颜色）。
+  因为段落只存起点，先标第一个点会把整首歌圈成第一段 —— 「在鼠标处切一刀」是
+  顺序标记与事后补标记共用的那条路。
+- **吸附点**：`snapTimeWithSections(t, mode, grid, sections, fps)` 在网格吸附的基础上，
+  让「更近的段落起点」赢（容差 = `snapToleranceSec`，半个吸附步长 / 半帧）。
+  **时间轴里凡是要吸附的地方都走它**，不要直接用 `snapTime` —— 那是「段落参与了吸附」
+  这件事的第二份真源。
+- 与 `Curve.beatAnchor` 相反：段落**不锚拍**。BPM 改了它不该偷偷跳走（那是重排，
+  不是跟着走）；吸附只发生在拖动 / 创建 / 切分的那一刻。
+
+### 吸附档位（`core/time.ts::SNAP_MODES`）
+
+- 表里有一档是**异类**：`frame` 的步长是 `1/fps` 秒，与拍网格无关。`snapTime` /
+  `snapToleranceSec` 先按 `mode === 'frame'` 分支，**不要**拿它去乘 `beatDur`。
+- 「哪些档位属于哪个时间轴形态」不在这张表里（那属于 UI，见
+  `src/timeline/view-model.ts::SNAP_MODES_FOR`）；这里只保证每个档位的**物理含义**。
+- 拍线位置 = `offset + b * beatDur`（`beatAtTime` 的逆）。**标尺与网格必须走
+  `view-model.ts::xOfBeat`** —— offset ≠ 0 时漏掉它就等于线画在第 0 拍、吸附对齐到
+  offset 之后的拍。
+
+### 音频包络（`core/audio-envelope.ts`）
+
+`gain 曲线 × fadeSec × fadeIn/fadeOut` 只有一个求值处，预览（`audio/player.ts`）
+与导出混流（`exporters/mixdown.ts`）都对着它。三条钳制规则：`fadeSec ≤ 片段长/2`
+（两个淡区不相交）、`fadeIn + fadeOut` 超长时**按比例收缩**、片外返回 0。
 
 ### 片段级图像处理：`key` / `quad`（`SCHEMA_VERSION` 7）
 

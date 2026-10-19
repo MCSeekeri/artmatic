@@ -157,6 +157,8 @@ function thumbProject(defId: string, values: Record<string, number>, size: Thumb
     overlapBehavior: 'reject',
     assets: {},
     tracks,
+    // 缩略图工程不出段落带（v8 的必填字段）。
+    sections: [],
   };
 }
 

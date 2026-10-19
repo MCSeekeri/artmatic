@@ -1,11 +1,17 @@
 /**
  * player.ts — 预览播放：音频时钟 → 工程时间 t。
  *
- * 播放对齐用 AudioContext.currentTime 映射帧号——但只发生在预览
+ * 播放对齐用 AudioContext.currentTime 映射帧号 —— 但只发生在预览
  * Transport 层；渲染函数永远只收 t（硬约束 1.1 的边界在这里守住）。
- * 导出是无声的（MVP 只做画面导出，声音对齐留给 M5 的 ffmpeg 混流）。
+ *
+ * **响度与导出同源**：每个片段挂一个 `GainNode`，曲线由
+ * `core/audio-envelope.ts::sampleAudioEnvelope` 采样（gain 曲线 × fadeSec ×
+ * `fadeIn` / `fadeOut`）。导出走 `exporters/mixdown.ts` 的逐样本求值，两条路
+ * 对「这一秒响多少」用的是同一个表达式 —— 各写一份的形态是「预览听着对、
+ * 导出多了一段渐入」，没人会去逐帧比对。
  */
 
+import { sampleAudioEnvelope } from '../core/audio-envelope';
 import type { Project } from '../core/schema';
 import { isAudioClip } from '../core/project-store';
 
@@ -73,7 +79,19 @@ export class AudioPlayer {
         if (remain <= 0) continue;
         const src = ctx.createBufferSource();
         src.buffer = buffer;
-        src.connect(ctx.destination);
+        /*
+         * 增益包络：采样「从片段内 intoClip 秒到结尾」这一段。
+         *
+         * 用 `setValueCurveAtTime` 而不是一串 `linearRampToValueAtTime`：
+         * 淡变时长是用户随手拖出来的小数，逐段排 ramp 要自己算拐点，而曲线上
+         * 的拐点只有 `core/audio-envelope.ts` 知道。128 点是采样下限的折中
+         * （WebAudio 内部本来就按采样点线性插值）。
+         */
+        const gain = ctx.createGain();
+        const curve = sampleAudioEnvelope(clip, project.beatGrid, intoClip, intoClip + remain);
+        gain.gain.setValueCurveAtTime(curve, startAt + when, remain);
+        src.connect(gain);
+        gain.connect(ctx.destination);
         src.start(startAt + when, clip.srcIn + intoClip, remain);
         this.sources.push(src);
       }
