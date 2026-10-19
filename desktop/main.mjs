@@ -38,6 +38,7 @@ const DO_EXPORT = process.argv.includes('--export')
 const CLOSE_TEST = process.argv.includes('--closetest')
 /** 冒烟：验证 preload / IPC / Range 协议（打包产物里也走这条）。 */
 const HOST_SMOKE = process.argv.includes('--host-smoke')
+const BOOT_T0 = Date.now()
 
 // 这些开关必须走 app.commandLine：直接当命令行参数传给 electron.exe 时，
 // 本机会话下进程会被外层静默干掉（表现为无输出 + SIGTERM）。
@@ -231,6 +232,15 @@ async function runHostSmoke(win) {
   for (let i = 0; i < payload.length; i++) payload[i] = i % 251
   await fs.writeFile(asset, payload)
 
+  // 记录「宿主脚本接手时」启动画面还在不在（正常情况下 bundle 还在解析）。
+  const early = await win.webContents
+    .executeJavaScript(
+      `({ splash: !!document.getElementById('boot-splash'), t: Math.round(performance.now()) })`,
+      true,
+    )
+    .catch(() => null)
+  console.log('[startup] splash-at-handler', JSON.stringify(early))
+
   await new Promise((r) => setTimeout(r, 2500))
   const result = await win.webContents.executeJavaScript(
     `(async () => {
@@ -255,6 +265,7 @@ async function runHostSmoke(win) {
         size: st.size,
         platform: window.__artmatic?.platform?.supportsLinked ?? null,
         mounted: !!document.querySelector('.app') || !!document.querySelector('[data-testid="empty-state"]'),
+        splashGone: !document.getElementById('boot-splash'),
       };
     })()`,
     true,
@@ -310,6 +321,7 @@ async function runHostSmoke(win) {
     result.size === payload.length &&
     result.platform === true &&
     result.mounted === true &&
+    result.splashGone === true &&
     (!video ||
       (!!linked &&
         !linked.error &&
@@ -335,7 +347,12 @@ async function main() {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    show: SHOW || !PROBE,
+    /*
+     * 正常启动先不显示：等 `ready-to-show`（此时 index.html 的内联启动画面
+     * 已经画出来了）。用户看到的第一帧是品牌画面，而不是一块黑窗。
+     * `--show` / 探针保留原来的显式行为。
+     */
+    show: SHOW,
     backgroundColor: '#111114',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -349,6 +366,23 @@ async function main() {
       additionalArguments: HOST_SMOKE ? ['--artmatic-smoke'] : [],
     },
   })
+
+  win.once('ready-to-show', () => {
+    console.log('[startup] ready-to-show', Date.now() - BOOT_T0, 'ms')
+    if (win.isDestroyed()) return
+    if (!PROBE || SHOW) win.show()
+  })
+
+  win.webContents.once('did-finish-load', () => {
+    console.log('[startup] did-finish-load', Date.now() - BOOT_T0, 'ms')
+  })
+
+  // 兜底：某些驱动上 ready-to-show 可能不触发；不能让用户对着不存在窗口发呆。
+  if (!PROBE && !HOST_SMOKE) {
+    setTimeout(() => {
+      if (!win.isDestroyed() && !win.isVisible()) win.show()
+    }, 8000)
+  }
 
   win.webContents.on('console-message', (_e, level, message) => {
     console.log('[renderer:' + level + ']', message)

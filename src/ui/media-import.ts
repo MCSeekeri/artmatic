@@ -494,28 +494,51 @@ export async function importFiles(
   files: readonly File[],
   target: ImportTarget = {},
 ): Promise<number> {
+  /*
+   * **先同步取完路径，再开始 await。**
+   *
+   * Electron 的 `webUtils.getPathForFile(file)` 只在 drop 事件期间可靠；
+   * 循环里第一次 await 之后，`File` 与本机路径的映射可能已经失效 ——
+   * 那样拖进来的素材会悄悄退化成「复制一份进工程」。
+   */
+  // `pathForFile` 在 preload 里同步完成 allowlist 登记（见 preload.cjs）。
+  const paths = files.map((f) => platform.pathForFile?.(f) ?? null);
+
   let start = target.start ?? 0;
   let ok = 0;
 
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]!;
     const kind = kindOfFile(file.name, file.type);
     if (!kind) {
       appState.flash(tr('err.file.unsupported', { name: file.name }), 'error');
       continue;
     }
     const step: ImportTarget = { ...target, start };
-    const done =
-      kind === 'video'
-        ? await importVideoFile(file, step)
-        : await (kind === 'image' ? importImageBlob : importAudioBlob)(
-            file.name,
-            await file.arrayBuffer(),
-            step,
-          );
+    const path = paths[i];
+
+    // 桌面版拖入：默认 linked（与右键「导入」同一条模型）。
+    // 路径导入失败时退回字节导入 —— 用户已经松手了，不该什么都不发生。
+    const done = path
+      ? ((await importLinkedPath(kind, file.name, path, file.size, step)) ??
+        (await importFromBytes(file, kind, step)))
+      : await importFromBytes(file, kind, step);
+
     if (!done) continue;
     ok += 1;
     if (done.end !== null) start = done.end;
   }
 
   return ok;
+}
+
+/** 没有本机路径时的兜底：字节导入（拖拽 / 剪贴板 / 浏览器）。 */
+async function importFromBytes(
+  file: File,
+  kind: PoolKind,
+  target: ImportTarget,
+): Promise<ImportedFile | null> {
+  if (kind === 'video') return importVideoFile(file, target);
+  const data = await file.arrayBuffer();
+  return (kind === 'image' ? importImageBlob : importAudioBlob)(file.name, data, target);
 }

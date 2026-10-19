@@ -23,12 +23,20 @@ const api = {
   readRange: (path, start, end) =>
     ipcRenderer.invoke('artmatic:readRange', path, start, end),
   stat: (path) => ipcRenderer.invoke('artmatic:stat', path),
-  /** 拖入的 File → 真实路径（Electron 32 起 `File.path` 已删除）。 */
+  /**
+   * 拖入的 File → 真实路径（Electron 32 起 `File.path` 已删除）。
+   *
+   * **授权也在这里**：`webUtils.getPathForFile` 只对用户拖入 / 选中的真实 File
+   * 返回路径，所以它等价于一次明确的用户选择，可以同步登记进主进程 allowlist。
+   * 不把 `allowPath` 单独暴露给页面 —— 那等于把「任意路径读取」的开关交给渲染层。
+   */
   pathForFile: (file) => {
     try {
-      return webUtils && typeof webUtils.getPathForFile === 'function'
+      const p = webUtils && typeof webUtils.getPathForFile === 'function'
         ? webUtils.getPathForFile(file)
-        : null
+        : ''
+      if (p) ipcRenderer.sendSync('artmatic:allowPath-sync', p)
+      return p || null
     } catch {
       return null
     }

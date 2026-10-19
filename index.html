@@ -20,8 +20,87 @@
       media="(prefers-color-scheme: dark)"
     />
     <title>Artmatic</title>
+    <!--
+      启动画面必须是**内联 CSS**：它要在 1.6 MB 的主 bundle 解析之前就画出来。
+      任何外部样式/字体都会把这段时间变成又一次等待。
+      `pointer-events: none` 是刻意的：画面只是遮罩，不该拦住首屏点击
+      （E2E 在 mount 之后立刻点元素，不会因为淡出动画而 miss）。
+    -->
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #111114;
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        background: #111114;
+        color: #e9e9ee;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+      }
+      #boot-splash.is-done {
+        opacity: 0;
+      }
+      .boot-mark {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        border: 1px solid #6f64ef;
+        color: #8c83ff;
+        font: 600 20px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .boot-word {
+        color: #b9b9c4;
+        font: 600 11px/1 ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0.46em;
+        text-indent: 0.46em;
+      }
+      .boot-bar {
+        width: 160px;
+        height: 1px;
+        overflow: hidden;
+        background: #2a2a33;
+      }
+      .boot-bar > i {
+        display: block;
+        width: 38%;
+        height: 100%;
+        background: #6f64ef;
+        animation: boot-slide 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      @keyframes boot-slide {
+        from {
+          transform: translateX(-120%);
+        }
+        to {
+          transform: translateX(360%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-bar > i {
+          width: 100%;
+          opacity: 0.5;
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="boot-splash" role="status" aria-label="Artmatic">
+      <div class="boot-mark" aria-hidden="true">A</div>
+      <div class="boot-word">ARTMATIC</div>
+      <div class="boot-bar" aria-hidden="true"><i></i></div>
+    </div>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

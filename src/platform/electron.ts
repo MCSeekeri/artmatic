@@ -24,6 +24,7 @@ export interface ElectronHostBridge {
   readFile(path: string): Promise<Uint8Array>;
   readRange(path: string, start: number, end: number): Promise<Uint8Array>;
   stat(path: string): Promise<{ size: number; mtime: number } | null>;
+  pathForFile(file: File): string | null;
   pickArchive(): Promise<{ path: string; name: string; size: number } | null>;
   watch(paths: string[]): Promise<number>;
   unwatch(): Promise<boolean>;
@@ -93,6 +94,7 @@ export function createElectronPlatform(host: ElectronHostBridge): Platform {
     readPath: (path, start, end) => host.readRange(path, start, end),
     readFileAt: (path) => host.readFile(path),
     statPath: (path) => host.stat(path),
+    pathForFile: (file) => host.pathForFile(file),
 
     watchPaths(paths, onChange) {
       void host.watch([...paths]);

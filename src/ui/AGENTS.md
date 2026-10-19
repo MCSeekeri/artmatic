@@ -364,6 +364,11 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   右键「收集到工程 / 重新链接」走 `project-actions.collectAsset` / `relinkAsset`。
   桌面版的文件监视在 `ui/asset-watch.ts`，**只标 `stale`，绝不自动重读**——
   自动换内容会让「同一帧两次渲染用了不同字节」变得无法复现。
+- **拖入 / 粘贴都走 `media-import.importFiles`**：进入函数时**同步**把
+  `platform.pathForFile` 取完（Electron 的 `webUtils` 只在 drop 事件期间可靠），
+  再 `await platform.allowPath` 登记主进程 allowlist，最后走
+  `importLinkedPath`。拿不到路径（浏览器 / 剪贴板）才退化成字节导入。
+  **不要**在 drop handler 里自己 `await` 后再取路径 —— 那样会静默退化成 bundled。
 - **「未使用素材」只在工程面板里（`Rail.svelte`）**，数据是 `assets.retainedIds()` /
   `retainedInput()` / `retainedSize()`（W1.3）。三个动作都有唯一实现：恢复走
   `project-actions.restoreUnusedAsset`（要 await 素材来源重建，之后画面才能出来）、

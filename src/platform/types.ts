@@ -108,6 +108,12 @@ export interface Platform {
   readonly readFileAt?: (path: string) => Promise<Uint8Array>;
   readonly statPath?: (path: string) => Promise<{ size: number; mtime: number } | null>;
   /**
+   * 拖入的 `File` → 本机路径（Electron 32 起 `File.path` 已被删除，
+   * 必须走 `webUtils.getPathForFile`）。**同步、只在 drop 事件期间可靠**：
+   * 调用方要先把它取完，再开始 await。
+   */
+  readonly pathForFile?: (file: File) => string | null;
+  /**
    * 监视源文件变化。返回停止函数。**只用于标记 stale**，绝不自动换内容。
    */
   watchPaths?: (paths: readonly string[], onChange: (path: string) => void) => () => void;

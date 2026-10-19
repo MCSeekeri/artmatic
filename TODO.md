@@ -29,11 +29,16 @@
     7.6 MB 视频按路径 linked 导入（`mediaKind:'path'`）并打进 `.artmatic`
     （`assets:1, bytes:7614208`）。
   - 可复现入口：`bun run desktop:artifact` / `bun run desktop:smoke`。
+- **拖拽 linked + 启动画面**：
+  - `importFiles` 先同步快照 `platform.pathForFile`（Electron `webUtils`），再
+    `allowPath` 进主进程 allowlist，最后 `importLinkedPath`；浏览器/剪贴板仍走字节。
+  - `index.html` 内联启动画面（不依赖 bundle/字体），`main.mjs` 改为
+    `show:false` + `ready-to-show` 才显示窗口；产物实测
+    `did-finish-load 309ms / ready-to-show 458ms`，启动画面在首帧就已存在，
+    mount 后自动退场（`splashGone:true`）。
 
 **未完成（下一步）**：
 - 干净机器上复测 `sandbox: true`（本机已知渲染进程崩溃，冒烟用 `--nosandbox`）。
-- 拖拽入口的 `webUtils.getPathForFile` 还没有接到 `MediaPoolDrawer` / 时间轴
-  drop（现在只有右键「导入」走原生选择器；拖拽仍回退 bundled）。
 - 图片/音频的桌面 linked 只做了单测 + 代码路径，冒烟只覆盖视频；补一条带
   PNG/WAV 的产物冒烟。
 - 工程包导入在 Electron 仍用 `<input type=file>`（可用，但不是原生对话框）。

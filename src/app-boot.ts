@@ -87,6 +87,20 @@ startAutosave();
 
 const app = mount(App, { target: document.getElementById('app')! });
 
+/*
+ * 启动画面（index.html 内联）在这之后才退场：两帧 rAF 保证浏览器已经
+ * 至少提交过一次新 UI —— 先 fade 再移除，避免「splash 消失、界面还没画」
+ * 的空白闪一下。移除失败也不影响功能（它 pointer-events: none）。
+ */
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    const splash = document.getElementById('boot-splash');
+    if (!splash) return;
+    splash.classList.add('is-done');
+    setTimeout(() => splash.remove(), 320);
+  });
+});
+
 // 最近工程列表：只填充 UI，**不自动打开**任何东西。
 // 恢复一个工程需要 requestPermission()，而它必须有用户手势 ——
 // 页面加载时做不到，所以只能等用户点。

@@ -164,6 +164,18 @@ export function installHost({ app, protocol, ipcMain, dialog, shell }) {
     return { path: abs, name: path.basename(abs), size: st.size }
   })
 
+  /**
+   * 拖拽入口的授权：路径来自 preload 的 `webUtils.getPathForFile`（用户刚把文件
+   * 拖进来），与原生选择器是同一种「用户明确选择」。
+   *
+   * 用同步 IPC 的唯一理由：必须在 preload 返回路径**之前**完成登记，否则紧随
+   * 其后的 `readRange` 会以「path not allowed」失败。它不暴露给页面。
+   */
+  ipcMain.on('artmatic:allowPath-sync', (e, p) => {
+    if (typeof p === 'string' && p) allow(p)
+    e.returnValue = true
+  })
+
   ipcMain.handle('artmatic:readFile', async (_e, p) => {
     if (!permitted(p)) throw new Error('path not allowed')
     return new Uint8Array(await fsp.readFile(trim(p)))
