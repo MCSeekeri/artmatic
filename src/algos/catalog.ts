@@ -136,6 +136,18 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   'scene-datamosh': rt('algo.desc.sceneDatamosh'),
   'scene-flow': rt('algo.desc.sceneFlow'),
   'scene-strands': rt('algo.desc.sceneStrands'),
+  /*
+   * 体积烟雾：t 无关（噪声沿 `-wind·t` 平移，没有「长出来」的过程），4 秒只是
+   * 让涡纹走到一个不像 t = 0 的相位。
+   *
+   * 缩略图**强制纯色背景**：它出厂是透明底，直接截会在菜单底板上糊成一片
+   * 半透明的脏灰 —— 那不能代表这条生成器的样子。
+   */
+  smoke: {
+    descKey: 'algo.desc.smoke',
+    previewT: 4,
+    previewParams: { intRes: '720', bgMode: 'solid', bg: '#0a0c11' },
+  },
 };
 
 /**
