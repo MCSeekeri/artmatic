@@ -22,6 +22,7 @@ import {
   createShapeElement,
   createTextElement,
   defaultTextStyle,
+  defaultTransform3D,
   type ImageElement,
   type MixBlend,
   type ShapeElement,
@@ -30,6 +31,7 @@ import {
   type TextStyle,
   type TextStyleShadow,
   type TextureFrame,
+  type Transform3D,
   type TypographyDocument,
   type TypographyElement,
   type ZOrderOp,
@@ -233,6 +235,93 @@ function anyElement(doc: TypographyDocument): TypographyElement[] {
 }
 
 /**
+ * 实时预览的写入通道：拖动中连续调用，**不拍快照**；松手由 `endLive` 结算。
+ *
+ * 拖拽路径没有显式的「开始」信号（第一个 pointermove 就是开始），所以事务
+ * 在这里懒开。`beginGesture` 本身是幂等的（已在事务里直接 return），
+ * 与 `PropertiesPanel` 的抠图滑杆是同一套写法。
+ */
+function liveWrite(fn: (doc: TypographyDocument) => void): void {
+  if (!editorState.gestureActive) editorState.beginGesture();
+  editorState.live(fn);
+}
+
+/**
+ * `setFrame` 的写库体。commit 与实时预览共用 —— 分两份的话「拖动时按锚点
+ * 整体平移、松手后变成各自设值」这种不一致只在多选时出现，极难发现。
+ */
+function applyFrame(doc: TypographyDocument, patch: Partial<TextureFrame>): void {
+  const ids = new Set(editorState.groupAwareIds);
+  if (!ids.size) return;
+  const targets = doc.elements.filter((el) => ids.has(el.id) && !el.locked);
+  const anchor = targets[0];
+  if (!anchor) return;
+  const single = targets.length === 1;
+  const dx = patch.x !== undefined ? patch.x - anchor.frame.x : 0;
+  const dy = patch.y !== undefined ? patch.y - anchor.frame.y : 0;
+  for (const el of targets) {
+    const f = el.frame;
+    el.frame = {
+      x: patch.x !== undefined ? (single ? patch.x : f.x + dx) : f.x,
+      y: patch.y !== undefined ? (single ? patch.y : f.y + dy) : f.y,
+      // 宽 / 高 / 旋转只在单选时生效（见 setFrame 的接口注释）。宽高至少 1px：
+      // 0 宽的元素在画布上再也点不回来。
+      w: single && patch.w !== undefined ? Math.max(1, patch.w) : f.w,
+      h: single && patch.h !== undefined ? Math.max(1, patch.h) : f.h,
+      rot: single && patch.rot !== undefined ? patch.rot : f.rot,
+    };
+  }
+}
+
+/**
+ * 图形描边宽度（commit / 实时共用）。
+ *
+ * 本来没有描边时也**创建**：面板上「先调宽度、再挑颜色」是常见顺序，
+ * 静默不生效会让人以为控件坏了。宽度 0 在视觉上仍等于没有描边。
+ */
+function applyShapeStrokeWidth(doc: TypographyDocument, width: number): void {
+  const w = Math.max(0, width);
+  for (const el of onlyShape(doc)) {
+    el.stroke = el.stroke
+      ? { ...el.stroke, width: w }
+      : { color: '#ffffff', width: w, style: 'solid' };
+  }
+}
+
+/** 文本框边框（commit / 实时共用）。 */
+function applyTextBoxStroke(doc: TypographyDocument, patch: Partial<Stroke>): void {
+  for (const el of onlyText(doc)) {
+    const cur = el.boxStroke;
+    el.boxStroke = {
+      color: patch.color ?? cur?.color ?? '#ffffff',
+      // 宽度 0 = 无边框（与图形描边同一套语义：不做「有 / 无」两态，
+      // 少一个状态就少一处「为什么这里还有个隐形边框」）。
+      width: patch.width !== undefined ? Math.max(0, patch.width) : (cur?.width ?? 2),
+      style: patch.style ?? cur?.style ?? 'solid',
+    };
+  }
+}
+
+/** `patchTransform3d` 的写库体（同样的理由：commit 与实时预览必须同源）。 */
+function applyTransform3d(doc: TypographyDocument, patch: Transform3DPatch): void {
+  for (const el of anyElement(doc)) {
+    // 面板只在启用后才显示控件；这里再兜一道，免得别处调进来写出半个对象。
+    const t = el.transform3d ?? defaultTransform3D();
+    el.transform3d = {
+      ...t,
+      perspective: patch.perspective ?? t.perspective,
+      translate: { ...t.translate, ...patch.translate },
+      rotate: { ...t.rotate, ...patch.rotate },
+      scale: { ...t.scale, ...patch.scale },
+      skew: { ...t.skew, ...patch.skew },
+      origin: { ...t.origin, ...patch.origin },
+      backface: patch.backface ?? t.backface,
+      style: patch.style ?? t.style,
+    };
+  }
+}
+
+/**
  * 写一个文本属性。**唯一实现** —— 提交路径与「拖动实时预览」路径共用，
  * 两处各写一份的话，「提交生效、预览不变」这类不一致迟早出现。
  *
@@ -394,6 +483,23 @@ function placeImageAssetImpl(
 
 /* ------------------------------------------------------------ 动作表 */
 
+/**
+ * 3D 参数的补丁：嵌套对象**逐层合并**，只写要改的键。
+ *
+ * 为什么不用 `Partial<Transform3D>`：那样 `translate` 只能整组替换 ——
+ * 面板里改一个 X 就得把 Y / Z 一起读上来再传回去，多一处会写错的地方。
+ */
+export interface Transform3DPatch {
+  perspective?: number;
+  translate?: Partial<Transform3D['translate']>;
+  rotate?: Partial<Transform3D['rotate']>;
+  scale?: Partial<Transform3D['scale']>;
+  skew?: Partial<Transform3D['skew']>;
+  origin?: Partial<Transform3D['origin']>;
+  backface?: Transform3D['backface'];
+  style?: Transform3D['style'];
+}
+
 export interface TypographyActions {
   /* 文本 */
   setTextProp<K extends keyof TextStyle>(key: K, value: TextStyle[K]): void;
@@ -538,6 +644,20 @@ export interface TypographyActions {
    */
   setFrame(patch: Partial<TextureFrame>): void;
 
+  /* 实时预览（属性面板的数字框拖动）：连续写、松手结算成一笔 */
+  /** 位置 / 大小 / 旋转的实时版本（与 `setFrame` 同一套多选语义）。 */
+  setFrameLive(patch: Partial<TextureFrame>): void;
+  setOpacityLive(value: number): void;
+  patchTransform3dLive(patch: Transform3DPatch): void;
+  /** 结算一次实时预览（松手）。无变化的事务由撤销栈自己丢弃。 */
+  endLive(label: string): void;
+
+  /* 元素级 3D 变换（所有元素类型通用） */
+  /** 打开 / 关闭 3D。关闭 = 删字段（缺省语义就是「没有 3D」）。 */
+  setTransform3dEnabled(enable: boolean): void;
+  /** 改 3D 参数。嵌套对象逐层合并；未启用时会先补一份默认值。 */
+  patchTransform3d(patch: Transform3DPatch): void;
+
   /* 图片元素的抠图 / 四角（元素级，只作用于图片） */
   /** 打开 / 关闭抠图。打开时若还没有参数，写一份默认绿幕。 */
   setImageKey(enable: boolean): void;
@@ -576,6 +696,8 @@ export interface TypographyActions {
   setShapeFill(color: string): void;
   /** 填充类型 / 渐变 / 纹理的**一处**写入路径（见 document.ts 的 applyPaintPatch）。 */
   setShapePaint(patch: ShapePaintPatch): void;
+  /** 实时版本（拖动数字框时连续写，松手由 `endLive` 结算）。 */
+  setShapePaintLive(patch: ShapePaintPatch): void;
   /**
    * 文本**字形填充**的局部更新（渐变 / 径向 / 纹理）。
    *
@@ -585,6 +707,8 @@ export interface TypographyActions {
    * `clearTextFill` 把字段整个清掉。
    */
   setTextFill(patch: ShapePaintPatch): void;
+  /** 实时版本（见 setShapePaintLive）。 */
+  setTextFillLive(patch: ShapePaintPatch): void;
   /** 清掉文本字形填充，回到 `style.color` 纯色字形。 */
   clearTextFill(): void;
   /**
@@ -594,8 +718,12 @@ export interface TypographyActions {
    * 这个是画在文本元素外壳上的背景（文字之下）。见 TextElement.boxFill。
    */
   setTextBoxFill(patch: ShapePaintPatch): void;
+  /** 实时版本（见 setShapePaintLive）。 */
+  setTextBoxFillLive(patch: ShapePaintPatch): void;
   /** 文本框边框（颜色 / 宽度 / 线型）。局部更新，缺省字段沿用原值。 */
   setTextBoxStroke(patch: Partial<Stroke>): void;
+  /** 实时版本（拖动边框宽度时连续写）。 */
+  setTextBoxStrokeLive(patch: Partial<Stroke>): void;
   /**
    * 布尔运算（并 / 差 / 交 / 异或）。作用于选中的图形，结果为**一个** `svg` 图形。
    * 差集是「最前景那个减去其余」，与设计工具一致。
@@ -605,6 +733,8 @@ export interface TypographyActions {
   canBoolean(): boolean;
   setShapeStroke(color: string): void;
   setShapeStrokeWidth(width: number): void;
+  /** 实时版本（拖动线宽时连续写）。 */
+  setShapeStrokeWidthLive(width: number): void;
   setShapeStrokeStyle(style: 'solid' | 'dashed' | 'dotted'): void;
   setShapeRadius(radius: number): void;
   /** 形状参数（边数 / 锐利度 / 壁厚 / 张角）。所有图形共用一条写入路径。 */
@@ -1203,6 +1333,24 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
+    setTransform3dEnabled(enable) {
+      editorState.commit(tr(enable ? 'typo.undo.t3dOn' : 'typo.undo.t3dOff'), (doc) => {
+        for (const el of anyElement(doc)) {
+          // 关闭 = 删字段（缺省语义就是「没有 3D」），与抠图 / 四角的开关节律一致。
+          if (enable) el.transform3d = el.transform3d ?? defaultTransform3D();
+          else delete el.transform3d;
+        }
+      });
+    },
+
+    patchTransform3d(patch) {
+      editorState.commit(tr('typo.undo.t3d'), (doc) => applyTransform3d(doc, patch));
+    },
+
+    patchTransform3dLive(patch) {
+      liveWrite((doc) => applyTransform3d(doc, patch));
+    },
+
     setImageKey(enable) {
       editorState.commit(tr(enable ? 'typo.undo.keyOn' : 'typo.undo.keyOff'), (doc) => {
         for (const el of onlyImage(doc)) {
@@ -1243,28 +1391,23 @@ export function createTypographyActions(): TypographyActions {
     },
 
     setFrame(patch) {
-      const ids = new Set(editorState.groupAwareIds);
-      if (!ids.size) return;
-      editorState.commit(tr('typo.undo.frame'), (doc) => {
-        const targets = doc.elements.filter((el) => ids.has(el.id) && !el.locked);
-        const anchor = targets[0];
-        if (!anchor) return;
-        const single = targets.length === 1;
-        const dx = patch.x !== undefined ? patch.x - anchor.frame.x : 0;
-        const dy = patch.y !== undefined ? patch.y - anchor.frame.y : 0;
-        for (const el of targets) {
-          const f = el.frame;
-          el.frame = {
-            x: patch.x !== undefined ? (single ? patch.x : f.x + dx) : f.x,
-            y: patch.y !== undefined ? (single ? patch.y : f.y + dy) : f.y,
-            // 宽 / 高 / 旋转只在单选时生效（见接口注释）。宽高至少 1px：
-            // 0 宽的元素在画布上再也点不回来。
-            w: single && patch.w !== undefined ? Math.max(1, patch.w) : f.w,
-            h: single && patch.h !== undefined ? Math.max(1, patch.h) : f.h,
-            rot: single && patch.rot !== undefined ? patch.rot : f.rot,
-          };
-        }
+      editorState.commit(tr('typo.undo.frame'), (doc) => applyFrame(doc, patch));
+    },
+
+    setFrameLive(patch) {
+      liveWrite((doc) => applyFrame(doc, patch));
+    },
+
+    setOpacityLive(value) {
+      const v = Math.max(0, Math.min(1, value));
+      liveWrite((doc) => {
+        for (const el of anyElement(doc)) el.opacity = v;
       });
+    },
+
+    endLive(label) {
+      // 无变化的事务（拖出去又拖回来）由 CommandStack.endTx 自己丢弃，不留空记录。
+      if (editorState.gestureActive) editorState.endGesture(label);
     },
 
     toggleFlag(key) {
@@ -1421,10 +1564,24 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
+    setShapePaintLive(patch) {
+      liveWrite((doc) => {
+        for (const el of onlyShape(doc)) el.fill = applyPaintPatch(el.fill, patch);
+      });
+    },
+
     setTextFill(patch) {
       // 起步用一份纯色：applyPaintPatch 会把颜色带到新类型，于是「第一次点
       // 渐变」不会得到一份没有颜色、画出来全透明的填充。
       editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
+        for (const el of onlyText(doc)) {
+          el.fill = applyPaintPatch(el.fill ?? { kind: 'solid', color: DEFAULT_PAINT_A }, patch);
+        }
+      });
+    },
+
+    setTextFillLive(patch) {
+      liveWrite((doc) => {
         for (const el of onlyText(doc)) {
           el.fill = applyPaintPatch(el.fill ?? { kind: 'solid', color: DEFAULT_PAINT_A }, patch);
         }
@@ -1446,19 +1603,20 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
-    setTextBoxStroke(patch) {
-      editorState.commit(tr('typo.undo.shapeStroke'), (doc) => {
+    setTextBoxFillLive(patch) {
+      liveWrite((doc) => {
         for (const el of onlyText(doc)) {
-          const cur = el.boxStroke;
-          el.boxStroke = {
-            color: patch.color ?? cur?.color ?? '#ffffff',
-            // 宽度 0 = 无边框（与图形描边同一套语义：不做「有 / 无」两态，
-            // 少一个状态就少一处「为什么这里还有个隐形边框」）。
-            width: patch.width !== undefined ? Math.max(0, patch.width) : (cur?.width ?? 2),
-            style: patch.style ?? cur?.style ?? 'solid',
-          };
+          el.boxFill = applyPaintPatch(el.boxFill ?? { kind: 'solid', color: DEFAULT_PAINT_A }, patch);
         }
       });
+    },
+
+    setTextBoxStroke(patch) {
+      editorState.commit(tr('typo.undo.shapeStroke'), (doc) => applyTextBoxStroke(doc, patch));
+    },
+
+    setTextBoxStrokeLive(patch) {
+      liveWrite((doc) => applyTextBoxStroke(doc, patch));
     },
 
     setShapeStroke(color) {
@@ -1470,16 +1628,11 @@ export function createTypographyActions(): TypographyActions {
     },
 
     setShapeStrokeWidth(width) {
-      editorState.commit(tr('typo.undo.strokeWidth'), (doc) => {
-        for (const el of onlyShape(doc)) {
-          // 本来没有描边时也**创建**：面板与 Ribbon 上「先调宽度、再挑颜色」
-          // 是常见顺序，静默不生效会让人以为控件坏了。宽度 0 在视觉上仍然
-          // 等于没有描边，所以这不会给用户多出一个隐形状态。
-          el.stroke = el.stroke
-            ? { ...el.stroke, width: Math.max(0, width) }
-            : { color: '#ffffff', width: Math.max(0, width), style: 'solid' };
-        }
-      });
+      editorState.commit(tr('typo.undo.strokeWidth'), (doc) => applyShapeStrokeWidth(doc, width));
+    },
+
+    setShapeStrokeWidthLive(width) {
+      liveWrite((doc) => applyShapeStrokeWidth(doc, width));
     },
 
     setShapeStrokeStyle(style) {

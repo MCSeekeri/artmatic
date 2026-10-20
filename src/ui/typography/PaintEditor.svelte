@@ -37,6 +37,13 @@
     onkind: (kind: Paint['kind']) => void;
     /** 其余字段的局部更新。 */
     onpatch: (patch: ShapePaintPatch) => void;
+    /**
+     * 拖动数字框过程中的**实时**更新（可选）。不传 = 只走 onpatch 的提交路径。
+     * 与 `NumberInput` 的 oninput/onliveend 同一套：连续写、松手结算成一笔。
+     */
+    onpatchlive?: (patch: ShapePaintPatch) => void;
+    /** 拖动结束（松手 / Esc）。由调用方结算撤销事务。 */
+    onliveend?: () => void;
     /** testid 前缀：`${prefix}-kind` / `${prefix}-color` / `${prefix}-stop-pos-0` … */
     prefix: string;
     /**
@@ -47,7 +54,17 @@
     /** 工程自定义方案（`theme` 给 id 时，id 可能是自定义的）。 */
     customThemes?: readonly TypographyTheme[] | null;
   }
-  const { paint, kindOptions, onkind, onpatch, prefix, theme = null, customThemes = null }: Props = $props();
+  const {
+    paint,
+    kindOptions,
+    onkind,
+    onpatch,
+    onpatchlive,
+    onliveend,
+    prefix,
+    theme = null,
+    customThemes = null,
+  }: Props = $props();
 
   const palette = $derived(
     typeof theme === 'object' && theme !== null ? theme : themeById(theme, customThemes),
@@ -149,6 +166,8 @@
           testid={`${prefix}-angle`}
           ariaLabel={tr('typo.propAngle')}
           onchange={(v) => onpatch({ angle: v })}
+          oninput={(v) => onpatchlive?.({ angle: v })}
+          onliveend={onliveend}
         />
       </Field>
     {/if}
@@ -176,6 +195,11 @@
             testid={`${prefix}-stop-pos-${i}`}
             ariaLabel={tr('typo.propStopPos')}
             onchange={(v) => writeStops(stops.map((x, j) => (j === i ? { ...x, offset: v / 100 } : x)))}
+            oninput={(v) =>
+              onpatchlive?.({
+                stops: stops.map((x, j) => (j === i ? { ...x, offset: v / 100 } : x)),
+              })}
+            onliveend={onliveend}
           />
           <button
             type="button"
@@ -218,6 +242,8 @@
         testid={`${prefix}-scale`}
         ariaLabel={tr('typo.propTextureScale')}
         onchange={(v) => onpatch({ scale: Math.max(2, v) })}
+        oninput={(v) => onpatchlive?.({ scale: Math.max(2, v) })}
+        onliveend={onliveend}
       />
     </Field>
     <Field label={tr('typo.propTextureThickness')} labelWidth={74}>
@@ -231,6 +257,8 @@
         testid={`${prefix}-thickness`}
         ariaLabel={tr('typo.propTextureThickness')}
         onchange={(v) => onpatch({ thickness: Math.max(0.5, v) })}
+        oninput={(v) => onpatchlive?.({ thickness: Math.max(0.5, v) })}
+        onliveend={onliveend}
       />
     </Field>
   {/if}
@@ -247,6 +275,8 @@
         testid={`${prefix}-opacity`}
         ariaLabel={tr('typo.propFillOpacity')}
         onchange={(v) => onpatch({ opacity: Math.max(0, Math.min(100, v)) / 100 })}
+        oninput={(v) => onpatchlive?.({ opacity: Math.max(0, Math.min(100, v)) / 100 })}
+        onliveend={onliveend}
       />
     </Field>
   {/if}

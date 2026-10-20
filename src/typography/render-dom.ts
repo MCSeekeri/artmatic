@@ -288,8 +288,9 @@ function buildContent(
 /**
  * 图片元素的内容节点（外壳 + `<img>` 或处理后的 `<canvas>`）。build 与 sync 共用。
  *
- * 有抠图 / 非恒等四角时走 canvas（见 `typography/image-fx.ts` 的文件头：
- * snapDOM 会丢 `matrix3d`，但保留 canvas）。处理是异步的：未就绪先显示**原图**，
+ * 有抠图 / 非恒等四角时走 canvas（见 `typography/image-fx.ts` 的文件头：逐像素
+ * 处理与 GPU 对拍都在 CPU 做；旧的「snapDOM 丢 matrix3d」结论已被重测否定）。
+ * 处理是异步的：未就绪先显示**原图**，
  * 就绪后由 `onImageFxReady` 通知宿主重绘 —— 不让用户看到空白。
  */
 function buildImageNode(el: ImageElement, url: string, opts: BuildDocOptions): HTMLElement {

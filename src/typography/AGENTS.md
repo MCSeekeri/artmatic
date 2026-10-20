@@ -32,6 +32,18 @@
   4. **动画状态要烘焙，不要指望库读懂**：WAAPI seek → 把计算值写进内联样式 →
      停掉 animation → 再截图。（WAAPI 的 seek 实测误差为 0，所以 CSS 动画可以帧精确导出，
      但必须走烘焙路径。）
+- **元素级 3D 是「参数 → CSS 字符串」，不是矩阵**（`document.ts::Transform3D` +
+  `css.ts::transform3dCss`，面板在「元素属性」的 3D 分节）。三条纪律：
+  1. **变换顺序固定**：`perspective → translate3d → rotateX → rotateY → rotateZ →
+     skewX → skewY → scale3d`。改顺序 = 改已有工程的画面。
+  2. `rotate.z` 与 `frame.rot` **合成一个 `rotateZ`**（都是绕 Z），不写两条 ——
+     否则「谁先谁后」会变成第三处约定。
+  3. `transform-origin` / `backface-visibility` / `transform-style` **总是输出**
+     （关闭时给 CSS 默认值）：就地同步只 set 不 delete，漏一个键就会在
+     「启用 → 关闭」后残留（与 `textBoxStyle` 同一条纪律）。
+  `perspective` 用 **`perspective()` 函数**，所以没有 `perspective-origin`；要做
+  「整页共享一个消失点」得把 perspective 提到文档根（未做）。选择框 / 吸附仍按
+  **未倾斜**的 `frame` 算 —— 倾斜元素的可视范围与编辑框不一致是已知的，与旋转同源。
 - **字体按 face 而不是按族组织**（最小单位 `family + weight + style`）：一族只存一份字节的话，
   粗体只能由浏览器合成，而舞台用的是真正的 700 字面 —— 「预览是真粗体、导出是合成粗体」，
   字宽与笔画都不同，逐像素一比就是几万个像素。
@@ -55,10 +67,17 @@
   ⚠️ **`UNPACK_FLIP_Y_WEBGL` 对 `ImageBitmap` 源在 Chromium 上被忽略** ⇒
   图片 / 视频的上传源统一成 **canvas**，翻转在 `SourceManager.uploadImage` 一处定义。
 - **图片元素的抠图 / 四角是 CPU 处理的**（`typography/image-fx.ts`），不能像片段那样
-  交给 GPU：排版渲染成 DOM，没有 placement pass 那个可编程采样点。三条实测结论：
-  1. **snapDOM 会丢掉 `matrix3d`**（透视过的元素直接不出现），但**保留 `<canvas>`
-     内容与 `mask-image`**。所以有 `key` 或非恒等 `quad` 的图片元素，内容节点是
-     `<canvas>` 而不是 `<img>`（`render-dom.ts::buildImageNode`）。
+  交给 GPU：抠图必须逐像素，四角重采样要控质量（与 `placement.frag.ts` 逐点对拍），
+  而排版渲染成 DOM，没有 placement pass 那个可编程采样点。三条实测结论：
+  1. **CSS 3D 变换在 snapDOM 里是保留的**（2026-10-21 重测 3.2.0：裸 div 的
+     `perspective` / `rotateY` / `rotateX` / `translateZ`、真实 `.typo-doc` 嵌套
+     （`contain` + `isolation` + `overflow:hidden`）、用四角单应写的 `matrix3d`、
+     `<img>`、文字、外层 `scale()` —— 全部正确出图）。**旧注释「snapDOM 会丢
+     `matrix3d`」是误判，已删**；当时看到的现象另有原因（未定位）。
+     复现脚本在 `.codebuddy/tmp/2026-10-21/`。跨元素 `preserve-3d` 的深度排序
+     **仍未验证**。抠图 / 四角仍走 CPU，所以有 `key` 或非恒等 `quad` 的图片元素
+     内容节点是 `<canvas>` 而不是 `<img>`（`render-dom.ts::buildImageNode`）——
+     这是逐像素处理的要求，不是 3D 的要求。
   2. **处理是异步的**（要等图片解码）。舞台未就绪时先显示**原图**、完成后靠
      `BuildDocOptions.onImageFxReady` bump 一次 version 换节点；光栅化那条路
      **必须 `await ensureDocImagesFx()`**（`dom-snap.ts`）—— 不等的话截图拿到原图，

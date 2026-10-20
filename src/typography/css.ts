@@ -20,6 +20,7 @@ import {
   type TextElement,
   type TexturePattern,
   type TextStyle,
+  type Transform3D,
   type TypographyDocument,
   type TypographyElement,
   type TypographyGroup,
@@ -109,20 +110,84 @@ export function docStyle(doc: TypographyDocument): CssDecls {
 
 /* ------------------------------------------------------------ 元素外壳 */
 
+/* ------------------------------------------------------------ 3D 变换 */
+
+/** 角度 → CSS `deg`（三位小数，与 `px()` 同口径）。 */
+function deg(v: number): string {
+  return `${Math.round(v * 1000) / 1000}deg`;
+}
+
+/** 倍数 → CSS 数字。 */
+function num(v: number): string {
+  return String(Math.round(v * 1000) / 1000);
+}
+
+/** 0..1 → CSS 百分比（原点是元素框的比例，不是 px）。 */
+function pct(v: number): string {
+  return `${Math.round(v * 100000) / 1000}%`;
+}
+
 /**
- * 外层：几何 + 旋转 + 不透明度 + 混合模式。
- * **动画不在这里** —— 动画预设大量使用 transform，而这里的 transform 被旋转占用。
- * 动画挂在紧接着的内层包装上（见 animLayerStyle），两者互不干扰。
+ * 3D 参数 → 一条 CSS `transform` 值。
+ *
+ * 顺序固定（见 `document.ts::Transform3D`）：写进 CSS 的列表就是矩阵相乘的顺序，
+ * 调换一下就是另一幅画 —— 已有工程会跟着变，不要「顺手」重排。
+ *
+ * 只有 `perspective` 为 0 且其余全恒等时返回 `'none'`。默认的 `perspective(800px)`
+ * 单独存在时矩阵是单位矩阵（视觉不变），保留它只是为了让 DOM 值与面板一致 ——
+ * 面板显示 800，`transform` 里就该看得到 800。
+ */
+function transform3dCss(frameRot: number, t: Transform3D): string {
+  const parts: string[] = [];
+  if (t.perspective > 0) parts.push(`perspective(${px(t.perspective)})`);
+
+  const tr = t.translate;
+  const ro = t.rotate;
+  const sc = t.scale;
+  const sk = t.skew;
+  if (tr.x || tr.y || tr.z) parts.push(`translate3d(${px(tr.x)}, ${px(tr.y)}, ${px(tr.z)})`);
+  if (ro.x) parts.push(`rotateX(${deg(ro.x)})`);
+  if (ro.y) parts.push(`rotateY(${deg(ro.y)})`);
+  /*
+   * `frame.rot` 与 `rotate.z` 都是绕 Z ⇒ 合成一个角度。
+   * 写成两条 `rotateZ` 的话，「谁先谁后」会变成第三处需要记住的约定，
+   * 而这里两者可交换、合并后没有任何歧义。
+   */
+  const rz = rad2deg(frameRot) + ro.z;
+  if (rz) parts.push(`rotateZ(${deg(rz)})`);
+  if (sk.x) parts.push(`skewX(${deg(sk.x)})`);
+  if (sk.y) parts.push(`skewY(${deg(sk.y)})`);
+  if (sc.x !== 1 || sc.y !== 1 || sc.z !== 1) {
+    parts.push(`scale3d(${num(sc.x)}, ${num(sc.y)}, ${num(sc.z)})`);
+  }
+  return parts.length ? parts.join(' ') : 'none';
+}
+
+/**
+ * 外层：几何 + 旋转 / 3D + 不透明度 + 混合模式。
+ * **动画不在这里** —— 动画预设大量使用 transform，而这里的 transform 被几何变换
+ * 占用。动画挂在紧接着的内层包装上（见 animLayerStyle），两者互不干扰。
+ *
+ * 三个 3D 相关声明**总是写出来**（关闭时给 CSS 默认值）：就地同步
+ * （`syncDocDom`）没有删除语义，只 set 不 delete —— 少写一个键，从「启用」
+ * 切回「关闭」时上一份的值会留在元素上（见 textBoxStyle 的同一条纪律）。
  */
 export function elementStyle(el: TypographyElement): CssDecls {
+  const t3 = el.transform3d;
   return {
     position: 'absolute',
     left: px(el.frame.x),
     top: px(el.frame.y),
     width: px(el.frame.w),
     height: px(el.frame.h),
-    transform: el.frame.rot ? `rotate(${rad2deg(el.frame.rot)}deg)` : 'none',
-    'transform-origin': '50% 50%',
+    transform: t3
+      ? transform3dCss(el.frame.rot, t3)
+      : el.frame.rot
+        ? `rotate(${rad2deg(el.frame.rot)}deg)`
+        : 'none',
+    'transform-origin': t3 ? `${pct(t3.origin.x)} ${pct(t3.origin.y)}` : '50% 50%',
+    'backface-visibility': t3?.backface ?? 'visible',
+    'transform-style': t3?.style ?? 'flat',
     opacity: String(el.opacity),
     'mix-blend-mode': el.blend,
     'pointer-events': 'none',

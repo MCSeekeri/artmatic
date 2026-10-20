@@ -226,6 +226,51 @@ test('文本框背景：画在外壳上，字形色与裁切不受影响', async
   expect(border).toBe('3px');
 });
 
+/**
+ * 实时预览：拖动数字框（横向 scrub）时文档**每帧**跟着变，松手只结算一笔撤销。
+ *
+ * 旧行为是只在松手时写一次 —— 拖动过程中画面纹丝不动，用户没法靠眼睛对准数值。
+ * 这里断言的是「还没松手就已经变了」，那是这轮改动的全部意义。
+ */
+test('拖动数字框实时改文档，松手才结算撤销', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-tab-props').click();
+
+  const readX = (): Promise<number> => readDoc(page).then((d) => d.elements[0]!.frame.x);
+  const before = await readX();
+
+  const wrap = page.getByTestId('prop-x-wrap');
+  const box = (await wrap.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  // 4px = 1 step（scrub.ts 的 DEFAULT_PX_PER_STEP），拖 40px ⇒ +10 左右。
+  await page.mouse.move(cx + 40, cy, { steps: 8 });
+
+  // 关键：**还没松手**，文档与 DOM 都已经变了。
+  await expect.poll(readX, { message: '拖动中数值没有实时跟随' }).toBeGreaterThan(before + 5);
+  const left = await page
+    .locator('.paper [data-el-id]')
+    .first()
+    .evaluate((el) => (el as HTMLElement).style.left);
+  expect(left).not.toBe(`${before}px`);
+
+  await page.mouse.up();
+  const settled = await readX();
+  expect(settled).toBeGreaterThan(before + 5);
+
+  // 整段拖动 = 一笔撤销：一次 Ctrl+Z 必须**完全**回到起点。
+  // 若中途每次 oninput 都入了栈，这里只会退一小步。
+  await page.keyboard.press('Control+z');
+  expect(await readX()).toBeCloseTo(before, 5);
+});
+
 test('切换填充方式不再让 Ribbon 重排（填充组是稳定控件集）', async ({ page }) => {
   await wide(page);
   await boot(page);

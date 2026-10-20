@@ -100,6 +100,20 @@ import ColorField from '../controls/ColorField.svelte';
       id: el.id,
       kind: el.kind,
       frame: { ...el.frame },
+      /**
+       * 3D 参数。深拷一份：元素是原地改的，嵌套对象共享引用会让 Svelte
+       * 认为「值没变」（见文件头的多选说明）。
+       */
+      transform3d: el.transform3d
+        ? {
+            ...el.transform3d,
+            translate: { ...el.transform3d.translate },
+            rotate: { ...el.transform3d.rotate },
+            scale: { ...el.transform3d.scale },
+            skew: { ...el.transform3d.skew },
+            origin: { ...el.transform3d.origin },
+          }
+        : null,
       opacity: el.opacity,
       blend: el.blend,
       /** 图形填充（shape.fill）。 */
@@ -218,6 +232,11 @@ import ColorField from '../controls/ColorField.svelte';
       {#if multi}
         <p class="props-note">{tr('typo.propsMulti', { n: model.count })}</p>
       {/if}
+      <!--
+        拖动（横向 scrub）走 oninput：连续写文档、松手由 onliveend 结算成一笔。
+        键盘步进 / 文本回车只触发 onchange（那是一笔 commit）——两条路径都写同一个值，
+        但只有拖动需要「每帧可见」。
+      -->
       <Field label={tr('typo.propPos')} labelWidth={50} testid="prop-pos">
         <NumberInput
           value={model.frame.x}
@@ -226,6 +245,8 @@ import ColorField from '../controls/ColorField.svelte';
           ariaLabel="X"
           testid="prop-x"
           onchange={(v) => actions.setFrame({ x: v })}
+          oninput={(v) => actions.setFrameLive({ x: v })}
+          onliveend={() => actions.endLive(tr('typo.undo.frame'))}
         />
         <NumberInput
           value={model.frame.y}
@@ -234,6 +255,8 @@ import ColorField from '../controls/ColorField.svelte';
           ariaLabel="Y"
           testid="prop-y"
           onchange={(v) => actions.setFrame({ y: v })}
+          oninput={(v) => actions.setFrameLive({ y: v })}
+          onliveend={() => actions.endLive(tr('typo.undo.frame'))}
         />
       </Field>
       <Field label={tr('typo.propSize')} labelWidth={50}>
@@ -246,6 +269,8 @@ import ColorField from '../controls/ColorField.svelte';
           ariaLabel={tr('typo.propSize')}
           testid="prop-w"
           onchange={(v) => actions.setFrame({ w: v })}
+          oninput={(v) => actions.setFrameLive({ w: v })}
+          onliveend={() => actions.endLive(tr('typo.undo.frame'))}
         />
         <NumberInput
           value={model.frame.h}
@@ -256,6 +281,8 @@ import ColorField from '../controls/ColorField.svelte';
           ariaLabel={tr('typo.propSize')}
           testid="prop-h"
           onchange={(v) => actions.setFrame({ h: v })}
+          oninput={(v) => actions.setFrameLive({ h: v })}
+          onliveend={() => actions.endLive(tr('typo.undo.frame'))}
         />
       </Field>
       <Field label={tr('typo.propRotate')} labelWidth={50}>
@@ -269,6 +296,8 @@ import ColorField from '../controls/ColorField.svelte';
           ariaLabel={tr('typo.propRotate')}
           testid="prop-rot"
           onchange={(v) => actions.setFrame({ rot: (v * Math.PI) / 180 })}
+          oninput={(v) => actions.setFrameLive({ rot: (v * Math.PI) / 180 })}
+          onliveend={() => actions.endLive(tr('typo.undo.frame'))}
         />
       </Field>
       <Field label={tr('typo.propOpacity')} labelWidth={50}>
@@ -282,6 +311,8 @@ import ColorField from '../controls/ColorField.svelte';
           ariaLabel={tr('typo.propOpacity')}
           testid="prop-opacity"
           onchange={(v) => actions.setOpacity(Math.max(0, Math.min(100, v)) / 100)}
+          oninput={(v) => actions.setOpacityLive(Math.max(0, Math.min(100, v)) / 100)}
+          onliveend={() => actions.endLive(tr('typo.undo.opacity'))}
         />
       </Field>
       <Field label={tr('typo.propBlend')} labelWidth={50}>
@@ -293,6 +324,216 @@ import ColorField from '../controls/ColorField.svelte';
           onchange={(v) => actions.setBlend(v as MixBlend)}
         />
       </Field>
+
+      <!--
+        3D 变换：与 CSS 的 3D 属性一一对应（见 document.ts::Transform3D）。
+        存的是参数不是矩阵，渲染走 elementStyle 生成 transform 字符串。
+        透视用 perspective() 函数，所以没有「透视原点」——消失点跟着「原点」走。
+      -->
+      <h4 class="prop-sec">{tr('typo.prop3d')}</h4>
+      <Field label={tr('typo.prop3dEnable')} labelWidth={74}>
+        <Checkbox
+          checked={!!model.transform3d}
+          label={tr('typo.prop3dEnable')}
+          testid="prop-3d-enable"
+          onchange={(v) => actions.setTransform3dEnabled(v)}
+        />
+      </Field>
+      {#if model.transform3d}
+        {@const t3 = model.transform3d}
+        <Field label={tr('typo.prop3dPerspective')} labelWidth={74}>
+          <NumberInput
+            value={t3.perspective}
+            min={0}
+            max={5000}
+            step={50}
+            width={62}
+            suffix="px"
+            ariaLabel={tr('typo.prop3dPerspective')}
+            testid="prop-3d-persp"
+            onchange={(v) => actions.patchTransform3d({ perspective: v })}
+            oninput={(v) => actions.patchTransform3dLive({ perspective: v })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+        </Field>
+        <Field label={tr('typo.prop3dRotate')} labelWidth={74}>
+          <NumberInput
+            value={t3.rotate.x}
+            step={5}
+            width={50}
+            suffix="°"
+            ariaLabel={`${tr('typo.prop3dRotate')} X`}
+            testid="prop-3d-rotx"
+            onchange={(v) => actions.patchTransform3d({ rotate: { x: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ rotate: { x: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={t3.rotate.y}
+            step={5}
+            width={50}
+            suffix="°"
+            ariaLabel={`${tr('typo.prop3dRotate')} Y`}
+            testid="prop-3d-roty"
+            onchange={(v) => actions.patchTransform3d({ rotate: { y: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ rotate: { y: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={t3.rotate.z}
+            step={5}
+            width={50}
+            suffix="°"
+            ariaLabel={`${tr('typo.prop3dRotate')} Z`}
+            testid="prop-3d-rotz"
+            onchange={(v) => actions.patchTransform3d({ rotate: { z: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ rotate: { z: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+        </Field>
+        <Field label={tr('typo.prop3dTranslate')} labelWidth={74}>
+          <NumberInput
+            value={t3.translate.x}
+            step={1}
+            width={50}
+            suffix="px"
+            ariaLabel={`${tr('typo.prop3dTranslate')} X`}
+            testid="prop-3d-tx"
+            onchange={(v) => actions.patchTransform3d({ translate: { x: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ translate: { x: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={t3.translate.y}
+            step={1}
+            width={50}
+            suffix="px"
+            ariaLabel={`${tr('typo.prop3dTranslate')} Y`}
+            testid="prop-3d-ty"
+            onchange={(v) => actions.patchTransform3d({ translate: { y: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ translate: { y: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={t3.translate.z}
+            step={10}
+            width={50}
+            suffix="px"
+            ariaLabel={`${tr('typo.prop3dTranslate')} Z`}
+            testid="prop-3d-tz"
+            onchange={(v) => actions.patchTransform3d({ translate: { z: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ translate: { z: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+        </Field>
+        <Field label={tr('typo.prop3dScale')} labelWidth={74}>
+          <NumberInput
+            value={t3.scale.x}
+            min={0}
+            step={0.05}
+            precision={2}
+            width={50}
+            ariaLabel={`${tr('typo.prop3dScale')} X`}
+            testid="prop-3d-sx"
+            onchange={(v) => actions.patchTransform3d({ scale: { x: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ scale: { x: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={t3.scale.y}
+            min={0}
+            step={0.05}
+            precision={2}
+            width={50}
+            ariaLabel={`${tr('typo.prop3dScale')} Y`}
+            testid="prop-3d-sy"
+            onchange={(v) => actions.patchTransform3d({ scale: { y: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ scale: { y: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={t3.scale.z}
+            min={0}
+            step={0.05}
+            precision={2}
+            width={50}
+            ariaLabel={`${tr('typo.prop3dScale')} Z`}
+            testid="prop-3d-sz"
+            onchange={(v) => actions.patchTransform3d({ scale: { z: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ scale: { z: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+        </Field>
+        <Field label={tr('typo.prop3dSkew')} labelWidth={74}>
+          <NumberInput
+            value={t3.skew.x}
+            step={5}
+            width={50}
+            suffix="°"
+            ariaLabel={`${tr('typo.prop3dSkew')} X`}
+            testid="prop-3d-skewx"
+            onchange={(v) => actions.patchTransform3d({ skew: { x: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ skew: { x: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={t3.skew.y}
+            step={5}
+            width={50}
+            suffix="°"
+            ariaLabel={`${tr('typo.prop3dSkew')} Y`}
+            testid="prop-3d-skewy"
+            onchange={(v) => actions.patchTransform3d({ skew: { y: v } })}
+            oninput={(v) => actions.patchTransform3dLive({ skew: { y: v } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+        </Field>
+        <Field label={tr('typo.prop3dOrigin')} labelWidth={74}>
+          <NumberInput
+            value={Math.round(t3.origin.x * 100)}
+            min={0}
+            max={100}
+            step={5}
+            width={50}
+            suffix="%"
+            ariaLabel={`${tr('typo.prop3dOrigin')} X`}
+            testid="prop-3d-ox"
+            onchange={(v) => actions.patchTransform3d({ origin: { x: v / 100 } })}
+            oninput={(v) => actions.patchTransform3dLive({ origin: { x: v / 100 } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+          <NumberInput
+            value={Math.round(t3.origin.y * 100)}
+            min={0}
+            max={100}
+            step={5}
+            width={50}
+            suffix="%"
+            ariaLabel={`${tr('typo.prop3dOrigin')} Y`}
+            testid="prop-3d-oy"
+            onchange={(v) => actions.patchTransform3d({ origin: { y: v / 100 } })}
+            oninput={(v) => actions.patchTransform3dLive({ origin: { y: v / 100 } })}
+            onliveend={() => actions.endLive(tr('typo.undo.t3d'))}
+          />
+        </Field>
+        <Field label={tr('typo.prop3dBackface')} labelWidth={74}>
+          <Checkbox
+            checked={t3.backface === 'visible'}
+            label={tr('typo.prop3dBackface')}
+            testid="prop-3d-backface"
+            onchange={(v) => actions.patchTransform3d({ backface: v ? 'visible' : 'hidden' })}
+          />
+        </Field>
+        <Field label={tr('typo.prop3dPreserve')} labelWidth={74}>
+          <Checkbox
+            checked={t3.style === 'preserve-3d'}
+            label={tr('typo.prop3dPreserve')}
+            testid="prop-3d-preserve"
+            onchange={(v) => actions.patchTransform3d({ style: v ? 'preserve-3d' : 'flat' })}
+          />
+        </Field>
+        <p class="props-note">{tr('typo.prop3dHint')}</p>
+      {/if}
 
       {#if model.kind === 'image' && model.image}
         <!--
@@ -532,6 +773,8 @@ import ColorField from '../controls/ColorField.svelte';
           {theme}
           onkind={(k) => actions.setShapePaint({ kind: k })}
           onpatch={(p) => actions.setShapePaint(p)}
+          onpatchlive={(p) => actions.setShapePaintLive(p)}
+          onliveend={() => actions.endLive(tr('typo.undo.shapeFill'))}
         />
 
         <h4 class="prop-sec">{tr('typo.propStroke')}</h4>
@@ -547,6 +790,8 @@ import ColorField from '../controls/ColorField.svelte';
             ariaLabel={tr('typo.propStrokeWidth')}
             testid="prop-stroke-width"
             onchange={(v) => actions.setShapeStrokeWidth(v)}
+            oninput={(v) => actions.setShapeStrokeWidthLive(v)}
+            onliveend={() => actions.endLive(tr('typo.undo.strokeWidth'))}
           />
         </Field>
         <Field label={tr('typo.propStrokeStyle')} labelWidth={74}>
@@ -567,6 +812,8 @@ import ColorField from '../controls/ColorField.svelte';
           {theme}
           onkind={(k) => actions.setTextBoxFill({ kind: k })}
           onpatch={(p) => actions.setTextBoxFill(p)}
+          onpatchlive={(p) => actions.setTextBoxFillLive(p)}
+          onliveend={() => actions.endLive(tr('typo.undo.shapeFill'))}
         />
 
         <h4 class="prop-sec">{tr('typo.propTextBorder')}</h4>
@@ -582,6 +829,8 @@ import ColorField from '../controls/ColorField.svelte';
             ariaLabel={tr('typo.propStrokeWidth')}
             testid="prop-box-stroke-width"
             onchange={(v) => actions.setTextBoxStroke({ width: v })}
+            oninput={(v) => actions.setTextBoxStrokeLive({ width: v })}
+            onliveend={() => actions.endLive(tr('typo.undo.shapeStroke'))}
           />
         </Field>
         <Field label={tr('typo.propStrokeStyle')} labelWidth={74}>
@@ -602,6 +851,8 @@ import ColorField from '../controls/ColorField.svelte';
           {theme}
           onkind={(k) => (k === 'none' ? actions.clearTextFill() : actions.setTextFill({ kind: k }))}
           onpatch={(p) => actions.setTextFill(p)}
+          onpatchlive={(p) => actions.setTextFillLive(p)}
+          onliveend={() => actions.endLive(tr('typo.undo.shapeFill'))}
         />
       {/if}
     </div>

@@ -243,8 +243,12 @@ MP4 4.6 s / 48.5 MB。
 - **排版文档里的图片元素也能抠图 / 四角透视**（同一天的需求延伸）：`ImageElement`
   新增 `key` / `quad`（与片段**同一个类型**，定义搬到了 `core/image-fx.ts`）。排版是
   DOM，没有 placement pass，所以是 CPU 实现（`typography/image-fx.ts`）：
-  - 实测 snapDOM **会丢掉 `matrix3d`**、但保留 `<canvas>` 与 `mask-image` ⇒ 有 fx 的
-    图片元素渲染成 `<canvas>`（先按 fit/crop 画、再逐像素色键、再 H⁻¹ 重采样）；
+  - ~~实测 snapDOM 会丢掉 `matrix3d`~~ —— **2026-10-21 重测否定了这条**（3.2.0：
+    perspective / rotateY / rotateX / translateZ / 四角单应 matrix3d / `<img>` / 文字 /
+    真实 `.typo-doc` 嵌套 / 外层 scale 全部正常出图，脚本在
+    `.codebuddy/tmp/2026-10-21/`）。CPU 实现仍然保留，理由是抠图必须逐像素、四角
+    重采样要与 GPU 逐点对拍 ⇒ 有 fx 的图片元素渲染成 `<canvas>`（先按 fit/crop 画、
+    再逐像素色键、再 H⁻¹ 重采样）；
   - 处理异步（等解码），舞台先显示原图、就绪后换节点；**光栅化前必须 await**，
     否则导出会把未处理的原图按正确缓存键存下来（永远不恢复）；
   - 参数拖动按元素串行 + 50ms 去抖（一次拖滑杆几十个键，不合并会卡主线程）；

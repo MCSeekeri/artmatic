@@ -82,6 +82,9 @@ export const typography = {
   'typo.undo.quadOff': '关闭四角调整',
   'typo.undo.quadReset': '四角复位',
   'typo.undo.quad': '调整四角',
+  'typo.undo.t3dOn': '启用 3D 变换',
+  'typo.undo.t3dOff': '关闭 3D 变换',
+  'typo.undo.t3d': '调整 3D 变换',
 
   /* ------------------------------------------------ 字体导入反馈 */
   'typo.fontsImported': '已导入 {ok} 个字体',
@@ -186,6 +189,18 @@ export const typography = {
   'typo.propQuadHint': '拖动画面上的四个角或边中点改变透视；Esc 取消这次拖动。',
   'typo.propQuadEditTip': '在画布上显示四角手柄',
   'typo.quadEditHint': '拖动四角 / 边中点调整透视 · Esc 取消',
+  /* 3D 变换（与 CSS 的 3D 属性一一对应） */
+  'typo.prop3d': '3D 变换',
+  'typo.prop3dEnable': '启用 3D 变换',
+  'typo.prop3dPerspective': '透视',
+  'typo.prop3dRotate': '旋转',
+  'typo.prop3dTranslate': '位移',
+  'typo.prop3dScale': '缩放',
+  'typo.prop3dSkew': '斜切',
+  'typo.prop3dOrigin': '原点',
+  'typo.prop3dBackface': '显示背面',
+  'typo.prop3dPreserve': '保留 3D',
+  'typo.prop3dHint': '透视是相机距离（px，0 = 不做透视）；旋转 Z 叠加在上面的「旋转」之上。',
 
   /* ------------------------------------------------ 动画窗格（AnimationPanel） */
   'typo.animPane': '动画',

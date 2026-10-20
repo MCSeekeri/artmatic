@@ -172,6 +172,56 @@ export interface TextureFrame {
   rot: number;
 }
 
+/**
+ * 元素级 3D 变换。**参数与 CSS 的 3D 属性一一对应**，存参数而不是矩阵 ——
+ * 渲染走 DOM + CSS，矩阵由浏览器算（见 `css.ts::elementStyle`）。
+ *
+ * 缺省（`undefined`）= 没有 3D：老的 `frame.rot` 那条路径逐字节不变。
+ * 可选字段 ⇒ 不抬 `SCHEMA_VERSION`（与 `groups` / `doc.theme` 同一条约定）。
+ *
+ * 几条与 CSS 对齐时的取舍：
+ *  - 透视用 `perspective()` **函数**而不是 CSS `perspective` 属性，所以没有
+ *    `perspective-origin`；消失点固定在 `origin` 上。要做「整页共享一个消失点」
+ *    得把 perspective 提到文档根，那是另一个功能。
+ *  - `rotate.z` 是**叠加在 `frame.rot` 之上**的额外角度（两者都是绕 Z），
+ *    不单独占一个旋转通道。
+ *  - 顺序固定为
+ *    `perspective → translate3d → rotateX → rotateY → rotateZ → skewX → skewY → scale3d`
+ *    （CSS 的变换列表从左到右相乘）。改顺序会改变已有工程的画面。
+ */
+export interface Transform3D {
+  /** CSS `perspective()` 距离，px。0 = 不做透视（近似正交）。 */
+  perspective: number;
+  /** 位移，px；z 对应 `translateZ`。 */
+  translate: { x: number; y: number; z: number };
+  /** 旋转，度。 */
+  rotate: { x: number; y: number; z: number };
+  /** 缩放，倍数。 */
+  scale: { x: number; y: number; z: number };
+  /** 斜切，度。 */
+  skew: { x: number; y: number };
+  /** 变换原点，元素框的 0..1（CSS `transform-origin`）。 */
+  origin: { x: number; y: number };
+  /** CSS `backface-visibility`。 */
+  backface: 'visible' | 'hidden';
+  /** CSS `transform-style`。多个元素互相穿插时才需要 `preserve-3d`。 */
+  style: 'flat' | 'preserve-3d';
+}
+
+/** 恒等 3D：勾上「启用」但什么都不改时，画面与没有 3D 完全一样。 */
+export function defaultTransform3D(): Transform3D {
+  return {
+    perspective: 800,
+    translate: { x: 0, y: 0, z: 0 },
+    rotate: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+    skew: { x: 0, y: 0 },
+    origin: { x: 0.5, y: 0.5 },
+    backface: 'visible',
+    style: 'flat',
+  };
+}
+
 export interface ElementBase {
   id: string;
   name: string;
@@ -192,6 +242,11 @@ export interface ElementBase {
    * 代价是：**成组时必须把成员挪到一起**（见 groups.ts 的 `groupElements`）。
    */
   groupId?: string;
+  /**
+   * 元素级 3D 变换。缺省 = 没有 3D（与老工程逐字节一致）。
+   * 与 `frame.rot` 复合，见 `Transform3D` 的说明。
+   */
+  transform3d?: Transform3D;
 }
 
 /**
@@ -597,6 +652,8 @@ function baseDefaults(size: Size, over: Partial<ElementBase>): Omit<ElementBase,
     visible: over.visible ?? true,
     locked: over.locked ?? false,
     animations: over.animations ?? [],
+    // 可选字段必须**显式搬运**：不写就会静默丢弃（与 createShapeElement 同款）。
+    transform3d: over.transform3d,
   };
 }
 
@@ -957,6 +1014,23 @@ export function resizeDocument(doc: TypographyDocument, size: Size): TypographyD
         rot: el.frame.rot,
       },
     };
+    /*
+     * 3D 的 px 参数跟着文档尺寸走：透视距离与位移都是画布上的长度，
+     * 不缩的话「1080 上刚好的倾斜」在 720 上会变成另一个透视强度。
+     * 角度 / 倍数 / 原点（0..1）不缩放。深拷一层，别让新旧文档共享子对象。
+     */
+    if (next.transform3d) {
+      const t = next.transform3d;
+      next.transform3d = {
+        ...t,
+        perspective: t.perspective * k,
+        translate: { x: t.translate.x * sx, y: t.translate.y * sy, z: t.translate.z * k },
+        rotate: { ...t.rotate },
+        scale: { ...t.scale },
+        skew: { ...t.skew },
+        origin: { ...t.origin },
+      };
+    }
     if (next.kind === 'text') {
       next.style = {
         ...next.style,

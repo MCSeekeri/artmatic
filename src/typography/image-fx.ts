@@ -4,9 +4,13 @@
  * ## 为什么在 DOM 侧自己算，而不是像片段那样交给 GPU
  *
  * 排版文档渲染成 DOM（`render-dom.ts`），舞台与 snapDOM 光栅化共用这一份
- * DOM —— 没有「placement pass」那个可编程采样点。实测（2026-10-17）：
- * snapDOM **会丢掉 `matrix3d`**（透视过的元素直接不出现），但**保留
- * `<canvas>` 内容与 `mask-image`**。所以两条能力的实现是：
+ * DOM —— 没有「placement pass」那个可编程采样点。抠图要逐像素、四角重采样要
+ * 与 GPU 逐点对拍，所以两条能力都在 CPU 做。
+ *
+ * ⚠️ **旧注释（2026-10-17）说「snapDOM 会丢掉 matrix3d」是误判**。2026-10-21
+ * 用 3.2.0 重测（裸 div / 真实 `.typo-doc` 嵌套 / 四角单应 matrix3d / `<img>` /
+ * 文字 / 外层 `scale()`）全部正确出图，脚本在 `.codebuddy/tmp/2026-10-21/`。
+ * 不要再用那条结论去排除 CSS 3D。两条能力的实现仍是：
  *
  *  - **抠图**：先按 `fit` / `crop` 把图片画进 canvas（与 CSS 同一套几何，
  *    交给 `drawImage` 做），再逐像素乘 alpha；

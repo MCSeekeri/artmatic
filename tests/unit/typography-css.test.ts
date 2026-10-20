@@ -14,7 +14,13 @@ import {
   textStyle,
   textureMotifSpec,
 } from '../../src/typography/css';
-import { createShapeElement, createTextElement, createTypographyDocument, defaultTextStyle } from '../../src/typography/document';
+import {
+  createShapeElement,
+  createTextElement,
+  createTypographyDocument,
+  defaultTextStyle,
+  defaultTransform3D,
+} from '../../src/typography/document';
 import type { Paint } from '../../src/typography/document';
 
 const SIZE = { w: 1000, h: 500 };
@@ -75,6 +81,68 @@ describe('elementStyle', () => {
   it('外层不吃指针事件（选择由编辑器自己算，不让 DOM 抢）', () => {
     const d = createTypographyDocument(SIZE);
     expect(elementStyle(createTextElement(d.size))['pointer-events']).toBe('none');
+  });
+
+  it('没有 3D 时仍写出三个复位键（就地同步没有删除语义）', () => {
+    const d = createTypographyDocument(SIZE);
+    const s = elementStyle(createTextElement(d.size));
+    // 只 set 不 delete ⇒ 从「启用 3D」切回关闭时，靠这三个默认值把上一份盖掉。
+    expect(s['transform-origin']).toBe('50% 50%');
+    expect(s['backface-visibility']).toBe('visible');
+    expect(s['transform-style']).toBe('flat');
+  });
+
+  it('3D：固定顺序，frame.rot 合进 rotateZ', () => {
+    const d = createTypographyDocument(SIZE);
+    const t = defaultTransform3D();
+    t.perspective = 1000;
+    t.rotate.x = 20;
+    t.rotate.y = 10;
+    t.translate.z = 40;
+    const el = createTextElement(d.size, {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: Math.PI / 2 },
+      transform3d: t,
+    });
+    // 顺序是约定（见 document.ts::Transform3D）：改顺序 = 改已有工程的画面。
+    expect(elementStyle(el).transform).toBe(
+      'perspective(1000px) translate3d(0px, 0px, 40px) rotateX(20deg) rotateY(10deg) rotateZ(90deg)',
+    );
+  });
+
+  it('3D：勾了启用但没调时只剩 perspective（单位矩阵，画面不变）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createTextElement(d.size, { transform3d: defaultTransform3D() });
+    // perspective() 单独存在时矩阵是单位矩阵；写出来是为了与面板上的 800 对得上。
+    expect(elementStyle(el).transform).toBe('perspective(800px)');
+  });
+
+  it('3D：perspective 为 0 且其余恒等时 transform 是 none', () => {
+    const d = createTypographyDocument(SIZE);
+    const t = defaultTransform3D();
+    t.perspective = 0;
+    const el = createTextElement(d.size, { transform3d: t });
+    expect(elementStyle(el).transform).toBe('none');
+  });
+
+  it('3D：原点走百分比，背面 / 保留 3D 直传', () => {
+    const d = createTypographyDocument(SIZE);
+    const t = defaultTransform3D();
+    t.origin = { x: 0.2, y: 0.8 };
+    t.backface = 'hidden';
+    t.style = 'preserve-3d';
+    const s = elementStyle(createTextElement(d.size, { transform3d: t }));
+    expect(s['transform-origin']).toBe('20% 80%');
+    expect(s['backface-visibility']).toBe('hidden');
+    expect(s['transform-style']).toBe('preserve-3d');
+  });
+
+  it('3D：perspective 为 0 时不写 perspective()（近似正交）', () => {
+    const d = createTypographyDocument(SIZE);
+    const t = defaultTransform3D();
+    t.perspective = 0;
+    t.rotate.y = 15;
+    const el = createTextElement(d.size, { transform3d: t });
+    expect(elementStyle(el).transform).toBe('rotateY(15deg)');
   });
 });
 
