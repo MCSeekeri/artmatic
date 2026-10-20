@@ -36,6 +36,15 @@ export const media = {
   'fx.scanlines.strength': '强度',
   'fx.scanlines.gap': '间距(px)',
 
+  'fx.lcd': '液晶屏幕',
+  'fx.lcd.distance': '相机距离',
+  'fx.lcd.panX': '相机 X',
+  'fx.lcd.panY': '相机 Y',
+  'fx.lcd.pitch': '像素大小(px)',
+  'fx.lcd.gap': '颗粒间隔(%)',
+  'fx.lcd.glare': '反光',
+  'fx.lcd.broken': '坏道',
+
   /* --- 以下 9 个移植自 openmosh gl/effect-shaders.ts（MIT，见 CREDITS.md） --- */
 
   /* 时钟三件套（effects/shader-def.ts 的 clockParams，多个特效共用一套文案） */

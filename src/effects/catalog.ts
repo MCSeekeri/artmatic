@@ -111,6 +111,7 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   kaleido: { base: 'photo', descKey: 'fx.desc.kaleido', category: 'geometry' },
   'kino-datamosh': { base: 'scroll', descKey: 'fx.desc.kinoDatamosh', category: 'glitch' },
   'kino-feedback': { base: 'mandel', descKey: 'fx.desc.kinoFeedback', category: 'blur', overlay: true },
+  lcd: { base: 'grid', descKey: 'fx.desc.lcd', category: 'style' },
   'liquid-light': { base: 'photo', descKey: 'fx.desc.liquidLight', category: 'blur', overlay: true },
   melt: { base: 'mandel', descKey: 'fx.desc.melt', category: 'glitch' },
   mirror: { base: 'photo', descKey: 'fx.desc.mirror', category: 'geometry' },

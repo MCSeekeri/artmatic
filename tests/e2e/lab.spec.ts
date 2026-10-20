@@ -515,3 +515,72 @@ test('悬停提示气泡真的浮出来（Tip 的渲染者在 lab 里也要挂�
   await page.getByTestId('lab-canvas').hover();
   await expect(bubble).toBeHidden();
 });
+
+/**
+ * 液晶屏的子像素只能发自己那一通道。
+ *
+ * 曾经的做法是 `mix(白, chan * 3, 0.5)`：拿一层白色底光把「子像素只占 1/3 宽度
+ * 所以要亮 3 倍」这件事摊到三根竖条上。亮度好看了，物理上是胡话 —— 红子像素
+ * 跟着发绿，纯绿画面变成三根绿条（GGG），纯青变成青 / 绿 / 蓝三色条。
+ *
+ * 判据一：**一个像素里不许同时有两个通道亮着**。子像素只透自己那一通道，
+ * 所以每颗输出像素要么落在某根竖条上（单通道），要么落在黑矩阵里。掺白底时
+ * 白色像素是 `(1, .5, .5)`、中灰是 `(1, .25, .25)` —— 阈值 40（≈16%）卡在
+ * 那 0.25 之下、噪声之上。
+ *
+ * 判据二**必须按位置量**，不能只看像素里的通道数：纯饱和色下掺白底不改变
+ * 通道数（绿条里那两根错色的竖条输出 `(0, .5, 0)`，仍是单通道，只是颜色错位）。
+ * 所以另取绿条（`lab:bars` 的第 4 条，正中间，翻转不影响）量两件事：
+ * 红 / 蓝子像素的均值必须近 0，且**亮像素只占约三分之一**（三根竖条里只有
+ * 中间那根亮）。实测：正确实现 0.26，掺白底 0.57。
+ */
+test('液晶屏：子像素只发自己那一通道', async ({ page }) => {
+  await boot(page);
+  const r = await page.evaluate(() => {
+    const L = (window as unknown as LabWindow).__lab!;
+    L.selectSource('lab:bars');
+    L.selectEffect('lcd');
+    // 反光与坏道都会往画面上加白 / 加彩，与这条要守的东西无关。
+    L.setParam('effect', 'glare', 0);
+    L.setParam('effect', 'broken', 0);
+    // distance = 1 ⇒ zoom = 1：屏幕坐标与内容坐标重合，条带位置不用再换算。
+    L.setParam('effect', 'distance', 1);
+    L.setParam('effect', 'pitch', 8);
+    L.renderAt(0, true);
+
+    const { data, w, h } = L.readPixels();
+    let mixed = 0; // 同一像素里 ≥2 个通道亮着
+    const green = [0, 0, 0]; // 绿条的三通道均值
+    let band = 0;
+    let lit = 0;
+    // 让开两条交界（格子跨过色块边界时，抽头会把两种颜色平均进来）。
+    const gx0 = Math.floor((3 * w) / 7) + Math.ceil(8);
+    const gx1 = Math.floor((4 * w) / 7) - Math.ceil(8);
+    for (let y = Math.floor(h * 0.3); y < Math.floor(h * 0.7); y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const rr = data[i]!;
+        const gg = data[i + 1]!;
+        const bb = data[i + 2]!;
+        if ((rr > 40 ? 1 : 0) + (gg > 40 ? 1 : 0) + (bb > 40 ? 1 : 0) >= 2) mixed++;
+        if (x >= gx0 && x < gx1) {
+          green[0]! += rr;
+          green[1]! += gg;
+          green[2]! += bb;
+          if (Math.max(rr, gg, bb) > 40) lit++;
+          band++;
+        }
+      }
+    }
+    return { mixed, litRatio: lit / band, mean: green.map((s) => s / band / 255) as number[] };
+  });
+
+  expect(r.mixed, '子像素串色：一个像素里有两根子像素在发不同颜色的光').toBe(0);
+  // 绿条只有中间那根竖条该亮 → 亮像素约等于发光面积的三分之一。
+  expect(r.litRatio, '绿条的亮像素接近全亮 → 红、蓝子像素也在发绿（GGG）').toBeLessThan(0.45);
+  const [mr, mg, mb] = r.mean as [number, number, number];
+  // 正向：绿子像素真的亮着（否则「输出全黑」也能通过）。
+  expect(mg, '绿条不亮了').toBeGreaterThan(0.1);
+  expect(mr, '红子像素在发绿光').toBeLessThan(mg * 0.05);
+  expect(mb, '蓝子像素在发绿光').toBeLessThan(mg * 0.05);
+});

@@ -75,6 +75,7 @@ export const effects = {
   'fx.desc.kaleido': '镜像成万花筒图案。',
   'fx.desc.kinoDatamosh': '只重画变动过的块。',
   'fx.desc.kinoFeedback': '像对着屏幕拍摄那样回授。',
+  'fx.desc.lcd': '凑近看一块液晶屏：RGB 像素、反光与坏道。',
   'fx.desc.liquidLight': '把光晕化成流动的液体。',
   'fx.desc.melt': '让画面像蜡一样往下淌。',
   'fx.desc.mirror': '沿中线镜像。',
