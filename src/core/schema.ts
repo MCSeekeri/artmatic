@@ -14,7 +14,7 @@
 
 import type { BeatGrid } from './time';
 import type { Curve } from './curve';
-import type { KeySettings, QuadCorners } from './image-fx';
+import type { CropSettings, KeySettings, QuadCorners } from './image-fx';
 import type { TypographyDocument } from '../typography/document';
 import {
   isKnownTheme,
@@ -26,8 +26,9 @@ import {
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 import { sanitizeSections } from './sections';
+import { isValidCrop } from './image-fx';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -209,8 +210,8 @@ export interface TransitionRef {
  * 排版文档的 `ImageElement` 也要用同一组字段，而那个模块反过来被本文件 import。
  * 定义放在叶子模块里才不会形成运行时循环。
  */
-export type { KeySettings, QuadCorners } from './image-fx';
-export { defaultKeySettings, identityQuad } from './image-fx';
+export type { KeySettings, QuadCorners, CropSettings } from './image-fx';
+export { defaultKeySettings, identityQuad, identityCrop, isIdentityCrop } from './image-fx';
 
 /** 有画面来源，参与合成。被特效影响的就是它。 */
 export interface SourceClip extends ClipBase {
@@ -236,6 +237,14 @@ export interface SourceClip extends ClipBase {
    * 与 `transform` 复合：变换先摆好图层矩形，四角再把这个矩形透视变形。
    */
   quad?: QuadCorners;
+  /**
+   * 画面裁剪（v10）：四条边各裁掉多少（源比例 0..1）。缺省 = 不裁。
+   *
+   * 只收可见窗口，**不缩放内容**；与 `transform` / `quad` 复合（裁剪判定在
+   * 源 uv 上，所以四角变形之后裁的仍是「源的那一条边」）。语义与排版元素
+   * `ImageElement.crop` 的差别见 `core/image-fx.ts::CropSettings`。
+   */
+  crop?: CropSettings;
   /** 出画转场。缺失 = 不设转场。语义与钳制规则见 core/transitions.ts。 */
   transitionOut?: TransitionRef;
 }
@@ -455,6 +464,15 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * （静默数据丢失，最难查的一类）。
    */
   8: (p) => ({ ...p, schemaVersion: 9 }),
+
+  /**
+   * v9 → v10：`SourceClip` 新增可选的 `crop`（画面裁剪）。
+   *
+   * **恒等迁移**：字段可选（缺省 = 不裁），v9 的工程读进来天然合法。抬版本号的
+   * 唯一目的仍然是让「新版存出的工程被旧版打开」走 `versionTooNew` 明确报错 ——
+   * 旧版静默忽略 `crop` 再保存，用户裁好的边就没了（静默数据丢失，最难查的一类）。
+   */
+  9: (p) => ({ ...p, schemaVersion: 10 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -721,6 +739,14 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
       const quad = (c as SourceClip).quad;
       if (quad !== undefined && !isValidQuad(quad)) {
         throw new SchemaError(tr('err.schema.badQuad', { id: c.id }));
+      }
+      /*
+       * 裁剪的形状校验。同样是「坏形状会穿透到渲染期」的那一类：越界的裁剪量在
+       * 着色器里只会让整层变成透明 —— 没有报错，看起来像「片段丢了」。
+       */
+      const crop = (c as SourceClip).crop;
+      if (crop !== undefined && !isValidCrop(crop)) {
+        throw new SchemaError(tr('err.schema.badCrop', { id: c.id }));
       }
     }
   }

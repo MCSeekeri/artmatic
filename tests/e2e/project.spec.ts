@@ -302,15 +302,15 @@ test.describe('素材台账', () => {
     await page.getByTestId('project-nav-cleanup').click();
     await expect(page.getByTestId('unused-asset')).toHaveCount(1);
     await page.getByTestId('unused-restore').click();
-    const restored = await page.evaluate(() => {
-      const A = (window as never as W).__artmatic;
-      return {
-        declared: Object.keys(A.store.project.assets),
-        retained: A.assets.retainedIds(),
-      };
-    });
-    expect(restored.declared).toContain('img-keep');
-    expect(restored.retained).not.toContain('img-keep');
+    // 恢复是异步的：`restore()` 会先把字节从句柄读回来，`store.commit` 才落地。
+    // 点完立刻断言会稳定抢跑（不是 flake —— 那次 OPFS 读总比 evaluate 往返慢）。
+    await expect
+      .poll(async () =>
+        page.evaluate(() => Object.keys((window as never as W).__artmatic.store.project.assets)),
+      )
+      .toContain('img-keep');
+    const retained = await page.evaluate(() => (window as never as W).__artmatic.assets.retainedIds());
+    expect(retained).not.toContain('img-keep');
   });
 
   test('清理未使用素材：文件进 assets/.trash，不再留在 assets/（W1.3）', async ({ page }) => {

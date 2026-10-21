@@ -1,13 +1,15 @@
 /**
- * image-fx.ts — 图片的**元素级**图像处理：简易抠图（色键）与四角透视。
+ * image-fx.ts — 图片的**元素级**图像处理：简易抠图（色键）、四角透视、裁剪。
  *
- * 两个能力在时间轴上属于 `SourceClip`（`key` / `quad`，走 GPU 的 placement
- * pass）；而排版文档里的图片元素是 DOM，没有那条 pass，只能自己在像素上算。
- * 本文件就是那份**唯一的 CPU 实现**：
+ * 三个能力在时间轴上属于 `SourceClip`（`key` / `quad` / `crop`，走 GPU 的
+ * placement pass）；而排版文档里的图片元素是 DOM，没有那条 pass，只能自己在
+ * 像素上算。本文件就是那份**唯一的 CPU 实现**：
  *
  *  - 色键公式与 `engine/placement.frag.ts` 逐字对齐（YCbCr 色度差为主 +
  *    亮度差 ×1/2，容差 / 柔边各吃「距离」的一半，溢色抑制往亮度靠）；
- *  - 单应数学复用 `core/quad.ts`（`quadInverseMatrix` / 恒等判据），不另写一套。
+ *  - 单应数学复用 `core/quad.ts`（`quadInverseMatrix` / 恒等判据），不另写一套；
+ *  - 裁剪在这里只有**形状与钳制**（片段渲染在着色器里做行/列判定，排版元素的
+ *    剪辑是 `typography/css.ts` 的「源窗铺满元素框」另一套语义，见 `CropSettings`）。
  *
  * **本文件不得有任何运行时 import**：`QuadCorners` / `KeySettings` 在这里定义
  * （schema 再 re-export），而 `typography/document.ts` 与 `core/quad.ts` 都要
@@ -32,6 +34,33 @@ export interface KeySettings {
   /** 溢色抑制（0..1）。 */
   spill: number;
 }
+
+/**
+ * 画面裁剪（`SourceClip.crop`）：四个值都是**该边被裁掉的源比例**（0..1）。
+ *
+ * 语义 = **只收可见窗口，不缩放内容**（AE 的 Crop）。所以它能做到一件别的手段
+ * 做不到的事：把 16:9 的素材裁成一条竖带，而图层矩形与内容比例都不变。
+ *
+ * ⚠️ 与 `TypographyDocument` 里 `ImageElement.crop`（`{x,y,w,h}` 源窗**铺满**
+ * 元素框）**不是同一件事**：那个的框是用户随便给的，所以「取一块铺进去」才是
+ * 它要表达的；片段的框是由 fit 从源比例推出来的，同一套语义就退化成「放大 +
+ * 偏移」（用 `transform.sx/sy` 已经能做到）。别把两者合并。
+ */
+export interface CropSettings {
+  /** 左边被裁掉的比例。 */
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * 一对边裁完之后至少要留这么多（占源的比例）。
+ *
+ * 不留下限的话，`left + right = 1` 是一个「整层消失」的合法状态 ——
+ * 画面上看不出发生了什么，用户只会以为渲染坏了。
+ */
+export const MIN_CROP_KEEP = 0.02;
 
 /**
  * 四角调整（透视变形）：把默认矩形的四个角拖到这四个位置。
@@ -59,6 +88,48 @@ export function defaultKeySettings(): KeySettings {
 /** 四角调整的恒等值：四角 = 单位方四角（= 不调整）。 */
 export function identityQuad(): QuadCorners {
   return { tl: [0, 0], tr: [1, 0], br: [1, 1], bl: [0, 1] };
+}
+
+/** 裁剪的恒等值：四条边都不裁。 */
+export function identityCrop(): CropSettings {
+  return { left: 0, top: 0, right: 0, bottom: 0 };
+}
+
+/** 全零 = 不裁。渲染侧靠它决定 `u_cropOn`（关闭时走与改动前逐位相同的算式）。 */
+export function isIdentityCrop(c: CropSettings): boolean {
+  return c.left === 0 && c.top === 0 && c.right === 0 && c.bottom === 0;
+}
+
+/**
+ * 改一条边的裁剪量，并把结果钳在合法范围内（返回新对象）。
+ *
+ * 钳的是**这一条边的上限**：对边已经吃掉的部分不能重复吃。UI 的输入框与滑杆
+ * 都走这里，于是「两个输入框都填 0.8」在写入前就被压成 0.8 + 0.18。
+ */
+export function withCropEdge(
+  c: CropSettings,
+  edge: keyof CropSettings,
+  v: number,
+): CropSettings {
+  const opposite: Record<keyof CropSettings, keyof CropSettings> = {
+    left: 'right',
+    right: 'left',
+    top: 'bottom',
+    bottom: 'top',
+  };
+  const max = Math.max(0, 1 - c[opposite[edge]] - MIN_CROP_KEEP);
+  const n = Number.isFinite(v) ? Math.min(Math.max(v, 0), max) : 0;
+  return { ...c, [edge]: n };
+}
+
+/** 形状 / 范围校验（schema 用）。坏形状在打开工程时就挡住，不让它穿透到着色器。 */
+export function isValidCrop(v: unknown): v is CropSettings {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const c = v as Partial<CropSettings>;
+  const unit = (x: unknown): x is number =>
+    typeof x === 'number' && Number.isFinite(x) && x >= 0 && x < 1;
+  if (!unit(c.left) || !unit(c.top) || !unit(c.right) || !unit(c.bottom)) return false;
+  return c.left + c.right < 1 && c.top + c.bottom < 1;
 }
 
 /** `#rrggbb` → 0..1 的三通道。坏颜色回落黑（调用点已由 schema 挡过一遍）。 */

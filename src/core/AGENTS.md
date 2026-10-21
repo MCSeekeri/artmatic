@@ -125,10 +125,10 @@ interface Section {
 与导出混流（`exporters/mixdown.ts`）都对着它。三条钳制规则：`fadeSec ≤ 片段长/2`
 （两个淡区不相交）、`fadeIn + fadeOut` 超长时**按比例收缩**、片外返回 0。
 
-### 片段级图像处理：`key` / `quad`（`SCHEMA_VERSION` 7）
+### 片段级图像处理：`key` / `quad` / `crop`（`SCHEMA_VERSION` 7 / 10）
 
 **它们不是特效片段。** 特效片段（EffectClip）是 adjustment layer，作用于下方所有轨的
-合成结果；这两个字段是 SourceClip 自己的属性，只处理**这一层**，实现全在同一次
+合成结果；这三个字段是 SourceClip 自己的属性，只处理**这一层**，实现全在同一次
 placement pass（`src/engine/placement.frag.ts`）。
 
 - `key?: KeySettings` —— 简易抠图（色键）：`{ color, tolerance, softness, spill }`。
@@ -139,9 +139,17 @@ placement pass（`src/engine/placement.frag.ts`）。
   透视变形之前）。这样它与 `transform` 的缩放 / 旋转**复合**而不是互相覆盖，用户先摆好
   图层再拉角依然成立。渲染用「单位方 → 四角」单应的**逆映射**采样（真透视，不是双线性
   拉伸）。四角退化到不可逆（三点共线 / 面积 0）时按「不调整」渲染 —— **不丢层**。
+- `crop?: CropSettings` —— 裁剪（v10）：`{ left, top, right, bottom }`，每项是**该边被
+  裁掉的源比例**（0..1，缺省全 0 = 不裁）。它**只收可见窗口、不改采样坐标** ——
+  内容不缩放不位移，所以「把 16:9 裁成一条竖带」只能靠它（缩放 + 偏移做不到）。
+  判定在**源 uv** 上，所以与 `quad` 的顺序无关；两条边之和必须 < 1（`isValidCrop`）。
+  ⚠️ 与排版文档的 `ImageElement.crop`（`{x,y,w,h}` 源窗**铺满**元素框）**不是一回事**：
+  那个的框是用户给的，片段这个的框由 `fit` 从源比例推出来，同一套语义会退化成放大。
 - **UI 拖角与渲染采样必须共用同一份纯数学**：`core/quad.ts`（无任何运行时 import，
   E2E 也直接 import 它算期望值）。判定「恒等」只认 `isIdentityQuad()` —— 各写一份
-  容差的表现是「手柄位置对、画面差半像素」这种没人会查的偏差。
+  容差的表现是「手柄位置对、画面差半像素」这种没人会查的偏差。裁剪同理：
+  钳制只在 `withCropEdge()`（写入口）与 `isValidCrop()`（打开工程）各一次。
+
 - 6→7 是**恒等迁移**：两个字段都可选，抬版本号的唯一目的仍然是让旧版打开新版工程时
   走 `versionTooNew` 显式报错，而不是静默丢掉用户的抠图 / 变形设置（静默数据丢失）。
 - **类型与默认值住在 `core/image-fx.ts`，不在本文件（schema.ts）里定义。**

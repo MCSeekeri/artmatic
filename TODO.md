@@ -43,6 +43,49 @@
   PNG/WAV 的产物冒烟。
 - 工程包导入在 Electron 仍用 `<input type=file>`（可用，但不是原生对话框）。
 
+# 本轮已完成（2026-10-21 · 片段裁剪 v10 + 排版画幅）
+
+两件事：排版片段能改画幅 / 上屏大小；所有可见片段类型（算法 / 排版 / 图片 / 视频 /
+纯色）能裁剪。`SCHEMA_VERSION` 9 → 10。
+
+- **裁剪是 clip 级属性**：`SourceClip.crop = {left,top,right,bottom}`，值是**每边被
+  裁掉的源比例**，语义是「只收可见窗口、不改采样坐标」（AE 的 Crop）。与排版元素
+  `ImageElement.crop`（`{x,y,w,h}` 源窗**铺满**元素框）刻意不同 —— 分水岭写在
+  `core/image-fx.ts` 与 `clip-crop.spec.ts` 头注里：裁掉左半边的左 1/6 必须是背景色，
+  而不是源 uv≈0.58 的内容。
+- **判定在 placement pass 里做，一次 pass 收口**：`engine/placement.frag.ts` 增
+  `u_crop` / `u_cropOn`，裁剪只乘 `inside`；裁剪坐标取**四角变换之后**的 `srcTd`，
+  所以与 `quad` 谁先谁后无关。全零裁剪不挂字段（与 `quadInverse` 同纪律）⇒
+  `u_cropOn = 0` ⇒ 与历史逐位一致。
+- 纯函数层 `image-fx.ts`：`MIN_CROP_KEEP = 0.02`、`withCropEdge()`（单边写入时按
+  **对边**剩余量钳制，不许把窗口吃没）、`isIdentityCrop()`、`isValidCrop()`。
+- **排版画幅**：`typography/canvas-size.ts`（纯计算：`CANVAS_RATIOS` / `sizeForRatio`
+  / `withLockedAspect` / `footprintOf`），`CanvasSizePopover.svelte` 挂在排版编辑器
+  标题栏：宽高 + 比例锁 + 预设（工程 / 16:9 / 9:16 / 1:1 / 4:5）+「缩放内容」+
+  上屏「大小」滑杆。
+  - **画布 ≠ 上屏**：`doc.size` 是设计分辨率，`clip.transform.sx/sy` 才是上屏缩放；
+    `fit: contain` 会把画布等比放大，所以**同比例改像素，上屏大小不变**。弹层给
+    「画面上 W × H（pct% × pct%）」实时读数，就是为了让这件事可见，别当成 bug。
+  - 占位尺寸只有一份真源：`footprintOf` 与 `typography/runtime.ts::rasterSizeFor`
+    共用 `engine/placement.frag.ts::drawSizeFor`。
+- **Svelte 5 断更（踩到并修好）**：`doc`/`clip` 是**原地改的对象**，`$derived(doc.size)`
+  拿到同一引用 ⇒ 不重算 ⇒ 弹层读数永远停在旧值。凡随文档/片段变的派生一律
+  `$derived.by(() => { void appState.version; ... return 新对象 })`。
+- 检查器新增「裁剪」区块（对所有 source 片段显示，四边 `%` + 重置删字段）。
+- 守卫：`image-fx.test.ts`（钳制 / 对边不可重复吃 / 坏值集合）、`schema.test.ts`
+  （四种源类型通过、7 类坏值被拒、v9→v10 恒等迁移）、`canvas-size.test.ts`（含
+  「同比例改像素不改变上屏大小」）、E2E `clip-crop` 3 条 + `typography-canvas` 3 条。
+- **顺手修一条既有 E2E 抢跑**：`project.spec.ts::移除素材后保存` 在 HEAD 上就稳定失败
+  （`git worktree` 跑基线复核过）。根因不在产品侧：`restoreUnusedAsset` 会先
+  `await` 一次 OPFS 字节读回才 `commit`，点完立刻断言必然抢在它前面。改成
+  `expect.poll` 等状态落地，机制断言不变。
+- **变异测试**（`stryker --mutate src/core/image-fx.ts,src/typography/canvas-size.ts`）：
+  `canvas-size.ts` 74.7% → **98.85%**，只剩 1 个等价存活（`byWidth.h <= frame.h` 在
+  正好装下时两支同值）。补的四条测试各钉一处真缺口：预设表的 id / 比例（漏一条就
+  静默换画幅）、工程画面单轴为 0 的退化分支、`withLockedAspect` 的除零（会给出
+  `Infinity` 并一路进 GLSL）、`footprintOf` 的 `NaN%`。`image-fx.ts` 新增的裁剪全部
+  被杀死；余下 59 个存活都在既有的 CPU 色键（127–212 行，本次未动）。
+
 # 0.3 交付前复核（2026-10-19）
 
 计划（`docs/plan-0.3-hardening.md`）W0–W5 逐条核对：`bun run check` 0 error 0 warning，

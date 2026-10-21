@@ -30,6 +30,8 @@ export const typography = {
   'typo.undo.theme': '更换配色方案',
   'typo.undo.themeProject': '配色方案应用到整个工程',
   'typo.undo.themeSave': '保存配色方案',
+  'typo.undo.canvasSize': '修改画布尺寸',
+  'typo.undo.canvasScale': '修改上屏缩放',
   'typo.undo.clearFormat': '清除格式',
   'typo.clearFormat': '清除格式',
   'typo.localFontsLoaded': '已载入 {n} 个本机字体',
@@ -122,7 +124,21 @@ export const typography = {
   'typo.zoomFit': '适配',
   'typo.zoom': '缩放',
   /* 画面尺寸读数。数字与 × 是格式，只有标题要翻译。 */
-  'typo.canvasSize': '画面尺寸（文档像素）',
+  'typo.canvasSize': '画面尺寸（文档像素）· 点击改画幅与上屏大小',
+  /* 画布尺寸弹层（CanvasSizePopover）。 */
+  'typo.canvasWidth': '宽',
+  'typo.canvasHeight': '高',
+  'typo.canvasLock': '锁定比例',
+  'typo.canvasLockTip': '改一边时另一边按当前画幅跟着变',
+  'typo.canvasRatioProject': '工程',
+  'typo.canvasScaleContent': '缩放内容',
+  'typo.canvasScaleContentTip': '按比例重排元素（关掉则只改画布，元素留在原像素位置）',
+  /* 上屏大小 = 片段 transform.sx/sy，与检查器的「缩放 X / Y」是同一份数据。 */
+  'typo.canvasScale': '大小',
+  'typo.canvasScaleTip': '上屏缩放；与检查器的「缩放 X / Y」是同一份数据，两轴同步',
+  /* 读数：画布在工程画面上的实际占位（contain / cover 会缩放，画布像素 ≠ 上屏像素）。 */
+  'typo.canvasFootprint': '画面上 {w} × {h}（{pw}% × {ph}%）',
+  'typo.canvasScaleKeyed': '缩放已被关键帧曲线接管，这里的数值不会生效。',
   /* 倍率本身（1.0x / 0.5x / 0.25x）是数值格式，不进语言表。 */
   'typo.previewScale': '预览画质 {scale}',
   'typo.rasterPreview': '光栅预览',

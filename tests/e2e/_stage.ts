@@ -842,6 +842,14 @@ export interface ClipQuadCorners {
   bl: [number, number];
 }
 
+/** 画面裁剪（`SourceClip.crop`）：四条边各被裁掉的源比例。 */
+export interface ClipCropSettings {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 /** 页内 canvas 画什么。坐标/朝向都以**画面**为准（图像行序自上而下）。 */
 export type TestImagePattern =
   | { kind: 'solid'; color: string }
@@ -857,9 +865,10 @@ export interface ImageStageSpec {
   height?: number;
   /** 底层背景纯色。给了就多一条全幅 solid 轨（z 在图片**之下**）。 */
   background?: string;
-  /** 初始抠图 / 四角。直接写进片段，不经 UI（UI 接线由各自的用例单独测）。 */
+  /** 初始抠图 / 四角 / 裁剪。直接写进片段，不经 UI（UI 接线由各自的用例单独测）。 */
   key?: ClipKeySettings;
   quad?: ClipQuadCorners;
+  crop?: ClipCropSettings;
   /** 片段在时间轴上的区间（默认 [0, 8)，与 buildStage 一致）。 */
   start?: number;
   end?: number;
@@ -978,6 +987,7 @@ export async function buildImageStage(page: Page, spec: ImageStageSpec): Promise
         opacity: 1,
         ...(s.key ? { key: s.key } : {}),
         ...(s.quad ? { quad: s.quad } : {}),
+        ...(s.crop ? { crop: s.crop } : {}),
       });
       if (backgroundTrack && s.background) {
         A.store.addClip(backgroundTrack, {
@@ -1016,19 +1026,26 @@ export async function buildImageStage(page: Page, spec: ImageStageSpec): Promise
 export async function readClipImageState(
   page: Page,
   clipId: string,
-): Promise<{ key: ClipKeySettings | null; quad: ClipQuadCorners | null }> {
+): Promise<{ key: ClipKeySettings | null; quad: ClipQuadCorners | null; crop: ClipCropSettings | null }> {
   return page.evaluate((id) => {
     const A = (window as never as {
       __artmatic: {
         store: {
           project: {
-            tracks: { clips: { id: string; key?: ClipKeySettings; quad?: ClipQuadCorners }[] }[];
+            tracks: {
+              clips: {
+                id: string;
+                key?: ClipKeySettings;
+                quad?: ClipQuadCorners;
+                crop?: ClipCropSettings;
+              }[];
+            }[];
           };
         };
       };
     }).__artmatic;
     const clip = A.store.project.tracks.flatMap((t) => t.clips).find((c) => c.id === id);
-    return { key: clip?.key ?? null, quad: clip?.quad ?? null };
+    return { key: clip?.key ?? null, quad: clip?.quad ?? null, crop: clip?.crop ?? null };
   }, clipId);
 }
 
@@ -1097,6 +1114,40 @@ export async function setClipQuad(
       });
     },
     { id: clipId, next: quad },
+  );
+}
+
+/** 直接改片段的 `crop`（null = 删除）。走 commit = 一笔撤销，和检查器的写入等价。 */
+export async function setClipCrop(
+  page: Page,
+  clipId: string,
+  crop: ClipCropSettings | null,
+): Promise<void> {
+  await page.evaluate(
+    ({ id, next }) => {
+      const A = (window as never as {
+        __artmatic: {
+          store: {
+            commit: (
+              label: string,
+              fn: (p: {
+                tracks: { clips: { id: string; kind?: string; crop?: unknown }[] }[];
+              }) => void,
+            ) => void;
+          };
+        };
+      }).__artmatic;
+      A.store.commit(next ? 'e2e: 设裁剪' : 'e2e: 删裁剪', (p) => {
+        for (const t of p.tracks) {
+          for (const c of t.clips) {
+            if (c.id !== id) continue;
+            if (next) c.crop = next;
+            else delete c.crop;
+          }
+        }
+      });
+    },
+    { id: clipId, next: crop },
   );
 }
 

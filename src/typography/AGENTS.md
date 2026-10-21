@@ -3,7 +3,8 @@
 `TypographyDocument` 模型 + 光栅化后端 + 字体注册表 / HarfBuzz 子集化。
 排版是**工程内部的第二个视图**（`OpenProject.view`），不是 modal、也不是新 tab。
 
-**何时读我**：改排版文档模型 / 光栅化 / 字体与子集化 / 配色方案 / 脱机媒体占位符时。
+**何时读我**：改排版文档模型 / 光栅化 / 字体与子集化 / 配色方案 / 画幅与上屏大小 /
+脱机媒体占位符时。
 
 相关：`src/ui/typography/AGENTS.md`（编辑器、Ribbon、取色入口的 UI 约定）、
 `src/ui/AGENTS.md`（抽屉与 modal 的通用约定）、`src/project/AGENTS.md`（字体字节存哪）。
@@ -195,6 +196,22 @@
   那个盒子是 flex 容器、撑满整个元素框，背景会连换行处的空白一起填满
   （看起来是「给文本框刷了底色」而不是「把字涂黄」）。背景**不继承**，所以元素级
   高亮只能靠变量传给每个 `<span data-run>`；行内覆盖则直接写 `background-color`。
+
+---
+
+## 画幅与上屏大小（`canvas-size.ts`）
+
+- **画布尺寸 ≠ 上屏大小**。`doc.size` 是设计分辨率（元素坐标的 0..100 按它铺），
+  上屏多大由**片段**的 `transform.sx / sy` 决定。改画布不改上屏占位，改上屏不改画布。
+- **`fit: 'contain'` 会把画布等比放大**，所以**同比例改画布像素，上屏大小一点不变**
+  （1920×1080 与 1280×720 都铺满）。用户看到「改了尺寸画面没变」时，先看弹层那行
+  「画面上 W × H（pct% × pct%）」有没有变 —— 它才是实际占位。
+- **占位读数的真源只有一份**：`footprintOf` 与 `runtime.ts::rasterSizeFor` 都调
+  `engine/placement.frag.ts::drawSizeFor`。别在 UI 里另算一遍（改了 GLSL 就会和画面打架）。
+- `withLockedAspect` 锁的是**当前画幅**（不是 16:9 常量），`sizeForRatio` 的 `project`
+  预设读 `project.width/height`（工程设置改了它跟着变）。
+- **「缩放内容」是两个动作，别做成一个**：关 = 只改 `doc.size`，元素留在原像素位置
+  （视口变了，构图跟着挪）；开 = 过 `resizeDocument` 按比例重排（构图保持）。
 
 ---
 

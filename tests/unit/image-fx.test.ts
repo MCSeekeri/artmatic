@@ -3,10 +3,15 @@ import {
   applyKeyToRgba,
   defaultKeySettings,
   hexToRgb01,
+  identityCrop,
   identityQuad,
+  isIdentityCrop,
+  isValidCrop,
   keyKeep,
   luma,
+  MIN_CROP_KEEP,
   smoothstep,
+  withCropEdge,
 } from '../../src/core/image-fx';
 
 /**
@@ -134,5 +139,72 @@ describe('identityQuad', () => {
     const a = identityQuad();
     a.tl[0] = 0.4;
     expect(identityQuad().tl[0]).toBe(0);
+  });
+});
+
+/**
+ * 裁剪（`SourceClip.crop`）。
+ *
+ * 这里的判据与着色器一一对应（`placement.frag.ts` 的 `u_crop` 分支）：
+ * 存的是「该边被裁掉的源比例」，可见窗口 = `[left, 1-right] × [top, 1-bottom]`，
+ * 采样坐标**不变**。所以「裁一半宽度」= 左边 0.5 → 右边半张仍在原位，不是被拉伸。
+ */
+describe('裁剪', () => {
+  it('恒等值全 0，且每次返回新对象', () => {
+    expect(identityCrop()).toEqual({ left: 0, top: 0, right: 0, bottom: 0 });
+    expect(isIdentityCrop(identityCrop())).toBe(true);
+    const c = identityCrop();
+    c.left = 0.5;
+    expect(identityCrop().left).toBe(0);
+  });
+
+  it('任意一条边非 0 就不算恒等', () => {
+    for (const edge of ['left', 'top', 'right', 'bottom'] as const) {
+      expect(isIdentityCrop({ ...identityCrop(), [edge]: 0.1 }), edge).toBe(false);
+    }
+  });
+
+  it('withCropEdge 钳在 [0, 1 - 对边 - 最小保留]', () => {
+    const start = identityCrop();
+    expect(withCropEdge(start, 'left', 0.3)).toEqual({ ...start, left: 0.3 });
+    // 单边最多吃到 1 - MIN_CROP_KEEP（对边还是 0）
+    expect(withCropEdge(start, 'left', 5).left).toBeCloseTo(1 - MIN_CROP_KEEP);
+    expect(withCropEdge(start, 'left', -2).left).toBe(0);
+    expect(withCropEdge(start, 'left', NaN).left).toBe(0);
+  });
+
+  it('对边已经吃掉的部分不能重复吃', () => {
+    const half = withCropEdge(identityCrop(), 'right', 0.6);
+    const next = withCropEdge(half, 'left', 0.8);
+    expect(next.right).toBeCloseTo(0.6);
+    expect(next.left).toBeCloseTo(1 - 0.6 - MIN_CROP_KEEP);
+    // 上下与左右互不影响
+    expect(withCropEdge(half, 'top', 0.5).left).toBe(0);
+  });
+
+  it('上下的对边关系与左右对称（表里漏一条就没有上限）', () => {
+    const c = withCropEdge(withCropEdge(identityCrop(), 'top', 0.9), 'bottom', 0.5);
+    expect(c.top).toBeCloseTo(0.9);
+    expect(c.bottom).toBeCloseTo(1 - 0.9 - MIN_CROP_KEEP);
+    const d = withCropEdge(withCropEdge(identityCrop(), 'bottom', 0.9), 'top', 0.5);
+    expect(d.bottom).toBeCloseTo(0.9);
+    expect(d.top).toBeCloseTo(1 - 0.9 - MIN_CROP_KEEP);
+  });
+
+  it('isValidCrop：范围与「两条边之和 < 1」都查', () => {
+    expect(isValidCrop({ left: 0, top: 0, right: 0, bottom: 0 })).toBe(true);
+    expect(isValidCrop({ left: 0.5, top: 0.1, right: 0.4, bottom: 0.2 })).toBe(true);
+    for (const bad of [
+      { left: 1, top: 0, right: 0, bottom: 0 },
+      { left: -0.1, top: 0, right: 0, bottom: 0 },
+      { left: NaN, top: 0, right: 0, bottom: 0 },
+      { left: '0.2', top: 0, right: 0, bottom: 0 },
+      { left: 0.6, top: 0, right: 0.4, bottom: 0 },
+      { left: 0, top: 0.7, right: 0, bottom: 0.3 },
+      null,
+      [0, 0, 0, 0],
+    ]) {
+      expect(isValidCrop(bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 });

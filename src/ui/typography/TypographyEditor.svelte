@@ -24,6 +24,7 @@
   import QuadEditLayer from './QuadEditLayer.svelte';
   import NodeEditor from './NodeEditor.svelte';
   import SidePanel from './SidePanel.svelte';
+  import CanvasSizePopover from './CanvasSizePopover.svelte';
   import BackgroundLayer from './BackgroundLayer.svelte';
   import { bgPreview } from './background-preview.svelte';
   import {
@@ -43,7 +44,14 @@
     syncDocDom,
   } from '../../typography/render-dom';
   import { normalizeRuns, runsEquivalent, runsSignature } from '../../typography/rich-text';
-  import { GUARDS_ATTR, RUNS_SIG_ATTR, type ShapeElement } from '../../typography/document';
+  import {
+    GUARDS_ATTR,
+    RUNS_SIG_ATTR,
+    resizeDocument,
+    type ShapeElement,
+    type Size,
+  } from '../../typography/document';
+
   import { parsePathNodes, type SubPath } from '../../typography/path-nodes';
   import { shapeHandles, type ShapeHandle } from '../../typography/shape-handles';
   import { resolveImageAsset } from '../../typography/image-assets';
@@ -132,7 +140,68 @@
     return docSignature(doc);
   });
 
-  const docSize = $derived(doc?.size ?? { w: 1920, h: 1080 });
+  /**
+   * 画布尺寸读数。
+   *
+   * **返回新对象**：文档是原地改的普通对象，`$derived` 靠 `===` 传播 —— 直接返回
+   * `doc.size` 会在「改画布之后对象引用没变」的那条路上静默断更（舞台不重排、
+   * 读数还是旧值，而工程里已经是新尺寸）。见 AGENTS §7「界面实时性」。
+   */
+  const docSize = $derived.by(() => {
+    void appState.version;
+    const s = editorState.doc?.size;
+    return s ? { w: s.w, h: s.h } : { w: 1920, h: 1080 };
+  });
+
+  /**
+   * 画布尺寸弹层要的片段属性（`fit` / 缩放 / 是否被曲线接管）。
+   *
+   * 同样返回新对象，理由与 `docSize` 一样：这些字段都在片段上**原地**改。
+   */
+  const canvasInfo = $derived.by(() => {
+    void appState.version;
+    const c = appState.store.findClip(clipId)?.clip;
+    if (!c || c.kind !== 'source' || c.source.type !== 'text') return null;
+    return {
+      fit: c.fit,
+      sx: c.transform.sx,
+      sy: c.transform.sy,
+      keyed: !!c.curves['transform.sx'] || !!c.curves['transform.sy'],
+    };
+  });
+
+  /**
+   * 改画布尺寸。
+   *
+   * `scaleContent` 开着时走 `resizeDocument`（元素、字号、阴影、3D 的 px 参数
+   * 一起按比例重排）—— 那才是「换画幅」；关掉就只改画布，元素留在原像素位置，
+   * 超出的部分被画布边缘裁掉。两种都是真实需求，所以给它一个开关而不是替用户选。
+   */
+  function setCanvasSize(next: Size, scaleContent: boolean): void {
+    editorState.commit(tr('typo.undo.canvasSize'), (d) => {
+      if (!scaleContent) {
+        d.size = { w: next.w, h: next.h };
+        return;
+      }
+      const resized = resizeDocument(d, next);
+      d.size = resized.size;
+      d.elements = resized.elements;
+    });
+  }
+
+  /**
+   * 上屏缩放（`transform.sx/sy` 两轴同一个值）。
+   *
+   * 这个缩放**不进光栅尺寸** —— `runtime.ts::rasterSizeFor` 只认 fit，所以缩小
+   * 不会降低文字清晰度，放大则会略微变软（与检查器里的「缩放 X/Y」完全同一件事）。
+   */
+  function setCanvasScale(v: number): void {
+    appState.store.updateClip(clipId, tr('typo.undo.canvasScale'), (c) => {
+      if (c.kind !== 'source') return;
+      c.transform.sx = v;
+      c.transform.sy = v;
+    });
+  }
 
   const selection = $derived.by(() => {
     void appState.version;
@@ -1437,10 +1506,20 @@
     <span class="zoom-val">{zoomPct}%</span>
     <IconButton icon="plus" label={tr('typo.zoomIn')} testid="typo-zoom-in" onclick={() => zoomBy(1.25)} />
     <IconButton icon="minimize-2" label={tr('typo.zoomFit')} testid="typo-zoom-fit" onclick={zoomFit} />
-    <!-- 画面尺寸：排版里所有坐标都是文档像素，不显示的话没法判断「这段文字有多大」。 -->
-    <span class="canvas-size mono" data-testid="typo-canvas-size" title={tr('typo.canvasSize')}>
-      {docSize.w} × {docSize.h}
-    </span>
+    <!-- 画面尺寸：排版里所有坐标都是文档像素，不显示的话没法判断「这段文字有多大」。
+         点开可以改画布尺寸 / 比例 / 上屏缩放（见 CanvasSizePopover 的说明）。 -->
+    {#if canvasInfo}
+      <CanvasSizePopover
+        size={docSize}
+        frame={appState.project.resolution}
+        fit={canvasInfo.fit}
+        sx={canvasInfo.sx}
+        sy={canvasInfo.sy}
+        keyed={canvasInfo.keyed}
+        onsize={setCanvasSize}
+        onscale={setCanvasScale}
+      />
+    {/if}
 
     <!--
       背景预览：播放按钮 + 进度条（用户要求放在缩放区右侧）+ 开关 + 不透明度。
@@ -1764,12 +1843,6 @@
     text-align: center;
     font-size: var(--fs-xs);
     color: var(--text-secondary);
-  }
-  .canvas-size {
-    margin-left: var(--sp-2);
-    color: var(--text-muted);
-    font-size: var(--fs-xs);
-    white-space: nowrap;
   }
   .spacer {
     margin-left: auto;

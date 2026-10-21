@@ -1,6 +1,7 @@
 /**
  * placement.frag.ts — 把一个 SourceClip 的画面放进全帧透明缓冲：
- * 居中 / 缩放 / 旋转 / fit / 四角透视 / 抠图，层外 alpha = 0，合成 pass 自然不动下层。
+ * 居中 / 缩放 / 旋转 / fit / 四角透视 / 抠图 / 裁剪，层外 alpha = 0，
+ * 合成 pass 自然不动下层。
  *
  * LAYER_BOX 数学移植自 openmosh effect-shaders.ts（MIT，见 CREDITS.md），
  * 去掉 MVP 用不到的 mask / edgeFade。抠图（chroma key）是**本项目自写**的
@@ -19,6 +20,10 @@
  *   → [四角] 翻成左上原点 → H⁻¹ → 翻回 GL 采样坐标
  *   → 采样 → insideLayer(最终源 uv) → 键色 alpha
  *
+ * **裁剪（v10）只乘 `inside`、不改采样坐标**：它收窄可见窗口，内容比例与位置
+ * 都不动。所以它排在四角之后（裁的是「源的边」，透视变形之后那条边仍在同一个
+ * 源 uv 上），也不需要第二遍采样。
+ *
  * 两条坐标空间约定，写错时的症状都是“看起来像 bug 的偏移 / 镜像”：
  *
  * 1. **四角坐标在层空间，左上原点 `(0,0)…(1,1)`**（与数据模型 `QuadCorners`
@@ -32,9 +37,9 @@
  *    因为 CPU 侧 `isIdentityQuad` 已把它挡在 `u_quadOn = 0` 那条路上）。
  *    与 `transform` 是**复合**关系：先把图层摆好，再拉角依然成立。H⁻¹ 在
  *    `core/quad.ts` 算，UI 拖角与这里共用同一份数学。
- * 2. **`u_quadOn = 0` 时不做四角、`u_key.a = 0` 时不做键控**：关闭状态必须与
- *    历史工程**逐位一致**（全项目确定性回归的前提），所以关闭分支里的运算与
- *    改动前逐字相同 —— 不是“看起来等价的改写”。
+ * 2. **`u_quadOn = 0` 时不做四角、`u_key.a = 0` 时不做键控、`u_cropOn = 0` 时
+ *    不裁**：关闭状态必须与历史工程**逐位一致**（全项目确定性回归的前提），所以
+ *    关闭分支里的运算与改动前逐字相同 —— 不是“看起来等价的改写”。
  *
  * 抠图数学（`keyDistance`）：色度差为主、亮度差 ×1/2。RGB 欧氏距离会被亮度主导，
  * 于是同一块绿幕在阴影和高光下判成两种颜色；剥掉亮度后“阴影绿幕”与“白灰背景”
@@ -42,9 +47,9 @@
  * 往亮度靠（去饱和） —— 绿幕边缘的绿边就是这么消的。
  *
  * **已知限制（刻意不修）**：转场窗口里 gl-transitions 的着色器只读贴图 rgb、
- * 不看 alpha，所以抠掉的区域在转场过程中会按黑色参与混合（普通合成路径完全正确）。
- * 这是转场协议本身的取舍，不要把抠图挪到转场之后去补 —— 那会让“转场两侧各自
- * 独立生效”的语义崩掉（见 `compositor.ts::placeLayer`）。
+ * 不看 alpha，所以抠掉 / 裁掉的区域在转场过程中会按黑色参与混合（普通合成路径
+ * 完全正确）。这是转场协议本身的取舍，不要把抠图挪到转场之后去补 —— 那会让
+ * “转场两侧各自独立生效”的语义崩掉（见 `compositor.ts::placeLayer`）。
  *
  * ## `u_opacity` 为什么存在（而不是只在 blend pass 里乘）
  *
@@ -77,6 +82,11 @@ uniform vec3 u_quadR2;
 // u_keyParams = (容差, 柔边, 溢色抑制)，三个都是 0..1。
 uniform vec4 u_key;
 uniform vec3 u_keyParams;
+
+// 裁剪：u_crop = (左, 上, 右, 下)，每项是**该边被裁掉的源比例**。
+// 只收紧可见窗口，不改采样坐标 —— 内容既不缩放也不位移（AE 的 Crop）。
+uniform vec4 u_crop;
+uniform float u_cropOn;
 
 in vec2 vUv;
 out vec4 outColor;
@@ -116,6 +126,10 @@ void main() {
   vec2 srcGl = layerGl;
   float inside = insideLayer(layerGl);
 
+  // 裁剪判定用的「源 uv（左上原点）」：没有四角时就是层 uv。裁剪边是**源的边**，
+  // 所以它在四角变形之前就已经确定 —— 判定放在四角之后（用 srcTd）而不是之前。
+  vec2 cropUv = vec2(layerGl.x, 1.0 - layerGl.y);
+
   // 四角透视：数据侧是左上原点，这里拿到的是 GL（v 向上）。
   // 先翻成左上原点再乘 H⁻¹，得到的源 uv 也是左上原点，最后翻回 GL 采样坐标。
   // 两次翻转必须成对出现；只翻一次 = 非恒等四角时画面上下镜像。
@@ -135,6 +149,16 @@ void main() {
     vec2 srcTd = p.xy / p.z;               // 源 uv（左上原点）
     inside = insideLayer(srcTd);
     srcGl = vec2(srcTd.x, 1.0 - srcTd.y);  // 采样用 GL 坐标（图片上传时 UNPACK_FLIP_Y = true）
+    cropUv = srcTd;
+  }
+
+  // 裁剪：只把可见窗口收窄到 [左, 1-右] × [上, 1-下]（左上原点）。
+  // 关闭时不进这个分支 —— u_cropOn 由 CPU 侧按「四条边全 0」决定。
+  if (u_cropOn > 0.5) {
+    vec2 lo = u_crop.xy;
+    vec2 hi = vec2(1.0) - u_crop.zw;
+    vec2 e = step(lo, cropUv) * step(cropUv, hi);
+    inside *= e.x * e.y;
   }
 
   vec4 c = texture(u_texture, clamp(srcGl, 0.0, 1.0));

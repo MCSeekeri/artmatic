@@ -78,6 +78,19 @@ export const inspector = {
   'insp.quadReset': '重置四角',
   'insp.quadResetTip': '四角回到默认位置（一笔撤销）',
 
+  /* ------------------------------------------------ 裁剪（源边裁切） */
+  /* 百分比是「该边被裁掉的源比例」。与抠图 / 四角一样是片段自身属性，
+     但它**不改内容比例**：只收可见窗口（见 core/image-fx.ts::CropSettings）。 */
+  'insp.crop': '裁剪',
+  'insp.cropLeft': '左',
+  'insp.cropRight': '右',
+  'insp.cropTop': '上',
+  'insp.cropBottom': '下',
+  'insp.cropHint': '按源画面比例裁掉四边；内容不缩放，所以「裁成竖条」靠它。',
+  'insp.cropReset': '取消裁剪',
+  'insp.cropResetTip': '四边都回到 0（一笔撤销）',
+  'insp.cropEdit': '修改裁剪',
+
   /* ------------------------------------------------ 特效链 */
   'insp.addEffect': '添加特效',
   'insp.removeEffect': '删除特效',

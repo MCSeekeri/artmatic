@@ -17,13 +17,17 @@
   import {
     BLEND_MODES,
     defaultKeySettings,
+    identityCrop,
     identityQuad,
+    isIdentityCrop,
     newId,
     type AnyClip,
     type BlendMode,
+    type CropSettings,
     type EffectInstance,
     type SourceClip,
   } from '../core/schema';
+  import { withCropEdge } from '../core/image-fx';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { reorder } from './drag-reorder';
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
@@ -346,6 +350,24 @@
     });
   }
 
+  /* ------------------------------------------------- 裁剪（片段级）
+   *
+   * 与抠图 / 四角同一层：片段自身的属性，一次 placement pass 里完成。
+   *
+   * 写入走 `withCropEdge`（钳制在 `image-fx` 里，与校验同一份规则），全零时
+   * **删掉字段** —— 缺省语义就是「不裁」，留一个恒等对象只会让「改过没改过」
+   * 在工程 JSON 与撤销快照里表现不一致。
+   */
+
+  function setCropEdge(clip: AnyClip, edge: keyof CropSettings, v: number): void {
+    upd(clip, tr('insp.cropEdit'), (c) => {
+      if (c.kind !== 'source') return;
+      const next = withCropEdge(c.crop ?? identityCrop(), edge, v);
+      if (isIdentityCrop(next)) delete c.crop;
+      else c.crop = next;
+    });
+  }
+
   /* ---------------------------------------------------------------- 转场 */
 
   /** 落不了地的原因 → 文案键。`cut.reason` 是闭联合，索引结果仍是字面量键。 */
@@ -659,6 +681,83 @@
               onchange={(v) => setKeyParam(clip, 'spill', v)}
             />
           </Field>
+        {/if}
+      </div>
+
+      <!--
+        裁剪（源边裁切）：**所有可见片段类型**都给（算法 / 排版 / 图片 / 视频 /
+        纯色）—— 它在 placement pass 里只是「层内可见窗口」，与源的种类无关。
+        四角与抠图只对图片 / 视频开放（它们的默认矩形对文本源不直观），裁剪不一样：
+        「把文字块裁成一条」是常见要求。
+
+        没有启用开关：四条边全 0 就是关闭，多一个开关只会让「关着但字段还在」
+        变成又一种要解释的状态。
+      -->
+      <div class="section" data-testid="crop-section">
+        <div class="section-head">
+          <span class="section-title">{tr('insp.crop')}</span>
+          {#if clip.crop}
+            <IconButton
+              icon="rotate-ccw"
+              label={tr('insp.cropReset')}
+              tipText={tr('insp.cropResetTip')}
+              size="sm"
+              testid="clip-crop-reset"
+              onclick={() =>
+                upd(clip, tr('insp.cropReset'), (c) => {
+                  if (c.kind === 'source') delete c.crop;
+                })}
+            />
+          {/if}
+        </div>
+        <Field label={tr('insp.cropLeft')}>
+          <NumberInput
+            value={Math.round((clip.crop?.left ?? 0) * 100)}
+            min={0}
+            max={98}
+            step={1}
+            width={54}
+            suffix="%"
+            testid="clip-crop-left"
+            onchange={(v) => setCropEdge(clip, 'left', v / 100)}
+          />
+          <span class="dim">{tr('insp.cropRight')}</span>
+          <NumberInput
+            value={Math.round((clip.crop?.right ?? 0) * 100)}
+            min={0}
+            max={98}
+            step={1}
+            width={54}
+            suffix="%"
+            testid="clip-crop-right"
+            onchange={(v) => setCropEdge(clip, 'right', v / 100)}
+          />
+        </Field>
+        <Field label={tr('insp.cropTop')}>
+          <NumberInput
+            value={Math.round((clip.crop?.top ?? 0) * 100)}
+            min={0}
+            max={98}
+            step={1}
+            width={54}
+            suffix="%"
+            testid="clip-crop-top"
+            onchange={(v) => setCropEdge(clip, 'top', v / 100)}
+          />
+          <span class="dim">{tr('insp.cropBottom')}</span>
+          <NumberInput
+            value={Math.round((clip.crop?.bottom ?? 0) * 100)}
+            min={0}
+            max={98}
+            step={1}
+            width={54}
+            suffix="%"
+            testid="clip-crop-bottom"
+            onchange={(v) => setCropEdge(clip, 'bottom', v / 100)}
+          />
+        </Field>
+        {#if clip.crop}
+          <p class="note">{tr('insp.cropHint')}</p>
         {/if}
       </div>
 

@@ -448,3 +448,63 @@ describe('片段级抠图 / 四角（SourceClip.key / quad，v7）', () => {
     expect(orig.key!.color).toBe('#00ff00');
   });
 });
+
+describe('画面裁剪（SourceClip.crop，v10）', () => {
+  const sourceClip = (extra: Record<string, unknown> = {}) => ({
+    kind: 'source', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+    source: { type: 'solid', color: '#000' },
+    blend: 'normal', opacity: 1,
+    transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'contain',
+    ...extra,
+  });
+
+  const withClip = (clip: unknown) => {
+    const p = defaultProject('v10');
+    p.tracks.push({ kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [clip] } as never);
+    return p;
+  };
+
+  it('缺省 / 合法值通过（四种源类型都接受）', () => {
+    expect(() => validateProject(withClip(sourceClip()))).not.toThrow();
+    const crop = { left: 0.1, top: 0.2, right: 0.3, bottom: 0.4 };
+    for (const source of [
+      { type: 'solid', color: '#000' },
+      { type: 'algo', generator: 'mandelbrot', params: {} },
+      { type: 'image', assetId: 'a1' },
+      { type: 'video', assetId: 'v1', srcIn: 0, speed: 1 },
+    ]) {
+      expect(() => validateProject(withClip(sourceClip({ source, crop }))), source.type).not.toThrow();
+    }
+  });
+
+  it('坏裁剪被拒（错误文案里带片段 id）', () => {
+    const good = { left: 0.1, top: 0.1, right: 0.1, bottom: 0.1 };
+    const cases: [string, unknown][] = [
+      ['缺一条边', { left: 0.1, top: 0.1, right: 0.1 }],
+      ['越界（= 1）', { ...good, left: 1 }],
+      ['负数', { ...good, top: -0.1 }],
+      ['NaN', { ...good, bottom: NaN }],
+      ['字符串', { ...good, right: '0.1' }],
+      ['两条边把画面吃光', { ...good, left: 0.6, right: 0.4 }],
+      ['不是对象', 0.5],
+      ['是数组', [0.1, 0.1, 0.1, 0.1]],
+    ];
+    for (const [name, bad] of cases) {
+      const clip = sourceClip({ crop: bad });
+      const p = withClip(clip);
+      expect(() => validateProject(p), name).toThrow((clip as { id: string }).id);
+      expect(() => validateProject(p), name).toThrow(/裁剪/);
+    }
+  });
+
+  it('v9 → v10 是恒等迁移：裁剪原样保留', () => {
+    const crop = { left: 0.25, top: 0, right: 0.25, bottom: 0.1 };
+    const p = withClip(sourceClip({ crop }));
+    p.schemaVersion = 9;
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'source') throw new Error('unreachable');
+    expect(clip.crop).toEqual(crop);
+  });
+});

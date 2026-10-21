@@ -388,10 +388,10 @@ export class Compositor {
    * 返回 false 表示源这帧没准备好（algo 烘焙中 / 图片未登记）——
    * 调用方决定这一层怎么缺席，这里不替它决定。
    *
-   * **四角调整与抠图都在 placement 里做**（见 `placement.frag.ts` 文件头），
+   * **四角调整、抠图与裁剪都在 placement 里做**（见 `placement.frag.ts` 文件头），
    * 所以转场两侧各自独立生效 —— `drawTransition` 对 from / to 各调一次本函数，
-   * 两边的 key / quad 不会串。反过来，特效片段（adjustment layer）碰不到它们：
-   * 抠图的透明区这时候已经烘进 alpha 了。
+   * 两边的 key / quad / crop 不会串。反过来，特效片段（adjustment layer）碰不到
+   * 它们：抠图的透明区这时候已经烘进 alpha 了。
    *
    * ## ⚠️ 源尺寸与帧尺寸成**非整数比**时，采样结果会有一对稳定态（2026-10-10）
    *
@@ -456,6 +456,16 @@ export class Compositor {
         .u('u_keyParams', [key.tolerance, key.softness, key.spill]);
     } else {
       this.placeProg.u('u_key', [0, 0, 0, 0]).u('u_keyParams', [0, 0, 0]);
+    }
+
+    // 裁剪同理：必须每次全量设置（复用 program），否则上一层裁掉的边会漏到下一层。
+    const crop = source.crop;
+    if (crop) {
+      this.placeProg
+        .u('u_cropOn', 1)
+        .u('u_crop', [crop.left, crop.top, crop.right, crop.bottom]);
+    } else {
+      this.placeProg.u('u_cropOn', 0).u('u_crop', [0, 0, 0, 0]);
     }
 
     this.kit.pass(this.placeProg, dst);

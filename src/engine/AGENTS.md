@@ -66,8 +66,9 @@ function buildStack(project: Project, t: number): Stack {
 
 ### 片段级几何与抠图（placement pass）
 
-`SourceClip.key`（色键）与 `SourceClip.quad`（四角透视）**都只在一次 placement 里做**
-（`placement.frag.ts`），不是特效、不是额外 pass。这个选择的三个后果都要记住：
+`SourceClip.key`（色键）、`SourceClip.quad`（四角透视）与 `SourceClip.crop`（裁剪）
+**都只在一次 placement 里做**（`placement.frag.ts`），不是特效、不是额外 pass。
+这个选择的三个后果都要记住：
 
 - **转场两侧各自独立**：转场通路对 from / to 各调一次 placement，所以两边的抠图 / 四角
   天然按各自片段生效，不需要转场着色器知道这件事。
@@ -85,6 +86,9 @@ function buildStack(project: Project, t: number): Stack {
 - `key` 的数学（YCbCr 色度差 + 亮度差、容差 / 柔边 / 溢色抑制）写在 placement 的文件头。
   它只乘 alpha（render target 是直通 alpha，乘 rgb 会得到错误结果）；普通通路里
   `u_opacity` 仍由 blend pass 负责，两者互不干扰。
+- `crop` 只乘 `inside`（可见窗口），**不动采样坐标**：内容不缩放不位移，所以它和
+  `transform.sx/sy` 不是一回事。四条边全 0 时 `stack.ts` 不带这个字段、`u_cropOn = 0`。
+  判定用的是**源 uv**（四角变形之后的 `srcTd`），因此与 quad 的顺序无关。
 - 坐标空间与 UI 拖角共用 `core/quad.ts`（层空间 = 默认图层矩形），改动语义时先看
   `src/core/AGENTS.md` 的「片段级图像处理」。
 

@@ -51,10 +51,12 @@
 import { evalCurve } from '../core/curve';
 import { fadeWeight } from '../core/clips';
 import { isIdentityQuad, quadInverseMatrix } from '../core/quad';
+import { isIdentityCrop } from '../core/image-fx';
 import { transitionAt } from '../core/transitions';
 import type { BeatGrid } from '../core/time';
 import type {
   BlendMode,
+  CropSettings,
   EffectClip,
   KeySettings,
   Project,
@@ -86,6 +88,13 @@ export interface ResolvedSource {
    *   **不丢层**。用户把四角拖成一条线时不该让图层整个消失。
    */
   quadInverse?: number[] | null;
+  /**
+   * 画面裁剪（`SourceClip.crop` 的**原样引用**）。缺省 = 不裁。
+   *
+   * 与 `quadInverse` 同一条纪律：全零裁剪**不带**这个字段，`u_cropOn = 0`，
+   * 走与改动前逐位相同的算式。
+   */
+  crop?: CropSettings;
 }
 
 /**
@@ -193,6 +202,7 @@ function resolveSource(clip: SourceClip, t: number, grid: BeatGrid): ResolvedSou
   // （多带一个 `quadInverse: undefined` 对渲染没影响，但守卫与快照会看到差别）。
   if (clip.key) out.key = clip.key;
   if (clip.quad && !isIdentityQuad(clip.quad)) out.quadInverse = quadInverseMatrix(clip.quad);
+  if (clip.crop && !isIdentityCrop(clip.crop)) out.crop = clip.crop;
   return out;
 }
 
