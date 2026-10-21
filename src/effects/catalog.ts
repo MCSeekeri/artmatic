@@ -112,6 +112,7 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   'kino-datamosh': { base: 'scroll', descKey: 'fx.desc.kinoDatamosh', category: 'glitch' },
   'kino-feedback': { base: 'mandel', descKey: 'fx.desc.kinoFeedback', category: 'blur', overlay: true },
   lcd: { base: 'grid', descKey: 'fx.desc.lcd', category: 'style' },
+  'lens-flare': { base: 'photo', descKey: 'fx.desc.lensFlare', category: 'blur', overlay: true },
   'liquid-light': { base: 'photo', descKey: 'fx.desc.liquidLight', category: 'blur', overlay: true },
   melt: { base: 'mandel', descKey: 'fx.desc.melt', category: 'glitch' },
   mirror: { base: 'photo', descKey: 'fx.desc.mirror', category: 'geometry' },

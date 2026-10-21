@@ -42,6 +42,18 @@
 
 > `HASH_FAST_GLSL` 用的是 Dave Hoskins 风格的无 sin hash（`p * 0.1031` 那一族），在 Shadertoy / MIT 圈通行，上游源码未署名，这里补记出处。
 
+## 镜头光晕（`src/effects/{defs,glsl}/lens-flare.ts`）
+
+**自写，没有复制代码。** 移植前读了两份公开实现，只取「有哪些光学分量」这一层：
+
+- [BetterLensFlare](https://github.com/polincdev/BetterLensFlare)（MIT）：鬼影沿
+  「光源 → 画面中心」的轴排布、逐通道错位做色散、横向拉丝的胶囊形衰减。
+- Anderson Mancini 的 *Ultimate Lens Flare*（Shadertoy 上的公开实现）：星芒来自
+  `atan` 角度乘条数后取幂，光圈叶片的六边形边。
+
+亮部检测（32×32 分格扫描 + 亚格加权质心，单 fragment 归约）是本项目自己的做法：
+上面两份都需要外部传入光源位置。
+
 ## 文本转路径（`src/typography/text-outline.ts`）
 
 **只参照思路，没有复制代码**：`tooooools/html-to-svg`（MIT）的 text 渲染器用
