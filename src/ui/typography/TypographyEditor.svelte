@@ -19,7 +19,7 @@
   import { editorState } from './editor-state.svelte';
   import { registerTextRangeRefresher } from './keys';
   import { createTypographyActions } from './actions';
-  import { buildTypographyTabs } from './ribbon-defs';
+  import { CANVAS_SIZE_TESTID, buildTypographyTabs } from './ribbon-defs';
   import SelectionLayer from './SelectionLayer.svelte';
   import QuadEditLayer from './QuadEditLayer.svelte';
   import NodeEditor from './NodeEditor.svelte';
@@ -169,6 +169,27 @@
       keyed: !!c.curves['transform.sx'] || !!c.curves['transform.sy'],
     };
   });
+
+  /**
+   * 画布尺寸浮层开着没有，以及它的锚点。
+   *
+   * 入口是「设计」Ribbon 的按钮 —— `ribbon-defs` 只能发一个无参意图，拿不到
+   * 事件目标，所以锚点用 testid 现查（那个 testid 同时也是 E2E 的稳定契约）。
+   * 再点一次按钮 = 关掉，所以这里是开合而不是「只开」。
+   */
+  let canvasOpen = $state(false);
+  let canvasAnchor = $state<HTMLElement | null>(null);
+
+  function toggleCanvasSize(): void {
+    if (canvasOpen) {
+      canvasOpen = false;
+      return;
+    }
+    const anchor = document.querySelector<HTMLElement>(`[data-testid="${CANVAS_SIZE_TESTID}"]`);
+    if (!anchor) return;
+    canvasAnchor = anchor;
+    canvasOpen = true;
+  }
 
   /**
    * 改画布尺寸。
@@ -356,6 +377,7 @@
         nodeEditing: !!editorState.nodeEditId,
         customThemes: appState.project.customThemes ?? [],
         onOpenThemeEditor: () => (themeEditorOpen = true),
+        onOpenCanvasSize: toggleCanvasSize,
       },
       actions,
     );
@@ -1506,20 +1528,6 @@
     <span class="zoom-val">{zoomPct}%</span>
     <IconButton icon="plus" label={tr('typo.zoomIn')} testid="typo-zoom-in" onclick={() => zoomBy(1.25)} />
     <IconButton icon="minimize-2" label={tr('typo.zoomFit')} testid="typo-zoom-fit" onclick={zoomFit} />
-    <!-- 画面尺寸：排版里所有坐标都是文档像素，不显示的话没法判断「这段文字有多大」。
-         点开可以改画布尺寸 / 比例 / 上屏缩放（见 CanvasSizePopover 的说明）。 -->
-    {#if canvasInfo}
-      <CanvasSizePopover
-        size={docSize}
-        frame={appState.project.resolution}
-        fit={canvasInfo.fit}
-        sx={canvasInfo.sx}
-        sy={canvasInfo.sy}
-        keyed={canvasInfo.keyed}
-        onsize={setCanvasSize}
-        onscale={setCanvasScale}
-      />
-    {/if}
 
     <!--
       背景预览：播放按钮 + 进度条（用户要求放在缩放区右侧）+ 开关 + 不透明度。
@@ -1589,6 +1597,26 @@
       onclick={() => (editorState.rasterPreview = !editorState.rasterPreview)}
     />
   </div>
+
+  <!--
+    画布尺寸浮层（「设计 → 画布大小」）。挂在根节点下、`position: fixed`：
+    它要能盖住 Ribbon 与画布两侧，不能留在 `.zoombar` / `.ribbon` 这类带
+    `overflow` 或层叠上下文的祖先里。
+  -->
+  {#if canvasOpen && canvasAnchor && canvasInfo}
+    <CanvasSizePopover
+      anchor={canvasAnchor}
+      onclose={() => (canvasOpen = false)}
+      size={docSize}
+      frame={appState.project.resolution}
+      fit={canvasInfo.fit}
+      sx={canvasInfo.sx}
+      sy={canvasInfo.sy}
+      keyed={canvasInfo.keyed}
+      onsize={setCanvasSize}
+      onscale={setCanvasScale}
+    />
+  {/if}
 </div>
 
 {#if ctxMenu}

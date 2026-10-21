@@ -44,6 +44,14 @@ import { tr } from '../../i18n/index.svelte';
 /** 「动作型」下拉的占位值：选完不改变显示值，所以可以连点。 */
 const ANIM_PICK = '__pick-anim';
 
+/**
+ * 「设计」页「画布大小」按钮的 testid。
+ *
+ * 它不只是测试选择器：画布尺寸浮层的**锚点**也靠它现查 —— Ribbon item 的
+ * `onselect` 是无参意图，拿不到事件目标。两处共用一个常量，改名不会只改一半。
+ */
+export const CANVAS_SIZE_TESTID = 'ribbon-canvas-size';
+
 export interface TypographyRibbonInput {
   doc: TypographyDocument;
   selection: TypographyElement[];
@@ -102,6 +110,8 @@ export interface TypographyRibbonInput {
   customThemes: readonly TypographyTheme[];
   /** 打开「配色方案编辑器」（界面状态，所以由编辑器提供）。 */
   onOpenThemeEditor: () => void;
+  /** 开合「画布大小」浮层（画幅 / 上屏大小，见 `CanvasSizePopover`）。 */
+  onOpenCanvasSize: () => void;
 }
 
 const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
@@ -130,6 +140,9 @@ const LINE_STYLES = ['solid', 'dashed', 'dotted'] as const;
 
 /** 「设计」页两个配色方案动作按钮的宽度（默认 50px 装不下它们的标签）。 */
 const THEME_BTN_W = 84;
+
+/** 「画布大小」四个字：默认 50px 差一点，给 58 正好不省略。 */
+const CANVAS_BTN_W = 58;
 
 function firstText(sel: TypographyElement[]): TextElement | null {
   return (sel.find((e) => e.kind === 'text') as TextElement | undefined) ?? null;
@@ -962,6 +975,29 @@ export function buildTypographyTabs(
       label: tr('rib.design'),
       order: 1,
       groups: [
+        /*
+         * 「画布」组：画幅（文档尺寸 / 比例）与上屏大小。
+         *
+         * 之前这枚读数挂在画布下方的缩放条上，看着像缩放的一部分 —— 而它改的是
+         * 版式本身，属于「设计」，所以搬到这里。按钮本身不带读数（Ribbon 的标签
+         * 是静态文案），尺寸在浮层里看。
+         */
+        {
+          id: 'canvas',
+          label: tr('rib.group.canvas'),
+          items: [
+            {
+              kind: 'button',
+              id: 'canvas-size',
+              label: tr('rib.canvasSize'),
+              icon: 'frame',
+              size: 'large',
+              width: CANVAS_BTN_W,
+              testid: CANVAS_SIZE_TESTID,
+              onselect: () => input.onOpenCanvasSize(),
+            },
+          ],
+        },
         {
           id: 'theme',
           label: tr('rib.group.theme'),

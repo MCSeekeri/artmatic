@@ -220,7 +220,7 @@ async function addTextClip(page: Page): Promise<void> {
   await expect(page.getByTestId('typo-editor')).toBeVisible();
 }
 
-test('排版 zoombar：高度固定、有缩放滑杆、显示画面尺寸', async ({ page }) => {
+test('排版 zoombar：高度固定、有缩放滑杆；画面尺寸在「设计」页', async ({ page }) => {
   await boot(page);
   await addTextClip(page);
 
@@ -228,10 +228,6 @@ test('排版 zoombar：高度固定、有缩放滑杆、显示画面尺寸', asy
   expect(bar, 'zoombar 应当存在').not.toBeNull();
   // 固定 26px：原来它被错误地放进 `minmax(0,1fr)` 那一行，会被拉高
   expect(bar!.height, `zoombar 高度应当固定，实测 ${bar!.height}`).toBeLessThanOrEqual(30);
-
-  // 画面尺寸读数
-  await expect(page.getByTestId('typo-canvas-size')).toContainText('1920');
-  await expect(page.getByTestId('typo-canvas-size')).toContainText('1080');
 
   // 滑杆真的能改缩放（拖到轨道最右 = 400%）
   const pct = () => page.evaluate(() => document.querySelector('.zoom-val')?.textContent ?? '');
@@ -241,6 +237,16 @@ test('排版 zoombar：高度固定、有缩放滑杆、显示画面尺寸', asy
   await page.mouse.click(sld.x + sld.width - 2, sld.y + sld.height / 2);
   await expect.poll(pct).not.toBe(fit);
   expect(Number.parseInt((await pct()).replace('%', ''), 10)).toBeGreaterThan(300);
+
+  // 画面尺寸从缩放条搬到了「设计 → 画布大小」：尺寸读数只在浮层里。
+  await expect(page.getByTestId('typo-canvas-size')).toHaveCount(0);
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-canvas-size').click();
+  await expect(page.getByTestId('typo-canvas-w')).toHaveValue('1920');
+  await expect(page.getByTestId('typo-canvas-h')).toHaveValue('1080');
+  // Esc 关掉，而不是留在屏幕上挡住画布
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('typo-canvas-pop')).toHaveCount(0);
 });
 
 test('Ribbon：纯小按钮的组排成两行', async ({ page }) => {

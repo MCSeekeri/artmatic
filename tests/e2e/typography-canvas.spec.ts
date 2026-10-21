@@ -63,19 +63,34 @@ function readDoc(page: Page, clipId: string) {
   }, clipId);
 }
 
+/**
+ * 打开画布尺寸浮层：入口在「设计」Ribbon 的「画布大小」。
+ *
+ * 这两步一起测，是因为「按钮在哪」本身是产品决定的一部分：它从画布下方的
+ * 缩放条搬到了 Ribbon（缩放条上的读数已经删掉，见用例 1 的第一条断言）。
+ */
+async function openCanvasPanel(page: Page): Promise<void> {
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-canvas-size').click();
+  await expect(page.getByTestId('typo-canvas-pop')).toBeVisible();
+}
+
 test('画幅预设：1:1 → 文档尺寸 1080×1080，读数与占位同步', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);
 
-  // 新片段沿工程分辨率
-  await expect(page.getByTestId('typo-canvas-size')).toContainText('1920');
+  // 缩放条上不再有尺寸读数（它现在住在「设计 → 画布大小」里）。
+  await expect(page.getByTestId('typo-canvas-size')).toHaveCount(0);
 
-  await page.getByTestId('typo-canvas-size').click();
-  await expect(page.getByTestId('typo-canvas-pop')).toBeVisible();
+  await openCanvasPanel(page);
+
+  // 新片段沿工程分辨率
+  await expect(page.getByTestId('typo-canvas-w')).toHaveValue('1920');
+  await expect(page.getByTestId('typo-canvas-h')).toHaveValue('1080');
 
   await page.getByTestId('typo-canvas-ratio-1:1').click();
 
-  await expect(page.getByTestId('typo-canvas-size')).toContainText('1080');
+  await expect(page.getByTestId('typo-canvas-w')).toHaveValue('1080');
   await expect
     .poll(async () => (await readDoc(page, clipId))?.source?.doc?.size)
     .toEqual({ w: 1080, h: 1080 });
@@ -89,11 +104,24 @@ test('画幅预设：1:1 → 文档尺寸 1080×1080，读数与占位同步', a
   await expect(foot).toContainText('56%');
 });
 
+test('「画布大小」是开合：再点一次关掉', async ({ page }) => {
+  await boot(page);
+  await addTextClip(page);
+
+  await openCanvasPanel(page);
+  /*
+   * 锚点也算「浮层里面」（否则 pointerdown 会先关掉、click 再打开，看起来是
+   * 闪一下），所以关闭必须由按钮自己 toggle —— 这条钉的就是那个分支。
+   */
+  await page.getByTestId('ribbon-canvas-size').click();
+  await expect(page.getByTestId('typo-canvas-pop')).toHaveCount(0);
+});
+
 test('上屏大小：缩放 50% 写进 transform.sx/sy，占位读数减半', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);
 
-  await page.getByTestId('typo-canvas-size').click();
+  await openCanvasPanel(page);
   await page.getByTestId('typo-canvas-scale-num').fill('50');
   await page.getByTestId('typo-canvas-scale-num').press('Enter');
 
@@ -113,7 +141,7 @@ test('缩放内容：开着按比例重排，关掉则元素留在原像素位�
   const before = (await readDoc(page, clipId))!.source!.doc!.elements[0]!.frame;
 
   // 关掉「缩放内容」再换画幅：元素框一个像素都不该动
-  await page.getByTestId('typo-canvas-size').click();
+  await openCanvasPanel(page);
   await page.getByTestId('typo-canvas-scale-content').click();
   await page.getByTestId('typo-canvas-ratio-1:1').click();
 

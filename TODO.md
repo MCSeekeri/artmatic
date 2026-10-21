@@ -85,6 +85,12 @@
   静默换画幅）、工程画面单轴为 0 的退化分支、`withLockedAspect` 的除零（会给出
   `Infinity` 并一路进 GLSL）、`footprintOf` 的 `NaN%`。`image-fx.ts` 新增的裁剪全部
   被杀死；余下 59 个存活都在既有的 CPU 色键（127–212 行，本次未动）。
+- **入口搬到「设计」Ribbon**（用户要求）：画布尺寸从缩放条上那枚读数按钮移到
+  `设计 → 画布大小`（`ribbon-canvas-size`，testid 常量与浮层锚点共用一个真源）。
+  缩放条上不再有尺寸读数。为此浮层改成**受控**（`anchor` / `onclose` 由编辑器给）：
+  Ribbon item 的 `onselect` 是无参意图，拿不到事件目标，锚点用 testid 现查。
+  「再点一次关掉」由编辑器 toggle（锚点算浮层内部，否则 pointerdown 会先关、click 再开，
+  看起来是闪一下）。
 
 # 0.3 交付前复核（2026-10-19）
 

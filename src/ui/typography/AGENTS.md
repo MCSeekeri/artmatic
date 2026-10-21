@@ -38,16 +38,20 @@
   不需要在时间轴的每条分支上加 `if (!editorOpen)`。
 - **编辑器内不做脏标记** —— 排版编辑全程直写工程（可撤销），不存在「切走就丢」的东西。
   需要脏标记的是「工程 vs 磁盘」（`savedVersion`）。
-- **画幅与上屏大小的入口是标题栏那枚读数按钮**（`CanvasSizePopover.svelte`，
-  `typo-canvas-size` → 弹层 `typo-canvas-pop`），定位与关闭复用 `controls/popover.ts`
-  （与 Ribbon 弹层同一套，`position: fixed`）。写 `doc.size` 走 `editorState.commit`
-  （可撤销），写上屏大小走 `store.updateClip` 的 `transform.sx / sy`。
+- **画幅与上屏大小的入口在「设计」Ribbon**（`ribbon-canvas-size` → 浮层
+  `typo-canvas-pop`，组件 `CanvasSizePopover.svelte`）。按钮由 `ribbon-defs`
+  描述生成、只能发无参意图（`onOpenCanvasSize`），**拿不到事件目标**，所以浮层的
+  锚点由编辑器用 `CANVAS_SIZE_TESTID` 现查 —— 那个常量同时是 E2E 的稳定契约。
+  浮层是受控的（`anchor` / `onclose` 由编辑器给），定位与关闭复用
+  `controls/popover.ts`（`position: fixed`，与 Ribbon 里其它弹层同一套）。
+  写 `doc.size` 走 `editorState.commit`（可撤销），写上屏大小走 `store.updateClip`
+  的 `transform.sx / sy`。**缩放条上不再有尺寸读数** —— 别在 `.zoombar` 里加回去。
 - **它读的每一样都是「原地改的对象」，派生必须 `$derived.by` + 返回新对象**：
   ```ts
   const docSize = $derived.by(() => { void appState.version; return { w: doc.size.w, h: doc.size.h }; });
   ```
-  `$derived(doc.size)` 拿到的是**同一个引用**，`===` 不变 ⇒ 不重算 ⇒ 弹层读数停在旧值，
-  而画面本身是对的（所以看起来像「只有数字不更新」）。`svelte-check` 不报这个。
+  `$derived(doc.size)` 拿到的是**同一个引用**，`===` 不变 ⇒ 不重算 ⇒ 浮层读数停在
+  旧值，而画面本身是对的（所以看起来像「只有数字不更新」）。`svelte-check` 不报这个。
 - **「文字转路径」按钮住在「开始」的「路径」组**（`typo-text-to-path`），与
   「文字填充」同一条出现规则：只在选中文本时占位置。它**异步**（等 wasm +
   字体字节），期间不改文档；失败只 flash 一条可照做的提示（缺字 / 字体读不到 /
