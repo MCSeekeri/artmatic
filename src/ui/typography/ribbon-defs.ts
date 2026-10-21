@@ -1027,8 +1027,11 @@ export function buildTypographyTabs(
                   t.colors.accent5,
                   t.colors.accent6,
                 ],
+                // 自定义方案（Project.customThemes 里的）才可移除；内置方案只读。
+                removable: input.customThemes.some((c) => c.id === t.id),
               })),
               onselect: (id) => a.setTheme(id),
+              onremove: (id) => a.removeCustomTheme(id),
             },
             /*
              * 「应用到整个项目」：一次 commit 写所有文本片段 + 新片段默认

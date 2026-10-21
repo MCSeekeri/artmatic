@@ -168,10 +168,21 @@ export interface RibbonMenuNumeric extends RibbonLiveHooks {
  */
 export interface RibbonThemesSpec extends RibbonItemBase {
   kind: 'themes';
-  options: { id: string; label: string; colors: string[] }[];
+  options: {
+    id: string;
+    label: string;
+    colors: string[];
+    /**
+     * 可移除（= 工程 `customThemes` 里的自定义方案）。内置方案是只读数据表，
+     * 不传即是不可移除 —— 图库不会给它们挂右键菜单。
+     */
+    removable?: boolean;
+  }[];
   /** 当前方案 id。 */
   value: string;
   onselect: (id: string) => void;
+  /** 移除一份自定义方案（图库里右键它 → 「移除」）。 */
+  onremove?: (id: string) => void;
 }
 
 /**

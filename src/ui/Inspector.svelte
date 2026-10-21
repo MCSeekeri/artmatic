@@ -756,9 +756,6 @@
             onchange={(v) => setCropEdge(clip, 'bottom', v / 100)}
           />
         </Field>
-        {#if clip.crop}
-          <p class="note">{tr('insp.cropHint')}</p>
-        {/if}
       </div>
 
       <!--

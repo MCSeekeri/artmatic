@@ -30,6 +30,7 @@ export const typography = {
   'typo.undo.theme': '更换配色方案',
   'typo.undo.themeProject': '配色方案应用到整个工程',
   'typo.undo.themeSave': '保存配色方案',
+  'typo.undo.themeRemove': '移除配色方案',
   'typo.undo.canvasSize': '修改画布尺寸',
   'typo.undo.canvasScale': '修改上屏缩放',
   'typo.undo.clearFormat': '清除格式',

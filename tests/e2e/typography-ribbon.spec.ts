@@ -2449,3 +2449,77 @@ test('自定义配色方案：内置方案打开即复制，改槽位保存后�
   await page.getByTestId('ribbon-themes').click();
   await expect(page.getByTestId('ribbon-themes-pop')).toContainText('Office 副本');
 });
+
+test('自定义配色方案：图库右键可移除，引用它的文档回落默认方案（一笔撤销）', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  // 先造一份自定义方案（「内置方案打开即复制」那条路径已在上一用例覆盖）
+  await page.getByTestId('ribbon-tab-design').click();
+  await page.getByTestId('ribbon-theme-edit').click();
+  await page.getByTestId('theme-editor-color-accent1').click();
+  await page.getByTestId('theme-editor-color-accent1-palette-std-ff0000').click();
+  await page.getByTestId('theme-editor-save').click();
+
+  const state = (): Promise<{
+    ids: string[];
+    projectTheme?: string;
+    themes: (string | undefined)[];
+  }> =>
+    page.evaluate(() => {
+      const p = (window as never as {
+        __artmatic: {
+          appState: {
+            store: {
+              project: {
+                typographyTheme?: string;
+                customThemes?: { id: string }[];
+                tracks: { clips: { kind: string; source?: { type?: string; doc?: { theme?: string } } }[] }[];
+              };
+            };
+          };
+        };
+      }).__artmatic.appState.store.project;
+      const themes: (string | undefined)[] = [];
+      for (const t of p.tracks) {
+        for (const c of t.clips) if (c.source?.type === 'text') themes.push(c.source.doc?.theme);
+      }
+      return {
+        ids: (p.customThemes ?? []).map((t) => t.id),
+        projectTheme: p.typographyTheme,
+        themes,
+      };
+    });
+
+  const before = await state();
+  expect(before.ids).toHaveLength(1);
+  const customId = before.ids[0]!;
+  expect(before.themes).toContain(customId);
+
+  await page.getByTestId('ribbon-themes').click();
+
+  // 内置方案没有「移除」：右键它不弹菜单（只读数据表）
+  await page.getByTestId('ribbon-themes-opt-office-2007').click({ button: 'right' });
+  await expect(page.getByTestId('ribbon-themes-remove')).toHaveCount(0);
+  // 图库也不该被右键关掉（否则下一次右键根本落不到那一行上）
+  await expect(page.getByTestId('ribbon-themes-pop')).toBeVisible();
+
+  // 自定义方案：右键 → 「移除」
+  await page.getByTestId(`ribbon-themes-opt-${customId}`).click({ button: 'right' });
+  await expect(page.getByTestId('ribbon-themes-remove')).toBeVisible();
+  await page.getByTestId('ribbon-themes-remove').click();
+
+  const after = await state();
+  expect(after.ids).toEqual([]);
+  // 引用它的地方不留下悬空 id（渲染本来就会回落，但工程不该带着它）
+  expect(after.themes).not.toContain(customId);
+  expect(after.projectTheme).toBeUndefined();
+
+  // 一笔撤销：方案与引用一起回来
+  await page.keyboard.press('Control+z');
+  const undone = await state();
+  expect(undone.ids).toEqual([customId]);
+  expect(undone.themes).toContain(customId);
+});

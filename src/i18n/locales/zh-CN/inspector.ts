@@ -86,7 +86,6 @@ export const inspector = {
   'insp.cropRight': '右',
   'insp.cropTop': '上',
   'insp.cropBottom': '下',
-  'insp.cropHint': '按源画面比例裁掉四边；内容不缩放，所以「裁成竖条」靠它。',
   'insp.cropReset': '取消裁剪',
   'insp.cropResetTip': '四边都回到 0（一笔撤销）',
   'insp.cropEdit': '修改裁剪',

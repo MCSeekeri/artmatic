@@ -94,6 +94,14 @@
 - **颜色控件的 `themeId` 由 `ribbon-defs.ts::injectThemeId` 一处注入**，不要在
   `kind: 'color'` 项上各写一遍。漏掉一处的表现是「取色卡画的是默认方案的色格，
   而选出来的颜色按当前方案解析」—— 切过配色方案才现形，且不报错。
+- **自定义配色方案的移除入口是图库的右键菜单**（`RibbonThemes` → `controls/Menu`）：
+  只有 `options[].removable`（= 工程 `customThemes` 里的条目）才挂得上，内置方案
+  只读。动作只有一条 `actions.removeCustomTheme`，一笔撤销，且**同时删掉引用它的
+  `doc.theme` / `Project.typographyTheme`** —— 留着悬空 id 不会报错（渲染照样回落
+  默认方案），但工程会带着一个「本版本没有的方案」。两个实现细节：右键菜单必须
+  渲染在 `{#if open}` **之外**（点菜单项时指针不在面板上，图库会先自关，嵌套的
+  菜单会被连带卸载、点击落空）；图库的 `attachDismiss` 必须开
+  `keepOnRightButton`，否则右键一按下面板就没了，`contextmenu` 根本落不到那一行。
 - **原生取色器（`<input type="color">`）只接 `change`，不接 `input`**：那个 input
   活在取色卡的弹层里，而提交动作会关掉弹层 ⇒ input 被销毁 ⇒ **原生取色器被连坐关闭**，
   颜色根本拖不动（用户报过）。拖动中的实时预览要用手势事务（`live`/`endGesture`）做，

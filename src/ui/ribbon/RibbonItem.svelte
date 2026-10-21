@@ -85,6 +85,7 @@
     disabled={item.disabled}
     testid={item.testid}
     onselect={item.onselect}
+    onremove={item.onremove}
   />
 {:else if item.kind === 'spacer'}
   <span class="rspacer" aria-hidden="true"></span>

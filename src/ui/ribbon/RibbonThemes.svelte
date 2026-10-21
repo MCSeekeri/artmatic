@@ -8,19 +8,28 @@
    *
    * 与 `RibbonGallery`（形状）分开一个组件：那个的卡片是「一张单色 SVG」，
    * 这个是「多条色带」，塞进同一套渲染里会长出两个 if 分支。
+   *
+   * 自定义方案可以**右键移除**（内置方案只读）。右键菜单渲染在组件根，不在
+   * `{#if open}` 里面 —— 点菜单项时指针不在图库面板上，图库会先自关，嵌套的
+   * 菜单会被连带卸载，点击根本落不到菜单项上。
    */
   import Icon from '../Icon.svelte';
+  import Menu from '../controls/Menu.svelte';
+  import type { MenuItem } from '../controls/menu-model';
   import { attachDismiss, computePopoverPosition } from '../controls/popover';
   import type { RibbonItemSize } from './ribbon-model';
+  import { tr } from '../../i18n/index.svelte';
 
   interface Props {
     label: string;
-    options: { id: string; label: string; colors: string[] }[];
+    options: { id: string; label: string; colors: string[]; removable?: boolean }[];
     value: string;
     size?: RibbonItemSize;
     disabled?: boolean;
     testid?: string;
     onselect: (id: string) => void;
+    /** 移除一份自定义方案（只对 `options[].removable` 生效）。 */
+    onremove?: (id: string) => void;
   }
   const {
     label,
@@ -30,6 +39,7 @@
     disabled = false,
     testid = 'themes',
     onselect,
+    onremove,
   }: Props = $props();
 
   let open = $state(false);
@@ -38,6 +48,27 @@
   const pos = $state({ x: -1, y: -1 });
   const positioned = $derived(pos.x >= 0 && pos.y >= 0);
   const panelId = $props.id();
+  /** 右键菜单的屏幕坐标与被点的方案。null = 关着。 */
+  let ctx = $state<{ x: number; y: number; id: string; label: string } | null>(null);
+
+  /**
+   * 右键菜单的项。**id 必须在这里闭包捕获**：`Menu.activate` 会先 `onclose()`
+   * 再跑 `onselect()`，那时 `ctx` 已经是 null，回调里再去读就拿不到 id 了。
+   */
+  const ctxItems = $derived.by<MenuItem[]>(() => {
+    const c = ctx;
+    if (!c) return [];
+    return [
+      {
+        id: 'remove',
+        label: tr('rib.themeRemove'),
+        icon: 'trash',
+        danger: true,
+        testid: `${testid}-remove`,
+        onselect: () => onremove?.(c.id),
+      },
+    ];
+  });
 
   function close(): void {
     open = false;
@@ -66,6 +97,9 @@
     const handle = attachDismiss({
       onclose: close,
       isInside: (t) => panelEl?.contains(t) === true || triggerEl?.contains(t) === true,
+      // 右键要开的是移除菜单，不能把图库自己先关掉（面板一没，contextmenu 就
+      // 落不到那一行上了）。
+      keepOnRightButton: true,
     });
     return () => handle.destroy();
   });
@@ -73,6 +107,13 @@
   function pick(id: string): void {
     close();
     if (id !== value) onselect(id);
+  }
+
+  function openCtx(e: MouseEvent, opt: Props['options'][number]): void {
+    if (!onremove || !opt.removable) return;
+    e.preventDefault();
+    e.stopPropagation();
+    ctx = { x: e.clientX, y: e.clientY, id: opt.id, label: opt.label };
   }
 </script>
 
@@ -117,6 +158,7 @@
         aria-selected={opt.id === value}
         data-testid={`${testid}-opt-${opt.id}`}
         onclick={() => pick(opt.id)}
+        oncontextmenu={(e) => openCtx(e, opt)}
       >
         <span class="bands">
           {#each opt.colors as c, i (i)}
@@ -127,6 +169,16 @@
       </button>
     {/each}
   </div>
+{/if}
+
+{#if ctx}
+  <Menu
+    items={ctxItems}
+    at={ctx}
+    head={{ label: ctx.label }}
+    onclose={() => (ctx = null)}
+    testid={`${testid}-ctx`}
+  />
 {/if}
 
 <style>

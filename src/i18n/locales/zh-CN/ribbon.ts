@@ -278,6 +278,9 @@ export const ribbon = {
   'rib.themeEditTitle': '编辑配色方案',
   'rib.themeNewTitle': '新建配色方案',
   'rib.themeName': '方案名',
+  /* 图库里右键自定义方案的菜单项。内置方案是只读数据表，没有这一项。 */
+  'rib.themeRemove': '移除配色方案',
+  'rib.themeRemoved': '已移除配色方案「{name}」',
   /* 内置方案复制成自定义方案时的名字后缀。 */
   'rib.themeCopySuffix': ' 副本',
   /* 弹窗里的一句话：两个端点槽为什么是只读的。 */

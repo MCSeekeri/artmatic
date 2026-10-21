@@ -844,6 +844,14 @@ export interface TypographyActions {
    * 一笔撤销；内置方案是只读数据表，要改先 `cloneAsCustomTheme` 复制。
    */
   saveCustomTheme(theme: TypographyTheme): void;
+  /**
+   * 移除一份自定义配色方案（图库里右键它 → 「移除」）。一笔撤销。
+   *
+   * 引用它的地方**就地回落**成「没设过」：`doc.theme` 与
+   * `Project.typographyTheme` 都删掉。渲染结果与 `themeById` 的回落一致
+   * （画面本来就会回到默认方案），但工程里不再留悬空 id。
+   */
+  removeCustomTheme(id: string): void;
 
   /* 插入 */
   addText(): void;
@@ -1485,6 +1493,39 @@ export function createTypographyActions(): TypographyActions {
           }
         }
       });
+    },
+
+    /**
+     * 移除一份自定义配色方案：**一笔撤销**。
+     *
+     * 删 `customThemes` 的那一条之外，还要把**引用它的地方**抹干净：
+     * `doc.theme` 与 `Project.typographyTheme`。不抹的话工程里会留一堆指向
+     * 不存在方案的悬空 id —— 渲染照样回落默认方案（不报错），但图库/检查器
+     * 显示的是「本版本没有的方案」，下次保存也照样带着它。
+     *
+     * 用户可能正在编辑用了它的文档：commit 之后 `doc.theme` 变 undefined，
+     * 编辑器的派生（`appState.version`）会跟上，画面按默认方案重渲。
+     */
+    removeCustomTheme(id) {
+      // 只认工程里的自定义方案：内置方案是只读数据表。UI 已经按 `removable`
+      // 挡过一层，这里再挡一次 —— 传进一个内置 id 的话，下面会把工程里对它的
+      // 引用（包括新片段默认方案）一起抹掉。
+      const target = appState.project.customThemes?.find((t) => t.id === id);
+      if (!target) return;
+      const name = target.name;
+      appState.store.commit(tr('typo.undo.themeRemove'), (p) => {
+        const list = (p.customThemes ?? []).filter((t) => t.id !== id);
+        if (list.length) p.customThemes = list;
+        else delete p.customThemes;
+        if (p.typographyTheme === id) delete p.typographyTheme;
+        for (const track of p.tracks) {
+          for (const clip of track.clips) {
+            if (clip.kind !== 'source' || clip.source.type !== 'text') continue;
+            if (clip.source.doc.theme === id) delete clip.source.doc.theme;
+          }
+        }
+      });
+      if (name) appState.flash(tr('rib.themeRemoved', { name }), 'info');
     },
 
     /* ---------------------------------------------------------- 插入 */
