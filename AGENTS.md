@@ -113,7 +113,7 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 | 渲染 | WebGL2 + GLSL ES 3.00 |
 | 导出编码 | **WebCodecs**（H.264 + AAC 封 MP4，mediabunny）+ PNG 序列逃生舱 + GIF（`gifenc` 软编） |
 | 音频分析 | 自研 TS 离线 FFT（对齐 `AnalyserNode` 的 dB 映射） |
-| 排版出图 | snapDOM + HarfBuzz WASM 字体子集化 |
+| 排版出图 | snapDOM + HarfBuzz WASM（字体子集化 / 字形轮廓「文字转路径」）；本机字体走 Local Font Access |
 | 图标 | Lucide（`@lucide/svelte`，ISC）。UI 图标走 `ui/icons.ts` 的按组件导出（可 tree-shaking）；排版编辑器的「插入图标」走全量清单 + 懒加载，见 `src/typography/AGENTS.md` |
 | 样式 | Design Token 单一真源在 TS（`ui/tokens.ts`） |
 | 工程持久化 | File System Access API；E2E 跑在 OPFS 上 |
@@ -159,6 +159,7 @@ src/
 ├── render/        ★ 合成根（见 `src/render/AGENTS.md`）
 ├── audio/         离线 FFT · BPM/offset 估计 · 波形桶 · 播放器
 ├── typography/    TypographyDocument 模型 + 光栅化后端 + 字体注册表 / HarfBuzz 子集化
+│                  + `text-outline.ts`（文字转路径：Range 布局 + 字形轮廓）
 │                  + `agent-ops.ts`（控制平面用的写入原语，纯函数）
 ├── timeline/      时间轴 UI（Canvas2D 绘制 + DOM 片段）
 ├── exporters/     export-runner（逐帧驱动）+ frame-sink（webcodecs / png-sequence / gif）
@@ -265,6 +266,7 @@ bun run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright
 bunx vitest run tests/unit/xxx.test.ts    # 只想跑一个测试文件
 node scripts/e2e.mjs tests/e2e/x.spec.ts  # 只跑一个 E2E（参数原样转给 playwright test）
 bun run capacity     # 打印本机内存 / 显存探测（页面读的是 /__capacity.json）
+bun run fonts:sfnt   # 内置字体 woff2 → TTF（文本转路径要 SFNT；产物已提交）
 bun run cli new ./p  # CLI（new / validate / clip add / diff / render），首次按需 SSR 打包
 bun run mcp          # MCP server（stdio）：stdout 是 JSON-RPC 通道，不能往里打日志
 bun run desktop      # Electron 探针壳（先 build）；desktop:probe 加探针 + 截图
@@ -354,6 +356,14 @@ bun run desktop      # Electron 探针壳（先 build）；desktop:probe 加探�
     修法：字段级/增量快照，或直接按字节预算裁（`pushUndo` 里已经有钩子）。
 14. **两处近义提示没有统一**：`app.beatAnchorTip` 与 `insp.anchorTip` 只差斜杠空格。
     同一功能两份 tooltip 是维护负担，合并需一次独立的文案改动。
+15. **文字转路径的剩余边界**：系统字体已走 Local Font Access（`queryLocalFonts()`
+    → `FontData.blob()`）解决，变量字体按 `wght` 轴实例化。仍未覆盖：
+    ① **用户导入的 woff2** 拿不到 SFNT（提示换成 TTF/OTF）；
+    ② **CSS 通用族**（`sans-serif` / `system-ui`）没有具体族名可匹配；
+    ③ **合成斜体** 拒绝转换（没有可复现的倾斜角）；
+    ④ 平台若把 `family` 只给本地化名字（如「微软雅黑」）而文档里存的是英文名，
+     `pickLocalFont` 的 fullName / PostScript 回落能兜住大部分，但兜不住全部；
+    ⑤ 第一次查询要枚举整机字体（Windows 实测 3 秒），只是在**一次会话**里付一次。
 
 ---
 

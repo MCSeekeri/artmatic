@@ -15,6 +15,7 @@
     "mcp": "node mcp/index.mjs",
     "cli": "node scripts/cli.mjs",
     "capacity": "node scripts/capacity.mjs",
+    "fonts:sfnt": "node scripts/fonts-woff2-to-sfnt.mjs",
     "desktop": "electron desktop/main.mjs",
     "desktop:probe": "electron desktop/main.mjs --probe",
     "desktop:artifact": "bun run build && node desktop/build.mjs",
@@ -45,6 +46,7 @@
     "svelte-check": "^4.3.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wawoff2": "^2.0.1"
   }
 }

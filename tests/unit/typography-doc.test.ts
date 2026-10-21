@@ -94,6 +94,37 @@ describe('元素工厂', () => {
     // 默认不裁切（用户报的「图片置入默认被裁切」）—— 见 image-frame.test.ts
     expect(img.fit).toBe('contain');
   });
+
+  it('阴影 / 虚化在构造期**逐项搬运**（否则 createXxx({shadows}) 会静默丢弃）', () => {
+    const d = createTypographyDocument({ w: 1000, h: 500 });
+    const shadows = [{ color: '#000000', dx: 4, dy: 8, blur: 12 }];
+    for (const el of [
+      createTextElement(d.size, { shadows, blur: 3 }),
+      createShapeElement(d.size, 'rect', { shadows, blur: 3 }),
+      createImageElement(d.size, 'asset-1', { shadows, blur: 3 }),
+    ]) {
+      expect(el.shadows).toEqual(shadows);
+      expect(el.blur).toBe(3);
+    }
+  });
+
+  it('字形描边在构造期也被搬运（只有文本框有这个字段）', () => {
+    const d = createTypographyDocument({ w: 1000, h: 500 });
+    const el = createTextElement(d.size, { glyphStroke: { color: '#f00', width: 5, style: 'solid' } });
+    expect(el.glyphStroke).toEqual({ color: '#f00', width: 5, style: 'solid' });
+  });
+
+  it('默认没有阴影 / 虚化（缺省 = 老工程逐字节不变）', () => {
+    const d = createTypographyDocument({ w: 1000, h: 500 });
+    for (const el of [
+      createTextElement(d.size),
+      createShapeElement(d.size, 'rect'),
+      createImageElement(d.size, 'asset-1'),
+    ]) {
+      expect(el.shadows).toBeUndefined();
+      expect(el.blur).toBeUndefined();
+    }
+  });
 });
 
 describe('elementById / elementsByIds / removeElements', () => {
@@ -178,6 +209,32 @@ describe('resizeDocument', () => {
     const el = next.elements[0]!;
     if (el.kind !== 'shape') throw new Error('unreachable');
     expect(el.stroke!.width).toBe(5);
+  });
+
+  it('阴影 / 虚化也是画布上的长度：偏移按各轴、模糊按 min(sx, sy)', () => {
+    const d = createTypographyDocument({ w: 1000, h: 1000 });
+    d.elements = [
+      createTextElement(d.size, {
+        shadows: [{ color: '#000000', dx: 10, dy: 20, blur: 30 }],
+        blur: 40,
+      }),
+    ];
+    const next = resizeDocument(d, { w: 500, h: 250 });
+    const el = next.elements[0]!;
+    // sx = 0.5 / sy = 0.25 / k = 0.25
+    expect(el.shadows).toEqual([{ color: '#000000', dx: 5, dy: 5, blur: 7.5 }]);
+    expect(el.blur).toBe(10);
+  });
+
+  it('字形描边宽度跟着缩（字号缩了，描边不缩就会相对变粗）', () => {
+    const d = createTypographyDocument({ w: 1000, h: 1000 });
+    d.elements = [
+      createTextElement(d.size, { glyphStroke: { color: '#fff', width: 8, style: 'solid' } }),
+    ];
+    const next = resizeDocument(d, { w: 500, h: 500 });
+    const el = next.elements[0]!;
+    if (el.kind !== 'text') throw new Error('unreachable');
+    expect(el.glyphStroke!.width).toBe(4);
   });
 
   it('不改原文档', () => {

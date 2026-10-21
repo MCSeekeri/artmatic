@@ -17,12 +17,13 @@
    * 屏幕上要两步：`localToDoc` 转成文档坐标，再乘 `zoom`（本层挂在
    * `.paper-wrap` 里，原点就是文档原点 —— 与 `SelectionLayer` 同一套约定）。
    *
-   * 路径数据还多一层：`svg` 图形的 `path` 按 **0..100 authored**，渲染时由
-   * `<g transform="scale(w/100, h/100)">` 拉到像素盒。所以锚点要先乘回
-   * 像素才能进 `localToDoc` —— 漏掉这一步的后果是「元素越接近正方形越准」，
-   * 非等比时锚点整片漂到框外。
+   * 路径数据还多一层：`svg` 图形的 `path` 默认按 **0..100 authored**，渲染时由
+   * `<g transform="scale(w/100, h/100)">` 拉到像素盒；文本转路径出来的
+   * `pathUnit: 'px'` 则已经是像素。换算统一走 `pathUnitScale` —— 漏掉这一层
+   * 的后果是「元素越接近正方形越准」，非等比时锚点整片漂到框外。
    */
   import { localToDoc } from '../../typography/geometry';
+  import { pathUnitScale } from '../../typography/shapes';
   import { nearestOnPath, type PathHit, type SubPath, type Vec } from '../../typography/path-nodes';
   import type { ShapeHandle } from '../../typography/shape-handles';
   import type { ShapeElement } from '../../typography/document';
@@ -71,17 +72,16 @@
     return { x: d.x * zoom, y: d.y * zoom };
   }
 
-  /** authored（0..100）→ 元素局部像素。 */
-  const fromAuthored = (p: Vec): Vec => ({
-    x: (p.x * el.frame.w) / 100,
-    y: (p.y * el.frame.h) / 100,
-  });
+  /** 路径坐标 → 元素局部像素（percent 是 0..100 authored，px 是原样）。 */
+  const unit = $derived(pathUnitScale(el));
 
-  /** 屏幕 → authored 坐标（双击加减点时用来找最近的位置）。 */
+  const fromAuthored = (p: Vec): Vec => ({ x: p.x * unit.x, y: p.y * unit.y });
+
+  /** 屏幕 → 路径坐标（双击加减点时用来找最近的位置）。 */
   function toAuthoredScreen(e: { clientX: number; clientY: number }): Vec {
     const d = toDoc(e);
     const w = el.frame;
-    // 逆着 localToDoc 走：先减原点、反旋转，再除以 authored 的比例。
+    // 逆着 localToDoc 走：先减原点、反旋转，再除以 pathUnit 的比例。
     const cx = w.w / 2;
     const cy = w.h / 2;
     const rot = w.rot ?? 0;
@@ -91,7 +91,7 @@
     const sin = Math.sin(-rot);
     const px = lx * cos - ly * sin + cx;
     const py = lx * sin + ly * cos + cy;
-    return { x: (px * 100) / Math.max(1, w.w), y: (py * 100) / Math.max(1, w.h) };
+    return { x: px / Math.max(1e-6, unit.x), y: py / Math.max(1e-6, unit.y) };
   }
 
   const isPath = $derived(paths && el.shape === 'svg');
@@ -119,7 +119,9 @@
   function onLayerDblClick(e: MouseEvent): void {
     if (!isPath) return;
     const pt = toAuthoredScreen(e);
-    const perPx = 100 / Math.max(1, Math.min(el.frame.w * zoom, el.frame.h * zoom));
+    // 一个屏幕像素对应多少路径单位：percent 下按短边折算（与原来的口径一致），
+    // px 下就是 1/zoom。
+    const perPx = 1 / Math.max(1e-6, Math.min(unit.x, unit.y) * zoom);
     const hit = nearestOnPath(subs, pt, HIT_PX * perPx);
     if (hit) onAddNode({ sub: hit.sub, seg: hit.seg, t: hit.t });
   }

@@ -23,11 +23,13 @@ import {
   createTextElement,
   defaultTextStyle,
   defaultTransform3D,
+  type ElementShadow,
   type ImageElement,
   type MixBlend,
   type ShapeElement,
   type ShapePaintPatch,
   type Stroke,
+  type TextElement,
   type TextStyle,
   type TextStyleShadow,
   type TextureFrame,
@@ -74,7 +76,13 @@ import {
   removeNode,
   serializePathNodes,
 } from '../../typography/path-nodes';
-import { booleanOp, multiToShape, shapeToMultiPolygon, type BoolOp } from '../../typography/path-ops';
+import {
+  booleanOp,
+  dividePolygons,
+  multiToShape,
+  shapeToMultiPolygon,
+  type BoolOp,
+} from '../../typography/path-ops';
 import {
   applySpanStyle,
   clearSpanStyle as clearRunsSpanStyle,
@@ -87,6 +95,13 @@ import {
   type SpanStyleKey,
   type SpanStylePatch,
 } from '../../typography/rich-text';
+import {
+  firstFamily,
+  outlineTextElement,
+  type TextOutlineFailure,
+  type TextOutlineItem,
+} from '../../typography/text-outline';
+import { localFontSource } from '../../typography/local-fonts';
 import { tr } from '../../i18n/index.svelte';
 
 /* ------------------------------------------------------------ 选择集工具 */
@@ -213,6 +228,148 @@ function shapeToPath(el: ShapeElement): boolean {
 }
 
 /**
+ * 文本转路径的产物 → 一组 `ShapeElement`。
+ *
+ * 三条约定：
+ *  - **路径是像素空间**（`pathUnit: 'px'` + `clipFrame`）：文本框通常是几百乘
+ *    几十，落回 0..100 authored 会把描边拉成一边粗一边细（见 shapes.ts 文件头）。
+ *  - **第一个产物沿用源元素的 id**：它就是「这个元素变成了路径」，选区与
+ *    上游引用（图层滚动位置之类）不用重算。
+ *  - **动画 id 逐个换新**：同一段文字按颜色拆成多个图形时，动画要各演各的，
+ *    共用 id 会让 `bake-animation` 的按 id 索引串味。
+ */
+function buildTextOutlineShapes(
+  source: TextElement,
+  items: readonly TextOutlineItem[],
+  shadows: readonly ElementShadow[],
+): ShapeElement[] {
+  const common = {
+    name: source.name,
+    frame: { ...source.frame },
+    blend: source.blend,
+    opacity: source.opacity,
+    visible: source.visible,
+    locked: source.locked,
+    groupId: source.groupId,
+    transform3d: source.transform3d ? structuredClone(source.transform3d) : undefined,
+    blur: source.blur,
+    // 文本框本来就是 overflow: hidden：溢出的字形 / 描边不该在转换后冒出来。
+    clipFrame: true,
+  };
+  /*
+   * 阴影要**分角色**给：
+   *  - `shadows` 是「文字阴影 + 元素阴影」，只该落在字形 / 装饰线上；
+   *  - 文本框底色与高亮只该带**元素阴影**（原来它们也不吃 text-shadow）。
+   * 全给的话，文本框会凭空长出一圈文字阴影。
+   */
+  const elementShadows = (source.shadows ?? []).map((s) => ({ ...s }));
+
+  return items.map((item, i): ShapeElement => {
+    const glyphLike = item.role === 'glyph' || item.role === 'decoration';
+    const base = {
+      ...common,
+      id: i === 0 ? source.id : newId(),
+      animations: source.animations.map((a) => ({ ...structuredClone(a), id: newId() })),
+      shadows: glyphLike
+        ? shadows.length
+          ? shadows.map((s) => ({ ...s }))
+          : undefined
+        : elementShadows.length
+          ? elementShadows.map((s) => ({ ...s }))
+          : undefined,
+    };
+    if (item.role === 'box') {
+      return {
+        ...base,
+        kind: 'shape',
+        shape: 'rect',
+        fill: item.paint,
+        stroke: item.stroke ? { ...item.stroke } : null,
+      };
+    }
+    const glyphStroke = item.role === 'glyph' && source.glyphStroke && source.glyphStroke.width > 0
+      ? {
+          color: source.glyphStroke.color,
+          width: source.glyphStroke.width,
+          // `-webkit-text-stroke` 没有线型；带上原字段会让 SVG 画出虚线。
+          style: 'solid' as const,
+        }
+      : null;
+    return {
+      ...base,
+      kind: 'shape',
+      shape: 'svg',
+      path: item.d,
+      pathUnit: 'px',
+      fill: item.paint,
+      stroke: glyphStroke,
+    };
+  });
+}
+
+/** 转路径失败 → 一条能照做的提示（不是「失败了」三个字）。 */
+function textOutlineFailureText(failure: TextOutlineFailure): string {
+  switch (failure.code) {
+    case 'vertical':
+      return tr('typo.textToPathVertical');
+    case 'no-font':
+      return tr('typo.textToPathNoFont', { fonts: failure.families.join(', ') });
+    case 'local-denied':
+      return tr('typo.textToPathLocalDenied', { fonts: failure.families.join(', ') });
+    case 'local-missing':
+      return tr('typo.textToPathLocalMissing', { fonts: failure.families.join(', ') });
+    case 'local-failed':
+      return tr('typo.textToPathLocalFailed', {
+        fonts: failure.families.join(', '),
+        msg: failure.message,
+      });
+    case 'missing-glyphs':
+      return tr('typo.textToPathMissingGlyphs', {
+        fonts: failure.families.join(', '),
+        chars: failure.chars,
+      });
+    case 'synthetic':
+      return tr('typo.textToPathSynthetic', { fonts: failure.faces.join(', ') });
+    default:
+      return tr('typo.textToPathEmpty');
+  }
+}
+
+/**
+ * 布尔 / 拆分结果的公共字段：外观与名字跟着来源，**几何身份**全部重置。
+ *
+ * - `multiToShape` 的输出恒为 0..100 authored，与来源原来的坐标系无关；
+ * - `clipFrame` 是「文本框转过来」的语义，结果已是新的外接框，不该继承；
+ * - 形状参数（圆角 / 边数 / 腰 / 内径 / 角度）只对原始图形有意义；
+ * - 动画清空：多个操作数各有一套，拆分的各片也不该各自重复播同一段；
+ * - `groupId` 由调用方决定（布尔清掉；拆分保留原组）。
+ */
+function booleanResultFrom(
+  src: ShapeElement,
+  id: string,
+  shaped: { path: string; frame: { x: number; y: number; w: number; h: number } },
+  keepGroup: boolean,
+): ShapeElement {
+  return {
+    ...structuredClone(src),
+    id,
+    kind: 'shape',
+    shape: 'svg',
+    path: shaped.path,
+    frame: { x: shaped.frame.x, y: shaped.frame.y, w: shaped.frame.w, h: shaped.frame.h, rot: 0 },
+    pathUnit: undefined,
+    clipFrame: undefined,
+    radius: undefined,
+    sides: undefined,
+    waist: undefined,
+    inner: undefined,
+    angle: undefined,
+    animations: [],
+    groupId: keepGroup ? src.groupId : undefined,
+  };
+}
+
+/**
  * 当前处于**顶点编辑态**的那个图形元素。
  *
  * 与 `onlyShape` 的区别很关键：那个返回「选择集里的图形」（可能多个、可能为空），
@@ -292,14 +449,111 @@ function applyShapeStrokeWidth(doc: TypographyDocument, width: number): void {
 function applyTextBoxStroke(doc: TypographyDocument, patch: Partial<Stroke>): void {
   for (const el of onlyText(doc)) {
     const cur = el.boxStroke;
-    el.boxStroke = {
+    const next: Stroke = {
       color: patch.color ?? cur?.color ?? '#ffffff',
       // 宽度 0 = 无边框（与图形描边同一套语义：不做「有 / 无」两态，
       // 少一个状态就少一处「为什么这里还有个隐形边框」）。
       width: patch.width !== undefined ? Math.max(0, patch.width) : (cur?.width ?? 2),
       style: patch.style ?? cur?.style ?? 'solid',
     };
+    // 填充方式（渐变 / 纹理）是另一个入口写的，这里必须**带过去** ——
+    // 重建成三字段对象的话，调一次宽度就把渐变边框打回纯色。
+    if (patch.paint !== undefined) next.paint = patch.paint;
+    else if (cur?.paint) next.paint = cur.paint;
+    el.boxStroke = next;
   }
+}
+
+/**
+ * 元素阴影（commit / 实时共用）。空列表 = 删字段。
+ *
+ * 逐层钳一遍：颜色原样、其余必须是**有限数**且模糊非负。面板给不出坏值，
+ * 但 agent 与粘贴进来的 JSON 能 —— 一个 `NaN` 会让整条 `filter` 失效
+ * （浏览器丢弃整条声明），表现是「调了半天阴影突然全没了」。
+ */
+function applyShadows(doc: TypographyDocument, list: ElementShadow[]): void {
+  const next = list.map((s) => ({
+    color: s.color,
+    dx: Number.isFinite(s.dx) ? s.dx : 0,
+    dy: Number.isFinite(s.dy) ? s.dy : 0,
+    blur: Number.isFinite(s.blur) ? Math.max(0, s.blur) : 0,
+  }));
+  for (const el of anyElement(doc)) {
+    if (next.length) el.shadows = next.map((s) => ({ ...s }));
+    else delete el.shadows;
+  }
+}
+
+/** 元素虚化（commit / 实时共用）。0 = 删字段（缺省语义就是「不虚化」）。 */
+function applyBlur(doc: TypographyDocument, value: number): void {
+  const v = Number.isFinite(value) ? Math.max(0, value) : 0;
+  for (const el of anyElement(doc)) {
+    if (v > 0) el.blur = v;
+    else delete el.blur;
+  }
+}
+
+/** 文字阴影（commit / 实时共用）。空列表 = 删字段。 */
+function applyTextShadows(doc: TypographyDocument, list: TextStyleShadow[]): void {
+  for (const el of onlyText(doc)) {
+    const next: TextStyle = { ...el.style };
+    if (list.length) next.shadow = list.map((s) => ({ ...s }));
+    else delete next.shadow;
+    el.style = next;
+  }
+}
+
+/** 字形描边的写库体（commit / 实时共用）。与 `applyTextBoxStroke` 同款，只写到 glyphStroke。 */
+function applyGlyphStroke(doc: TypographyDocument, patch: Partial<Stroke>): void {
+  for (const el of onlyText(doc)) {
+    const cur = el.glyphStroke;
+    el.glyphStroke = {
+      color: patch.color ?? cur?.color ?? '#ffffff',
+      // 第一次点颜色就造一条 3px 的描边：比「设了色什么都没有」更容易发现，
+      // 又不至于像 4px 那样把字形吃掉一大块（居中描边，见 document.ts）。
+      width: patch.width !== undefined ? Math.max(0, patch.width) : (cur?.width ?? 3),
+      style: 'solid',
+    };
+  }
+}
+
+/**
+ * 描边填充方式的写库体（commit / 实时共用）。
+ *
+ * 语义与 `applyPaintPatch` 一致：**只有渐变 / 纹理才算「有填充」**，
+ * `solid` / `none` 一律删掉 `paint` 字段、回到 `stroke.color` 那条老路
+ * （与 `TextElement.fill` 同构，见 document.ts::Stroke.paint）。
+ *
+ * 本来没有描边、又被设成纯色的：**什么都不做** —— 不凭空造出一条 2px 白边
+ * （与 `applyTextBoxStroke` 的「调宽度就创建」不同：那里用户的动作就是调宽度）。
+ */
+function applyStrokePaint(
+  doc: TypographyDocument,
+  target: 'shape' | 'box',
+  patch: ShapePaintPatch,
+): void {
+  if (target === 'shape') {
+    for (const el of onlyShape(doc)) {
+      const next = strokePaintNext(el.stroke, patch);
+      if (next) el.stroke = next;
+    }
+    return;
+  }
+  for (const el of onlyText(doc)) {
+    const next = strokePaintNext(el.boxStroke, patch);
+    if (next) el.boxStroke = next;
+  }
+}
+
+/** 上面那个函数的一层：返回 null = 这次不改（见「什么都不做」那条注释）。 */
+function strokePaintNext(cur: Stroke | null | undefined, patch: ShapePaintPatch): Stroke | null {
+  const applied = applyPaintPatch(cur?.paint ?? { kind: 'none' }, patch);
+  const painted = applied.kind !== 'none' && applied.kind !== 'solid' ? applied : null;
+  if (!cur && !painted) return null;
+  const next: Stroke = cur ? { ...cur } : { color: '#ffffff', width: 2, style: 'solid' };
+  if (painted) next.paint = painted;
+  else delete next.paint;
+  return next;
 }
 
 /** `patchTransform3d` 的写库体（同样的理由：commit 与实时预览必须同源）。 */
@@ -547,13 +801,19 @@ export interface TypographyActions {
   setVAlign(value: TextStyle['vAlign']): void;
   toggleTextFlag(key: 'bold' | 'italic' | 'underline' | 'strike'): void;
   /**
-   * 文字阴影的总开关。`undefined` = 去掉阴影。
+   * 文字阴影：**整份替换**（`undefined` = 去掉阴影）。
    *
-   * 独立一个动作而不是塞进 `setTextStyle`：阴影是个对象，而 `setTextStyle`
+   * 独立一个动作而不是塞进 `setTextStyle`：阴影是个数组，而 `setTextStyle`
    * 的键值语义（还能按行内覆盖）对它是错的 —— 阴影**只有元素级**
    * （见 `SPAN_STYLE_KEYS`：同一行里两种阴影谁也画不对）。
+   *
+   * 为什么是整份而不是「按下标打补丁」：面板上的层会增删，逐层补丁要求调用方
+   * 维护一份稳定的下标映射 —— 那正是「删掉一层之后改到另一层」这类 bug 的来源
+   * （与色标列表同一条教训，见 `ShapePaintPatch.stops`）。
    */
-  setTextShadow(shadow: TextStyleShadow | undefined): void;
+  setTextShadow(shadow: TextStyleShadow[] | undefined): void;
+  /** 实时版本（拖动某层的偏移 / 模糊时连续写，松手由 `endLive` 结算）。 */
+  setTextShadowLive(shadow: TextStyleShadow[]): void;
   /**
    * 「突出显示颜色」。`undefined` = 去掉高亮。
    *
@@ -658,6 +918,20 @@ export interface TypographyActions {
   /** 改 3D 参数。嵌套对象逐层合并；未启用时会先补一份默认值。 */
   patchTransform3d(patch: Transform3DPatch): void;
 
+  /* 阴影 / 虚化（所有元素类型通用） */
+  /**
+   * 元素阴影：**整份替换**。空数组 = 删字段（缺省语义就是「没有阴影」）。
+   *
+   * 与文字阴影同一套理由：层会增删，逐层补丁的下标映射迟早错位。
+   */
+  setShadows(list: ElementShadow[]): void;
+  /** 实时版本（拖动某层的偏移 / 模糊）。 */
+  setShadowsLive(list: ElementShadow[]): void;
+  /** 元素虚化半径（文档 px）。0 = 不虚化。 */
+  setBlur(value: number): void;
+  /** 实时版本。 */
+  setBlurLive(value: number): void;
+
   /* 图片元素的抠图 / 四角（元素级，只作用于图片） */
   /** 打开 / 关闭抠图。打开时若还没有参数，写一份默认绿幕。 */
   setImageKey(enable: boolean): void;
@@ -720,15 +994,40 @@ export interface TypographyActions {
   setTextBoxFill(patch: ShapePaintPatch): void;
   /** 实时版本（见 setShapePaintLive）。 */
   setTextBoxFillLive(patch: ShapePaintPatch): void;
-  /** 文本框边框（颜色 / 宽度 / 线型）。局部更新，缺省字段沿用原值。 */
+  /** 文本框边框（颜色 / 宽度 / 线型 / 填充）。局部更新，缺省字段沿用原值。 */
   setTextBoxStroke(patch: Partial<Stroke>): void;
   /** 实时版本（拖动边框宽度时连续写）。 */
   setTextBoxStrokeLive(patch: Partial<Stroke>): void;
   /**
+   * **描边的填充方式**（渐变 / 纹理）的局部更新。两处描边共用这一个动作 ——
+   * 图形描边走 SVG `url(#…)`，文本框边框走 CSS `border-image`，差别只在
+   * 渲染出口（见 document.ts::Stroke.paint）。
+   *
+   * `kind: 'none'` = 回到纯色（删掉 `paint` 字段，不是写 `{kind:'none'}`）。
+   */
+  patchStrokePaint(target: 'shape' | 'box', patch: ShapePaintPatch): void;
+  /** 实时版本（拖动渐变角度 / 纹理周期）。 */
+  patchStrokePaintLive(target: 'shape' | 'box', patch: ShapePaintPatch): void;
+  /**
+   * **字形描边**（`-webkit-text-stroke`）的局部更新，只对文本框。
+   *
+   * `width: 0` = 关掉（与文本框边框同一套「不做有/无两态」的语义）。
+   * 注意它是**居中**描边：半个宽度压在字形里，面板上的提示也是这么写的。
+   */
+  setGlyphStroke(patch: Partial<Stroke>): void;
+  /** 实时版本（拖动宽度时连续写）。 */
+  setGlyphStrokeLive(patch: Partial<Stroke>): void;
+  /**
    * 布尔运算（并 / 差 / 交 / 异或）。作用于选中的图形，结果为**一个** `svg` 图形。
-   * 差集是「最前景那个减去其余」，与设计工具一致。
+   * 差集是「**最底层**那个减去其余」（与 Illustrator 的 Minus Front、Figma 的
+   * Subtract 一致：后画的图形挖掉前面的）。
    */
   booleanShapes(op: BoolOp): void;
+  /**
+   * 拆分（分割）：按彼此的边界把选中图形切成互不重叠的面，**每个面一个图形**。
+   * 与异或的区别见 `path-ops.ts::dividePolygons`。
+   */
+  divideShapes(): void;
   /** 选中的图形够不够做布尔运算（≥2 个）。 */
   canBoolean(): boolean;
   setShapeStroke(color: string): void;
@@ -745,6 +1044,13 @@ export interface TypographyActions {
   toggleNodeEdit(): void;
   /** 把参数化图形转成路径。之后它的形状由顶点决定，参数控件不再适用。 */
   convertToPath(): void;
+  /**
+   * 把选中的文本框**转成真正的路径**（每个字形一份轮廓，坐标落在像素盒里）。
+   *
+   * 异步：先按 face 取字体字节、再逐字形取轮廓。任何一步失败都只 flash
+   * 一条提示、**不改文档**（半成品转换会静默换字形，比不做更糟）。
+   */
+  convertTextToPath(): void;
   /** 双击路径：在命中位置插一个锚点（de Casteljau 细分，形状不变）。 */
   addPathNode(hit: { sub: number; seg: number; t: number }): void;
   /** 双击锚点：删掉它（相邻两段合并成一段）。 */
@@ -1061,13 +1367,12 @@ export function createTypographyActions(): TypographyActions {
 
     setTextShadow(shadow) {
       editorState.commit(tr('typo.undo.textShadow'), (doc) => {
-        for (const el of onlyText(doc)) {
-          const next: TextStyle = { ...el.style };
-          if (shadow) next.shadow = { ...shadow };
-          else delete next.shadow;
-          el.style = next;
-        }
+        applyTextShadows(doc, shadow ?? []);
       });
+    },
+
+    setTextShadowLive(shadow) {
+      liveWrite((doc) => applyTextShadows(doc, shadow));
     },
 
     setTextHighlight(color) {
@@ -1119,8 +1424,11 @@ export function createTypographyActions(): TypographyActions {
           delete next.highlight;
           delete next.shadow;
           el.style = next;
-          // 字形填充（渐变 / 纹理）也是「格式」，一并清掉。
+          // 字形填充（渐变 / 纹理）与字形描边也是「格式」，一并清掉。
+          // 注意**不**清 boxFill / boxStroke：那是文本框本身的外观（Word 同款），
+          // 与「清字形格式」不是一件事。
           delete el.fill;
+          delete el.glyphStroke;
           // 行内覆盖整段丢掉：清格式之后不该有任何一段还留着旧样式。
           el.runs = normalizeRuns(el.runs.map((r) => ({ text: r.text })));
         }
@@ -1349,6 +1657,22 @@ export function createTypographyActions(): TypographyActions {
 
     patchTransform3dLive(patch) {
       liveWrite((doc) => applyTransform3d(doc, patch));
+    },
+
+    setShadows(list) {
+      editorState.commit(tr('typo.undo.shadow'), (doc) => applyShadows(doc, list));
+    },
+
+    setShadowsLive(list) {
+      liveWrite((doc) => applyShadows(doc, list));
+    },
+
+    setBlur(value) {
+      editorState.commit(tr('typo.undo.blur'), (doc) => applyBlur(doc, value));
+    },
+
+    setBlurLive(value) {
+      liveWrite((doc) => applyBlur(doc, value));
     },
 
     setImageKey(enable) {
@@ -1619,6 +1943,25 @@ export function createTypographyActions(): TypographyActions {
       liveWrite((doc) => applyTextBoxStroke(doc, patch));
     },
 
+    patchStrokePaint(target, patch) {
+      // 两处描边的标签不同：图形说「描边」，文本框说「边框」——
+      // 撤销记录里能区分是哪一处，回退时才对得上用户刚才的动作。
+      const label = target === 'shape' ? 'typo.undo.strokePaint' : 'typo.undo.borderPaint';
+      editorState.commit(tr(label), (doc) => applyStrokePaint(doc, target, patch));
+    },
+
+    patchStrokePaintLive(target, patch) {
+      liveWrite((doc) => applyStrokePaint(doc, target, patch));
+    },
+
+    setGlyphStroke(patch) {
+      editorState.commit(tr('typo.undo.glyphStroke'), (doc) => applyGlyphStroke(doc, patch));
+    },
+
+    setGlyphStrokeLive(patch) {
+      liveWrite((doc) => applyGlyphStroke(doc, patch));
+    },
+
     setShapeStroke(color) {
       editorState.commit(tr('typo.undo.shapeStroke'), (doc) => {
         for (const el of onlyShape(doc)) {
@@ -1694,6 +2037,106 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
+    convertTextToPath() {
+      /*
+       * **先收尾文本编辑，再取文档**：`stopEditing()` 会触发 focusout → 提交
+       * 正在编辑的内容（那是另一笔 commit）。先拿元素引用的话可能拿到提交前
+       * 的那一版 —— 转出来的是「少打了最后一个字」的形状。
+       */
+      editorState.stopEditing();
+      const doc = editorState.doc;
+      if (!doc) return;
+      const targets = onlyText(doc);
+      if (!targets.length) return;
+
+      /*
+       * **快照**：轮廓计算要等字体 wasm / 字节（可能上百毫秒），期间用户还能
+       * 继续改文档。拿快照算、落库前再核对一次内容没变 —— 用当前对象边算边改
+       * 的话，用户刚打的字会被一个「上一版的形状」盖掉。
+       */
+      const jobs = targets.map((el) => ({ source: structuredClone(el) }));
+      const theme = doc.theme;
+      const customThemes = appState.project.customThemes;
+
+      /*
+       * 用到本机字体时先打一声招呼：**第一次** `queryLocalFonts()` 要枚举整机
+       * 字体（实测 Windows 上 3 秒），之后 Chrome 自己缓存到 1ms。没有这句的
+       * 话，用户点完按钮会愣三秒以为卡死了。只在「族不在注册表里、环境又支持
+       * 本机字体」时才说，正常情况下不该多一条噪声。
+       */
+      const needsLocalFonts = targets.some((el) =>
+        el.runs.some(
+          (run) => !appState.fonts.has(firstFamily(run.style?.fontFamily ?? el.style.fontFamily)),
+        ),
+      );
+      if (needsLocalFonts && localFontSource()) {
+        appState.flash(tr('typo.textToPathReadingLocalFonts'), 'info');
+      }
+
+      void (async () => {
+        const prepared: { source: TextElement; items: TextOutlineItem[]; shadows: ElementShadow[] }[] = [];
+        try {
+          for (const job of jobs) {
+            const r = await outlineTextElement(job.source, {
+              fonts: appState.fonts,
+              theme,
+              customThemes,
+            });
+            if (!r.ok) {
+              appState.flash(textOutlineFailureText(r), 'error');
+              return;
+            }
+            prepared.push({ source: job.source, items: r.items, shadows: r.shadows });
+          }
+        } catch (err) {
+          console.warn('[typo] text-to-path failed', err);
+          appState.flash(tr('typo.textToPathFailed'), 'error');
+          return;
+        }
+
+        // 等了一会儿之后文档可能已经变了：逐个体检，任何一个对不上就整批放弃。
+        const now = editorState.doc;
+        if (!now) return;
+        for (const job of prepared) {
+          const el = now.elements.find((e) => e.id === job.source.id);
+          // 整元素比对：改字号 / 字体 / 颜色 / 框大小同样会让快照过期。
+          if (!el || el.kind !== 'text' || JSON.stringify(el) !== JSON.stringify(job.source)) {
+            appState.flash(tr('typo.textToPathChanged'), 'error');
+            return;
+          }
+        }
+
+        const freshIds: string[] = [];
+        editorState.commit(tr('typo.undo.textToPath'), (d) => {
+          for (const job of prepared) {
+            const idx = d.elements.findIndex((e) => e.id === job.source.id);
+            if (idx < 0) continue;
+            const src = d.elements[idx]!;
+            if (src.kind !== 'text') continue;
+            const shapes = buildTextOutlineShapes(job.source, job.items, job.shadows);
+            d.elements.splice(idx, 1, ...shapes);
+            freshIds.push(...shapes.map((s) => s.id));
+            /*
+             * 按颜色拆成多个图形时包成一个组合：拖动 / 选择仍是一件事。
+             * 源元素本来就在组里就不另建 —— 组合是扁平的，不能套娃。
+             */
+            if (shapes.length > 1 && !src.groupId) {
+              const gid = newId();
+              for (const s of shapes) s.groupId = gid;
+              d.groups = [
+                ...(d.groups ?? []),
+                // padding 0：原文本没有「外扩一圈」的语义，默认的 8 会让选择框变大。
+                { id: gid, name: src.name, fill: { kind: 'none' }, stroke: null, radius: 0, padding: 0 },
+              ];
+            }
+          }
+        });
+
+        if (freshIds.length) queueMicrotask(() => editorState.setSelection(freshIds));
+        else appState.flash(tr('typo.textToPathEmpty'), 'error');
+      })();
+    },
+
     addPathNode(hit) {
       editorState.commit(tr('typo.undo.addNode'), (doc) => {
         const el = nodeEditShape(doc);
@@ -1730,7 +2173,8 @@ export function createTypographyActions(): TypographyActions {
     booleanShapes(op) {
       const doc = editorState.doc;
       if (!doc) return;
-      // 只取图形，并按 **z 序**排列 —— 差集的语义依赖顺序（最前景减去其余）。
+      // 只取图形，并按 **z 序**排列（底 → 顶）。差集依赖顺序：数组第一个是
+      // 被减数，其余是减数 —— 与「后画的挖掉先画的」直觉一致。
       const picked = new Set(
         editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).map((e) => e.id),
       );
@@ -1749,25 +2193,7 @@ export function createTypographyActions(): TypographyActions {
           empty = true;
           return;
         }
-        const fresh: ShapeElement = {
-          ...structuredClone(top),
-          id: freshId,
-          kind: 'shape',
-          shape: 'svg',
-          path: shaped.path,
-          frame: { x: shaped.frame.x, y: shaped.frame.y, w: shaped.frame.w, h: shaped.frame.h, rot: 0 },
-          // 形状参数只对原始图形有意义，转成自定义路径后全部清掉。
-          radius: undefined,
-          sides: undefined,
-          waist: undefined,
-          inner: undefined,
-          angle: undefined,
-          // 动画与组合都不跟着走：多个操作数各有一套，没有共同的解释。
-          animations: [],
-          groupId: undefined,
-          fill: { ...top.fill },
-          stroke: top.stroke ? { ...top.stroke } : null,
-        };
+        const fresh = booleanResultFrom(top, freshId, shaped, false);
 
         const ids = new Set(ordered.map((o) => o.id));
         const topIndex = d.elements.findIndex((e) => e.id === top.id);
@@ -1782,6 +2208,57 @@ export function createTypographyActions(): TypographyActions {
         return;
       }
       queueMicrotask(() => editorState.setSelection([freshId]));
+    },
+
+    divideShapes() {
+      const doc = editorState.doc;
+      if (!doc) return;
+      /* 与布尔运算同一条选择口径：只取未锁定的图形，按 z 序（底 → 顶）传入。 */
+      const picked = new Set(
+        editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).map((e) => e.id),
+      );
+      const ordered = doc.elements.filter((e) => picked.has(e.id)) as ShapeElement[];
+      if (ordered.length < 2) return;
+
+      const freshIds: string[] = [];
+      let empty = false;
+
+      editorState.commit(tr('typo.undo.divide'), (d) => {
+        const regions = dividePolygons(ordered.map(shapeToMultiPolygon));
+        const fresh: ShapeElement[] = [];
+        for (const region of regions) {
+          const shaped = multiToShape(region.mp);
+          if (!shaped) continue;
+          /*
+           * 每一片沿用「盖在它最上面的那个操作数」的外观：A−B 是 A 的颜色，
+           * 重叠区与 B−A 是 B 的颜色。全用最顶层的话，A 独有的部分会被
+           * 染成 B 的色 —— 拆分就失去了「保留原观感」的意义。
+           */
+          const src = ordered[region.top]!;
+          const el = booleanResultFrom(src, newId(), shaped, true);
+          fresh.push(el);
+          freshIds.push(el.id);
+        }
+        if (!fresh.length) {
+          empty = true;
+          return;
+        }
+
+        const ids = new Set(ordered.map((o) => o.id));
+        // 插在**最前景那个操作数**的位置：拆分不改变整体前后关系。
+        const topIndex = d.elements.findIndex((e) => e.id === ordered[ordered.length - 1]!.id);
+        let insertAt = 0;
+        for (let i = 0; i < topIndex; i++) if (!ids.has(d.elements[i]!.id)) insertAt += 1;
+        const kept = d.elements.filter((e) => !ids.has(e.id));
+        d.elements = [...kept.slice(0, insertAt), ...fresh, ...kept.slice(insertAt)];
+      });
+
+      if (empty) {
+        appState.flash(tr('typo.booleanEmpty'), 'error');
+        return;
+      }
+      // 全部选中：用户可以立刻整体拖动，也可以点其中一片单独改色 / 移动。
+      queueMicrotask(() => editorState.setSelection(freshIds));
     },
 
     /* ---------------------------------------------------------- 图片 */

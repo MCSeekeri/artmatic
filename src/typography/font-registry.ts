@@ -30,6 +30,7 @@ import type { FontRef, TypographyDocument } from './document';
 import { collectGlyphs, usedFontFamilies } from './document';
 import type { FontAsset, FontProvider } from './font-provider';
 import { subsetFont } from './font/subset-hb';
+import { pickCssWeight } from './font/css-weight';
 import { fnv1a } from './cache-key';
 
 export interface FontFaceSource {
@@ -57,10 +58,18 @@ export interface FontFaceSource {
   failed?: boolean;
 }
 
-/** 随软件分发的内置字体（OFL，见 public/fonts/OFL.txt）。 */
+/**
+ * 随软件分发的内置字体（OFL，见 public/fonts/OFL.txt）。
+ *
+ * **用 TTF 而不是 woff2**：`FontFace` 两者都吃，但文本转路径要交给 HarfBuzz ——
+ * 它只认 SFNT，woff2 取不到任何字形（`nominalGlyph` 全 undefined）。TTF 是由
+ * 同名 woff2 **无损解压**出来的（`scripts/fonts-woff2-to-sfnt.mjs`），字形与
+ * 度量逐字节相同，所以渲染不会变；顺带让内置字体也能走子集化（woff2 不行）。
+ * woff2 文件仍留在 public/fonts 里：E2E 用它模拟「用户导入的 woff2 字体」。
+ */
 export const BUILTIN_FONTS: { family: string; file: string; weight: number; style: 'normal' | 'italic' }[] = [
-  { family: 'Inter', file: 'inter-latin-400.woff2', weight: 400, style: 'normal' },
-  { family: 'Inter', file: 'inter-latin-700.woff2', weight: 700, style: 'normal' },
+  { family: 'Inter', file: 'inter-latin-400.ttf', weight: 400, style: 'normal' },
+  { family: 'Inter', file: 'inter-latin-700.ttf', weight: 700, style: 'normal' },
 ];
 
 /** btoa 一次吃不下大字体，分块编码。 */
@@ -151,6 +160,14 @@ export function familyRenders(family: string): boolean {
   return ok;
 }
 
+/**
+ * CSS Fonts 4 §5.2.2 的 weight 匹配。
+ *
+ * 定义搬到了 `font/css-weight.ts`（本机字体匹配也要用同一套，且不该为此
+ * 把字体注册表与 HarfBuzz 拉进单测）；这里只做转出，保持既有 import 路径可用。
+ */
+export { pickCssWeight } from './font/css-weight';
+
 export class FontRegistry implements FontProvider {
   /** face id → face */
   private readonly faces = new Map<string, FontFaceSource>();
@@ -208,7 +225,8 @@ export class FontRegistry implements FontProvider {
   registerBundled(): void {
     const base = import.meta.env?.BASE_URL ?? '/';
     for (const f of BUILTIN_FONTS) {
-      this.registerBuiltin(f.family, `${base}fonts/${f.file}`, f.weight, f.style);
+      // MIME 必须按文件名推断：写死 woff2 会让 TTF 走「不可子集化」那条路。
+      this.registerBuiltin(f.family, `${base}fonts/${f.file}`, f.weight, f.style, mimeForFilename(f.file));
     }
     // 预加载：内置字体是本地资源，随用随 fetch 会让首帧用回落字体量度，
     // 也可能在 `document.fonts.ready` 之前被光栅化。失败只置 `failed`，
@@ -279,6 +297,59 @@ export class FontRegistry implements FontProvider {
 
   facesOf(family: string): FontFaceSource[] {
     return (this.byFamily.get(family) ?? []).map((id) => this.faces.get(id)!);
+  }
+
+  /**
+   * 按 **CSS Fonts 4 的字体匹配**挑一个 face（文本转路径用）。
+   *
+   * 为什么不能只找完全相同的 weight / style：`font-weight: 500` 在一族只有
+   * 400 与 700 时浏览器用的是 400 —— 只认精确匹配的话，滑杆停在 500 的标题
+   * 会莫名其妙「找不到字体」。而匹配到的面与请求的 weight 差得远时，浏览器
+   * 会用**合成粗体**，那是轮廓数据里没有的东西：这时 `syntheticBold` 为 true，
+   * 调用方必须拒绝转换（否则转出来的是不粗的字）——除非字体文件本身带
+   * `wght` 变量轴，那就不是合成，按轴取值即可（调用方自己判断）。
+   *
+   * 两个合成标志**分开报**：斜体是倾斜变换，变量轴救不了；粗体可能被轴救。
+   */
+  pickFace(
+    family: string,
+    weight: number,
+    style: 'normal' | 'italic',
+  ): { face: FontFaceSource; syntheticBold: boolean; syntheticItalic: boolean } | null {
+    const faces = this.facesOf(family);
+    if (!faces.length) return null;
+
+    const sameStyle = faces.filter((f) => f.style === style);
+    const pool = sameStyle.length ? sameStyle : faces;
+    const syntheticItalic = style === 'italic' && pool[0]!.style !== 'italic';
+
+    const weights = [...new Set(pool.map((f) => f.weight))].sort((a, b) => a - b);
+    const wanted = pickCssWeight(weight, weights);
+    const chosen = pool.find((f) => f.weight === wanted) ?? pool[0]!;
+    // 只有「要粗体、拿到的是常规字面」才需要合成粗体；500 → 400 浏览器不合成。
+    const syntheticBold = weight >= 600 && chosen.weight < 600;
+    return { face: chosen, syntheticBold, syntheticItalic };
+  }
+
+  /**
+   * 取一个 face 的 **SFNT 字节**（内置字体按需 fetch）。
+   *
+   * 返回 null 表示「拿不到可用轮廓」：woff2 / woff（HarfBuzz 解不了）、
+   * fetch 失败、或本来就没有字节（系统字体）。
+   */
+  async sfntBytes(face: FontFaceSource): Promise<ArrayBuffer | null> {
+    if (!isSubsettable(face.mime)) return null;
+    if (!face.bytes && face.url) {
+      try {
+        const res = await fetch(face.url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        face.bytes = await res.arrayBuffer();
+      } catch (err) {
+        console.warn(`[typo] font ${face.url} failed to load`, err);
+        return null;
+      }
+    }
+    return face.bytes ?? null;
   }
 
   /** 文档用到但未注册的族。UI 的「字体未就绪」横幅读这个。 */

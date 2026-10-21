@@ -119,6 +119,14 @@ export default defineConfig({
   plugins: [svelte(), labRedirect(), capacityEndpoint(), llmProxy({ routes: PROXY_ROUTES })],
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   worker: { format: 'es' },
+  /*
+   * `harfbuzzjs` 的 emscripten 胶水按 `import.meta.url` 找同目录的
+   * `harfbuzz.wasm`。预打包会把它塞进 `node_modules/.vite/deps/`，那里没有
+   * wasm（表现是「转路径时 fetch 404」）。排除之后 dev 直接按源文件路径服务，
+   * 与构建时 Vite 把 `new URL(...)` 改写成资产 URL 的行为一致。
+   * 它是纯 ESM，不需要预打包。
+   */
+  optimizeDeps: { exclude: ['harfbuzzjs'] },
   build: {
     target: 'es2022',
     /*

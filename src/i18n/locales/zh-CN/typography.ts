@@ -62,11 +62,24 @@ export const typography = {
   'typo.undo.radius': '修改圆角',
   'typo.undo.shapeParam': '修改形状参数',
   'typo.undo.toPath': '转为路径',
+  'typo.undo.textToPath': '文字转为路径',
+  'typo.textToPathEmpty': '没有可转换的文字。',
+  'typo.textToPathVertical': '竖排文本暂不支持转为路径。',
+  'typo.textToPathNoFont': '找不到这些字体：{fonts}。请先导入它们的 TTF/OTF 文件（或换一款内置 / 本机已装的字体）。',
+  'typo.textToPathReadingLocalFonts': '正在读取本机字体（首次约需几秒）…',
+  'typo.textToPathLocalDenied': '系统字体「{fonts}」需要读取权限：再点一次「文字转路径」，并在浏览器弹窗里允许访问本机字体；也可以直接导入字体文件。',
+  'typo.textToPathLocalMissing': '读不到系统字体「{fonts}」的字体文件（多半是这台机器上没装这个字重）。请导入对应的 TTF/OTF。',
+  'typo.textToPathLocalFailed': '读取系统字体「{fonts}」失败：{msg}',
+  'typo.textToPathMissingGlyphs': '字体「{fonts}」里没有这些字：{chars}。它们现在是用系统回落字体画的，请导入含这些字的字体并应用到文本框后再转。',
+  'typo.textToPathSynthetic': '这些字面在浏览器里是合成渲染的：{fonts}。请导入对应的字重 / 斜体后再转，否则笔画会变细。',
+  'typo.textToPathFailed': '文字转路径失败（字体解析出错）。',
+  'typo.textToPathChanged': '文字在转换过程中被修改了，请重试。',
   'typo.undo.addNode': '添加锚点',
   'typo.undo.deleteNode': '删除锚点',
   'typo.undo.editPath': '编辑路径',
   'typo.undo.shapeHandle': '调整图形参数',
   'typo.undo.boolean': '布尔运算',
+  'typo.undo.divide': '拆分图形',
   'typo.booleanEmpty': '运算结果为空，没有生成图形。',  'typo.undo.imageFit': '修改图片适配',
   'typo.undo.align': '对齐元素',
   'typo.undo.distribute': '分布元素',
@@ -85,6 +98,11 @@ export const typography = {
   'typo.undo.t3dOn': '启用 3D 变换',
   'typo.undo.t3dOff': '关闭 3D 变换',
   'typo.undo.t3d': '调整 3D 变换',
+  'typo.undo.shadow': '修改阴影',
+  'typo.undo.blur': '修改虚化',
+  'typo.undo.strokePaint': '修改描边填充',
+  'typo.undo.borderPaint': '修改边框填充',
+  'typo.undo.glyphStroke': '修改字形描边',
 
   /* ------------------------------------------------ 字体导入反馈 */
   'typo.fontsImported': '已导入 {ok} 个字体',
@@ -130,7 +148,7 @@ export const typography = {
 
   /* ------------------------------------------------ 元素属性面板（PropertiesPanel） */
   'typo.props': '元素属性',
-  'typo.propsEmpty': '选中一个元素后，在这里编辑它的填充、描边、大小与位置。',
+  'typo.propsEmpty': '选中一个元素后，在这里编辑它的形状外观。',
   /* 多选提示；{n} 是数字。 */
   'typo.propsMulti': '已选 {n} 个元素，改动作用于所有选中的元素。',
   /* 分节标题 */
@@ -189,6 +207,30 @@ export const typography = {
   'typo.propQuadHint': '拖动画面上的四个角或边中点改变透视；Esc 取消这次拖动。',
   'typo.propQuadEditTip': '在画布上显示四角手柄',
   'typo.quadEditHint': '拖动四角 / 边中点调整透视 · Esc 取消',
+  /* 阴影 / 虚化（所有元素通用；渲染是 filter: blur + drop-shadow） */
+  'typo.propShadow': '阴影',
+  'typo.propShadowPreset': '预设',
+  'typo.propShadowAdd': '添加一层',
+  'typo.propShadowLayer': '阴影 {n}',
+  'typo.propShadowOffset': '偏移',
+  'typo.propShadowBlur': '模糊',
+  'typo.propShadowHint': 'CSS drop-shadow()滤镜',
+  'typo.propBlur': '虚化',
+  'typo.propBlurHint': '模糊半径（px），0 = 不虚化。',
+  /* 阴影预设名（元素阴影与文字阴影共用） */
+  'typo.shadowPresetSoft': '柔和投影',
+  'typo.shadowPresetLift': '双层浮起',
+  'typo.shadowPresetHard': '硬投影',
+  'typo.shadowPresetLong': '长投影',
+  'typo.shadowPresetGlow': '光晕',
+  /* 字形描边（-webkit-text-stroke） */
+  'typo.propGlyphStroke': '字形描边',
+  'typo.propGlyphStrokeHint': '描边居中：半个宽度压在字形里，要外扩 N px 就设 2N。',
+  /* 文字阴影（多层，仅文本框） */
+  'typo.propTextShadow': '文字阴影',
+  /* 描边填充（渐变 / 纹理） */
+  'typo.propStrokePaint': '描边填充',
+  'typo.propStrokePaintHint': '渐变 / 纹理描边不支持线型。',
   /* 3D 变换（与 CSS 的 3D 属性一一对应） */
   'typo.prop3d': '3D 变换',
   'typo.prop3dEnable': '启用 3D 变换',

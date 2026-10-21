@@ -42,6 +42,13 @@
 
 > `HASH_FAST_GLSL` 用的是 Dave Hoskins 风格的无 sin hash（`p * 0.1031` 那一族），在 Shadertoy / MIT 圈通行，上游源码未署名，这里补记出处。
 
+## 文本转路径（`src/typography/text-outline.ts`）
+
+**只参照思路，没有复制代码**：`tooooools/html-to-svg`（MIT）的 text 渲染器用
+Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置测量沿用这两条
+公开技法，字形轮廓与字体选择走自己的 `FontRegistry` + HarfBuzz（`glyphToPath`），
+没有引入 opentype.js，也没有取用它的任何源码或字体表。
+
 ## SVG 素材生成器（`src/typography/svg-gen/`）
 
 一期 20 + 二期 2（`motif` / `contour`）共 **22 个生成器全部自写**，没有复制任何
@@ -97,10 +104,11 @@
 | `@lucide/svelte` | ISC | UI 图标 |
 | `@zumer/snapdom` | MIT | 排版层光栅化 |
 | `mediabunny` | MPL-2.0 | MP4 封装 |
-| `harfbuzzjs` | MIT | 字体子集化 |
+| `harfbuzzjs` | MIT | 字体子集化 + 字形轮廓（文本转路径） |
 | `gl-transitions` | MIT | 转场 |
 | `polygon-clipping` | MIT | 图形布尔运算 |
-| Inter（`public/fonts/`） | OFL-1.1 | 内置西文字体，许可原文见 `public/fonts/OFL.txt` |
+| `wawoff2` | MIT | **仅 devDependency**：`scripts/fonts-woff2-to-sfnt.mjs` 把内置 woff2 无损还原成 TTF |
+| Inter（`public/fonts/`） | OFL-1.1 | 内置西文字体，许可原文见 `public/fonts/OFL.txt`。`*.ttf` 是同一份 `*.woff2` 的无损解压（字形与度量逐字节相同），供 HarfBuzz 取轮廓 |
 
 以上均按依赖引入，不复制源码入库。
 

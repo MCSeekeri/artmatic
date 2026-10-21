@@ -179,15 +179,45 @@ export function coercePaint(raw: unknown, fallback: Paint = { kind: 'none' }): P
   }
 }
 
+/**
+ * 描边填充：`{kind:'none'}` / `{kind:'solid'}` 等价于「没有填充」（回到 `color`），
+ * 这时必须**删掉字段**而不是写一个 `{kind:'none'}` —— 见 Stroke.paint 的语义。
+ */
+function withStrokePaint(base: Stroke, raw: unknown): Stroke {
+  if (raw === undefined) return base;
+  const paint = coercePaint(raw, base.paint ?? { kind: 'none' });
+  const next: Stroke = { ...base };
+  if (paint.kind === 'none' || paint.kind === 'solid') delete next.paint;
+  else next.paint = paint;
+  return next;
+}
+
 export function coerceStroke(raw: unknown, fallback: Stroke | null = null): Stroke | null {
   if (raw === null) return null;
   if (!isRecord(raw)) return fallback;
   const style = raw.style === 'dashed' || raw.style === 'dotted' ? raw.style : 'solid';
-  return {
-    color: colorString(raw.color, '#ffffff'),
-    width: Math.max(0, finite(raw.width, 2)),
-    style,
-  };
+  return withStrokePaint(
+    {
+      color: colorString(raw.color, '#ffffff'),
+      width: Math.max(0, finite(raw.width, 2)),
+      style,
+    },
+    raw.paint,
+  );
+}
+
+/**
+ * 字形描边（`TextElement.glyphStroke`）。同样是「没有 = 键不存在」，
+ * 复用 `coerceStroke`：它已经把颜色 / 宽度 / 线型都钳过了（线型渲染侧忽略）。
+ */
+function setGlyphStroke(el: TextElement, raw: unknown): void {
+  if (raw === null) {
+    delete el.glyphStroke;
+    return;
+  }
+  const s = coerceStroke(raw, el.glyphStroke ?? null);
+  if (s) el.glyphStroke = s;
+  else delete el.glyphStroke;
 }
 
 /**
@@ -202,11 +232,14 @@ function setTextBoxStroke(el: TextElement, raw: unknown): void {
     return;
   }
   if (!isRecord(raw)) return;
-  el.boxStroke = {
-    color: colorString(raw.color, '#ffffff'),
-    width: Math.max(0, finite(raw.width, 2)),
-    style: raw.style === 'dashed' || raw.style === 'dotted' ? raw.style : 'solid',
-  };
+  el.boxStroke = withStrokePaint(
+    {
+      color: colorString(raw.color, '#ffffff'),
+      width: Math.max(0, finite(raw.width, 2)),
+      style: raw.style === 'dashed' || raw.style === 'dotted' ? raw.style : 'solid',
+    },
+    raw.paint,
+  );
 }
 
 /** 把 `applyPaintPatch` 的入参收窄成安全形状（只认它认识的键）。 */
@@ -281,18 +314,31 @@ export function applyTextStylePatch(style: TextStyle, raw: unknown): boolean {
   } else if (typeof raw.highlight === 'string') {
     set('highlight', raw.highlight);
   }
+  /*
+   * 文字阴影：三种形态都收 —— `null` 清空、单个对象（老形态 / 手写调用）、
+   * 数组（多层）。写回**一律是数组**，于是「只有一份真相」成立（读的地方
+   * 还要过 `textShadowList()`，那是给老工程数据留的）。
+   */
   if (raw.shadow === null) {
     if (style.shadow !== undefined) {
       delete style.shadow;
       changed = true;
     }
-  } else if (isRecord(raw.shadow)) {
-    set('shadow', {
-      color: colorString(raw.shadow.color, '#000000'),
-      dx: finite(raw.shadow.dx, 0.045),
-      dy: finite(raw.shadow.dy, 0.045),
-      blur: Math.max(0, finite(raw.shadow.blur, 0.09)),
-    });
+  } else if (Array.isArray(raw.shadow) || isRecord(raw.shadow)) {
+    const list = (Array.isArray(raw.shadow) ? raw.shadow : [raw.shadow])
+      .filter(isRecord)
+      .slice(0, 8)
+      .map((s) => ({
+        color: colorString(s.color, '#000000'),
+        dx: finite(s.dx, 0.045),
+        dy: finite(s.dy, 0.045),
+        blur: Math.max(0, finite(s.blur, 0.09)),
+      }));
+    if (list.length) set('shadow', list);
+    else if (style.shadow !== undefined) {
+      delete style.shadow;
+      changed = true;
+    }
   }
   return changed;
 }
@@ -306,6 +352,8 @@ export interface NewTextInput {
   fill?: unknown;
   boxFill?: unknown;
   boxStroke?: unknown;
+  /** 字形描边（`-webkit-text-stroke`）：`{ color, width }`，宽度 px。 */
+  glyphStroke?: unknown;
   name?: string;
   opacity?: number;
   blend?: string;
@@ -367,6 +415,7 @@ export function addTextElement(doc: TypographyDocument, input: NewTextInput): Te
   if (input.fill !== undefined) el.fill = coercePaint(input.fill);
   if (input.boxFill !== undefined) el.boxFill = coercePaint(input.boxFill);
   if (input.boxStroke !== undefined) setTextBoxStroke(el, input.boxStroke);
+  if (input.glyphStroke !== undefined) setGlyphStroke(el, input.glyphStroke);
   applyCommon(el, input);
   doc.elements = [...doc.elements, el];
   return el;
@@ -491,6 +540,26 @@ export function patchElement(
   if (raw.visible !== undefined) el.visible = Boolean(raw.visible);
   if (raw.locked !== undefined) el.locked = Boolean(raw.locked);
 
+  /* 阴影 / 虚化：所有元素通用，都是「空 = 删字段」。 */
+  if (raw.blur !== undefined) {
+    const v = Math.max(0, finite(raw.blur, 0));
+    if (v > 0) el.blur = v;
+    else delete el.blur;
+  }
+  if (raw.shadows !== undefined) {
+    const list = (Array.isArray(raw.shadows) ? raw.shadows : [])
+      .filter(isRecord)
+      .slice(0, 8)
+      .map((s) => ({
+        color: colorString(s.color, '#000000'),
+        dx: finite(s.dx, 0),
+        dy: finite(s.dy, 0),
+        blur: Math.max(0, finite(s.blur, 0)),
+      }));
+    if (list.length) el.shadows = list;
+    else delete el.shadows;
+  }
+
   if (el.kind === 'text') {
     if (isRecord(raw.style)) applyTextStylePatch(el.style, raw.style);
     const fillPatch = coercePaintPatch(raw.fill);
@@ -498,6 +567,7 @@ export function patchElement(
     const boxPatch = coercePaintPatch(raw.boxFill);
     if (boxPatch) el.boxFill = applyPaintPatch(el.boxFill ?? { kind: 'none' }, boxPatch);
     if (raw.boxStroke !== undefined) setTextBoxStroke(el, raw.boxStroke);
+    if (raw.glyphStroke !== undefined) setGlyphStroke(el, raw.glyphStroke);
     if (raw.text !== undefined && typeof raw.text === 'string') el.runs = runsFromText(raw.text);
   } else if (el.kind === 'shape') {
     const fillPatch = coercePaintPatch(raw.fill);
@@ -700,6 +770,9 @@ function elementView(el: TypographyElement): Record<string, unknown> {
     locked: el.locked,
     ...(el.groupId ? { groupId: el.groupId } : {}),
     ...(el.animations.length ? { animations: el.animations.map((a) => ({ kind: a.kind, duration: a.duration })) } : {}),
+    // 阴影 / 虚化对所有元素成立，与 transform3d 一样放在公共部分。
+    ...(el.shadows?.length ? { shadows: el.shadows } : {}),
+    ...(el.blur ? { blur: el.blur } : {}),
   };
   if (el.kind === 'text') {
     return {
@@ -709,6 +782,8 @@ function elementView(el: TypographyElement): Record<string, unknown> {
       ...(el.fill ? { fill: el.fill } : {}),
       ...(el.boxFill ? { boxFill: el.boxFill } : {}),
       ...(el.boxStroke ? { boxStroke: el.boxStroke } : {}),
+      // 字形描边只用于文本（图形有自己的 stroke），与 boxStroke 并列但含义不同。
+      ...(el.glyphStroke ? { glyphStroke: el.glyphStroke } : {}),
     };
   }
   if (el.kind === 'shape') {
@@ -832,6 +907,7 @@ export function coerceDocument(raw: unknown, fallback: TypographyDocument): Typo
       if (item.fill !== undefined) el.fill = coercePaint(item.fill);
       if (item.boxFill !== undefined) el.boxFill = coercePaint(item.boxFill);
       if (item.boxStroke !== undefined) setTextBoxStroke(el, item.boxStroke);
+      if (item.glyphStroke !== undefined) setGlyphStroke(el, item.glyphStroke);
       doc.elements.push(el);
     } else if (kind === 'shape' && isShapeKind(item.shape)) {
       const el = createShapeElement(size, item.shape, {

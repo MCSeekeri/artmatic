@@ -159,6 +159,7 @@ import X from '@lucide/svelte/icons/x';
  */
 import LetterSpacing from './icons/letter-spacing.svelte';
 import TextShadow from './icons/text-shadow.svelte';
+import SquaresDivide from './icons/squares-divide.svelte';
 
 /** 名字 → 组件。新增图标只在这里加一行，调用点写 `name="eye"` 即得类型检查。 */
 export const ICONS = {
@@ -271,6 +272,7 @@ export const ICONS = {
   spline: Spline,
   eraser: Eraser,
   'a-large-small': ALargeSmall,
+  'squares-divide': SquaresDivide,
   'squares-exclude': SquaresExclude,
   'squares-intersect': SquaresIntersect,
   'squares-subtract': SquaresSubtract,

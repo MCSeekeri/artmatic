@@ -27,11 +27,13 @@ import {
   imageStyle,
   paintDefId,
   paintNeedsDefs,
+  strokePaintDefId,
   runsWrapperStyle,
   shapePaintAttrs,
   spanStyle,
   textBoxStyle,
   textFillStyle,
+  glyphStrokeStyle,
   textStyle,
   textureMotifSpec,
 } from './css';
@@ -198,7 +200,8 @@ function buildElement(
   const shell = document.createElement('div');
   shell.className = `typo-el typo-el-${el.kind}`;
   shell.setAttribute(EL_ID_ATTR, el.id);
-  applyDecls(shell, elementStyle(el));
+  // theme 是给阴影色用的（阴影色可以是配色方案引用）。
+  applyDecls(shell, elementStyle(el, theme));
   // 文本框背景 / 边框画在**外壳**上，在文字之下；字形填充在内层另一个节点
   // （`background-clip: text`），两者互不干扰 —— 见 css.ts::textBoxStyle。
   if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
@@ -250,6 +253,10 @@ function buildContent(
     // 字形填充（渐变 / 径向 / 纹理）。放在 textStyle **之后** —— 它要能覆盖
     // textStyle 里的 `color`（裁切填充时字形本身是透明的）。
     applyDecls(box, textFillStyle(textFillOf(el), theme));
+    // 字形描边（-webkit-text-stroke）。排在上面两者之后：它不参与填充裁切，
+    // 顺序只影响「同一属性谁覆盖谁」——这里没有重叠的键，但保持「填充 → 描边」
+    // 的阅读顺序，与图形那边的 fill → stroke 一致。
+    applyDecls(box, glyphStrokeStyle(el.glyphStroke, theme));
     applyRuns(box, el.runs, theme);
     if (!opts.forRaster) {
       // 舞台上的双击进入编辑由编辑器自己接管（设置 contenteditable）。
@@ -495,7 +502,7 @@ function syncElement(
   opts: BuildDocOptions,
   theme: TypographyTheme,
 ): void {
-  applyDecls(shell, elementStyle(el));
+  applyDecls(shell, elementStyle(el, theme));
   // 与 buildElement 同一份声明：就地同步时切回「无填充」由它复位。
   if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
 
@@ -514,6 +521,8 @@ function syncElement(
     applyDecls(content, textStyle(el.style, theme));
     // 与 buildContent 同一份声明：切回纯色时这里负责**复位**上一次的裁切。
     applyDecls(content, textFillStyle(textFillOf(el), theme));
+    // 同理：关掉描边时靠这份声明把宽度写回 0。
+    applyDecls(content, glyphStrokeStyle(el.glyphStroke, theme));
     const editing = opts.editingId === el.id;
     /*
      * 编辑态与文档内容**不能同时写**：同步每帧都跑，覆写 textContent 会把用户
@@ -615,9 +624,15 @@ export function syncShape(svg: SVGSVGElement, el: ShapeElement, theme?: Typograp
     inner: el.inner,
     angle: el.angle,
     path: el.path,
+    pathUnit: el.pathUnit,
     evenOdd: el.evenOdd,
   });
   svg.setAttribute('viewBox', geo.viewBox);
+  /*
+   * `overflow` 由 `clipFrame` 决定（文本转路径要按文本框原来的口径裁掉溢出）。
+   * 每次 sync 都写一遍：就地同步没有删除语义，`hidden → visible` 必须显式复位。
+   */
+  svg.style.overflow = el.clipFrame ? 'hidden' : 'visible';
 
   syncPaintDefs(svg, el, geo.scaleFrom100 === true, theme);
 
@@ -671,7 +686,9 @@ function syncPaintDefs(
   scaleFrom100: boolean,
   theme?: TypographyTheme,
 ): void {
-  const needs = paintNeedsDefs(el.fill);
+  const strokePaint = el.stroke?.paint;
+  const strokeNeeds = !!strokePaint && paintNeedsDefs(strokePaint);
+  const needs = paintNeedsDefs(el.fill) || strokeNeeds;
   let defs = svg.firstElementChild as SVGDefsElement | null;
   if (!defs || defs.tagName.toLowerCase() !== 'defs') defs = null;
 
@@ -684,10 +701,24 @@ function syncPaintDefs(
     svg.prepend(defs);
   }
 
-  const paint = el.fill;
-  const id = paintDefId(el.id);
   defs.replaceChildren();
+  // 两份 defs 共用同一个 `<defs>` 容器（一个元素只有一个 svg 子节点），
+  // 各自的 id 不同 —— 见 css.ts::strokePaintDefId 的说明。
+  if (paintNeedsDefs(el.fill)) appendPaintDef(defs, paintDefId(el.id), el.fill, el, scaleFrom100, theme);
+  if (strokeNeeds && strokePaint) {
+    appendPaintDef(defs, strokePaintDefId(el.id), strokePaint, el, scaleFrom100, theme);
+  }
+}
 
+/** 把一份 Paint 的渐变 / 纹理节点追加进 `<defs>`（填充与描边共用）。 */
+function appendPaintDef(
+  defs: SVGDefsElement,
+  id: string,
+  paint: Paint,
+  el: ShapeElement,
+  scaleFrom100: boolean,
+  theme?: TypographyTheme,
+): void {
   if (paint.kind === 'linear' || paint.kind === 'radial') {
     const grad = document.createElementNS(
       SVG_NS,

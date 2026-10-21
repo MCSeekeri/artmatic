@@ -34,6 +34,7 @@ import {
   setHandle,
 } from '../../typography/path-nodes';
 import { applyShapeParam, shapeParamValue, type ShapeHandle } from '../../typography/shape-handles';
+import { pathUnitScale } from '../../typography/shapes';
 import type { ShapeElement } from '../../typography/document';
 import { tr } from '../../i18n/index.svelte';
 
@@ -349,18 +350,21 @@ export function startShapeHandleDrag(
 /* ------------------------------------------------------------ 路径顶点 */
 
 /**
- * 元素局部**像素** → 路径的 **authored（0..100）** 坐标。
+ * 元素局部**像素** → 路径坐标。
  *
- * `svg` 图形的 `path` 按 0..100 authored 存（渲染时由 `<g scale(w/100,h/100)>`
- * 拉到像素盒）。手势这一路拿到的是「文档坐标 → 局部像素」，**必须再过这一趟**
- * 才能写进路径。
+ * `svg` 图形的 `path` 默认按 0..100 authored 存（渲染时由 `<g scale(w/100,h/100)>`
+ * 拉到像素盒）；文本转路径的 `pathUnit: 'px'` 已经是像素。手势这一路拿到的是
+ * 「文档坐标 → 局部像素」，**必须再过这一趟**才能写进路径。
  *
  * 漏掉的后果非常隐蔽：写进去的是像素值，在 324 宽的框里差 3.24 倍 —— 拖一下
  * 锚点它就飞到框外，而**那一次拖动的 DOM 更新看起来是正常的**（路径确实变了），
  * 只有下一次想再拖它时才发现点不到了。各轴比例不同，所以 x / y 要分别换算。
  */
-function toAuthored(p: { x: number; y: number }, frame: { w: number; h: number }): { x: number; y: number } {
-  return { x: (p.x * 100) / Math.max(1, frame.w), y: (p.y * 100) / Math.max(1, frame.h) };
+function toAuthored(
+  p: { x: number; y: number },
+  unit: { x: number; y: number },
+): { x: number; y: number } {
+  return { x: p.x / Math.max(1e-6, unit.x), y: p.y / Math.max(1e-6, unit.y) };
 }
 
 export type NodeDragTarget =
@@ -386,6 +390,7 @@ export function startNodeDrag(
   const el = findShape(elId);
   if (!el || el.shape !== 'svg') return;
   const frame = { ...el.frame };
+  const unit = pathUnitScale(el);
   const origin = docToLocal(frame, start);
   const base = parsePathNodes(el.path ?? '');
   if (!base[target.sub]) return;
@@ -399,7 +404,7 @@ export function startNodeDrag(
     // authored —— 两件事用两个坐标系，混起来就会写出错位的值。
     const local = docToLocal(frame, env.toDoc(ev));
     if (!moved && Math.hypot(local.x - origin.x, local.y - origin.y) < 0.5) return;
-    const at = toAuthored(local, frame);
+    const at = toAuthored(local, unit);
     const sp = base[target.sub]!;
     const next =
       target.kind === 'anchor'

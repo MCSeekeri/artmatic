@@ -91,11 +91,18 @@ A text clip owns a \`TypographyDocument\`:
   - \`text\`: \`runs\` (plain text input is fine - we convert it), \`style\`
     (fontFamily, fontSize, fontWeight, letterSpacing, lineHeight, align, vAlign,
     color, textDecoration, textTransform, highlight, shadow, writingMode),
-    optional \`fill\` (gradient / texture on glyphs), \`boxFill\`, \`boxStroke\`.
+    optional \`fill\` (gradient / texture on glyphs), \`boxFill\`, \`boxStroke\`
+    (the box rectangle), \`glyphStroke\` (\`{ color, width }\`, an outline on the
+    glyphs themselves via \`-webkit-text-stroke\`; width is centred, so half of
+    it eats into the glyph).
   - \`shape\`: \`shape\` kind (rect / ellipse / line / triangle / star / polygon /
     trapezoid / parallelogram / arrow / ring / frame / pie / svg), \`fill\`,
     \`stroke\`, \`radius\`, \`sides\`, \`waist\`, \`inner\`, \`angle\`, \`path\` (for svg).
   - \`image\`: \`assetId\`, \`fit\`, optional \`crop\`, \`radius\`.
+- Every element also takes \`shadows\` (array of \`{ color, dx, dy, blur }\` in
+  document px, rendered as chained \`filter: drop-shadow()\`) and \`blur\` (px,
+  \`filter: blur()\`). A stroke's optional \`paint\` (same Paint shape) fills it
+  with a gradient / texture instead of \`color\`.
 - \`frame\` is the unrotated bounding box: \`{ x, y, w, h, rot }\` in document px.
   Rotation is around the box centre (radians).
 - \`Paint\`: \`{ kind: 'none' }\` | \`{ kind:'solid', color }\` |

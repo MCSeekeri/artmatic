@@ -70,6 +70,7 @@ export const ribbon = {
   'rib.boolSubtract': '差集',
   'rib.boolIntersect': '交集',
   'rib.boolXor': '异或',
+  'rib.boolDivide': '拆分',
 
   /* ------------------------------------------------ 图形格式 → 填充 */
   'rib.fillKind': '填充类型',
@@ -88,6 +89,9 @@ export const ribbon = {
   'rib.textureThickness': '线宽',
   'rib.group.textFill': '文字填充',
   'rib.textFillFollow': '跟随文字色',
+  /* ------------------------------------------------ 开始 → 文字转路径 */
+  'rib.group.textPath': '路径',
+  'rib.textToPath': '文字转路径',
 
   /* ------------------------------------------------ [Contextual] 组合格式 */
   'rib.groupFormat': '组合格式',

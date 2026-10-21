@@ -447,8 +447,9 @@ export function buildTypographyTabs(
                 disabled: !hasText,
                 active: !!style?.shadow,
                 // 开关语义：有阴影就关掉，没有就套一份默认参数（偏移/模糊按字号比例，
-                // 见 document.ts::defaultTextShadow）。
-                onchange: () => a.setTextShadow(style?.shadow ? undefined : defaultTextShadow()),
+                // 见 document.ts::defaultTextShadow）。阴影是**数组**（多层），
+                // 开关只造一层；逐层调整在「元素属性」面板里。
+                onchange: () => a.setTextShadow(style?.shadow ? undefined : [defaultTextShadow()]),
               },
               {
                 kind: 'toggle',
@@ -924,6 +925,29 @@ export function buildTypographyTabs(
                     value: textFillColorA,
                     disabled: textFillKind === 'none',
                     onchange: (v: string) => a.setTextFill({ color: v }),
+                  },
+                ],
+              },
+            ]
+          : []),
+        /*
+         * 文字转路径。与「文字填充」同一条出现规则：只有选中文本时才占位置。
+         * 转换会把文本框拆成图形（多色时多个），所以**放在「开始」而不是
+         * 「图形格式」** —— 后者只有在选中图形后才出现，而那时已经晚了。
+         */
+        ...(hasText
+          ? [
+              {
+                id: 'text-path',
+                label: tr('rib.group.textPath'),
+                items: [
+                  {
+                    kind: 'button' as const,
+                    id: 'text-to-path',
+                    label: tr('rib.textToPath'),
+                    icon: 'spline' as const,
+                    testid: 'typo-text-to-path',
+                    onselect: () => a.convertTextToPath(),
                   },
                 ],
               },
@@ -1622,6 +1646,17 @@ export function buildTypographyTabs(
               testid: 'typo-bool-xor',
               disabled: !canBool,
               onselect: () => a.booleanShapes('xor'),
+            },
+            {
+              kind: 'button',
+              id: 'bool-divide',
+              label: tr('rib.boolDivide'),
+              size: 'small',
+              // 自绘：Lucide 没有「拆分」，见 `ui/icons/squares-divide.svelte`。
+              icon: 'squares-divide',
+              testid: 'typo-bool-divide',
+              disabled: !canBool,
+              onselect: () => a.divideShapes(),
             },
           ],
         },

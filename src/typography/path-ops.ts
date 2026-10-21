@@ -479,6 +479,57 @@ export function booleanOp(op: BoolOp, polys: MultiPoly[]): MultiPoly {
   }
 }
 
+/** 拆分得到的一个面：区域本身 + 覆盖它的输入里**最靠上**的那一个（样式来源）。 */
+export interface DividedRegion {
+  mp: MultiPoly;
+  top: number;
+}
+
+/**
+ * 拆分（分割 / divide）：把输入图形按彼此的边界切成**互不重叠的面**，
+ * 每个面作为一个独立的多边形。
+ *
+ * 与 `xor` 的区别是本质的：`xor` 只保留「恰好被奇数个图形覆盖」的区域，
+ * 两个图形相减的结果是**一个带洞的多边形**（洞就是重叠部分）—— 重叠区域
+ * 仍然是一片空白、不是对象。拆分要的是「每个面都成为对象」：A−B、A∩B、
+ * B−A 三块各自独立。所以不能直接调 `clip.xor`。
+ *
+ * ## 增量法而不是枚举子集
+ *
+ * 朴素做法是枚举所有覆盖组合（2^N 个），N 稍大就爆炸。这里按 z 序一个个
+ * 加进来：每个已有面被新图形切成「相交」与「不相交」两份（cover 集分别
+ * 追加 / 保持不变），新图形里没被任何已有面覆盖的部分单独成一块。
+ * 整个过程只在**真正存在的面**上做布尔运算，区域数就是图形边界的实际
+ * 排列数（N 个矩形最多 O(N²)），不会出现 2^N 个空集。
+ *
+ * **cover 里最后加入的下标就是最靠上的来源**：输入按 z 序（底 → 顶）传入，
+ * 每个面的样式取「最后一笔盖在它上面的那个图形」，与所见一致。
+ */
+export function dividePolygons(polys: readonly MultiPoly[]): DividedRegion[] {
+  let regions: { mp: MultiPoly; cover: number[] }[] = [];
+
+  polys.forEach((shape, index) => {
+    if (!shape.length) return;
+    const next: { mp: MultiPoly; cover: number[] }[] = [];
+    for (const region of regions) {
+      const inside = clip.intersection(region.mp, shape);
+      if (inside.length) next.push({ mp: inside, cover: [...region.cover, index] });
+      const outside = clip.difference(region.mp, shape);
+      if (outside.length) next.push({ mp: outside, cover: region.cover });
+    }
+    // 新图形的「净增面积」：减掉所有已有面之后剩下的部分。
+    let fresh = shape;
+    for (const region of regions) {
+      fresh = clip.difference(fresh, region.mp);
+      if (!fresh.length) break;
+    }
+    if (fresh.length) next.push({ mp: fresh, cover: [index] });
+    regions = next;
+  });
+
+  return regions.map((r) => ({ mp: r.mp, top: r.cover[r.cover.length - 1]! }));
+}
+
 /**
  * 一个图形元素 → **文档坐标**下的 MultiPolygon。
  *
@@ -497,6 +548,7 @@ export function shapeToMultiPolygon(el: ShapeElement): MultiPoly {
     inner: el.inner,
     angle: el.angle,
     path: el.path,
+    pathUnit: el.pathUnit,
     evenOdd: el.evenOdd,
   });
   const local = pathToMultiPolygon(geo.d);

@@ -116,6 +116,19 @@ export interface Stroke {
   color: string;
   width: number;
   style?: 'solid' | 'dashed' | 'dotted';
+  /**
+   * **描边的填充方式**。缺省 = 纯色（用 `color`）。
+   *
+   * 语义与 `TextElement.fill` 完全同构：只有 `linear` / `radial` / `texture`
+   * 会**覆盖** `color`；`solid` / `none` 一律走 `color` 那条老路。
+   * 两处渲染出口各用各的机制，但都是同一条规则：
+   *  - 文本框边框（CSS border）→ `border-image`（`css.ts::textBoxStyle`）；
+   *  - 图形描边（SVG `<path>`）→ `stroke="url(#…)"` + `<defs>`（`render-dom.ts`）。
+   *
+   * ⚠️ 设了渐变 / 纹理之后 `style`（虚线 / 点线）**不再有效**：
+   * `border-image` 与 SVG 渐变描边的 dasharray 行为都不可靠，面板会把线型置灰。
+   */
+  paint?: Paint;
 }
 
 /**
@@ -159,6 +172,90 @@ export const MIX_BLENDS: { id: MixBlend; labelKey: MessageKey }[] = [
   { id: 'saturation', labelKey: 'blend.saturation' },
   { id: 'color', labelKey: 'blend.color' },
   { id: 'luminosity', labelKey: 'blend.luminosity' },
+];
+
+/**
+ * 元素阴影的一层。
+ *
+ * ## 为什么渲染的是 `filter: drop-shadow()` 而不是 `box-shadow`
+ *
+ * 两者都由浏览器画，差别只在「谁算轮廓」：
+ *  - `box-shadow` 永远把一个**圆角矩形**投影 —— 星形 / 圆环 / 裸文字框会得到
+ *    一块方影子（文字元素没有文本框背景时，影子比字形大一圈，看起来像画错了）；
+ *  - `drop-shadow` 取元素**实际画出来的那片墨迹**（字形 / 路径 / 图片 alpha），
+ *    四种元素都只投该投的影。
+ *
+ * 实测（`.codebuddy/tmp/2026-10-21/snapdom-effects.mjs`）两者在 snapDOM 的
+ * 光栅化里都保真，所以这是**取舍**而不是限制。代价是 CSS 的 `spread` / `inset`
+ * 表达不出来（drop-shadow 没有这两个参数）；需要「硬描边」时用 4 层零模糊的
+ * 阴影模拟（见 `SHADOW_PRESETS` 的 `outline`）。
+ *
+ * 尺寸是**文档 px**（不是字号倍数）：阴影跟着元素框走，而框本来就在文档坐标里。
+ * 与 `TextStyleShadow`（字号倍数）刻意不同 —— 那个跟着字号缩放，这个不跟。
+ */
+export interface ElementShadow {
+  /** 阴影色。**支持配色方案引用**（`@accent1`），见 theme.ts。 */
+  color: string;
+  /** 水平偏移，文档 px。 */
+  dx: number;
+  /** 垂直偏移，文档 px。 */
+  dy: number;
+  /** 模糊半径，文档 px。0 = 硬边。 */
+  blur: number;
+}
+
+/** 一层默认阴影：柔和投影，够用又不喧宾夺主。 */
+export function defaultElementShadow(): ElementShadow {
+  return { color: 'rgba(0, 0, 0, 0.45)', dx: 0, dy: 12, blur: 28 };
+}
+
+/**
+ * 常用阴影预设。**数组顺序 = 叠放顺序**（first = 最靠近元素），与 CSS
+ * `filter: drop-shadow()` 的链式顺序一致；`outline` 用 4 层零模糊模拟
+ * `box-shadow` 的 spread（drop-shadow 没有那个参数）。
+ *
+ * 尺寸按 1080p 文档标定（标题字号约 97px），720 档看着偏大但不至于畸形 ——
+ * 阴影是文档 px，`resizeDocument` 会把整份文档缩到目标尺寸，这些值也随之缩放。
+ */
+export const SHADOW_PRESETS: { id: string; labelKey: MessageKey; shadows: ElementShadow[] }[] = [
+  {
+    id: 'soft',
+    labelKey: 'typo.shadowPresetSoft',
+    shadows: [{ color: 'rgba(0, 0, 0, 0.45)', dx: 0, dy: 12, blur: 28 }],
+  },
+  {
+    id: 'lift',
+    labelKey: 'typo.shadowPresetLift',
+    shadows: [
+      { color: 'rgba(0, 0, 0, 0.5)', dx: 0, dy: 4, blur: 10 },
+      { color: 'rgba(0, 0, 0, 0.35)', dx: 0, dy: 20, blur: 48 },
+    ],
+  },
+  {
+    id: 'hard',
+    labelKey: 'typo.shadowPresetHard',
+    shadows: [{ color: '#000000', dx: 12, dy: 12, blur: 0 }],
+  },
+  {
+    id: 'long',
+    labelKey: 'typo.shadowPresetLong',
+    // 阶梯式长投影：每层错开固定步长、零模糊，链起来就是一条实心长影。
+    shadows: Array.from({ length: 6 }, (_, i) => ({
+      color: 'rgba(0, 0, 0, 0.9)',
+      dx: (i + 1) * 9,
+      dy: (i + 1) * 9,
+      blur: 0,
+    })),
+  },
+  {
+    id: 'glow',
+    labelKey: 'typo.shadowPresetGlow',
+    // 两层同色、模糊半径一大一小 ⇒ 中心亮、外圈散，观感接近「发光」。
+    shadows: [
+      { color: '@accent1', dx: 0, dy: 0, blur: 18 },
+      { color: '@accent1', dx: 0, dy: 0, blur: 56 },
+    ],
+  },
 ];
 
 export interface TextureFrame {
@@ -247,6 +344,21 @@ export interface ElementBase {
    * 与 `frame.rot` 复合，见 `Transform3D` 的说明。
    */
   transform3d?: Transform3D;
+  /**
+   * 元素阴影，**多层**（数组顺序 = 叠放顺序）。缺省 / 空数组 = 无阴影。
+   *
+   * 渲染成 `filter: drop-shadow()` 的链（见 `ElementShadow` 的说明）。
+   * 与 `TextStyle.shadow` 是两件事：那个只裁在字形上（text-shadow），
+   * 这个投**整个元素**（字形 + 文本框底色 + 边框 + 图片）。
+   */
+  shadows?: ElementShadow[];
+  /**
+   * 元素虚化半径（文档 px）→ CSS `filter: blur()`。缺省 / 0 = 不虚化。
+   *
+   * 与 `shadows` 共用**同一个** CSS `filter`：虚化在前、阴影在后 ——
+   * 先糊再投影才对（反过来会把影子也糊掉，且边缘出现一圈亮环）。
+   */
+  blur?: number;
 }
 
 /**
@@ -268,14 +380,16 @@ export interface TypographyGroup {
 }
 
 /**
- * 文字阴影。
+ * 文字阴影的一层。
  *
  * 三个尺寸都是**字号倍数**而不是 px：`resizeDocument` 会把字号按比例缩放，
  * 跟着字号走的阴影自动一起缩；写死 px 的话，「1080 上刚好的阴影」在 720 上
  * 会糊成一团。倍数还让不同字号的观感一致（大标题的阴影不该是一条细线）。
  *
- * 只有一层、四个参数是刻意的：Office 的「文字效果」里那套多层发光/倒影属于
- * 「有人真的要再说」的范畴，而单层阴影覆盖了绝大多数用法。
+ * 多层是后加的（`TextStyle.shadow` 现在是数组），因为「霓虹 / 外发光」这类效果
+ * 要求同一份文字上有两层以上（内实外虚）—— 单层做不到。
+ * 描边**不**走这里：`text-shadow` 没有 spread，靠多向 copy 拼层数随厚度线性涨，
+ * 字形描边用 `TextElement.glyphStroke`（`-webkit-text-stroke`，一个宽度参数）。
  */
 export interface TextStyleShadow {
   /** 阴影色。**支持配色方案引用**（`@dk1`、`@accent1.l40`），见 theme.ts。 */
@@ -291,6 +405,43 @@ export interface TextStyleShadow {
 /** 默认阴影：向右下偏一点、带轻微模糊（与 Office 的默认文字阴影观感一致）。 */
 export function defaultTextShadow(): TextStyleShadow {
   return { color: '#000000', dx: 0, dy: 0.045, blur: 0.09 };
+}
+
+/**
+ * 文字阴影预设（字号倍数）。尺寸取法同 `SHADOW_PRESETS`，但这里全是**倍数**，
+ * 所以 720 档标题上的观感与 1080 档一致。
+ */
+export const TEXT_SHADOW_PRESETS: { id: string; labelKey: MessageKey; shadows: TextStyleShadow[] }[] = [
+  {
+    id: 'soft',
+    labelKey: 'typo.shadowPresetSoft',
+    shadows: [{ color: 'rgba(0, 0, 0, 0.5)', dx: 0, dy: 0.03, blur: 0.08 }],
+  },
+  {
+    id: 'hard',
+    labelKey: 'typo.shadowPresetHard',
+    shadows: [{ color: '#000000', dx: 0.05, dy: 0.05, blur: 0 }],
+  },
+  {
+    id: 'neon',
+    labelKey: 'typo.shadowPresetGlow',
+    shadows: [
+      { color: '@accent1', dx: 0, dy: 0, blur: 0.06 },
+      { color: '@accent1', dx: 0, dy: 0, blur: 0.2 },
+    ],
+  },
+];
+
+/**
+ * 文字阴影的**读取归一化**：新数据是数组，老工程里是单个对象
+ * （多阴影之前只存一层）。所有读的地方都过这里，写的地方一律写数组 ——
+ * 于是「老档照常渲染」与「只有一份真相」可以同时成立，不需要改
+ * `SCHEMA_VERSION`（可选字段不抬版本号，见 AGENTS）。
+ */
+export function textShadowList(style: TextStyle): TextStyleShadow[] {
+  const v = style.shadow;
+  if (!v) return [];
+  return Array.isArray(v) ? v : [v];
 }
 
 export interface TextStyle {
@@ -320,8 +471,16 @@ export interface TextStyle {
    * 那个盒子是 flex 容器，背景会连换行处的空白一起填满。
    */
   highlight?: string;
-  /** 文字阴影。缺省 = 无阴影。 */
-  shadow?: TextStyleShadow;
+  /**
+   * 文字阴影。缺省 / 空数组 = 无阴影。
+   *
+   * **新数据一律写数组**（多层，数组顺序 = 叠放顺序，第一个最靠近字形）；
+   * 老工程里这里是单个对象，读的时候一律过 `textShadowList()`。
+   * 用联合类型而不是「新字段 + 迁移」：仓库里没有文档解析的迁移钩子
+   * （工程里存的就是 `clip.source.doc` 原样），加字段会让老工程的阴影
+   * 静默消失 —— 那比一个联合类型贵得多。
+   */
+  shadow?: TextStyleShadow | TextStyleShadow[];
   /** M4 预留；CSS text-autospace 普及前恒为 'none'。 */
   textAutospace?: 'none' | 'normal';
   writingMode: 'horizontal-tb' | 'vertical-rl';
@@ -373,6 +532,20 @@ export interface TextElement extends ElementBase {
    * 占宽，不会把框撑大（尺寸输入框里的数字因此就是最终外框尺寸）。
    */
   boxStroke?: Stroke;
+  /**
+   * **字形描边**（CSS `-webkit-text-stroke`），只用到 `color` / `width`
+   * （`style` 忽略：文字描边没有虚线）。
+   *
+   * 缺省 = 不描边（宽度 0）。与 `boxStroke`（文本框那个矩形框）是两件事，
+   * 与 `fill`（字形填充）配对 —— 一个管填、一个管边。
+   *
+   * ⚠️ 两个必须记住的行为：
+   *  - **描边是居中的**，会吃掉字形自己的一半宽度。想要「向外扩 N px」就设 2N。
+   *    HTML 文字没有 `paint-order: stroke fill`（那是 SVG text 的属性），
+   *    所以做不到「只往外长」。
+   *  - 它**不是**动画/逐 run 的属性：行内 run 会继承同一个描边，改不了其中一段。
+   */
+  glyphStroke?: Stroke;
 }
 
 /**
@@ -418,8 +591,28 @@ export interface ShapeElement extends ElementBase {
   inner?: number;
   /** pie 的张角（度）。 */
   angle?: number;
-  /** shape === 'svg' 时的路径数据（viewBox 0 0 100 100）。 */
+  /** shape === 'svg' 时的路径数据（默认按 0..100 authored，见 `pathUnit`）。 */
   path?: string;
+  /**
+   * `shape === 'svg'` 的路径坐标系。缺省 `'percent'` = authored 在 0..100 的
+   * 方盒里（生成器 / 图标 / 参数化图形转路径都是这一路），渲染时外套一层
+   * `scale(w/100, h/100)`。
+   *
+   * **`'px'` = 路径就写在元素自己的像素盒里**（`0..frame.w` / `0..frame.h`）。
+   * 文本转路径必须用它：文本框通常是几百乘几十，0..100 的等比拉伸会把
+   * 描边拉成「一边粗一边细」（见 shapes.ts 文件头的同一段理由）。
+   *
+   * 可选字段 ⇒ 不抬 `SCHEMA_VERSION`（与 `groups` / `doc.theme` 同一条约定）。
+   */
+  pathUnit?: 'percent' | 'px';
+  /**
+   * 是否按元素框裁剪内容（SVG `overflow: hidden`）。
+   *
+   * 文本转路径时要置 true：文本框本来就是 `overflow: hidden`（`css.ts::textStyle`），
+   * 溢出的字形 / 描边在原状态下看不见，若不裁，转换后会突然冒出来。
+   * 可选字段 ⇒ 不抬 `SCHEMA_VERSION`。
+   */
+  clipFrame?: boolean;
   /**
    * `shape === 'svg'` 时的填充规则。**带洞的图形靠它**（同心环 / 刻度盘 /
    * 嵌套框）：不置的话内圈会被 nonzero 填实，看起来就是一个实心圆盘。
@@ -654,6 +847,8 @@ function baseDefaults(size: Size, over: Partial<ElementBase>): Omit<ElementBase,
     animations: over.animations ?? [],
     // 可选字段必须**显式搬运**：不写就会静默丢弃（与 createShapeElement 同款）。
     transform3d: over.transform3d,
+    shadows: over.shadows,
+    blur: over.blur,
   };
 }
 
@@ -689,6 +884,7 @@ export function createTextElement(
     fill: over.fill,
     boxFill: over.boxFill,
     boxStroke: over.boxStroke,
+    glyphStroke: over.glyphStroke,
   };
 }
 
@@ -891,6 +1087,8 @@ export function createShapeElement(  size: Size,
     angle: over.angle,
     path: over.path,
     // 可选字段必须**逐项显式搬运**：不写就会静默丢弃（既有注释已警示过一次）。
+    pathUnit: over.pathUnit,
+    clipFrame: over.clipFrame,
     evenOdd: over.evenOdd,
     gen: over.gen,
   };
@@ -1031,6 +1229,20 @@ export function resizeDocument(doc: TypographyDocument, size: Size): TypographyD
         origin: { ...t.origin },
       };
     }
+    /*
+     * 阴影 / 虚化也是**画布上的长度**（文档 px），跟着走。不缩的话
+     * 「1080 上刚好的柔和投影」在 720 上会糊成一团 —— 与 3D 的 px 参数同源。
+     * 偏移按各轴缩（阴影是方向的），模糊按 k（等比）。颜色不动。
+     */
+    if (next.shadows?.length) {
+      next.shadows = next.shadows.map((s) => ({
+        ...s,
+        dx: s.dx * sx,
+        dy: s.dy * sy,
+        blur: Math.max(0, s.blur * k),
+      }));
+    }
+    if (next.blur) next.blur = next.blur * k;
     if (next.kind === 'text') {
       next.style = {
         ...next.style,
@@ -1043,6 +1255,10 @@ export function resizeDocument(doc: TypographyDocument, size: Size): TypographyD
     }
     if (next.kind === 'text' && next.boxStroke) {
       next.boxStroke = { ...next.boxStroke, width: next.boxStroke.width * k };
+    }
+    // 字形描边的宽度也是画布长度（字号已按 k 缩，不缩这一项描边会相对变粗）。
+    if (next.kind === 'text' && next.glyphStroke) {
+      next.glyphStroke = { ...next.glyphStroke, width: next.glyphStroke.width * k };
     }
     return next;
   });

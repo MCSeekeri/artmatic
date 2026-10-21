@@ -44,6 +44,57 @@
   `perspective` 用 **`perspective()` 函数**，所以没有 `perspective-origin`；要做
   「整页共享一个消失点」得把 perspective 提到文档根（未做）。选择框 / 吸附仍按
   **未倾斜**的 `frame` 算 —— 倾斜元素的可视范围与编辑框不一致是已知的，与旋转同源。
+- **元素阴影用 `filter: drop-shadow()`，不是 `box-shadow`**（`document.ts::ElementShadow`
+  + `css.ts::elementFilter`）。`box-shadow` **有** `spread`（能「调大小」），但它永远投
+  元素的**边框盒**：星形 / 圆环得到一块方影子，裸文字（没有文本框背景）会把整块框影出来。
+  实测（`.codebuddy/tmp/2026-10-21/shadow-spread.mjs`）：星形 + `box-shadow:0 0 0 10px`
+  时框角 `(36,36)` 是纯黑；`drop-shadow` 同一位置是透明白。
+  **`drop-shadow()` 没有 `spread`**（规范只允许 `offset-x offset-y blur? color?`）：
+  写 `drop-shadow(0 0 0 10px)` 不是「忽略多出来的那个长度」，而是**整条 `filter` 失效**，
+  computed 值退回 `none`（同一个脚本量的：`filter=none`，一点影子都没有）。
+  1. **filter 链是复合的**，不是并列：`drop-shadow(a) drop-shadow(b)` 里 b 会把
+     「元素 + a 的影子」一起再投一次（实测：dy=20 叠两次，影子从 `[40,100)` 延伸到
+     `[60,120)`；`box-shadow` 两条并列则不会）。后果：**面板上第 N 层阴影也会给前 N-1 层
+     再投影** —— 加一层会同时加深前面那几层。别拿它去凑「加粗的描边」：那要多向 copy，
+     层数随厚度线性涨，r=10 时 4 向在尖角处实测漏一格（8 向才补上，代价 8 个 filter pass）。
+  2. 虚化与阴影**共用同一条 `filter`**，顺序固定 `blur() → drop-shadow(...)`（先糊再投影；
+     反过来会把影子也糊掉，并在边缘留一圈亮环）。关闭时**写 `'none'`**（就地同步没有删除语义）。
+  3. 挂在**元素外壳**上 ⇒ 投的是「整个元素」的影（含文本框底色 / 边框 / 图片）；
+     按字形投影是 `TextStyle.shadow`（text-shadow）那条路，两者别混。
+  4. `filter` 是分组属性：它会让 `transform-style: preserve-3d` 失效（跨元素深度排序本来
+     也未验证）。设了阴影 / 虚化的元素不能指望与兄弟元素穿插，这与 3D 那一节的已知限制同源。
+  5. snapDOM 对 `box-shadow` / `drop-shadow` / `blur` / `text-shadow` / `border-image`
+     / `-webkit-text-stroke` 全部保真（`.codebuddy/tmp/2026-10-21/snapdom-effects.mjs`
+     与同目录 `text-stroke.mjs`），所以这里是取舍不是限制。
+- **描边分三条路，按对象选，别混**（这是被推翻过一轮的结论）：
+  | 对象 | 用什么 | 入口 |
+  |---|---|---|
+  | 图形 | SVG `stroke`（真描边，有 join/cap） | `ShapeElement.stroke` |
+  | 文本框那个矩形框 | CSS `border`（+ 渐变走 `border-image`） | `TextElement.boxStroke` |
+  | **字形** | **`-webkit-text-stroke`**（一个宽度参数） | `TextElement.glyphStroke` |
+  字形**不要**用多向 `text-shadow` 拼描边：`text-shadow` 没有 `spread`，层数随厚度涨、
+  尖角漏、还不能单独调「线宽以外的任何东西」。`-webkit-text-stroke` 的代价是
+  **描边居中**（半个宽度压在字形里 ⇒ 想外扩 N px 就设 2N；HTML 文字没有
+  `paint-order: stroke fill`，那是 SVG text 的属性）。`-webkit-` 前缀没有标准替身，
+  Chromium 认、其他引擎不认 —— 本项目已不做那两家适配（AGENTS §2），不写两份。
+- **描边填充（渐变 / 纹理）有两个渲染出口，一份数据**（`Stroke.paint`，语义与
+  `TextElement.fill` 同构：只有 linear / radial / texture 覆盖 `color`）：
+  - 文本框边框 → CSS **`border-image`**（`css.ts::borderImageCss`）。必须写在 `border`
+    简写**之后**（简写会把 `border-image` 复位），且 `border-width` 为 0 时什么都画不出来。
+    **`border-image` 不吃 `border-radius`**（实测圆角处仍是方角）—— 文本框今天没有圆角字段，
+    将来加的时候要先解决它。
+  - 图形描边 → SVG `stroke="url(#…)"` + `<defs>`（`render-dom.ts::syncPaintDefs`，id 走
+    `strokePaintDefId`，**不能与填充共用 id**：共用时后写的 `replaceChildren` 会把填充的
+    `<defs>` 抹掉）。
+  - 设了渐变 / 纹理就**不写 `stroke-dasharray`**、面板把线型置灰：`border-image` 那条路
+    根本不支持线型，两条路给同一个开关不同结果才是真的糟。
+- **文字阴影是数组**（多层，`TextStyle.shadow?: TextStyleShadow | TextStyleShadow[]`）：
+  新数据一律写数组，老工程的单个对象在读的时候过 `textShadowList()` 归一化 ——
+  仓库里没有文档解析的迁移钩子（工程里存的就是 `clip.source.doc` 原样），
+  加新字段会让老工程的阴影静默消失。多层让「描边字」「霓虹」这类效果成为可能
+  （单层做不到，`TEXT_SHADOW_PRESETS` 有现成的四向零模糊写法）。
+  尺寸仍是**字号倍数**（`resizeDocument` 按比例缩字号，阴影跟着缩）；而元素阴影是
+  **文档 px**（它跟着元素框走，不跟字号）。
 - **字体按 face 而不是按族组织**（最小单位 `family + weight + style`）：一族只存一份字节的话，
   粗体只能由浏览器合成，而舞台用的是真正的 700 字面 —— 「预览是真粗体、导出是合成粗体」，
   字宽与笔画都不同，逐像素一比就是几万个像素。
@@ -146,6 +197,89 @@
   高亮只能靠变量传给每个 `<span data-run>`；行内覆盖则直接写 `background-color`。
 
 ---
+
+## 布尔运算与拆分（`path-ops.ts`）
+
+- **所有运算都在文档坐标的 MultiPolygon 上做**，结果经 `multiToShape` 归一化回
+  0..100 authored。旋转不参与（见 `shapeToMultiPolygon` 的注释）；差集的被减数是
+  **数组第一个 = 最底层**（Illustrator 的 Minus Front / Figma Subtract 口径）。
+- **拆分（`dividePolygons`）不是异或**：xor 给的是「一块带洞的形状」，拆分要「每个
+  面一个对象」。实现是**增量切分** —— 每加入一个图形，把已有面切成相交 / 不相交
+  两份，新图形净增的部分另起一块；不是枚举 2^N 个子集。返回的 `top` 是覆盖该面
+  的**最上层**操作数，动作层按它取填充 / 描边（重叠区跟顶层走，A 独有的部分
+  不会被染成 B 的颜色）。
+- **结果字段统一走 `booleanResultFrom`**：几何身份（`pathUnit` / `clipFrame` /
+  形状参数 / 动画）全部重置；布尔清 `groupId`，拆分**保留**（每片有明确来源，
+  留在原组里才不会「拆完跑出组」）。⚠️ 拆出的相邻片各自带描边 / 阴影时，接缝
+  处会出现**双线 / 叠影** —— 它们已经是独立对象了，这是拆分的固有代价，不是 bug。
+- **拆分一次产出多个元素**：全部选中、一笔撤销；结果为空时不写文档，只 flash。
+- **图标 `squares-divide` 是自绘的**（Lucide 没有这个形状）：两片 L =
+  `squares-subtract` 的实线部分 + 它旋转 180° 的副本，中间一个空心方 = 被切出来
+  的重叠区。三块之间必须留缝，否则 16px 下与 `squares-exclude` 糊成一团。
+
+## 文字转路径（`text-outline.ts` + `font/outline-hb.ts`）
+
+入口是「开始 → 路径 → 文字转路径」（只在选中文本时出现）。产出是一组
+`ShapeElement`：文本框底色 → 高亮 → 字形（按颜色分桶）→ 下划线 / 删除线。
+
+- **布局归浏览器、轮廓归 HarfBuzz，两边都不许自己发明**：位置逐字符用
+  `Range.getClientRects()` 量（换行 / 对齐 / 两端对齐 / 字距 / 行内字号全都
+  自动对）；轮廓走 `Font.glyphToPath`，字体字节与光栅化是**同一份**
+  （`FontRegistry` 的 face）。基线 = `rect.top + ascent × size / upem`
+  （实测 Chrome 的字符矩形就是字体的 ascent..descent 一段）。
+- **`pathUnit: 'px'` 是必须的，不要改回 0..100**：文本框通常是几百乘几十，
+  回到 authored 空间会被 `scale(w/100,h/100)` 非等比拉伸，描边变成「一边粗
+  一边细」。`clipFrame: true` 同理 —— 文本框本来 `overflow: hidden`，
+  不裁的话溢出的字形 / 描边会在转换后突然冒出来。
+- **`pathUnitScale()` 是唯一的坐标系换算处**（`shapes.ts`）：渲染
+  （`shapeGeometry` 的 `scaleFrom100`）、布尔运算（`shapeToMultiPolygon`）、
+  顶点编辑（`NodeEditor`）与手势写回（`gestures.ts::toAuthored`）都从它取
+  比例。新加一条碰 `ShapeElement.path` 的路径时必须过这里。
+- **本机字体不用导入**：注册表里没有的族会走 `local-fonts.ts` 的
+  `resolveLocalFont` → `FontData.blob()`，System Fonts 的字节就是这么来的
+  （Chrome / Edge 桌面版的 Local Font Access；Electron 宿主已放行 `local-fonts`
+  且页面跑在 secure 的 `app://` 上）。实测第一个 `queryLocalFonts()` 要枚举整机
+  字体（3 秒），之后 Chrome 自己缓存到 1ms；`convertTextToPath` 会先 flash
+  一句「正在读取本机字体」，别删。**拒绝授权** / **本机没有这个字重** / **根本
+  没这个字体**是三种说法（`local-denied` / `local-missing` / `no-font`），
+  下一步动作不同。字节只放内存（LRU 4 条，CJK 一条十几 MB），**绝不进工程**。
+- **变量字体按 `wght` 轴实例化，不判成合成粗体**：`FontData.style` 只写
+  `Regular`/`Bold`，看不出一个字体是不是 VF，所以用 `font/sfnt.ts` 直接读
+  `fvar` 判断有没有 `wght` 轴。有轴 → `glyphFaceFor(bytes, weight)` 调
+  `setVariations`（缓存的第二层键也要带 `wght`，否则 400/700 会拿到同一个
+  实例）；没有轴又要 600+ → 浏览器是合成粗体，**拒绝转换**。合成斜体没有对应
+  的轴（`slnt` 不等于 CSS 的 italic），一律拒绝。
+- **HarfBuzz 只认 SFNT**：内置 Inter 因此同时提供 `*.ttf`（由同名 woff2
+  **无损解压**，`bun run fonts:sfnt` 重新生成）与 woff2（E2E 当用户字体用）。
+  用户导入的 woff2 拿不到轮廓（`sfntBytes` 返回 null），会落到本机字体查询，
+  再失败才拒绝 —— 提示里让用户导入 TTF/OTF，绝不能转出半个字形。
+  字体里没有那几个字（默认中文占位文本 + Inter 就是这种）走 `missing-glyphs`，
+  说法与「字体读不到」分开：前者要换字体，后者要导入字体文件。
+- **不做整形（不调 `hb_shape`）**：位置全来自浏览器，逐字符只取
+  `nominalGlyph`。代价是连字 / 上下文替换按单字绘制（位置仍然对），阿拉伯 /
+  印度系这类需要整形的文字不在支持范围。竖排（`writing-mode: vertical-rl`）
+  同样拒绝：矩形是旋转的，基线方向没有实测依据。
+- **一个文本元素可能变成多个图形**：行内多色按解析后的颜色分桶，各出一个
+  `svg` 图形；有文本框底色 / 边框时再加一个 `rect`；每个高亮颜色一组矩形；
+  产物 >1 且源元素本来不在组里时包一个 `padding: 0` 的组（默认 8 会让选择框
+  凭空大一圈）。动画 id 逐个换新，否则 `bake-animation` 的按 id 索引会串味。
+  ⚠️ **拆成多层之后 `opacity` / 混合模式是逐元素生效的**：重叠处（文本框压在
+  字形下面、或两层阴影）与原来的「整块一次性合成」不完全等价；单层字形
+  （没有底色 / 高亮 / 多色）时逐像素等价。
+- **下划线 / 删除线的尺寸是实测的，不读 `post` 表**：Chrome 的
+  `text-decoration-thickness: auto` 恒为 **0.1em**，下划线位置恒为基线下
+  **0.05em**（Inter 的 `post.underlinePosition` 是 -0.17em，照抄会低 10 多像素）；
+  删除线位置才读字体的 `OS/2 yStrikeoutPosition`（Inter 671/2048，实测吻合）。
+  取数脚本在 `.codebuddy/tmp/2026-10-21/underline-rule.mjs`；改这里先重跑它。
+- **`TextStyle.shadow` 映射到 `ElementShadow`**（字号倍数 × fontSize → px），
+  顺序是「文字阴影在前、元素阴影在后」：`filter` 链里后面的会连前面的影子
+  一起再投一次。多层阴影的复合观感与 CSS `text-shadow` 不完全等价（见
+  元素阴影那节的实测）。**阴影要按角色分**：文字阴影 + 元素阴影只给字形 /
+  装饰线；文本框底色与高亮只带元素阴影 —— 否则文本框会凭空长出一圈文字阴影。
+- **wasm 懒加载**：`import('harfbuzzjs')` 在第一次转路径时才发生，Vite 会把
+  `harfbuzz.wasm` 作为独立资产产出。`vite.config.ts` 把该包**排除出
+  optimizeDeps**：预打包会把它挪进 `.vite/deps/`，emscripten 胶水按
+  `import.meta.url` 找同目录 wasm 时就是 404（dev 侧实测）。
 
 ## SVG 素材生成器（`src/typography/svg-gen/`）
 

@@ -17,6 +17,7 @@
    *  - 宽 / 高 / 旋转：多选时禁用（「那条边」没有唯一定义）；
    *  - 填充 / 描边：显示首个元素的取值，写入作用于全部同类元素（与 Ribbon 同款）。
    */
+  import Icon from '../Icon.svelte';
   import Field from '../controls/Field.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
   import Select from '../controls/Select.svelte';
@@ -30,7 +31,19 @@ import ColorField from '../controls/ColorField.svelte';
   import { appState } from '../app-state.svelte';
   import { editorState } from './editor-state.svelte';
   import { createTypographyActions } from './actions';
-  import { MIX_BLENDS, type MixBlend, type Paint, type Stroke } from '../../typography/document';
+  import {
+    MIX_BLENDS,
+    SHADOW_PRESETS,
+    TEXT_SHADOW_PRESETS,
+    defaultElementShadow,
+    defaultTextShadow,
+    textShadowList,
+    type ElementShadow,
+    type MixBlend,
+    type Paint,
+    type Stroke,
+    type TextStyleShadow,
+  } from '../../typography/document';
   import { defaultKeySettings, type KeySettings } from '../../core/image-fx';
   import { resolveThemeColor, themeById } from '../../typography/theme';
   import { generatorById, mergeParams } from '../../typography/svg-gen';
@@ -80,6 +93,25 @@ import ColorField from '../controls/ColorField.svelte';
     (o) => o.value !== 'solid',
   ).map((o) => (o.value === 'none' ? { ...o, label: tr('typo.propFillFollow') } : o));
 
+  /**
+   * 描边填充：`none` 就是**纯色**（走 `Stroke.color`），没有「无」这一档 ——
+   * 描边本身有「无」，那是「宽度 0」，不在这里表达（见 document.ts::Stroke.paint）。
+   */
+  const STROKE_KIND_OPTIONS: { value: Paint['kind']; label: string }[] = [
+    { value: 'none', label: tr('typo.propFillSolid') },
+    { value: 'linear', label: tr('typo.propFillLinear') },
+    { value: 'radial', label: tr('typo.propFillRadial') },
+    { value: 'texture', label: tr('typo.propFillTexture') },
+  ];
+
+  /** 预设下拉：`''` 是「选一个套上」的占位项（不表示某份数据里的状态）。 */
+  function presetOptions(list: { id: string; labelKey: Parameters<typeof tr>[0] }[]) {
+    return [
+      { value: '', label: tr('typo.propShadowPreset') },
+      ...list.map((p) => ({ value: p.id, label: tr(p.labelKey) })),
+    ];
+  }
+
   /** 深拷贝一份 Paint：派生必须产出新对象，否则 Svelte 认为值没变（见文件头）。 */
   function clonePaint(p: Paint | undefined): Paint | undefined {
     if (!p) return undefined;
@@ -116,6 +148,12 @@ import ColorField from '../controls/ColorField.svelte';
         : null,
       opacity: el.opacity,
       blend: el.blend,
+      /**
+       * 阴影 / 虚化（所有元素通用）。逐层深拷：元素是原地改的，
+       * 共享引用会让「改了一层」在模板里看起来没变（见文件头的多选说明）。
+       */
+      shadows: (el.shadows ?? []).map((s) => ({ ...s })),
+      blur: el.blur ?? 0,
       /** 图形填充（shape.fill）。 */
       fill: el.kind === 'shape' ? clonePaint(el.fill) : undefined,
       stroke: el.kind === 'shape' && el.stroke ? ({ ...el.stroke } as Stroke) : null,
@@ -124,6 +162,18 @@ import ColorField from '../controls/ColorField.svelte';
       /** 文本框背景 / 边框（text.boxFill / boxStroke）。 */
       boxFill: el.kind === 'text' ? clonePaint(el.boxFill) : undefined,
       boxStroke: el.kind === 'text' && el.boxStroke ? ({ ...el.boxStroke } as Stroke) : null,
+      /** 描边填充方式（图形 stroke.paint / 文本框 boxStroke.paint）。 */
+      strokePaint: el.kind === 'shape' ? clonePaint(el.stroke?.paint) : undefined,
+      boxStrokePaint: el.kind === 'text' ? clonePaint(el.boxStroke?.paint) : undefined,
+      /**
+       * 文字阴影（多层）。老工程里 `style.shadow` 是单个对象 ——
+       * `textShadowList` 负责归一化，这里不重复判断。
+       */
+      textShadows:
+        el.kind === 'text' ? textShadowList(el.style).map((s) => ({ ...s })) : [],
+      textFontSize: el.kind === 'text' ? el.style.fontSize : 1,
+      /** 字形描边（-webkit-text-stroke），只对文本框。 */
+      glyphStroke: el.kind === 'text' && el.glyphStroke ? ({ ...el.glyphStroke } as Stroke) : null,
       /** 图形路径（「已烘焙」的命令数提示用）。 */
       path: el.kind === 'shape' ? (el.path ?? '') : '',
       /** 生成器状态。浅拷贝：面板只读，写入一律走 actions。 */
@@ -194,6 +244,81 @@ import ColorField from '../controls/ColorField.svelte';
   function keyCommit(id: string, patch: Partial<KeySettings>): void {
     keyLive(id, patch);
     if (editorState.gestureActive) editorState.endGesture(tr('typo.undo.key'));
+  }
+
+  /* ------------------------------------------------- 元素阴影 / 虚化 */
+
+  /**
+   * 改第 i 层阴影。
+   *
+   * 动作层收的是**整份列表**（见 actions.ts::setShadows）：层会增删，
+   * 「按下标打补丁」要求调用方维护一份稳定的下标映射，而那份映射正是
+   * 「删掉一层之后改到另一层」这类 bug 的来源。
+   */
+  function setShadowAt(i: number, patch: Partial<ElementShadow>): void {
+    if (!model) return;
+    actions.setShadows(model.shadows.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  }
+
+  function setShadowAtLive(i: number, patch: Partial<ElementShadow>): void {
+    if (!model) return;
+    actions.setShadowsLive(model.shadows.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  }
+
+  function addShadow(): void {
+    if (!model) return;
+    actions.setShadows([...model.shadows.map((s) => ({ ...s })), defaultElementShadow()]);
+  }
+
+  function removeShadow(i: number): void {
+    if (!model) return;
+    actions.setShadows(model.shadows.filter((_, j) => j !== i));
+  }
+
+  function applyShadowPreset(id: string): void {
+    const p = SHADOW_PRESETS.find((x) => x.id === id);
+    if (p) actions.setShadows(p.shadows.map((s) => ({ ...s })));
+  }
+
+  /* ------------------------------------------------- 文字阴影 */
+
+  /** 模型存的是**字号倍数**，面板显示 px —— 倍数在面板上没法读（0.045px 是多少？）。 */
+  function tsPx(v: number): number {
+    return Math.round(v * (model?.textFontSize ?? 1) * 10) / 10;
+  }
+
+  function tsRatio(px: number): number {
+    return px / Math.max(1, model?.textFontSize ?? 1);
+  }
+
+  function setTextShadowAt(i: number, patch: Partial<TextStyleShadow>): void {
+    if (!model) return;
+    actions.setTextShadow(model.textShadows.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  }
+
+  function setTextShadowAtLive(i: number, patch: Partial<TextStyleShadow>): void {
+    if (!model) return;
+    actions.setTextShadowLive(model.textShadows.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  }
+
+  function addTextShadow(): void {
+    if (!model) return;
+    actions.setTextShadow([...model.textShadows.map((s) => ({ ...s })), defaultTextShadow()]);
+  }
+
+  function removeTextShadow(i: number): void {
+    if (!model) return;
+    actions.setTextShadow(model.textShadows.filter((_, j) => j !== i));
+  }
+
+  function applyTextShadowPreset(id: string): void {
+    const p = TEXT_SHADOW_PRESETS.find((x) => x.id === id);
+    if (p) actions.setTextShadow(p.shadows.map((s) => ({ ...s })));
+  }
+
+  /** 描边填充是否已经是渐变 / 纹理（线型在那种情况下不生效，见 Stroke.paint）。 */
+  function painted(paint: Paint | undefined): boolean {
+    return !!paint && paint.kind !== 'none' && paint.kind !== 'solid';
   }
 </script>
 
@@ -535,6 +660,105 @@ import ColorField from '../controls/ColorField.svelte';
         <p class="props-note">{tr('typo.prop3dHint')}</p>
       {/if}
 
+      <!--
+        阴影 / 虚化：所有元素通用，与小节顺序无关（放在「变换」之后、类型专属
+        小节之前 —— 它们是「这个元素整体长什么样」，比填充更外层）。
+        渲染是 `filter: blur() drop-shadow(…)`，见 css.ts::elementFilter。
+      -->
+      <h4 class="prop-sec">{tr('typo.propShadow')}</h4>
+      <Field label={tr('typo.propShadowPreset')} labelWidth={50}>
+        <Select
+          value=""
+          options={presetOptions(SHADOW_PRESETS)}
+          testid="prop-shadow-preset"
+          optionTestidPrefix="prop-shadow-preset-option"
+          onchange={(id) => applyShadowPreset(id)}
+        />
+      </Field>
+      {#each model.shadows as sh, i (i)}
+        <div class="prop-card" data-testid={`prop-shadow-${i}`}>
+          <div class="prop-card-head">
+            <span class="prop-card-name">{tr('typo.propShadowLayer', { n: i + 1 })}</span>
+            <span class="prop-swatch prop-swatch-sm">
+              <ColorField
+                label={tr('typo.propShadow')}
+                value={dc(sh.color, '#000000')}
+                {theme}
+                testid={`prop-shadow-color-${i}`}
+                onchange={(v) => setShadowAt(i, { color: v })}
+              />
+            </span>
+            <button
+              type="button"
+              class="prop-ic"
+              aria-label={tr('typo.propShadow')}
+              data-testid={`prop-shadow-remove-${i}`}
+              onclick={() => removeShadow(i)}
+            >
+              <Icon name="minus" size={11} />
+            </button>
+          </div>
+          <Field label="X / Y" labelWidth={44}>
+            <NumberInput
+              value={sh.dx}
+              step={1}
+              width={50}
+              suffix="px"
+              ariaLabel={`${tr('typo.propShadowOffset')} X`}
+              testid={`prop-shadow-dx-${i}`}
+              onchange={(v) => setShadowAt(i, { dx: v })}
+              oninput={(v) => setShadowAtLive(i, { dx: v })}
+              onliveend={() => actions.endLive(tr('typo.undo.shadow'))}
+            />
+            <NumberInput
+              value={sh.dy}
+              step={1}
+              width={50}
+              suffix="px"
+              ariaLabel={`${tr('typo.propShadowOffset')} Y`}
+              testid={`prop-shadow-dy-${i}`}
+              onchange={(v) => setShadowAt(i, { dy: v })}
+              oninput={(v) => setShadowAtLive(i, { dy: v })}
+              onliveend={() => actions.endLive(tr('typo.undo.shadow'))}
+            />
+          </Field>
+          <Field label={tr('typo.propShadowBlur')} labelWidth={44}>
+            <NumberInput
+              value={sh.blur}
+              min={0}
+              step={1}
+              width={62}
+              suffix="px"
+              ariaLabel={tr('typo.propShadowBlur')}
+              testid={`prop-shadow-blur-${i}`}
+              onchange={(v) => setShadowAt(i, { blur: Math.max(0, v) })}
+              oninput={(v) => setShadowAtLive(i, { blur: Math.max(0, v) })}
+              onliveend={() => actions.endLive(tr('typo.undo.shadow'))}
+            />
+          </Field>
+        </div>
+      {/each}
+      <button type="button" class="prop-add" data-testid="prop-shadow-add" onclick={addShadow}>
+        <Icon name="plus" size={11} />
+        {tr('typo.propShadowAdd')}
+      </button>
+      <p class="props-note">{tr('typo.propShadowHint')}</p>
+
+      <Field label={tr('typo.propBlur')} labelWidth={50}>
+        <NumberInput
+          value={model.blur}
+          min={0}
+          step={1}
+          width={62}
+          suffix="px"
+          ariaLabel={tr('typo.propBlur')}
+          testid="prop-blur"
+          onchange={(v) => actions.setBlur(Math.max(0, v))}
+          oninput={(v) => actions.setBlurLive(Math.max(0, v))}
+          onliveend={() => actions.endLive(tr('typo.undo.blur'))}
+        />
+      </Field>
+
       {#if model.kind === 'image' && model.image}
         <!--
           抠图 / 四角：与时间轴片段上的同名能力**同一套语义**（同一个
@@ -778,8 +1002,14 @@ import ColorField from '../controls/ColorField.svelte';
         />
 
         <h4 class="prop-sec">{tr('typo.propStroke')}</h4>
-        {@render colorRow(tr('typo.propStrokeColor'), dc(model.stroke?.color, '#ffffff'), 'prop-stroke-color', (v) =>
-          actions.setShapeStroke(v))}
+        <!--
+          纯色时显示色块；渐变 / 纹理时颜色由 PaintEditor 的色标决定，
+          再把色块摆在那里就是「调了没反应」的第二个入口（见 Stroke.paint）。
+        -->
+        {#if !painted(model.strokePaint)}
+          {@render colorRow(tr('typo.propStrokeColor'), dc(model.stroke?.color, '#ffffff'), 'prop-stroke-color', (v) =>
+            actions.setShapeStroke(v))}
+        {/if}
         <Field label={tr('typo.propStrokeWidth')} labelWidth={74}>
           <NumberInput
             value={model.stroke?.width ?? 0}
@@ -794,10 +1024,22 @@ import ColorField from '../controls/ColorField.svelte';
             onliveend={() => actions.endLive(tr('typo.undo.strokeWidth'))}
           />
         </Field>
-        <Field label={tr('typo.propStrokeStyle')} labelWidth={74}>
+        <PaintEditor
+          paint={model.strokePaint}
+          kindOptions={STROKE_KIND_OPTIONS}
+          kindLabel={tr('typo.propStrokePaint')}
+          prefix="prop-stroke-paint"
+          {theme}
+          onkind={(k) => actions.patchStrokePaint('shape', { kind: k })}
+          onpatch={(p) => actions.patchStrokePaint('shape', p)}
+          onpatchlive={(p) => actions.patchStrokePaintLive('shape', p)}
+          onliveend={() => actions.endLive(tr('typo.undo.strokePaint'))}
+        />
+        <Field label={tr('typo.propStrokeStyle')} labelWidth={74} tipText={tr('typo.propStrokePaintHint')}>
           <Select
             value={model.stroke?.style ?? 'solid'}
             options={LINE_OPTIONS}
+            disabled={painted(model.strokePaint)}
             testid="prop-stroke-style"
             optionTestidPrefix="prop-stroke-style-option"
             onchange={(v) => actions.setShapeStrokeStyle(v)}
@@ -817,8 +1059,10 @@ import ColorField from '../controls/ColorField.svelte';
         />
 
         <h4 class="prop-sec">{tr('typo.propTextBorder')}</h4>
-        {@render colorRow(tr('typo.propStrokeColor'), dc(model.boxStroke?.color, '#ffffff'), 'prop-box-stroke-color', (v) =>
-          actions.setTextBoxStroke({ color: v }))}
+        {#if !painted(model.boxStrokePaint)}
+          {@render colorRow(tr('typo.propStrokeColor'), dc(model.boxStroke?.color, '#ffffff'), 'prop-box-stroke-color', (v) =>
+            actions.setTextBoxStroke({ color: v }))}
+        {/if}
         <Field label={tr('typo.propStrokeWidth')} labelWidth={74}>
           <NumberInput
             value={model.boxStroke?.width ?? 0}
@@ -833,15 +1077,116 @@ import ColorField from '../controls/ColorField.svelte';
             onliveend={() => actions.endLive(tr('typo.undo.shapeStroke'))}
           />
         </Field>
-        <Field label={tr('typo.propStrokeStyle')} labelWidth={74}>
+        <!--
+          描边填充：渐变 / 纹理走 CSS `border-image`（见 css.ts::borderImageCss）。
+          宽度仍然靠上面那一格 —— border-image 只在有边框宽度时才画得出来。
+        -->
+        <PaintEditor
+          paint={model.boxStrokePaint}
+          kindOptions={STROKE_KIND_OPTIONS}
+          kindLabel={tr('typo.propStrokePaint')}
+          prefix="prop-box-stroke-paint"
+          {theme}
+          onkind={(k) => actions.patchStrokePaint('box', { kind: k })}
+          onpatch={(p) => actions.patchStrokePaint('box', p)}
+          onpatchlive={(p) => actions.patchStrokePaintLive('box', p)}
+          onliveend={() => actions.endLive(tr('typo.undo.borderPaint'))}
+        />
+        <Field label={tr('typo.propStrokeStyle')} labelWidth={74} tipText={tr('typo.propStrokePaintHint')}>
           <Select
             value={model.boxStroke?.style ?? 'solid'}
             options={LINE_OPTIONS}
+            disabled={painted(model.boxStrokePaint)}
             testid="prop-box-stroke-style"
             optionTestidPrefix="prop-box-stroke-style-option"
             onchange={(v) => actions.setTextBoxStroke({ style: v })}
           />
         </Field>
+
+        <!--
+          文字阴影：**只对文本框**（text-shadow 裁在字形上，图形没有字形）。
+          多层 + 预设；面板显示 px，模型存字号倍数（见 TextStyleShadow）。
+        -->
+        <h4 class="prop-sec">{tr('typo.propTextShadow')}</h4>
+        <Field label={tr('typo.propShadowPreset')} labelWidth={50}>
+          <Select
+            value=""
+            options={presetOptions(TEXT_SHADOW_PRESETS)}
+            testid="prop-text-shadow-preset"
+            optionTestidPrefix="prop-text-shadow-preset-option"
+            onchange={(id) => applyTextShadowPreset(id)}
+          />
+        </Field>
+        {#each model.textShadows as sh, i (i)}
+          <div class="prop-card" data-testid={`prop-text-shadow-${i}`}>
+            <div class="prop-card-head">
+              <span class="prop-card-name">{tr('typo.propShadowLayer', { n: i + 1 })}</span>
+              <span class="prop-swatch prop-swatch-sm">
+                <ColorField
+                  label={tr('typo.propTextShadow')}
+                  value={dc(sh.color, '#000000')}
+                  {theme}
+                  testid={`prop-text-shadow-color-${i}`}
+                  onchange={(v) => setTextShadowAt(i, { color: v })}
+                />
+              </span>
+              <button
+                type="button"
+                class="prop-ic"
+                aria-label={tr('typo.propTextShadow')}
+                data-testid={`prop-text-shadow-remove-${i}`}
+                onclick={() => removeTextShadow(i)}
+              >
+                <Icon name="minus" size={11} />
+              </button>
+            </div>
+            <Field label="X / Y" labelWidth={44}>
+              <NumberInput
+                value={tsPx(sh.dx)}
+                step={1}
+                precision={1}
+                width={50}
+                suffix="px"
+                ariaLabel={`${tr('typo.propShadowOffset')} X`}
+                testid={`prop-text-shadow-dx-${i}`}
+                onchange={(v) => setTextShadowAt(i, { dx: tsRatio(v) })}
+                oninput={(v) => setTextShadowAtLive(i, { dx: tsRatio(v) })}
+                onliveend={() => actions.endLive(tr('typo.undo.textShadow'))}
+              />
+              <NumberInput
+                value={tsPx(sh.dy)}
+                step={1}
+                precision={1}
+                width={50}
+                suffix="px"
+                ariaLabel={`${tr('typo.propShadowOffset')} Y`}
+                testid={`prop-text-shadow-dy-${i}`}
+                onchange={(v) => setTextShadowAt(i, { dy: tsRatio(v) })}
+                oninput={(v) => setTextShadowAtLive(i, { dy: tsRatio(v) })}
+                onliveend={() => actions.endLive(tr('typo.undo.textShadow'))}
+              />
+            </Field>
+            <Field label={tr('typo.propShadowBlur')} labelWidth={44}>
+              <NumberInput
+                value={tsPx(sh.blur)}
+                min={0}
+                step={1}
+                precision={1}
+                width={62}
+                suffix="px"
+                ariaLabel={tr('typo.propShadowBlur')}
+                testid={`prop-text-shadow-blur-${i}`}
+                onchange={(v) => setTextShadowAt(i, { blur: tsRatio(Math.max(0, v)) })}
+                oninput={(v) => setTextShadowAtLive(i, { blur: tsRatio(Math.max(0, v)) })}
+                onliveend={() => actions.endLive(tr('typo.undo.textShadow'))}
+              />
+            </Field>
+          </div>
+        {/each}
+        <button type="button" class="prop-add" data-testid="prop-text-shadow-add" onclick={addTextShadow}>
+          <Icon name="plus" size={11} />
+          {tr('typo.propShadowAdd')}
+        </button>
 
         <h4 class="prop-sec">{tr('typo.propGlyphFill')}</h4>
         <PaintEditor
@@ -854,6 +1199,35 @@ import ColorField from '../controls/ColorField.svelte';
           onpatchlive={(p) => actions.setTextFillLive(p)}
           onliveend={() => actions.endLive(tr('typo.undo.shapeFill'))}
         />
+
+        <!--
+          字形描边 = 单个可调宽度的属性（`-webkit-text-stroke`），不是四向阴影叠
+          —— text-shadow 没有 spread，靠 copy 拼出来的「描边」层数随厚度线性涨、
+          尖角还会漏。与「文本框边框」是两件事：那个是矩形框，这个是字形轮廓。
+        -->
+        <h4 class="prop-sec">{tr('typo.propGlyphStroke')}</h4>
+        <!--
+          宽度为 0 时颜色仍显示（Word / PPT 同款）：藏起来会让控件集随数值跳动，
+          而「先挑色、再调宽」是常见的操作顺序。
+        -->
+        {@render colorRow(tr('typo.propStrokeColor'), dc(model.glyphStroke?.color, '#ffffff'), 'prop-glyph-stroke-color', (v) =>
+          actions.setGlyphStroke({ color: v }))}
+        <Field label={tr('typo.propStrokeWidth')} labelWidth={74}>
+          <NumberInput
+            value={model.glyphStroke?.width ?? 0}
+            min={0}
+            step={0.5}
+            precision={1}
+            width={62}
+            suffix="px"
+            ariaLabel={tr('typo.propGlyphStroke')}
+            testid="prop-glyph-stroke-width"
+            onchange={(v) => actions.setGlyphStroke({ width: v })}
+            oninput={(v) => actions.setGlyphStrokeLive({ width: v })}
+            onliveend={() => actions.endLive(tr('typo.undo.glyphStroke'))}
+          />
+        </Field>
+        <p class="props-note">{tr('typo.propGlyphStrokeHint')}</p>
       {/if}
     </div>
   {/if}
@@ -905,5 +1279,71 @@ import ColorField from '../controls/ColorField.svelte';
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
     overflow: hidden;
+  }
+  .prop-swatch-sm {
+    width: 18px;
+  }
+  /* 一层阴影 = 一张小卡片：标题行（名字 / 色块 / 删除）+ 两行数值。
+     卡片边界是必要的 —— 多层阴影连着排时，没有边界就看不出「这几行是一层」。 */
+  .prop-card {
+    display: grid;
+    gap: 2px;
+    margin-bottom: var(--sp-2);
+    padding: var(--sp-2);
+    background: var(--surface-0);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .prop-card-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-bottom: 2px;
+  }
+  .prop-card-name {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .prop-ic {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    flex: none;
+  }
+  .prop-ic:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+  .prop-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    justify-self: start;
+    height: 20px;
+    margin: 0 0 var(--sp-2);
+    padding: 0 var(--sp-2);
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .prop-add:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
   }
 </style>

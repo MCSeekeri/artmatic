@@ -450,8 +450,10 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'typo_update_element',
     description:
       'Patch one element: name, frame, blend, opacity, visible, locked, text, style, fill, boxFill, ' +
-      'boxStroke, stroke, radius, sides, waist, inner, angle, evenOdd, fit, crop, gen (to re-seed a ' +
-      'generated shape). Unknown keys are ignored.',
+      'boxStroke, glyphStroke (text only: {color, width}, -webkit-text-stroke), ' +
+      'stroke, radius, sides, waist, inner, angle, evenOdd, fit, crop, ' +
+      'shadows (array of {color, dx, dy, blur}, document px), blur (px), ' +
+      'gen (to re-seed a generated shape). Unknown keys are ignored.',
     params: [OPT_CLIP_ID, ELEMENT_ID, req('patch', 'json', 'Whitelisted fields.')],
     writes: true,
   },

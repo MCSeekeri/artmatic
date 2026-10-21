@@ -18,7 +18,7 @@
  * 于是「矩形能改圆角、别的不能」这种不一致从根上消失。
  */
 
-import type { ShapeKind } from './document';
+import type { ShapeElement, ShapeKind } from './document';
 import type { MessageKey } from '../i18n/locales';
 
 export interface ShapeGeometry {
@@ -197,8 +197,10 @@ export interface ShapeBox {
   /** 像素。对多边形类图形是**顶点圆角**半径。 */
   radius?: number;
   sides?: number;
-  /** shape === 'svg' 时的自定义路径（按 0..100 坐标系 authored）。 */
+  /** shape === 'svg' 时的自定义路径（默认按 0..100 坐标系 authored）。 */
   path?: string;
+  /** 自定义路径的坐标系，见 `ShapeElement.pathUnit`。缺省 = 0..100 authored。 */
+  pathUnit?: 'percent' | 'px';
   /**
    * `shape === 'svg'` 时的填充规则。带洞的路径（环 / 刻度盘 / 嵌套框）必须为
    * true，否则内圈被 nonzero 填实 —— 生成器素材里近一半靠它。
@@ -270,6 +272,17 @@ export function shapeVertexRing(shape: ShapeKind, box: ShapeBox): Pt[] {
   }
 }
 
+/**
+ * 路径坐标 → 元素局部像素的比例（`pathUnit` 的**唯一换算处**）。
+ *
+ * 顶点编辑、手势写回、布尔运算都要用它：`'percent'` 是 0..100 authored，
+ * 各轴分别按 frame 缩放（见 `shapeGeometry('svg')`）；`'px'` 原样就是像素。
+ */
+export function pathUnitScale(el: Pick<ShapeElement, 'pathUnit' | 'frame'>): { x: number; y: number } {
+  if (el.pathUnit === 'px') return { x: 1, y: 1 };
+  return { x: el.frame.w / 100, y: el.frame.h / 100 };
+}
+
 export function shapeGeometry(shape: ShapeKind, box: ShapeBox): ShapeGeometry {
   const w = Math.max(1, Math.round(box.w));
   const h = Math.max(1, Math.round(box.h));
@@ -304,12 +317,13 @@ export function shapeGeometry(shape: ShapeKind, box: ShapeBox): ShapeGeometry {
     case 'pie':
       return { viewBox, d: pie(w, h, box.angle ?? 270) };
     case 'svg':
-      // 自定义路径按 0..100 authored，交给调用方包一层 scale 组。
+      // 自定义路径默认按 0..100 authored，交给调用方包一层 scale 组。
+      // `pathUnit === 'px'` 的（文本转路径）就写在元素像素盒里，不缩放。
       // `evenOdd` 必须透出去：带洞路径走 nonzero 会被填成实心（形状参数「没生效」）。
       return {
         viewBox,
         d: box.path?.trim() || `M0,0 H${w} V${h} H0 Z`,
-        scaleFrom100: true,
+        scaleFrom100: box.pathUnit !== 'px',
         evenOdd: box.evenOdd,
       };
     default:

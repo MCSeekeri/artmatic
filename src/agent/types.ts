@@ -416,6 +416,8 @@ export interface TypographyElementView {
   fill?: unknown;
   boxFill?: unknown;
   boxStroke?: unknown;
+  /** 字形描边（-webkit-text-stroke）：{ color, width }。 */
+  glyphStroke?: unknown;
   /** shape */
   shape?: string;
   stroke?: unknown;
@@ -697,6 +699,7 @@ export type TypographyElementInput =
       fill?: unknown;
       boxFill?: unknown;
       boxStroke?: unknown;
+      glyphStroke?: unknown;
       name?: string;
       opacity?: number;
       blend?: string;
@@ -751,7 +754,8 @@ export interface TypographyTextStyleInput {
   textDecoration: 'none' | 'underline' | 'line-through';
   textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
   highlight?: string;
-  shadow?: { color: string; dx: number; dy: number; blur: number };
+  /** 文字阴影：数组 = 多层（单个对象是老形态，写入时归一化成数组）。 */
+  shadow?: { color: string; dx: number; dy: number; blur: number }[];
   writingMode: 'horizontal-tb' | 'vertical-rl';
 }
 
@@ -763,11 +767,17 @@ export interface TypographyElementPatch {
   opacity?: number;
   visible?: boolean;
   locked?: boolean;
+  /** 元素阴影（多层，文档 px）。空数组 = 去掉阴影。 */
+  shadows?: { color: string; dx: number; dy: number; blur: number }[];
+  /** 元素虚化半径（文档 px）。0 = 不虚化。 */
+  blur?: number;
   /** text */
   style?: Partial<TypographyTextStyleInput>;
   fill?: unknown;
   boxFill?: unknown;
   boxStroke?: unknown;
+  /** 字形描边（-webkit-text-stroke）：{ color, width }，宽度 px。`null` = 去掉。 */
+  glyphStroke?: unknown;
   /** shape */
   stroke?: unknown;
   radius?: number;

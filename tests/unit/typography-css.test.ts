@@ -3,11 +3,13 @@ import {
   animLayerStyle,
   docStyle,
   elementStyle,
+  glyphStrokeStyle,
   imageStyle,
   paintCss,
   paintToBackground,
   shapePaintAttrs,
   spanStyle,
+  strokePaintDefId,
   textBoxStyle,
   textFillBackgroundImage,
   textFillStyle,
@@ -488,6 +490,27 @@ describe('文字阴影 / 高亮 / 配色方案解析', () => {
     expect(textStyle(defaultTextStyle(SIZE))['text-shadow']).toBe('none');
   });
 
+  it('多层阴影 → 逗号列表（先写的在上，与数组第一层最靠近字形一致）', () => {
+    const s = textStyle({
+      ...defaultTextStyle(SIZE),
+      fontSize: 100,
+      shadow: [
+        { color: '#000000', dx: 0.01, dy: 0.02, blur: 0 },
+        { color: '#ff0000', dx: -0.03, dy: 0, blur: 0.1 },
+      ],
+    });
+    expect(s['text-shadow']).toBe('1px 2px 0px #000000, -3px 0px 10px #ff0000');
+  });
+
+  it('老工程里 shadow 是单个对象（多阴影之前）—— 照常渲染，不用迁移', () => {
+    const s = textStyle({
+      ...defaultTextStyle(SIZE),
+      fontSize: 100,
+      shadow: { color: '#000000', dx: 0.05, dy: 0.1, blur: 0.2 },
+    });
+    expect(s['text-shadow']).toBe('5px 10px 20px #000000');
+  });
+
   it('高亮通过 `--typo-hl` 变量下发（背景不继承，只能这么传）', () => {
     expect(textStyle({ ...defaultTextStyle(SIZE), highlight: '#ffff00' })['--typo-hl']).toBe('#ffff00');
     // 无高亮时写 transparent：就地同步不会重建节点，省略会留下上一帧的底色。
@@ -535,6 +558,186 @@ describe('文字阴影 / 高亮 / 配色方案解析', () => {
     const style = { ...defaultTextStyle(SIZE), color: '@accent1' };
     expect(textStyle(style, 'office').color).not.toBe(textStyle(style, 'office-2007').color);
     expect(textStyle(style, 'office-2007').color).toBe('#4f81bd');
+  });
+});
+
+describe('字形描边（-webkit-text-stroke）', () => {
+  it('宽度 / 颜色 → 两条 -webkit- 属性', () => {
+    expect(glyphStrokeStyle({ color: '#ff0000', width: 6, style: 'solid' })).toEqual({
+      '-webkit-text-stroke-width': '6px',
+      '-webkit-text-stroke-color': '#ff0000',
+    });
+  });
+
+  it('没有描边时仍写 0 宽度 —— 就地同步没有删除语义', () => {
+    expect(glyphStrokeStyle(undefined)).toEqual({
+      '-webkit-text-stroke-width': '0px',
+      '-webkit-text-stroke-color': 'transparent',
+    });
+  });
+
+  it('负宽度钳到 0（否则整条属性非法，描边静默消失）', () => {
+    expect(glyphStrokeStyle({ color: '#fff', width: -3, style: 'solid' })[
+      '-webkit-text-stroke-width'
+    ]).toBe('0px');
+  });
+
+  it('颜色支持配色方案引用', () => {
+    expect(
+      glyphStrokeStyle({ color: '@accent1', width: 2, style: 'solid' }, 'office')[
+        '-webkit-text-stroke-color'
+      ],
+    ).toBe('#156082');
+  });
+
+});
+
+describe('元素阴影 / 虚化（filter: blur + drop-shadow）', () => {
+  it('默认写 filter: none —— 就地同步时「有 → 无」才能复位', () => {
+    const d = createTypographyDocument(SIZE);
+    expect(elementStyle(createTextElement(d.size)).filter).toBe('none');
+  });
+
+  it('多层阴影是按数组顺序链起来的 drop-shadow（不是 box-shadow）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createShapeElement(d.size, 'rect', {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+      shadows: [
+        { color: '#000000', dx: 1, dy: 2, blur: 3 },
+        { color: '#ff0000', dx: -4, dy: 0, blur: 0 },
+      ],
+    });
+    expect(elementStyle(el).filter).toBe(
+      'drop-shadow(1px 2px 3px #000000) drop-shadow(-4px 0px 0px #ff0000)',
+    );
+    // 关键：不是 box-shadow（那个只会投一个矩形，星形 / 裸文字会得到方影子）
+    expect(elementStyle(el).filter).not.toContain('box-shadow');
+  });
+
+  it('虚化在阴影**之前**（先糊再投影，反过来会连影子一起糊掉）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createTextElement(d.size, {
+      blur: 6,
+      shadows: [{ color: '#000000', dx: 0, dy: 0, blur: 0 }],
+    });
+    expect(elementStyle(el).filter).toBe('blur(6px) drop-shadow(0px 0px 0px #000000)');
+  });
+
+  it('负模糊钳到 0（NaN / 负数会让整条 filter 被浏览器丢弃）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createTextElement(d.size, { shadows: [{ color: '#000000', dx: 0, dy: 0, blur: -5 }] });
+    expect(elementStyle(el).filter).toBe('drop-shadow(0px 0px 0px #000000)');
+  });
+
+  it('阴影色走配色方案解析（@accent1 这类引用）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createTextElement(d.size, {
+      shadows: [{ color: '@accent1', dx: 0, dy: 0, blur: 0 }],
+    });
+    expect(elementStyle(el, 'office').filter).toContain('#156082');
+    expect(elementStyle(el, 'office').filter).not.toContain('@accent1');
+  });
+
+  it('虚化为 0 时不写 blur()（0px 的模糊在部分驱动上仍有代价）', () => {
+    const d = createTypographyDocument(SIZE);
+    expect(elementStyle(createTextElement(d.size, { blur: 0 })).filter).toBe('none');
+  });
+});
+
+describe('描边的填充方式', () => {
+  it('文本框边框的渐变走 border-image，且写在 border 简写**之后**', () => {
+    const el = createTextElement(SIZE, {
+      boxStroke: {
+        color: '#ffffff',
+        width: 4,
+        paint: {
+          kind: 'linear',
+          angle: 0,
+          stops: [
+            { offset: 0, color: '#ff0000' },
+            { offset: 1, color: '#0000ff' },
+          ],
+        },
+      },
+    });
+    const s = textBoxStyle(el);
+    expect(s['border-image']).toBe('linear-gradient(90deg, #ff0000 0%, #0000ff 100%) 1');
+    // 键序 = applyDecls 的写入顺序：border 简写会复位 border-image，
+    // 所以 border 必须先写（后写的才生效）。
+    expect(Object.keys(s).indexOf('border')).toBeLessThan(Object.keys(s).indexOf('border-image'));
+  });
+
+  it('纹理边框：data-URI 平铺 + 按瓦片三分之一切', () => {
+    const el = createTextElement(SIZE, {
+      boxStroke: {
+        color: '#ffffff',
+        width: 4,
+        paint: { kind: 'texture', pattern: 'dots', color: '#fff', bg: '#000', scale: 30, thickness: 2 },
+      },
+    });
+    const v = textBoxStyle(el)['border-image']!;
+    expect(v).toContain('data:image/svg+xml');
+    expect(v.endsWith('10 repeat')).toBe(true);
+  });
+
+  it('纯色 / 无填充：border-image 复位成 none（就地同步没有删除语义）', () => {
+    expect(textBoxStyle(createTextElement(SIZE, {
+      boxStroke: { color: '#fff', width: 2, paint: { kind: 'solid', color: '#f00' } },
+    }))['border-image']).toBe('none');
+    expect(textBoxStyle(createTextElement(SIZE, {
+      boxStroke: { color: '#fff', width: 2 },
+    }))['border-image']).toBe('none');
+  });
+
+  it('图形描边：渐变 → stroke=url(#…)，纯色仍是真实颜色', () => {
+    const d = createTypographyDocument(SIZE);
+    const base = { frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 } };
+    const painted = createShapeElement(d.size, 'rect', {
+      ...base,
+      stroke: {
+        color: '#ffffff',
+        width: 4,
+        paint: { kind: 'radial', stops: [{ offset: 0, color: '#fff' }, { offset: 1, color: '#000' }] },
+      },
+    });
+    expect(shapePaintAttrs(painted).stroke).toBe(`url(#${strokePaintDefId(painted.id)})`);
+    const plain = createShapeElement(d.size, 'rect', {
+      ...base,
+      stroke: { color: '#123456', width: 4 },
+    });
+    expect(shapePaintAttrs(plain).stroke).toBe('#123456');
+  });
+
+  it('渐变描边时**不写** dasharray（线型在 border-image 那条路上不生效，两条路要一致）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createShapeElement(d.size, 'rect', {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+      stroke: {
+        color: '#fff',
+        width: 4,
+        style: 'dashed',
+        paint: { kind: 'linear', angle: 0, stops: [{ offset: 0, color: '#fff' }, { offset: 1, color: '#000' }] },
+      },
+    });
+    expect(shapePaintAttrs(el)['stroke-dasharray']).toBeUndefined();
+  });
+
+  it('描边填充的整体不透明度走 stroke-opacity（一处覆盖三种填充）', () => {
+    const d = createTypographyDocument(SIZE);
+    const el = createShapeElement(d.size, 'rect', {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+      stroke: {
+        color: '#fff',
+        width: 4,
+        paint: {
+          kind: 'linear',
+          angle: 0,
+          stops: [{ offset: 0, color: '#fff' }, { offset: 1, color: '#000' }],
+          opacity: 0.5,
+        },
+      },
+    });
+    expect(shapePaintAttrs(el)['stroke-opacity']).toBe('0.5');
   });
 });
 

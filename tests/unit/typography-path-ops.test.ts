@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   booleanOp,
   boundsOfMulti,
+  dividePolygons,
   multiToPath,
   multiToShape,
   pathToMultiPolygon,
@@ -159,6 +160,71 @@ describe('布尔运算', () => {
   });
 });
 
+describe('dividePolygons（拆分）', () => {
+  const bounds = (mp: MultiPoly) => boundsOfMulti(mp)!;
+
+  it('两个相交矩形 ⇒ 三块：只在 A、重叠、只在 B', () => {
+    const a = rect(0, 0, 100, 100);
+    const b = rect(50, 0, 100, 100);
+    const regions = dividePolygons([a, b]);
+    expect(regions).toHaveLength(3);
+
+    // 以左边界区分：A−B 从 0 开始、重叠从 50、B−A 从 100。
+    const aOnly = regions.find((r) => bounds(r.mp).x === 0)!;
+    const overlap = regions.find((r) => bounds(r.mp).x === 50)!;
+    const bOnly = regions.find((r) => bounds(r.mp).x === 100)!;
+    expect(totalArea(aOnly.mp)).toBeCloseTo(5000, 4);
+    expect(totalArea(overlap.mp)).toBeCloseTo(5000, 4);
+    expect(totalArea(bOnly.mp)).toBeCloseTo(5000, 4);
+    // 样式来源：A−B 在最底层图形；重叠与 B−A 都被 B（后画的）盖住。
+    expect(aOnly.top).toBe(0);
+    expect(overlap.top).toBe(1);
+    expect(bOnly.top).toBe(1);
+  });
+
+  it('不相交 ⇒ 两个面，各归各的来源', () => {
+    const regions = dividePolygons([rect(0, 0, 10, 10), rect(100, 100, 10, 10)]);
+    expect(regions).toHaveLength(2);
+    expect(regions.map((r) => r.top).sort()).toEqual([0, 1]);
+    expect(totalArea(regions[0]!.mp)).toBeCloseTo(100, 4);
+  });
+
+  it('完全包含 ⇒ 内层一块 + 外层带洞一块', () => {
+    const regions = dividePolygons([rect(0, 0, 100, 100), rect(25, 25, 50, 50)]);
+    expect(regions).toHaveLength(2);
+    const inner = regions.find((r) => bounds(r.mp).w === 50)!;
+    const outer = regions.find((r) => bounds(r.mp).w === 100)!;
+    expect(inner.top).toBe(1);
+    expect(outer.top).toBe(0);
+    expect(totalArea(inner.mp)).toBeCloseTo(2500, 4);
+    expect(totalArea(outer.mp)).toBeCloseTo(7500, 4);
+    // 外层是一个带洞的多边形（外环 + 内环）。
+    expect(outer.mp).toHaveLength(1);
+    expect(outer.mp[0]).toHaveLength(2);
+  });
+
+  it('三块图形：每个面只算一次，总面积 = 并集面积', () => {
+    const polys = [rect(0, 0, 100, 100), rect(50, 0, 100, 100), rect(25, 50, 100, 100)];
+    const regions = dividePolygons(polys);
+    const sum = regions.reduce((s, r) => s + totalArea(r.mp), 0);
+    const unionArea = totalArea(booleanOp('union', polys));
+    expect(sum).toBeCloseTo(unionArea, 4);
+    // 每个面至少有一个来源，且来源下标合法。
+    for (const r of regions) expect(r.top).toBeGreaterThanOrEqual(0);
+    for (const r of regions) expect(r.top).toBeLessThan(polys.length);
+  });
+
+  it('完全重合 ⇒ 只有一个面（不会拆出重复的块）', () => {
+    const a = rect(0, 0, 100, 100);
+    expect(dividePolygons([a, a])).toHaveLength(1);
+  });
+
+  it('空输入 / 空图形 ⇒ 没有面', () => {
+    expect(dividePolygons([])).toEqual([]);
+    expect(dividePolygons([[], rect(0, 0, 10, 10)])).toHaveLength(1);
+  });
+});
+
 describe('multiToShape（归一化到 0..100 authored）', () => {
   it('外接框成为新 frame，路径被归一化进 100×100', () => {
     const mp = booleanOp('union', [rect(200, 300, 100, 50), rect(250, 320, 100, 50)]);
@@ -214,6 +280,33 @@ describe('shapeToMultiPolygon（元素 → 文档坐标）', () => {
       path: 'M0,0 H100 V100 H0 Z',
     });
     expect(boundsOfMulti(shapeToMultiPolygon(el))).toEqual({ x: 100, y: 100, w: 300, h: 150 });
+  });
+
+  it("pathUnit: 'px' 的路径不再乘 100 的比例（文本转路径的坐标系）", () => {
+    const el = createShapeElement(SIZE, 'svg', {
+      frame: { x: 10, y: 20, w: 300, h: 100, rot: 0 },
+      // 像素空间：正好铺满 frame。
+      path: 'M0,0 H300 V100 H0 Z',
+      pathUnit: 'px',
+    });
+    expect(boundsOfMulti(shapeToMultiPolygon(el))).toEqual({ x: 10, y: 20, w: 300, h: 100 });
+  });
+
+  it('px 路径与 0..100 路径做布尔时能对上（不会把 px 当成 authored）', () => {
+    const px = createShapeElement(SIZE, 'svg', {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+      path: 'M0,0 H50 V50 H0 Z',
+      pathUnit: 'px',
+    });
+    const authored = createShapeElement(SIZE, 'svg', {
+      frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+      path: 'M0,0 H50 V50 H0 Z',
+    });
+    // 100×100 的框里两者恰好重合：并集面积 = 2500。
+    expect(totalArea(booleanOp('union', [shapeToMultiPolygon(px), shapeToMultiPolygon(authored)]))).toBeCloseTo(
+      2500,
+      3,
+    );
   });
 });
 

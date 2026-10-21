@@ -14,9 +14,11 @@ import type { TextSpanStyle } from './rich-text';
 import { resolveThemeColor, type TypographyTheme } from './theme';
 import {
   normalizeStops,
+  textShadowList,
   type ImageElement,
   type Paint,
   type ShapeElement,
+  type Stroke,
   type TextElement,
   type TexturePattern,
   type TextStyle,
@@ -48,6 +50,17 @@ export const PAINT_ID_PREFIX = 'typo-paint-';
  *  否则每次 sync 都会新增一个 `<linearGradient>`，DOM 无限增长。 */
 export function paintDefId(elId: string): string {
   return `${PAINT_ID_PREFIX}${elId}`;
+}
+
+/**
+ * 某个元素**描边**填充的 defs id。
+ *
+ * 与填充的 id 分开是必须的：同一个元素可以同时有渐变填充和渐变描边，
+ * 共用一个 id 时后写的 `<defs>` 会把前一个 `replaceChildren` 掉，
+ * 表现是「设了描边渐变，填充变回黑色」。
+ */
+export function strokePaintDefId(elId: string): string {
+  return `${PAINT_ID_PREFIX}stroke-${elId}`;
 }
 
 /** 填充是否需要 `<defs>`（纯色 / 无填充不需要）。 */
@@ -164,15 +177,39 @@ function transform3dCss(frameRot: number, t: Transform3D): string {
 }
 
 /**
- * 外层：几何 + 旋转 / 3D + 不透明度 + 混合模式。
+ * 元素阴影 + 虚化 → 一条 CSS `filter`。
+ *
+ * 顺序固定为 **blur 在前、drop-shadow 在后**：先把元素糊开再投它的影，
+ * 得到的是「模糊的墨迹 + 清晰的边缘扩散」；反过来会把影子本身也糊掉，
+ * 而且元素边缘会出现一圈亮环（drop-shadow 取的是**过滤后**的 alpha）。
+ *
+ * 无阴影 / 无虚化时返回 `'none'`：就地同步只 set 不 delete，
+ * 「有 → 无」必须靠这条显式复位（与 textBoxStyle / elementStyle 的 3D 同一条纪律）。
+ */
+function elementFilter(el: TypographyElement, theme?: ThemeArg): string {
+  const parts: string[] = [];
+  if (el.blur && el.blur > 0) parts.push(`blur(${px(el.blur)})`);
+  for (const s of el.shadows ?? []) {
+    const blur = Math.max(0, s.blur);
+    parts.push(
+      `drop-shadow(${px(s.dx)} ${px(s.dy)} ${px(blur)} ${resolveThemeColor(s.color, theme)})`,
+    );
+  }
+  return parts.length ? parts.join(' ') : 'none';
+}
+
+/**
+ * 外层：几何 + 旋转 / 3D + 不透明度 + 混合模式 + 阴影 / 虚化。
  * **动画不在这里** —— 动画预设大量使用 transform，而这里的 transform 被几何变换
  * 占用。动画挂在紧接着的内层包装上（见 animLayerStyle），两者互不干扰。
  *
  * 三个 3D 相关声明**总是写出来**（关闭时给 CSS 默认值）：就地同步
  * （`syncDocDom`）没有删除语义，只 set 不 delete —— 少写一个键，从「启用」
  * 切回「关闭」时上一份的值会留在元素上（见 textBoxStyle 的同一条纪律）。
+ *
+ * `theme` 只有阴影色需要（阴影色可以是配色方案引用）。缺省 = 默认方案。
  */
-export function elementStyle(el: TypographyElement): CssDecls {
+export function elementStyle(el: TypographyElement, theme?: ThemeArg): CssDecls {
   const t3 = el.transform3d;
   return {
     position: 'absolute',
@@ -190,6 +227,7 @@ export function elementStyle(el: TypographyElement): CssDecls {
     'transform-style': t3?.style ?? 'flat',
     opacity: String(el.opacity),
     'mix-blend-mode': el.blend,
+    filter: elementFilter(el, theme),
     'pointer-events': 'none',
     'user-select': 'none',
     'box-sizing': 'border-box',
@@ -215,13 +253,20 @@ export function animLayerStyle(): CssDecls {
  * 文字阴影 → `text-shadow` 声明。**尺寸是字号倍数**，这里才换算成 px
  * （见 document.ts::TextStyleShadow 的理由）。无阴影返回 `'none'` ——
  * 声明表逐键同构，就地同步时「有 → 无」才能复位。
+ *
+ * 多层时按数组顺序拼成一条逗号列表：CSS 里**先写的在上**，
+ * 与「数组第一个最靠近字形」是同一条约定（见 textShadowList）。
  */
 function textShadow(style: TextStyle, theme: ThemeArg): string {
-  const sh = style.shadow;
-  if (!sh) return 'none';
+  const list = textShadowList(style);
+  if (!list.length) return 'none';
   const k = style.fontSize;
-  const blur = Math.max(0, sh.blur * k);
-  return `${px(sh.dx * k)} ${px(sh.dy * k)} ${px(blur)} ${resolveThemeColor(sh.color, theme)}`;
+  return list
+    .map((sh) => {
+      const blur = Math.max(0, sh.blur * k);
+      return `${px(sh.dx * k)} ${px(sh.dy * k)} ${px(blur)} ${resolveThemeColor(sh.color, theme)}`;
+    })
+    .join(', ');
 }
 
 export function textStyle(style: TextStyle, theme?: ThemeArg): CssDecls {
@@ -319,7 +364,45 @@ export function textBoxStyle(el: TextElement, theme?: ThemeArg): CssDecls {
   out.border = s
     ? `${px(Math.max(0, s.width))} ${s.style ?? 'solid'} ${resolveThemeColor(s.color, theme)}`
     : '0 solid transparent';
+  /*
+   * 描边的**填充方式**。`border` 简写会把 `border-image` 复位成 none，
+   * 所以这一条必须写在 `border` **之后**（对象键序就是 applyDecls 的写入顺序）。
+   * 复位同样显式写 'none'（就地同步没有删除语义）。
+   */
+  out['border-image'] = s?.paint ? borderImageCss(s.paint, theme) : 'none';
   return out;
+}
+
+/**
+ * 描边的渐变 / 纹理 → CSS `border-image` 的值。
+ *
+ * 两处与「填充」那条路对齐、一处必须不同：
+ *  - 色标同样过 `cssStops`（排序 + 高精度百分比），否则同一个文档在
+ *    「文本框背景」与「边框」上会排成不同的渐变；
+ *  - 纹理复用 `textureDataUri`（同一份图案几何），不是回落到纯色；
+ *  - **`border-image` 不吃 `border-radius`**（实测：圆角处仍是方角，
+ *    这是 CSS 的既有行为，不是我们的 bug）。文本框没有圆角字段，所以
+ *    这条今天不会露出来；将来给文本框加圆角时要先解决它。
+ *
+ * `slice` 取一个固定的「1」：渐变是连续色彩，切分位置不影响观感（整块铺满）；
+ * 纹理则按瓦片的三分之一切，中间那段平铺 —— 与 `textureDataUri` 的瓦片尺寸
+ * 对得上，不会出现「纹理被拉成一条」。
+ */
+function borderImageCss(paint: Paint, theme?: ThemeArg): string {
+  const op = paintOpacity(paint);
+  switch (paint.kind) {
+    case 'linear':
+      return `linear-gradient(${Math.round(paint.angle + 90)}deg, ${cssStops(paint, op, theme)}) 1`;
+    case 'radial':
+      return `radial-gradient(circle at 50% 50%, ${cssStops(paint, op, theme)}) 1`;
+    case 'texture': {
+      const cell = Math.max(2, paint.scale);
+      const slice = Math.max(1, Math.round(cell / 3));
+      return `${textureDataUri(paint, op, theme)} ${slice} repeat`;
+    }
+    default:
+      return 'none';
+  }
 }
 
 /* ------------------------------------------------------------ 图形 */
@@ -349,10 +432,25 @@ export function shapePaintAttrs(el: ShapeElement, evenOdd = false, theme?: Theme
   if (fillOpacity < 1) attrs['fill-opacity'] = String(fillOpacity);
   if (!el.stroke) return attrs;
 
-  attrs.stroke = resolveThemeColor(el.stroke.color, theme);
+  /*
+   * 描边填充：渐变 / 纹理走 `<defs>` 的 `url(#…)`（与填充同一套机制，
+   * 见 render-dom.ts::syncPaintDefs）。`solid` / `none` 仍是纯色 —— 与
+   * `TextElement.fill` 的语义同构（见 document.ts::Stroke.paint）。
+   */
+  const sp = el.stroke.paint;
+  const painted = sp && sp.kind !== 'solid' && sp.kind !== 'none' ? sp : null;
+  attrs.stroke = painted
+    ? `url(#${strokePaintDefId(el.id)})`
+    : resolveThemeColor(el.stroke.color, theme);
+  if (painted) {
+    const op = paintOpacity(painted);
+    if (op < 1) attrs['stroke-opacity'] = String(op);
+  }
   attrs['stroke-width'] = String(Math.max(0, el.stroke.width));
-  if (el.stroke.style === 'dashed') attrs['stroke-dasharray'] = '6 4';
-  if (el.stroke.style === 'dotted') attrs['stroke-dasharray'] = '1 3';
+  // 设了渐变 / 纹理就**不写 dasharray**：文本框那条路（border-image）根本
+  // 不支持线型，两条路给同一个开关不同结果才是真的糟。
+  if (!painted && el.stroke.style === 'dashed') attrs['stroke-dasharray'] = '6 4';
+  if (!painted && el.stroke.style === 'dotted') attrs['stroke-dasharray'] = '1 3';
   return attrs;
 }
 
@@ -591,6 +689,29 @@ export function textFillStyle(fill: Paint | undefined, theme?: ThemeArg): CssDec
     'background-repeat': 'repeat',
     'background-size': cell === null ? 'auto' : `${cell}px ${cell}px`,
     color: 'transparent',
+  };
+}
+
+/**
+ * 文本元素 → **字形描边**的 CSS 声明（`-webkit-text-stroke`）。
+ *
+ * 为什么是这条而不是给字形加 `text-shadow` 四向叠：`text-shadow` 没有 `spread`，
+ * 只能靠多向 copy 拼（层数随厚度线性上升，尖角处还会漏），而描边本来就是一个
+ * 有宽度参数的属性。图形那边用真 `stroke`，文字这边用这个，两边都「一个参数调粗细」。
+ *
+ * 三个必须知道的现实（都写在文档模型 `TextElement.glyphStroke` 上）：
+ *  - **居中描边**：半个宽度压在字形里，所以「向外扩 N px」要设 2N。
+ *  - `paint-order` 救不了：那是 SVG text 的属性，HTML 文字不认。
+ *  - 名字带 `-webkit-` 且没有标准替身（`text-stroke` 未标准化）。Chromium 认；
+ *    本项目已经不做 Firefox / Safari 适配（AGENTS §2），所以不写两遍。
+ *
+ * **总是返回完整声明**：就地同步没有删除语义，宽度要能复位到 0。
+ */
+export function glyphStrokeStyle(stroke: Stroke | undefined, theme?: ThemeArg): CssDecls {
+  const width = stroke && Number.isFinite(stroke.width) ? Math.max(0, stroke.width) : 0;
+  return {
+    '-webkit-text-stroke-width': px(width),
+    '-webkit-text-stroke-color': resolveThemeColor(stroke?.color ?? 'transparent', theme),
   };
 }
 

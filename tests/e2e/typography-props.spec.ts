@@ -32,7 +32,11 @@ interface DocShape {
       opacity?: number;
     };
     boxFill?: { kind: string; color?: string; opacity?: number };
-    boxStroke?: { color: string; width: number; style?: string };
+    boxStroke?: { color: string; width: number; style?: string; paint?: { kind: string } };
+    shadows?: { color: string; dx: number; dy: number; blur: number }[];
+    blur?: number;
+    glyphStroke?: { color: string; width: number };
+    style?: { shadow?: { dx: number; dy: number; blur: number } | { dx: number; dy: number; blur: number }[] };
   }[];
 }
 
@@ -269,6 +273,286 @@ test('拖动数字框实时改文档，松手才结算撤销', async ({ page }) 
   // 若中途每次 oninput 都入了栈，这里只会退一小步。
   await page.keyboard.press('Control+z');
   expect(await readX()).toBeCloseTo(before, 5);
+});
+
+/**
+ * 元素阴影 / 虚化：多层、逐层可调、预设一键套上。
+ *
+ * 渲染是 `filter: blur() drop-shadow() drop-shadow()`（**不是** box-shadow：
+ * 那个只会投一个矩形，星形 / 裸文字会得到方影子，见 document.ts::ElementShadow）。
+ * 断言同时看文档与外壳的 inline filter —— 只改 store 不改 DOM 是这族的经典回归。
+ */
+test('元素阴影：预设 / 多层 / 逐层调参 / 虚化，外壳 filter 跟着变', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-tab-props').click();
+
+  const filterOf = (): Promise<string> =>
+    page.locator('.paper .typo-el').first().evaluate((el) => (el as HTMLElement).style.filter);
+
+  // 默认没有任何 filter（显式写 none，就地同步才能把上一份复位）。
+  expect(await filterOf()).toBe('none');
+
+  await page.getByTestId('prop-shadow-preset').click();
+  await page.getByTestId('prop-shadow-preset-option-soft').click();
+  expect((await readDoc(page)).elements[0]!.shadows).toHaveLength(1);
+  expect(await filterOf()).toContain('drop-shadow(');
+
+  // 再加一层：链式 drop-shadow，DOM 里必须真的多一条。
+  await page.getByTestId('prop-shadow-add').click();
+  expect((await readDoc(page)).elements[0]!.shadows).toHaveLength(2);
+  const two = await filterOf();
+  expect(two.match(/drop-shadow\(/g)).toHaveLength(2);
+
+  // 逐层改：第二层的 X（编号从 0 开始，与面板上的「阴影 2」对应）。
+  const dx = page.getByTestId('prop-shadow-dx-1');
+  await dx.fill('24');
+  await dx.press('Enter');
+  expect((await readDoc(page)).elements[0]!.shadows![1]!.dx).toBe(24);
+  expect(await filterOf()).toContain('24px');
+
+  // 删掉第一层：只剩一层，且剩下的是刚调过的那层。
+  await page.getByTestId('prop-shadow-remove-0').click();
+  const left = (await readDoc(page)).elements[0]!.shadows!;
+  expect(left).toHaveLength(1);
+  expect(left[0]!.dx).toBe(24);
+
+  // 虚化与阴影共用一条 filter，且**虚化在前**（先糊再投影）。
+  const blur = page.getByTestId('prop-blur');
+  await blur.fill('6');
+  await blur.press('Enter');
+  expect((await readDoc(page)).elements[0]!.blur).toBe(6);
+  expect((await filterOf()).startsWith('blur(6px) drop-shadow(')).toBe(true);
+
+  await blur.fill('0');
+  await blur.press('Enter');
+  // 0 = 不虚化：字段被删掉（缺省语义），filter 里也不该再有 blur()。
+  expect((await readDoc(page)).elements[0]!.blur).toBeUndefined();
+  expect(await filterOf()).not.toContain('blur(');
+});
+
+/** 文字阴影只作用于文本框，且可以是多层（text-shadow 的逗号列表）。 */
+test('文字阴影：多层落到内层的 text-shadow 上', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-tab-props').click();
+
+  const textShadow = (): Promise<string> =>
+    page.locator('.paper .typo-text').first().evaluate((el) => getComputedStyle(el).textShadow);
+  // 每条阴影以颜色开头；不能按逗号数 —— `rgb(0, 0, 0)` 自己就带两个逗号。
+  const count = (css: string): number => (css.match(/rgb\(/g) ?? []).length;
+
+  expect(await textShadow()).toBe('none');
+
+  // 「光晕」预设 = 两层同色、模糊半径不同。
+  await page.getByTestId('prop-text-shadow-preset').click();
+  await page.getByTestId('prop-text-shadow-preset-option-neon').click();
+  const shadows = (await readDoc(page)).elements[0]!.style!.shadow;
+  expect(Array.isArray(shadows) ? shadows.length : 0).toBe(2);
+  expect(count(await textShadow())).toBe(2);
+
+  // 再加一层 → 三条。
+  await page.getByTestId('prop-text-shadow-add').click();
+  const after = (await readDoc(page)).elements[0]!.style!.shadow;
+  expect(Array.isArray(after) ? after.length : 0).toBe(3);
+  expect(count(await textShadow())).toBe(3);
+
+  // 删掉一层 → 回到两条。
+  await page.getByTestId('prop-text-shadow-remove-0').click();
+  const back = (await readDoc(page)).elements[0]!.style!.shadow;
+  expect(Array.isArray(back) ? back.length : 0).toBe(2);
+  expect(count(await textShadow())).toBe(2);
+});
+
+/**
+ * 字形描边（`-webkit-text-stroke`）：单个可调宽度，不是四向阴影叠。
+ *
+ * 除了内联样式，还要证明**光栅化路径**也真的画了 —— 描边是 snapDOM 最容易
+ * 丢掉的一类效果（它靠内联样式，丢的时候不报错）。
+ */
+test('字形描边：宽度 / 颜色落到 -webkit-text-stroke，光栅化墨迹变多', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-tab-props').click();
+
+  const strokeOf = (): Promise<{ w: string; c: string }> =>
+    page.locator('.paper .typo-text').first().evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        w: s.getPropertyValue('-webkit-text-stroke-width'),
+        c: s.getPropertyValue('-webkit-text-stroke-color'),
+      };
+    });
+
+  /** 用当前文档在光栅化路径上渲一张，返回墨迹数。 */
+  const inkNow = async (): Promise<number> => {
+    const doc = await readDoc(page);
+    return page.evaluate(async (d) => {
+      const A = (window as never as { __artmatic: Hooks }).__artmatic as unknown as {
+        typoRasterize: (doc: unknown, w: number, h: number, t: number) => Promise<{ ink: number }>;
+      };
+      const shot = await A.typoRasterize(d, 640, 360, 0);
+      return shot.ink;
+    }, doc);
+  };
+
+  expect((await strokeOf()).w).toBe('0px');
+  const inkOff = await inkNow();
+
+  const width = page.getByTestId('prop-glyph-stroke-width');
+  await width.fill('6');
+  await width.press('Enter');
+  expect((await readDoc(page)).elements[0]!.glyphStroke?.width).toBe(6);
+  expect((await strokeOf()).w).toBe('6px');
+  // 描边色默认白（先在面板上挑色再调宽度也走得通）。
+  expect((await strokeOf()).c).toBe('rgb(255, 255, 255)');
+
+  await page.getByTestId('prop-glyph-stroke-color').click();
+  await page.getByTestId('prop-glyph-stroke-color-palette-std-ff0000').click();
+  expect((await readDoc(page)).elements[0]!.glyphStroke?.color).toBe('#ff0000');
+  expect((await strokeOf()).c).toBe('rgb(255, 0, 0)');
+
+  // 居中描边会向外扩 ⇒ 墨迹变多（这也顺带证明 snapDOM 画了它）。
+  expect(await inkNow()).toBeGreaterThan(inkOff);
+
+  // 宽度 0 = 关掉：就地同步靠这份声明复位。
+  await width.fill('0');
+  await width.press('Enter');
+  expect((await strokeOf()).w).toBe('0px');
+  expect(await inkNow()).toBe(inkOff);
+});
+
+/** 描边填充：渐变 / 纹理走 border-image，纯色仍是 border-color。 */
+test('文本框边框的填充方式：渐变走 border-image', async ({ page }) => {
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-tab-props').click();
+
+  // 纯色阶段：没有 border-image。
+  const bw = page.getByTestId('prop-box-stroke-width');
+  await bw.fill('6');
+  await bw.press('Enter');
+  const readBorder = (): Promise<{ src: string; slice: string; width: string }> =>
+    page.locator('.paper .typo-el').first().evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { src: s.borderImageSource, slice: s.borderImageSlice, width: s.borderTopWidth };
+    });
+  expect((await readBorder()).src).toBe('none');
+
+  await page.getByTestId('prop-box-stroke-paint-kind').click();
+  await page.getByTestId('prop-box-stroke-paint-kind-option-linear').click();
+  expect((await readDoc(page)).elements[0]!.boxStroke?.paint?.kind).toBe('linear');
+
+  const after = await readBorder();
+  expect(after.src).toContain('linear-gradient');
+  // slice 序列化各浏览器可能带四边（`1` / `1 1 1 1`），只要求含 1。
+  expect(after.slice).toContain('1');
+  // 宽度仍然是边框宽度那一格决定的（border-image 只在有宽度时画得出来）。
+  expect(after.width).toBe('6px');
+
+  // 回到纯色：border-image 必须复位成 none（就地同步没有删除语义）。
+  await page.getByTestId('prop-box-stroke-paint-kind').click();
+  await page.getByTestId('prop-box-stroke-paint-kind-option-none').click();
+  expect((await readDoc(page)).elements[0]!.boxStroke?.paint).toBeUndefined();
+  expect((await readBorder()).src).toBe('none');
+});
+
+/**
+ * 光栅化路径（snapDOM）也要出图 —— 阶段与导出走的是**同一份声明表**，
+ * 但「DOM 里有 inline filter」不等于「截图里真的画了」：snapDOM 丢效果时
+ * 不报错，只会安静地少画一层（与 3D 那次排查同源）。
+ *
+ * 断言走结构量（墨迹数 / 平均通道），不做逐像素相等（AGENTS §7 的 flaky 区）。
+ */
+test('光栅化：阴影多出墨迹、虚化把边缘摊开、渐变描边不是白色', async ({ page }) => {
+  await boot(page);
+
+  const r = await page.evaluate(async () => {
+    const A = (window as never as { __artmatic: Hooks }).__artmatic as unknown as {
+      typoRasterize: (
+        doc: unknown,
+        w: number,
+        h: number,
+        localSec: number,
+      ) => Promise<{ ink: number; sum: number }>;
+    };
+
+    /** 320×180 里一块 80×50 的白方块（居中偏上）。 */
+    const doc = (extra: Record<string, unknown>, stroke: unknown = null) => ({
+      size: { w: 320, h: 180 },
+      background: { kind: 'none' },
+      fonts: [],
+      groups: [],
+      elements: [
+        {
+          id: 's1',
+          name: '',
+          kind: 'shape',
+          shape: 'rect',
+          frame: { x: 120, y: 50, w: 80, h: 50, rot: 0 },
+          blend: 'normal',
+          opacity: 1,
+          visible: true,
+          locked: false,
+          animations: [],
+          fill: { kind: 'solid', color: '#ffffff' },
+          stroke,
+          ...extra,
+        },
+      ],
+    });
+
+    const whiteStroke = { color: '#ffffff', width: 8, style: 'solid' };
+    const gradientStroke = {
+      ...whiteStroke,
+      paint: {
+        kind: 'linear',
+        angle: 0,
+        stops: [
+          { offset: 0, color: '#00ff00' },
+          { offset: 1, color: '#0000ff' },
+        ],
+      },
+    };
+
+    return {
+      plain: await A.typoRasterize(doc({}), 320, 180, 0),
+      shadow: await A.typoRasterize(
+        doc({ shadows: [{ color: '#ff0000', dx: 0, dy: 30, blur: 0 }] }),
+        320,
+        180,
+        0,
+      ),
+      blurred: await A.typoRasterize(doc({ blur: 6 }), 320, 180, 0),
+      plainStroke: await A.typoRasterize(doc({}, whiteStroke), 320, 180, 0),
+      gradientStroke: await A.typoRasterize(doc({}, gradientStroke), 320, 180, 0),
+    };
+  });
+
+  // 硬阴影（dy=30、零模糊）是一条 80×30 的实心带。
+  expect(r.shadow.ink - r.plain.ink).toBeGreaterThan(80 * 30 * 0.9);
+
+  // 虚化把边缘摊开：墨迹变多，但中心仍是实心（不是整块被冲淡）。
+  expect(r.blurred.ink).toBeGreaterThan(r.plain.ink);
+
+  // 渐变描边：墨迹不能少（少 = `url(#…)` 没解析，描边整个没画），
+  // 且平均通道明显低于白描边（低 = 渐变真的上色了）。
+  expect(r.gradientStroke.ink).toBeGreaterThan(r.plainStroke.ink * 0.9);
+  expect(r.gradientStroke.sum / r.gradientStroke.ink).toBeLessThan(
+    r.plainStroke.sum / r.plainStroke.ink,
+  );
 });
 
 test('切换填充方式不再让 Ribbon 重排（填充组是稳定控件集）', async ({ page }) => {

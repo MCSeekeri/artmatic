@@ -33,6 +33,11 @@
     paint: Paint | undefined;
     /** 类型下拉的选项（字形填充没有「纯色」这一项）。 */
     kindOptions: { value: Paint['kind']; label: string }[];
+    /**
+     * 类型那一行的标签。缺省「填充方式」；描边填充传「描边填充」——
+     * 同一个编辑器两种语义（填什么 vs 描边填什么），标签是唯一的区别。
+     */
+    kindLabel?: string;
     /** 类型切换。字形填充的「无」要清字段而不是写 `kind:'none'`，所以单独一个回调。 */
     onkind: (kind: Paint['kind']) => void;
     /** 其余字段的局部更新。 */
@@ -57,6 +62,7 @@
   const {
     paint,
     kindOptions,
+    kindLabel = undefined,
     onkind,
     onpatch,
     onpatchlive,
@@ -142,7 +148,7 @@
 {/snippet}
 
 <div class="prop-paint">
-  <Field label={tr('typo.propFillKind')} labelWidth={74} testid={`${prefix}-kind-row`}>
+  <Field label={kindLabel ?? tr('typo.propFillKind')} labelWidth={74} testid={`${prefix}-kind-row`}>
     <Select
       value={kind}
       options={kindOptions}

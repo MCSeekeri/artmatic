@@ -46,8 +46,10 @@ interface DocShape {
       textTransform: string;
       /** 文字高亮（「突出显示颜色」）。缺省 = 不高亮。 */
       highlight?: string;
-      /** 文字阴影。三个尺寸都是**字号倍数**（见 document.ts）。 */
-      shadow?: { color: string; dx: number; dy: number; blur: number };
+      /** 文字阴影（多层）。三个尺寸都是**字号倍数**（见 document.ts）。 */
+      shadow?:
+        | { color: string; dx: number; dy: number; blur: number }
+        | { color: string; dx: number; dy: number; blur: number }[];
     };
     radius?: number;
     /** 星形的谷半径比例。 */
@@ -1172,6 +1174,90 @@ test('布尔运算：并集把两个图形合成一个 svg 图形', async ({ pag
   expect(merged.frame.x).toBeCloseTo(x0, 0);
 });
 
+test('拆分：两个图形切成三块独立图形，每块沿用覆盖它的来源样式', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  await insertShape(page, 'rect');
+  await insertShape(page, 'rect');
+  // 第二个往右挪 60px（Shift+方向键 = 10px/次），两个矩形部分重叠。
+  for (let i = 0; i < 6; i++) await page.keyboard.press('Shift+ArrowRight');
+
+  const before = await readDoc(page);
+  const shapes = before.elements.filter((e) => e.kind === 'shape');
+  expect(shapes).toHaveLength(2);
+  const [bottom, top] = shapes; // 数组序 = 底 → 顶
+  const w0 = bottom!.frame.w;
+
+  /*
+   * 上色：底层蓝、顶层红。拆分后应当得到 1 块蓝 + 2 块红 ——
+   * A−B 只被 A 覆盖，重叠区与 B−A 的最上层覆盖者是 B。
+   */
+  await page.evaluate(
+    ({ id, bottomId, topId }) => {
+      // 这个 spec 的 `Hooks` 只声明了读的部分；写操作用局部类型补 commit。
+      const A = (
+        window as never as {
+          __artmatic: {
+            store: {
+              project: Hooks['store']['project'];
+              commit: (label: string, fn: (p: unknown) => void) => void;
+            };
+          };
+        }
+      ).__artmatic;
+      A.store.commit('e2e: 给两块上色', (p) => {
+        const proj = p as {
+          tracks: { clips: { id: string; source?: { doc?: DocShape } }[] }[];
+        };
+        for (const t of proj.tracks) {
+          for (const c of t.clips) {
+            if (c.id !== id || !c.source?.doc) continue;
+            for (const el of c.source.doc.elements) {
+              if (el.id === bottomId) el.fill = { kind: 'solid', color: '#0000ff' };
+              if (el.id === topId) el.fill = { kind: 'solid', color: '#ff0000' };
+            }
+          }
+        }
+      });
+    },
+    { id: clipId, bottomId: bottom!.id, topId: top!.id },
+  );
+
+  await page.keyboard.press('Control+a');
+  await page.getByTestId('ribbon-tab-shape-format').click();
+  await page.getByTestId('typo-bool-divide').click();
+
+  const after = await readDoc(page);
+  // 文本 + 三块
+  expect(after.elements).toHaveLength(4);
+  const pieces = after.elements.filter((e) => e.kind === 'shape');
+  expect(pieces).toHaveLength(3);
+  for (const p of pieces) {
+    expect(p.shape).toBe('svg');
+    expect(p.path).toBeTruthy();
+    // 结果按 0..100 authored 归一化（与其它布尔结果一致）。
+    expect(p.groupId).toBeUndefined();
+  }
+
+  const colors = pieces.map((p) => p.fill?.color).sort();
+  expect(colors).toEqual(['#0000ff', '#ff0000', '#ff0000']);
+
+  // 三块的宽度：A−B(60) + 重叠(w0−60) + B−A(60)，按左边界从左到右排。
+  const widths = pieces.map((p) => Math.round(p.frame.w)).sort((a, b) => a - b);
+  expect(widths).toEqual([60, 60, Math.round(w0 - 60)].sort((a, b) => a - b));
+  const xs = pieces.map((p) => Math.round(p.frame.x)).sort((a, b) => a - b);
+  expect(xs).toHaveLength(3);
+  expect(xs[0]).toBe(Math.round(bottom!.frame.x));
+  expect(xs[1] - xs[0]).toBe(60);
+  expect(xs[2] - xs[1]).toBe(Math.round(w0 - 60));
+
+  // 一步撤销回到两个图形。
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => (await readDoc(page)).elements.filter((e) => e.kind === 'shape').length).toBe(2);
+});
+
 test('布尔运算：结果为空时不动文档，并给出提示', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);
@@ -2094,8 +2180,10 @@ test('文字阴影开关：开有 shadow 且画布上真的画了，再点关掉
   await selectFirst(page);
 
   await page.getByTestId('ribbon-text-shadow').click();
+  // 开关只造**一层**；写回一律是数组（多层是面板的能力，见 PropertiesPanel）。
   const shadow = (await readDoc(page)).elements[0]!.style!.shadow;
-  expect(shadow?.blur).toBeGreaterThan(0);
+  const first = Array.isArray(shadow) ? shadow[0] : shadow;
+  expect(first?.blur).toBeGreaterThan(0);
   const css = await page.evaluate(() =>
     getComputedStyle(document.querySelector('.paper .typo-text')!).textShadow,
   );
