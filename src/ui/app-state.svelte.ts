@@ -2158,7 +2158,8 @@ class AppState {
     // 光栅化本身必须在主线程做（要走 DOM 与 document.fonts），
     // 所以只有「异步结果 → 缓存 → bump version」这一层是复用的。
     this.fonts = new FontRegistry();
-    // 随软件分发的 OFL 西文（Inter 400/700）。只登记 URL，第一次用才 fetch。
+    // 随软件分发的 OFL 西文（Inter / JetBrains Mono / Lora / Outfit，各 400+700）。
+    // 只登记 URL，第一次用才 fetch。
     this.fonts.registerBundled();
     this.fontFamilies = this.fonts.families();
     this.textBackends = createTextBackendRegistry(createOffscreenHost(), this.fonts);

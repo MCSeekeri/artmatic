@@ -121,7 +121,9 @@
   粗体只能由浏览器合成，而舞台用的是真正的 700 字面 —— 「预览是真粗体、导出是合成粗体」，
   字宽与笔画都不同，逐像素一比就是几万个像素。
 - 字体**只存引用**（`FontRef`）：9 MB 中文字体 base64 进 `project.json` 会把工程变成
-  不可用的大 blob。内置只有 OFL 的 Inter；中文字体由用户自行导入。
+  不可用的大 blob。内置只有 OFL 的四族西文（Inter 无衬线 / JetBrains Mono 等宽 /
+  Lora 衬线 / Outfit 装饰，各 400+700，只含 latin 子集，清单在
+  `font-registry.ts::BUILTIN_FONTS`）；中文字体由用户自行导入或走本机字体。
 - HarfBuzz 的 subset **只吃 SFNT（TTF/OTF）**，woff / woff2 走「原样内联」分支。
   四个 wasm 坑写在 `typography/font/subset-hb.ts`：`memory.buffer` 的视图会在 wasm 内存
   增长后 detach（每次用堆视图前都重取）、`hb_blob_get_data` 返回堆指针要先 `.slice()`、
@@ -287,8 +289,11 @@
   `setVariations`（缓存的第二层键也要带 `wght`，否则 400/700 会拿到同一个
   实例）；没有轴又要 600+ → 浏览器是合成粗体，**拒绝转换**。合成斜体没有对应
   的轴（`slnt` 不等于 CSS 的 italic），一律拒绝。
-- **HarfBuzz 只认 SFNT**：内置 Inter 因此同时提供 `*.ttf`（由同名 woff2
+- **HarfBuzz 只认 SFNT**：每套内置字体因此同时提供 `*.ttf`（由同名 woff2
   **无损解压**，`bun run fonts:sfnt` 重新生成）与 woff2（E2E 当用户字体用）。
+  新增内置字体 = 往 `public/fonts/` 放 `<family>-latin-<weight>.woff2` → 跑
+  `bun run fonts:sfnt` → 在 `BUILTIN_FONTS` 加一行 → 更新 `public/fonts/OFL.txt`
+  与 `CREDITS.md`。
   用户导入的 woff2 拿不到轮廓（`sfntBytes` 返回 null），会落到本机字体查询，
   再失败才拒绝 —— 提示里让用户导入 TTF/OTF，绝不能转出半个字形。
   字体里没有那几个字（默认中文占位文本 + Inter 就是这种）走 `missing-glyphs`，

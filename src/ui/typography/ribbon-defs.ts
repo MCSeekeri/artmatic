@@ -39,6 +39,8 @@ import type { GalleryCard } from '../ribbon/ribbon-model';
 import { minSpanValue, uniformSpanValue, type SpanStyleKey } from '../../typography/rich-text';
 import type { TypographyActions } from './actions';
 import { loadRecentFonts, orderByRecent, rememberFont } from './recent-fonts';
+import { cssFamily } from '../../typography/font/css-family';
+import type { SelectOption } from '../controls/select-model';
 import { tr } from '../../i18n/index.svelte';
 
 /** 「动作型」下拉的占位值：选完不改变显示值，所以可以连点。 */
@@ -184,14 +186,23 @@ function shapeCards(): GalleryCard[] {
   });
 }
 
-/** 字体下拉的选项：已注册的族 + 文档里正在用的族（后者可能尚未注册），最近用过的置顶。 */
-function fontOptions(input: TypographyRibbonInput, current: string): { value: string; label: string }[] {
+/**
+ * 字体下拉的选项：已注册的族 + 文档里正在用的族（后者可能尚未注册），最近用过的置顶。
+ *
+ * 每项带上 `fontFamily` —— 这样「宋体」两个字是宋体画的，「Lora」是 Lora 画的。
+ * 挑字体时看的是「长什么样」，比任何小字说明都直接。值已经过 `cssFamily`
+ * 加引号转义（族名里的空格 / 数字 / 逗号会让裸拼的声明整条失效）。
+ */
+function fontOptions(input: TypographyRibbonInput, current: string): SelectOption<string>[] {
   const names = new Set([...input.fontFamilies, ...input.localFontFamilies]);
   for (const el of input.doc.elements) {
     if (el.kind === 'text') names.add(el.style.fontFamily);
   }
   if (current) names.add(current);
-  return orderByRecent([...names], loadRecentFonts()).map((f) => ({ value: f, label: f }));
+  return orderByRecent([...names], loadRecentFonts()).map((f) => {
+    const family = cssFamily(f);
+    return { value: f, label: f, fontFamily: family || undefined };
+  });
 }
 
 export function buildTypographyTabs(

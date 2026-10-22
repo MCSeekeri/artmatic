@@ -120,7 +120,7 @@ Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置�
 | `gl-transitions` | MIT | 转场 |
 | `polygon-clipping` | MIT | 图形布尔运算 |
 | `wawoff2` | MIT | **仅 devDependency**：`scripts/fonts-woff2-to-sfnt.mjs` 把内置 woff2 无损还原成 TTF |
-| Inter（`public/fonts/`） | OFL-1.1 | 内置西文字体，许可原文见 `public/fonts/OFL.txt`。`*.ttf` 是同一份 `*.woff2` 的无损解压（字形与度量逐字节相同），供 HarfBuzz 取轮廓 |
+| Inter · JetBrains Mono · Lora · Outfit（`public/fonts/`） | OFL-1.1 | 内置西文字体（无衬线 / 等宽 / 衬线 / 装饰，各 400+700）。版权行与许可原文见 `public/fonts/OFL.txt`；`*.ttf` 是同一份 `*.woff2` 的无损解压（字形与度量逐字节相同），供 HarfBuzz 取轮廓。woff2 取自 `@fontsource/*` 的 latin 子集（未改动字体） |
 
 以上均按依赖引入，不复制源码入库。
 
@@ -131,7 +131,7 @@ Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置�
 > 运行时把 `texture2D` / `gl_FragColor` 改写成 ES 3.00 写法，不改上游文件。
 > 拒收 3 条：`luma`、`displacement`（声明了规范之外的额外贴图输入），`burn`（`vec3 color` 不在 `paramsTypes` 里，拿不到默认值）。
 
-> 内置字体只有 OFL 的 Inter。系统字体（simhei / msyh 等）不允许随软件分发，中文字体由用户自行导入。
+> 内置字体只有 OFL 的四族西文（Inter / JetBrains Mono / Lora / Outfit），且都只含 latin 子集。系统字体（simhei / msyh 等）不允许随软件分发，中文字体由用户自行导入或走本机字体。
 
 ## 明确不使用
 

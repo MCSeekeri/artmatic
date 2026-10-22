@@ -14,6 +14,7 @@
 
 import { DENSITY } from '../tokens';
 import type { IconName } from '../icons';
+import type { SelectOption } from '../controls/select-model';
 
 /**
  * 按钮尺寸档。
@@ -71,7 +72,8 @@ export interface RibbonSelectSpec extends RibbonItemBase {
   kind: 'select';
   icon?: IconName;
   value: string;
-  options: { value: string; label: string }[];
+  /** 与 `Select` 同一份选项类型：`fontFamily` 让字体下拉用族自己的字体画名字。 */
+  options: SelectOption<string>[];
   onchange: (value: string) => void;
   /** 选项 testid 前缀，实际为 `${prefix}-${value}`。 */
   optionTestidPrefix?: string;

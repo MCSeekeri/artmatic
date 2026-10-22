@@ -316,7 +316,13 @@
       onclick={(e) => e.stopPropagation()}
     />
   {:else}
-    <span class="sel-label">{current?.label ?? String(value)}</span>
+    <!--
+      触发区与选项都用自己的字体画名字（字体下拉）：挑字体时看的是「长什么样」，
+      换一行小字说明是噪声。`fontFamily` 已是合法 CSS（见 select-model.ts）。
+    -->
+    <span class="sel-label" style:font-family={current?.fontFamily ?? null}
+      >{current?.label ?? String(value)}</span
+    >
   {/if}
   <span class="sel-arrow"><Icon name="chevron-right" size={11} /></span>
 </div>
@@ -366,6 +372,7 @@
         aria-disabled={opt.disabled}
         data-active={active === i ? 'true' : undefined}
         data-testid={`${optionTestidPrefix}-${opt.value}`}
+        style:font-family={opt.fontFamily ?? null}
         disabled={opt.disabled}
         onpointerenter={() => (active = i)}
         onclick={() => commit(opt)}

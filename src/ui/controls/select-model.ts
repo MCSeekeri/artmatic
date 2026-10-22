@@ -10,6 +10,13 @@ export interface SelectOption<T = string> {
   value: T;
   label: string;
   disabled?: boolean;
+  /**
+   * 用这个字族渲染 `label` 自己（字体下拉专用）。
+   *
+   * 值必须**已经是合法的 CSS `font-family`**（含引号），由调用方过一遍
+   * `typography/font/css-family.ts::cssFamily` —— 控件不认识字体注册表。
+   */
+  fontFamily?: string;
 }
 
 /** 连打字母的合并窗口。比操作系统的 500ms 略宽，中文输入法切换时更宽容。 */

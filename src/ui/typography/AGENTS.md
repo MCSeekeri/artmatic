@@ -75,6 +75,12 @@
 - **Ribbon 的弹层必须是 `position: fixed`**（`controls/popover.ts` 的纯函数定位）。
   面板是 `overflow: auto/hidden`（横向滚动 + 固定高度），absolute 弹层会被整个裁掉。
   取色卡、菜单、下拉、图库全部走这一套。
+- **字体下拉的每个选项用它自己的字体画名字**（`SelectOption.fontFamily`，值由
+  `typography/font/css-family.ts::cssFamily` 生成），触发区（`.sel-label`）跟随当前值 ——
+  挑字体时看的是「长什么样」，配一行小字说明是噪声。族名**必须加引号转义**：本机族名里
+  有空格 / 数字 / 逗号，裸拼会让整条 `font-family` 声明失效，而失效是**静默**的
+  （退回界面字体，不报错）。E2E 因此不只断言 computed 字体名，还量同一串字在四族里的
+  宽度必须互不相同（`typography-ribbon.spec.ts` 的「字体下拉」用例）。
 - **「开始」的字体区是 PPT 式两排**（`layout: 'rows'` + `size: 'icon'` 的纯图标按钮）：
   第一排是宽下拉（字体 / 字号 / 字号 ∓ / 清除格式），第二排是字形格式，**行尾**是
   字体资源（本机字体 / 导入字体）—— 两者之间靠 `{ kind: 'spacer' }` 撑开，两排的

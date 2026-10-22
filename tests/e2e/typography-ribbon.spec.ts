@@ -595,6 +595,70 @@ test('长字体名不会把 Ribbon 布局顶歪（定宽 + 截断）', async ({ 
   expect(label.clipped).toBe(true);
 });
 
+test('字体下拉：每个名字用它自己的字体画（内置四族都在，触发区跟着换）', async ({ page }) => {
+  /*
+   * 「宋体」两个字就该是宋体画的 —— 挑字体时看的是「长什么样」，比小字说明直接。
+   *
+   * 断言分两层，缺一层就测不到东西：
+   *  ① **声明**：选项的 computed font-family 就是它代表的族；
+   *  ② **真的用上了**：同一串字在四族里量出来的宽度互不相同。
+   *     只看 ① 的话，族名写错（比如漏了引号导致整条声明失效）也照样过 ——
+   *     那时浏览器会静默回落到界面字体。
+   */
+  await wide(page);
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  const BUILTIN = ['Inter', 'JetBrains Mono', 'Lora', 'Outfit'];
+
+  // 内置字体是启动时预加载的；量宽度前必须真的 loaded，否则四族都会回落到界面字体。
+  await page.waitForFunction(
+    (families: string[]) => {
+      const loaded = new Set(
+        [...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family.replace(/["']/g, '')),
+      );
+      return families.every((f) => loaded.has(f));
+    },
+    BUILTIN,
+    { timeout: 20_000 },
+  );
+
+  await page.getByTestId('ribbon-font-family').click();
+  await expect(page.getByTestId('ribbon-font-family-pop')).toBeVisible();
+
+  const rows = await page.evaluate((families: string[]) => {
+    const ctx = document.createElement('canvas').getContext('2d')!;
+    return families.map((family) => {
+      const el = document.querySelector<HTMLElement>(`[data-testid="ribbon-font-option-${family}"]`);
+      if (!el) return { family, css: '(missing)', width: -1 };
+      const cs = getComputedStyle(el);
+      ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+      return {
+        family,
+        // Chromium 会把多词族名带引号串行化回来，引号是语法不是名字的一部分。
+        css: cs.fontFamily.replace(/["']/g, ''),
+        width: Math.round(ctx.measureText('Hamburgefonstiv').width * 100) / 100,
+      };
+    });
+  }, BUILTIN);
+
+  for (const row of rows) expect(row.css, `${row.family} 的选项没用它自己的字体`).toBe(row.family);
+  expect(
+    new Set(rows.map((r) => r.width)).size,
+    `四族的字宽应当互不相同（实测 ${JSON.stringify(rows.map((r) => [r.family, r.width]))}）`,
+  ).toBe(BUILTIN.length);
+
+  await page.getByTestId('ribbon-font-option-Outfit').click();
+  const trigger = await page.getByTestId('ribbon-font-family').evaluate((root) => {
+    const label = root.querySelector('.sel-label')!;
+    return { text: label.textContent ?? '', css: getComputedStyle(label).fontFamily.replace(/["']/g, '') };
+  });
+  expect(trigger.text).toBe('Outfit');
+  expect(trigger.css).toBe('Outfit');
+});
+
 test('窄窗口：Ribbon 横向滚动，不换行也不出纵向滚动条', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await boot(page);

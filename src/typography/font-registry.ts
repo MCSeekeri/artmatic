@@ -68,8 +68,18 @@ export interface FontFaceSource {
  * woff2 文件仍留在 public/fonts 里：E2E 用它模拟「用户导入的 woff2 字体」。
  */
 export const BUILTIN_FONTS: { family: string; file: string; weight: number; style: 'normal' | 'italic' }[] = [
+  // 无衬线（默认）。`document.DEFAULT_FONT_FAMILY` 指向它。
   { family: 'Inter', file: 'inter-latin-400.ttf', weight: 400, style: 'normal' },
   { family: 'Inter', file: 'inter-latin-700.ttf', weight: 700, style: 'normal' },
+  // 等宽：算法艺术里贴代码 / 参数 / 数字阵列时的默认手。
+  { family: 'JetBrains Mono', file: 'jetbrains-mono-latin-400.ttf', weight: 400, style: 'normal' },
+  { family: 'JetBrains Mono', file: 'jetbrains-mono-latin-700.ttf', weight: 700, style: 'normal' },
+  // 衬线：高对比度标题。
+  { family: 'Lora', file: 'lora-latin-400.ttf', weight: 400, style: 'normal' },
+  { family: 'Lora', file: 'lora-latin-700.ttf', weight: 700, style: 'normal' },
+  // 装饰：几何圆体，算法艺术海报的常见选择。
+  { family: 'Outfit', file: 'outfit-latin-400.ttf', weight: 400, style: 'normal' },
+  { family: 'Outfit', file: 'outfit-latin-700.ttf', weight: 700, style: 'normal' },
 ];
 
 /** btoa 一次吃不下大字体，分块编码。 */

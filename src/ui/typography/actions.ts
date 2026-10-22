@@ -90,8 +90,8 @@ import {
   type SpanStyleKey,
   type SpanStylePatch,
 } from '../../typography/rich-text';
+import { firstFamily } from '../../typography/font/css-family';
 import {
-  firstFamily,
   outlineTextElement,
   type TextOutlineFailure,
   type TextOutlineItem,

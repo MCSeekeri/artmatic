@@ -50,6 +50,7 @@ import { mapNodes, parsePathNodes, serializePathNodes, type SubPath } from './pa
 import { resolveThemeColor, themeById, type TypographyTheme } from './theme';
 import { plainTextOf } from './rich-text';
 import type { FontRegistry } from './font-registry';
+import { firstFamily } from './font/css-family';
 import { glyphFaceFor, type GlyphFace } from './font/outline-hb';
 import { fontHasWeightAxis } from './font/sfnt';
 import { resolveLocalFont } from './local-fonts';
@@ -101,11 +102,6 @@ function needsBox(el: TextElement): boolean {
     (el.boxFill !== undefined && el.boxFill.kind !== 'none') ||
     (el.boxStroke != null && el.boxStroke.width > 0)
   );
-}
-
-/** 字体族名可能是 `"Inter", sans-serif` 这种列表：只取第一个。 */
-export function firstFamily(name: string): string {
-  return name.split(',')[0]!.trim().replace(/^["']|["']$/g, '');
 }
 
 /**
