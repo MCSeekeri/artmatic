@@ -31,6 +31,7 @@ import { splitRelPath, pluginFileName } from './project/layout';
 import { writePluginFile } from './project/plugins';
 import { packProject, unpackProject } from './project/package';
 import { editorState } from './ui/typography/editor-state.svelte';
+import { outlineTextElement } from './typography/text-outline';
 import {
   attachProjectDirectory,
   collectAsset,
@@ -38,6 +39,8 @@ import {
   openProjectPicker,
   refreshRecentProjects,
   registerDemoAssets,
+  listMediaPool,
+  runMediaPoolOp,
   saveProjectNow,
 } from './ui/project-actions';
 import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave';
@@ -54,7 +57,7 @@ import { applyMachine, currentCapacity, resetCapacity, setLimits } from './core/
 import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
 import { createControlPlane } from './agent/index';
-import { registerControlPlane } from './ui/agent/agent-state.svelte';
+import { agentState, registerControlPlane } from './ui/agent/agent-state.svelte';
 import type { ControlContext, OpenProjectView } from './agent/types';
 import type { Renderer } from './engine/renderer';
 
@@ -367,8 +370,33 @@ const controlContext: ControlContext = {
    * 这三件事只有装配点知道「现在前台是哪份工程、目录句柄在哪」。
    */
   getActiveTypoClipId: () => appState.activeTypoClipId,
+  /*
+   * 媒体池。这些动作会移动 / 删除磁盘文件，所以默认要用户确认一次；
+   * 偏好关掉时控制平面直接执行（见 `mediaPoolOp`）。
+   */
+  mediaPool: { list: listMediaPool, run: runMediaPoolOp },
+  getMediaPoolConfirm: () => agentState.prefs.mediaPoolConfirm,
   // 打字是直接改 doc.runs，不经过手势事务；agent 写文档前必须先停掉。
   stopTextEditing: () => editorState.stopEditing(),
+  /*
+   * 「文字转路径」的算力。控制平面不能 import `text-outline`（它拉 `render-dom`），
+   * 所以轮廓在这里算、按 `TextOutlineResult` 交回去；快照 / 核对 / 提交都在那边。
+   */
+  outlineText: async (el, theme, customThemes) => {
+    try {
+      const r = await outlineTextElement(el, { fonts: appState.fonts, theme, customThemes });
+      if (r.ok) return { ok: true, items: r.items, shadows: r.shadows };
+      const { ok: _ok, code, ...detail } = r;
+      return { ok: false, code, detail: detail as Record<string, unknown> };
+    } catch (e) {
+      // 抛错也归成一条可判别的失败（模型至少知道是「读字体」这一步挂了）。
+      return {
+        ok: false,
+        code: 'local-failed',
+        detail: { message: e instanceof Error ? e.message : String(e) },
+      };
+    }
+  },
   getPluginHost: () => appState.plugins,
   getProjectKey: () => (appState.hasProject ? appState.activeProjectId : null),
   persistPlugin: async (pluginId, source) => {

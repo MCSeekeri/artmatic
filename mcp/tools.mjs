@@ -540,6 +540,44 @@ export const TOOLS = [
     args: { clipId: ID('片段') },
   },
   {
+    name: 'artmatic_media_list',
+    kind: 'read',
+    description:
+      '媒体池：每条素材的 id / kind / 名字、是否在工程里（新片段能引用）、是否已移除但字节还在、' +
+      '是否引用式（linked / stale）、字节是否缺失、字节数、被片段引用次数（0 = 未使用）；' +
+      '另给磁盘占用（回收站 / 孤儿）。没有工程目录时 usage 为 null。删之前先读它，别猜 id。',
+    args: {},
+  },
+  {
+    name: 'artmatic_media_op',
+    kind: 'write',
+    description:
+      '操作媒体池。**会移动 / 删除用户磁盘上的文件**，所以默认返回 needs-approval 并让应用弹确认；' +
+      '用户确认后同一次调用才真正执行（设置里可以关掉「操作媒体池需我确认」）。' +
+      'op: collect（把 linked 复制进工程）/ relink（重选源文件，需文件对话框）/ restore（恢复已移除素材）/' +
+      ' trash（移进 assets/.trash）/ delete（彻底删除，**不可恢复**）/ trash_all / delete_all /' +
+      ' clear_trash（清空回收站）/ cleanup_orphans（删 assets/ 里没人引用的文件）。' +
+      'collect / relink / restore / trash / delete 需要 assetId。返回「真的改了几条」与释放的字节 —— ' +
+      '0 表示什么都没做（没有工程目录 / 素材不在回收站 / 源文件没了），不是成功。',
+    args: {
+      op: F.string({
+        required: true,
+        enum: [
+          'collect',
+          'relink',
+          'restore',
+          'trash',
+          'delete',
+          'trash_all',
+          'delete_all',
+          'clear_trash',
+          'cleanup_orphans',
+        ],
+      }),
+      assetId: F.string({ description: '目标素材（collect / relink / restore / trash / delete）。' }),
+    },
+  },
+  {
     name: 'artmatic_set_project',
     kind: 'write',
     description: '改工程级参数（name / fps / resolution / duration / beatGrid / overlapBehavior）。',
@@ -870,6 +908,37 @@ export const TOOLS = [
       groupId: F.string({ required: true }),
       patch: F.any({ required: true, description: '{ name?, fill?, stroke?, radius?, padding? }' }),
     },
+  },
+  {
+    name: 'artmatic_typo_boolean',
+    kind: 'write',
+    description:
+      '图形布尔运算（z 序 = 文档顺序，不是 elementIds 顺序）。op: union | difference | intersection | xor。' +
+      '差集以**最底下**的那个为被减数（后画的挖掉先画的）。结果是**一个新** shape:"svg" 元素，' +
+      '放在最上面那个操作数的位置；操作数被移除、结果不带动画。结果为空时报错且不改文档。',
+    args: {
+      clipId: F.string(),
+      elementIds: F.stringArray({ required: true }),
+      op: F.string({ required: true, enum: ['union', 'difference', 'intersection', 'xor'] }),
+    },
+  },
+  {
+    name: 'artmatic_typo_divide',
+    kind: 'write',
+    description:
+      '拆分：把重叠图形切成互不重叠的若干片，每片沿用「盖在它最上面的那个操作数」的外观。' +
+      '操作数被移除，结果片保留原组。返回新元素 id。',
+    args: { clipId: F.string(), elementIds: F.stringArray({ required: true }) },
+  },
+  {
+    name: 'artmatic_typo_convert_to_path',
+    kind: 'write',
+    description:
+      '转路径：参数化图形就地转（同 id，0..100 authored）；生成器图形只摘掉 gen 绑定；' +
+      '文本走真实字形轮廓（DOM 排版 + HarfBuzz），产出一个或多个 pathUnit:"px" 的 svg 图形，' +
+      '第一个沿用原 id，多个时包进新组合。**整批原子**：字体缺失 / 竖排 / 合成粗体等任何一条失败都不改文档。' +
+      '文本转换较慢。',
+    args: { clipId: F.string(), elementIds: F.stringArray({ required: true }) },
   },
   {
     name: 'artmatic_typo_set_canvas_size',

@@ -26,7 +26,10 @@ interface Harness {
   ctx: ControlContext;
 }
 
-function harness(project: Project = createBlankProject('agent-test')): Harness {
+function harness(
+  project: Project = createBlankProject('agent-test'),
+  extra: Partial<ControlContext> = {},
+): Harness {
   const store = new ProjectStore(project);
   const ctx: ControlContext = {
     getStore: () => store,
@@ -41,6 +44,7 @@ function harness(project: Project = createBlankProject('agent-test')): Harness {
     openProject: async () => false,
     cancelPendingGesture: () => {},
     refreshPreview: () => {},
+    ...extra,
   };
   return { store, ctx, cp: createControlPlane(ctx) };
 }
@@ -1084,5 +1088,246 @@ describe('图层移到指定下标 / 工程名 / 估 BPM', () => {
   it('没有音频时估 BPM 是 unsupported（不静默写默认值）', async () => {
     const h = harness();
     expect(await code(h.cp.estimateBeatGrid())).toBe('unsupported');
+  });
+});
+
+/* ------------------------------------------- P3：路径族 / 富文本 / 媒体池 */
+
+describe('路径族（布尔 / 拆分 / 转路径）', () => {
+  async function clipWithShapes(h: Harness, n = 2): Promise<{ clipId: string; ids: string[] }> {
+    const clipId = await textClip(h);
+    const elements = Array.from({ length: n }, (_, i) => ({
+      kind: 'shape' as const,
+      shape: 'rect',
+      frame: { x: i * 60, y: 0, w: 100, h: 100 },
+    }));
+    const added = await ok(h.cp.addTypographyElements(clipId, elements));
+    return { clipId, ids: added.elementIds };
+  }
+
+  it('布尔：产出一个新图形，操作数消失；交集为空报错且不改文档', async () => {
+    const h = harness();
+    const { clipId, ids } = await clipWithShapes(h);
+    const r = await ok(h.cp.booleanTypographyShapes(clipId, ids, 'union'));
+    expect(r.elementId).toBeTruthy();
+    const doc = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as unknown as {
+      elements: { id: string; kind: string; shape?: string }[];
+    };
+    expect(doc.elements).toHaveLength(1);
+    expect(doc.elements[0]!.shape).toBe('svg');
+
+    const h2 = harness();
+    const two = await clipWithShapes(h2);
+    // 把第二个挪到远处：交集为空。
+    await ok(
+      h2.cp.updateTypographyElement(two.clipId, two.ids[1]!, { frame: { x: 600, y: 400 }  }),
+    );
+    const before = JSON.stringify(h2.store.project);
+    expect(await code(h2.cp.booleanTypographyShapes(two.clipId, two.ids, 'intersection'))).toBe(
+      'unsupported',
+    );
+    expect(JSON.stringify(h2.store.project)).toBe(before);
+  });
+
+  it('拆分：每个区域一片；少于两个图形是 invalid-argument', async () => {
+    const h = harness();
+    const { clipId, ids } = await clipWithShapes(h, 3);
+    const r = await ok(h.cp.divideTypographyShapes(clipId, ids));
+    expect(r.elementIds.length).toBeGreaterThanOrEqual(3);
+    expect(await code(h.cp.divideTypographyShapes(clipId, [ids[0]!]))).toBe('invalid-argument');
+  });
+
+  it('转路径：参数化图形就地转；宿主没有轮廓能力时文本转路径是 unsupported', async () => {
+    const h = harness();
+    const { clipId, ids } = await clipWithShapes(h, 1);
+    const r = await ok(h.cp.convertTypographyToPath(clipId, ids));
+    expect(r.converted).toBe(1);
+    expect(r.elementIds).toEqual(ids);
+    const doc = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as unknown as {
+      elements: { shape?: string; path?: string; radius?: number }[];
+    };
+    expect(doc.elements[0]!.shape).toBe('svg');
+    expect(doc.elements[0]!.path).toBeTruthy();
+    expect(doc.elements[0]!.radius).toBeUndefined();
+
+    // 空列表是前置错误（不做任何事，也不问宿主要大纲）。
+    expect(await code(h.cp.convertTypographyToPath(clipId, []))).toBe('invalid-argument');
+  });
+
+  it('文本转路径：轮廓由宿主注入，落成多个图形并包进组（整批原子）', async () => {
+    const h = harness(undefined, {
+      outlineText: async () => ({
+        ok: true,
+        items: [
+          { role: 'glyph', paint: { kind: 'solid', color: '#fff' }, d: 'M0 0L10 0L10 10Z' },
+          { role: 'glyph', paint: { kind: 'solid', color: '#f00' }, d: 'M20 0L30 0L30 10Z' },
+        ],
+        shadows: [],
+      }),
+    });
+    const clipId = await textClip(h);
+    const added = await ok(h.cp.addTypographyElements(clipId, [{ kind: 'text', text: 'AB' }]));
+    const r = await ok(h.cp.convertTypographyToPath(clipId, [added.elementIds[0]!]));
+    expect(r.elementIds).toHaveLength(2);
+    const doc = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as unknown as {
+      elements: { kind: string; groupId?: string }[];
+      groups: { id: string }[];
+    };
+    expect(doc.elements.every((e) => e.kind === 'shape')).toBe(true);
+    expect(doc.groups).toHaveLength(1);
+    expect(doc.elements[0]!.groupId).toBe(doc.groups[0]!.id);
+  });
+
+  it('文本转路径失败时整批不改文档，并把原因带回来', async () => {
+    const h = harness(undefined, {
+      outlineText: async () => ({ ok: false, code: 'no-font', detail: { families: ['Inter'] } }),
+    });
+    const clipId = await textClip(h);
+    const added = await ok(h.cp.addTypographyElements(clipId, [{ kind: 'text', text: 'AB' }]));
+    const before = JSON.stringify(h.store.project);
+    const res = await h.cp.convertTypographyToPath(clipId, [added.elementIds[0]!]);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('unsupported');
+      expect(res.error.message).toContain('Inter');
+    }
+    expect(JSON.stringify(h.store.project)).toBe(before);
+  });
+});
+
+describe('行内富文本（runs）', () => {
+  it('可写可读，整份往返不丢；非法 style 键被拒绝', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const added = await ok(h.cp.addTypographyElements(clipId, [{ kind: 'text', text: 'AB' }]));
+    const elementId = added.elementIds[0]!;
+
+    const r = await ok(
+      h.cp.updateTypographyElement(clipId, elementId, {
+        runs: [{ text: 'A', style: { fontWeight: 700, color: '#ff0000' } }, { text: 'B' }],
+      }),
+    );
+    // 有行内覆盖时视图必须给 runs（否则读一次再写回就抹掉了）。
+    expect(Array.isArray(r.element.runs)).toBe(true);
+    expect((r.element.runs as { style?: { fontWeight?: number } }[])[0]!.style?.fontWeight).toBe(700);
+
+    // 整份往返：detail:full → replace_doc → 再读回。
+    const full = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as never as Record<string, unknown>;
+    const replaced = await ok(h.cp.replaceTypographyDoc(clipId, full));
+    expect(replaced.droppedKeys).toEqual([]);
+    const after = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as unknown as {
+      elements: { runs?: { text: string; style?: { color?: string } }[] }[];
+    };
+    expect(after.elements[0]!.runs?.[0]?.style?.color).toBe('#ff0000');
+
+    // 新建时也能直接带 runs（不是只能事后 patch）。
+    const fresh = await ok(
+      h.cp.addTypographyElements(clipId, [
+        { kind: 'text', text: '', runs: [{ text: '粗', style: { fontWeight: 900 } }] },
+      ]),
+    );
+    expect(
+      (fresh.elements[0] as { runs?: { text: string; style?: { fontWeight?: number } }[] }).runs?.[0]
+        ?.style?.fontWeight,
+    ).toBe(900);
+
+    // 拼错的键必须报错（normalizeRuns 会原样放过，渲染静默忽略）。
+    expect(
+      await code(
+        h.cp.updateTypographyElement(clipId, elementId, {
+          runs: [{ text: 'A', style: { fontWight: 700 } } as never],
+        }),
+      ),
+    ).toBe('invalid-argument');
+  });
+
+  it('给图形写 runs 是 invalid-argument', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [{ kind: 'shape', shape: 'rect' }]),
+    );
+    expect(
+      await code(
+        h.cp.updateTypographyElement(clipId, added.elementIds[0]!, { runs: [{ text: 'x' }] }),
+      ),
+    ).toBe('invalid-argument');
+  });
+});
+
+describe('媒体池（media_list / media_op + 默认需确认）', () => {
+  function mediaHarness(confirm: boolean, calls: { op: string; assetId?: string }[]) {
+    return harness(undefined, {
+      mediaPool: {
+        list: async () => ({
+          assets: [
+            {
+              id: 'a1',
+              name: '掌声.wav',
+              kind: 'audio',
+              inProject: true,
+              retained: false,
+              linked: false,
+              stale: false,
+              missing: false,
+              bytes: 1024,
+              uses: 1,
+            },
+          ],
+          usage: null,
+        }),
+        run: async (op, assetId) => {
+          calls.push({ op, ...(assetId ? { assetId } : {}) });
+          return { changed: 1, bytes: 4096 };
+        },
+      },
+      getMediaPoolConfirm: () => confirm,
+    });
+  }
+
+  it('media_list 给出归属 / 字节 / 引用次数', async () => {
+    const calls: { op: string; assetId?: string }[] = [];
+    const h = mediaHarness(true, calls);
+    const snap = await ok(h.cp.listMediaPool());
+    expect(snap.assets[0]).toMatchObject({ id: 'a1', uses: 1, bytes: 1024 });
+  });
+
+  it('默认要确认：未确认时 needs-approval 且不执行；confirm:true 才真的动', async () => {
+    const calls: { op: string; assetId?: string }[] = [];
+    const h = mediaHarness(true, calls);
+    const denied = await h.cp.mediaPoolOp({ op: 'delete', assetId: 'a1' });
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) {
+      expect(denied.error.code).toBe('needs-approval');
+      expect((denied.error.detail as { kind?: string }).kind).toBe('media');
+    }
+    expect(calls).toEqual([]);
+
+    const confirmed = await ok(h.cp.mediaPoolOp({ op: 'delete', assetId: 'a1', confirm: true }));
+    expect(confirmed).toMatchObject({ op: 'delete', changed: 1, bytes: 4096 });
+    expect(calls).toEqual([{ op: 'delete', assetId: 'a1' }]);
+  });
+
+  it('偏好关掉时直接执行（不再弹确认）', async () => {
+    const calls: { op: string; assetId?: string }[] = [];
+    const h = mediaHarness(false, calls);
+    expect((await ok(h.cp.mediaPoolOp({ op: 'trash', assetId: 'a1' }))).changed).toBe(1);
+    expect(calls).toEqual([{ op: 'trash', assetId: 'a1' }]);
+  });
+
+  it('未知动作 / 单条动作缺 assetId 都是 invalid-argument（前置校验，不问确认）', async () => {
+    const calls: { op: string; assetId?: string }[] = [];
+    const h = mediaHarness(true, calls);
+    expect(await code(h.cp.mediaPoolOp({ op: 'nope' as never }))).toBe('invalid-argument');
+    expect(await code(h.cp.mediaPoolOp({ op: 'trash' }))).toBe('invalid-argument');
+    // 批量动作不需要 assetId。
+    expect((await ok(h.cp.mediaPoolOp({ op: 'clear_trash', confirm: true }))).changed).toBe(1);
+    expect(calls).toEqual([{ op: 'clear_trash' }]);
+  });
+
+  it('宿主没接媒体池时是 unsupported', async () => {
+    const h = harness();
+    expect(await code(h.cp.listMediaPool())).toBe('unsupported');
+    expect(await code(h.cp.mediaPoolOp({ op: 'clear_trash', confirm: true }))).toBe('unsupported');
   });
 });

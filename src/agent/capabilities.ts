@@ -265,7 +265,11 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
         'glyphStroke.width and boxStroke.width are px. shadows dx/dy/blur are document px. ' +
         'rot on a frame is radians, but a text element has no rotation field of its own — ' +
         'frame.rot is the only rotation and it is applied around the box centre. ' +
-        'autoHeight:true means the box width is fixed and the height follows the text.',
+        'autoHeight:true means the box width is fixed and the height follows the text. ' +
+        'Inline rich text lives in `runs: [{ text, style? }]`; style keys are fontFamily / fontSize (px) / ' +
+        'fontWeight / fontStyle / letterSpacing (px) / color / textDecoration / highlight — anything ' +
+        'omitted inherits the element style. `runs` is only returned when a run overrides something; ' +
+        'otherwise send `text`.',
       shapePath:
         '`path` is only read when `shape:"svg"`. Default coordinate space is 0..100 authored and ' +
         'stretched to the frame; `pathUnit:"px"` means the path is already in the element\'s own ' +

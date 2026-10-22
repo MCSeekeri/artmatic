@@ -50,6 +50,14 @@ call changes the actual project, and every write is undoable.
 - Plugins are single-file ESM with no imports. Shaders must not redeclare the
   shared uniforms, and every parameter must be dispatched in \`setUniforms\`.
 
+# Media pool
+- \`media_op\` moves or deletes files on the user's disk. Unless the user turned the
+  "confirm media pool actions" preference off, it returns \`needs-approval\` first
+  and the app asks; the same call then runs. Never say a file was deleted /
+  collected until the tool result says \`changed > 0\` — 0 means nothing happened.
+- Read \`media_list\` before choosing an asset id, and prefer \`trash\` (recoverable)
+  over \`delete\` unless the user explicitly asked for permanent removal.
+
 # Typography
 - A text clip owns a document; edit it with \`typo_*\` tools. Array index = z order.
 - Prefer \`typo_layout\` (align / distribute / grid / row / column) over computing

@@ -92,9 +92,14 @@ export interface AgentMessage {
 }
 
 export interface PendingApproval {
-  /** `try` = 立刻执行源码；`install` = 写进工程目录。两者文案与按钮不同。 */
-  kind: 'try' | 'install';
+  /**
+   * `try` = 立刻执行源码；`install` = 写进工程目录；`media` = 媒体池动作
+   * （会移动 / 删除磁盘文件）。三者文案与按钮不同。
+   */
+  kind: 'try' | 'install' | 'media';
   pluginId: string;
+  /** `media` 时给动作与目标（卡片正文用）。 */
+  media?: { op: string; assetId?: string; assetName?: string };
   text: string;
   detail?: unknown;
 }
@@ -610,8 +615,9 @@ class AgentUiState {
   }
 
   private askApproval(req: {
-    kind: 'try' | 'install';
+    kind: 'try' | 'install' | 'media';
     pluginId: string;
+    media?: { op: string; assetId?: string; assetName?: string };
     text: string;
     detail?: unknown;
   }): Promise<boolean> {

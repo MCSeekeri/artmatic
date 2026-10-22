@@ -34,6 +34,13 @@ export interface AgentPrefs {
   maxSteps: number;
   /** 每轮允许把截图回传给模型（关掉可以省 token / 不外传画面）。 */
   screenshots: boolean;
+  /**
+   * 操作媒体池前要用户确认（**默认开**）。
+   *
+   * 这些动作会移动 / 删除磁盘上的素材文件（移进回收站、彻底删除、收集进工程
+   * 目录），而模型无法从画面判断哪一份是原件 —— 默认把决定权留给用户。
+   */
+  mediaPoolConfirm: boolean;
   /** key 只在内存里（不落 localStorage）。 */
   sessionOnly: boolean;
 }
@@ -46,6 +53,7 @@ export function defaultPrefs(): AgentPrefs {
     effort: DEFAULT_LLM_CONFIG.effort,
     maxSteps: 200,
     screenshots: true,
+    mediaPoolConfirm: true,
     sessionOnly: false,
   };
 }
@@ -159,6 +167,9 @@ export function migratePrefs(raw: unknown): AgentPrefs {
     ? Math.max(1, Math.min(2000, Math.round(fresh ? Math.max(200, Number(raw.maxSteps)) : Number(raw.maxSteps))))
     : out.maxSteps;
   out.screenshots = typeof raw.screenshots === 'boolean' ? raw.screenshots : out.screenshots;
+  // 新加的安全开关缺省必须**偏安全**：老配置里没有这个键，读成 false 等于默认放行。
+  out.mediaPoolConfirm =
+    typeof raw.mediaPoolConfirm === 'boolean' ? raw.mediaPoolConfirm : out.mediaPoolConfirm;
   out.sessionOnly = typeof raw.sessionOnly === 'boolean' ? raw.sessionOnly : out.sessionOnly;
 
   // 已经是新结构

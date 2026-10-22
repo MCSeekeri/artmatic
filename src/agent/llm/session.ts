@@ -154,8 +154,12 @@ export interface SessionOptions {
    * 自己带 `confirm:true` 再调一次控制平面 —— UI 不直接改状态。
    */
   onApproval?(req: {
-    kind: 'try' | 'install';
+    /** `media` = 媒体池动作（会移动 / 删除磁盘文件）。 */
+    kind: 'try' | 'install' | 'media';
+    /** 插件 id；`media` 时是空串。 */
     pluginId: string;
+    /** `media` 时给 `{ op, assetId?, assetName? }`。 */
+    media?: { op: string; assetId?: string; assetName?: string };
     detail?: unknown;
     text: string;
   }): Promise<boolean>;
@@ -643,18 +647,42 @@ export class AgentSession {
            */
           if (!out.ok && out.code === 'needs-approval' && this.opts.onApproval) {
             this.setStatus('awaiting-approval');
-            const detail = out.detail as { pluginId?: unknown; kind?: unknown } | undefined;
+            const detail = out.detail as
+              | { pluginId?: unknown; kind?: unknown; op?: unknown; assetId?: unknown; assetName?: unknown }
+              | undefined;
             const pluginId = String(detail?.pluginId ?? args.pluginId ?? '');
-            const kind: 'try' | 'install' =
-              call.name === 'plugin_try' || detail?.kind === 'try' ? 'try' : 'install';
+            const kind: 'try' | 'install' | 'media' =
+              detail?.kind === 'media'
+                ? 'media'
+                : call.name === 'plugin_try' || detail?.kind === 'try'
+                  ? 'try'
+                  : 'install';
             const approved = await this.opts.onApproval({
               kind,
               pluginId,
+              ...(kind === 'media'
+                ? {
+                    media: {
+                      op: String(detail?.op ?? args.op ?? ''),
+                      ...(typeof detail?.assetId === 'string' ? { assetId: detail.assetId } : {}),
+                      ...(typeof detail?.assetName === 'string' ? { assetName: detail.assetName } : {}),
+                    },
+                  }
+                : {}),
               detail: out.detail,
               text: out.text,
             });
             this.setStatus('tool');
-            if (approved && kind === 'try') {
+            if (approved && kind === 'media') {
+              // 工具面不暴露 `confirm`：只有用户点过之后，这一层才能自己带上。
+              out = outcomeOf(
+                await this.opts.control.mediaPoolOp({
+                  op: String(args.op ?? '') as never,
+                  ...(typeof args.assetId === 'string' ? { assetId: args.assetId } : {}),
+                  confirm: true,
+                }),
+              );
+            } else if (approved && kind === 'try') {
               out = outcomeOf(
                 await this.opts.control.pluginTry({
                   id: String(args.id ?? pluginId),

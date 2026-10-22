@@ -516,6 +516,55 @@ export const AGENT_TOOLS: ToolSpec[] = [
     slow: true,
   },
   {
+    name: 'media_list',
+    description:
+      'The media pool: every asset with `id` / `kind` / `name`, whether it is in the project ' +
+      '(a clip can reference it) or retained (removed but bytes still on disk), whether it is a ' +
+      'LINKED file on the user\'s disk (`linked` / `stale`), whether the bytes are missing, its byte ' +
+      'size, and `uses` = how many clips reference it (0 = unused). Also returns disk usage ' +
+      '(trash / orphan counts) or null when the project has no directory. Read this before any ' +
+      'delete/trash decision — never guess an asset id.',
+    params: [],
+    writes: false,
+  },
+  {
+    name: 'media_op',
+    description:
+      'Operate the media pool. THESE MOVE OR DELETE FILES ON THE USER\'S DISK, so by default the ' +
+      'call returns code=needs-approval and the app asks the user; the same call then runs once they ' +
+      'confirm. (The user can turn "confirm media pool actions" off in settings.)\n' +
+      'op:\n' +
+      '  collect — copy a LINKED asset into the project folder (it becomes self-contained);\n' +
+      '  relink — let the user pick a new source file for a linked/missing asset (needs a file dialog, ' +
+      'may be unavailable in the browser);\n' +
+      '  restore — bring a retained (removed) asset back into the project;\n' +
+      '  trash — move a retained asset\'s file into assets/.trash (recoverable);\n' +
+      '  delete — permanently delete a retained asset\'s file (NOT recoverable);\n' +
+      '  trash_all / delete_all — the same for every retained asset;\n' +
+      '  clear_trash — empty assets/.trash (only files already in the trash);\n' +
+      '  cleanup_orphans — delete files in assets/ that no asset (active or retained) references.\n' +
+      '`assetId` is required for collect / relink / restore / trash / delete. Returns how many items ' +
+      'actually changed and the bytes freed — 0 means nothing happened (no project directory, asset ' +
+      'not retained, source gone), not that it succeeded.',
+    params: [
+      req('op', 'string', 'collect | relink | restore | trash | delete | trash_all | delete_all | clear_trash | cleanup_orphans', {
+        enum: [
+          'collect',
+          'relink',
+          'restore',
+          'trash',
+          'delete',
+          'trash_all',
+          'delete_all',
+          'clear_trash',
+          'cleanup_orphans',
+        ],
+      }),
+      p('assetId', 'string', 'Target asset (collect / relink / restore / trash / delete).'),
+    ],
+    writes: true,
+  },
+  {
     name: 'edit_sections',
     description:
       'Add / split / rename / remove / move a section marker. Sections store ONLY their start time: ' +
@@ -632,9 +681,12 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'typo_update_element',
     description:
-      'Patch one element: name, frame, blend, opacity, visible, locked, text, style, fill, boxFill, ' +
+      'Patch one element: name, frame, blend, opacity, visible, locked, text, runs, style, fill, boxFill, ' +
       'boxStroke, glyphStroke (text only: {color, width}, -webkit-text-stroke), autoHeight ' +
       '(text only), stroke, radius, sides, waist, inner, angle, evenOdd, fit, crop, ' +
+      'runs (text only: inline rich text `[{ text, style? }]` — replaces the whole run list; style keys ' +
+      'are fontFamily / fontSize / fontWeight / fontStyle / letterSpacing / color / textDecoration / ' +
+      'highlight; runs wins over text when both are sent), ' +
       'shadows (array of {color, dx, dy, blur}, document px), blur (px), ' +
       'transform3d (MERGES — send only {rotate:{y:35}} to tilt; null removes 3D), ' +
       'path (shape:"svg" only — writing it clears the generator binding, i.e. it bakes the shape; ' +
@@ -763,6 +815,55 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'typo_boolean',
+    description:
+      'Boolean two or more unlocked shapes. z order is the document order, not the order of `elementIds`.\n' +
+      'op: union | difference | intersection | xor.\n' +
+      'DIFFERENCE subtracts with the BOTTOM-most shape as the minuend ("drawn later cuts what was ' +
+      'drawn earlier").\n' +
+      'The result is ONE new `shape:"svg"` element placed where the topmost operand was; the operands ' +
+      'are removed and the result carries no animations. An empty result (no overlap / fully ' +
+      'subtracted) is an error and changes nothing — treat it as a signal, not a failure to retry. ' +
+      'Returns the new element id (and its stored view).',
+    params: [
+      OPT_CLIP_ID,
+      req('elementIds', 'stringArray', 'Two or more shape element ids.'),
+      req('op', 'string', 'union | difference | intersection | xor', {
+        enum: ['union', 'difference', 'intersection', 'xor'],
+      }),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_divide',
+    description:
+      'Divide overlapping shapes into non-overlapping pieces (one element per region). Each piece ' +
+      'inherits the look of the operand that covers it topmost, so A-minus-B keeps A\'s fill and the ' +
+      'overlap takes B\'s — that is what makes "split" preserve the original look. Operands are ' +
+      'removed, result pieces keep the original group. Returns their ids.',
+    params: [
+      OPT_CLIP_ID,
+      req('elementIds', 'stringArray', 'Two or more shape element ids.'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_convert_to_path',
+    description:
+      'Bake elements into explicit SVG paths (irreversible in one step, but one undo entry).\n' +
+      '- parametric shapes (rect / ellipse / star …): converted in place (same id), path written in ' +
+      'the 0..100 authored space, shape params cleared;\n' +
+      '- generated shapes (`gen`): only the generator binding is dropped — their path is already baked;\n' +
+      '- text elements: real glyph outlines (DOM layout + HarfBuzz), replaced by one or more ' +
+      '`shape:"svg"` elements with `unit:"px"` paths. The first keeps the element id; several results ' +
+      'are wrapped in a new group (padding 0).\n' +
+      'All-or-nothing: a missing font / vertical text / synthetic bold fails the whole call and nothing ' +
+      'is changed. Text conversion is slow. Returns the resulting element ids.',
+    params: [OPT_CLIP_ID, req('elementIds', 'stringArray', 'Elements to bake (shape or text).')],
+    writes: true,
+    slow: true,
+  },
+  {
     name: 'typo_set_canvas_size',
     description:
       'Change the document canvas (design resolution). Two real intents, so it is a switch:\n' +
@@ -861,9 +962,8 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'failing the whole call — check the returned `dropped` count. Keys/fields that were not ' +
       'recognised come back in `droppedKeys` (e.g. "elements[2].colour"); animation entries that ' +
       'failed validation come back in `droppedAnimations` (e.g. "elements[2].animations[0]") — ' +
-      'nothing is silently normalised away. Animations (preset, keys AND custom css) are ' +
-      'preserved, so a document read with detail:full can be edited and written straight back. ' +
-      '`text` is plain text; inline per-run formatting is not expressible here.',
+      'nothing is silently normalised away. Animations (preset, keys AND custom css) and inline ' +
+      'runs are preserved, so a document read with detail:full can be edited and written straight back.',
     params: [OPT_CLIP_ID, req('doc', 'json', 'A complete TypographyDocument.')],
     writes: true,
   },

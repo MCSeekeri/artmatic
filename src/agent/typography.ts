@@ -18,8 +18,25 @@
 import { newId } from '../core/schema';
 import { coerceKeySettings, coerceQuadCorners } from '../core/image-fx';
 import type { ProjectStore } from '../core/project-store';
-import { SHAPE_KINDS, coerceTransform3DPatch, type TypographyDocument, type TypographyElement } from '../typography/document';
+import {
+  SHAPE_KINDS,
+  coerceTransform3DPatch,
+  type ElementShadow,
+  type TextElement,
+  type TypographyDocument,
+  type TypographyElement,
+} from '../typography/document';
+// 只取类型：`text-outline.ts` 拉 `render-dom`，值导入会把 DOM 依赖带进控制平面。
+import type { TextOutlineItem } from '../typography/text-outline';
+import {
+  applyBoolean,
+  applyDivide,
+  applyTextToPath,
+  convertShapeToPath,
+} from '../typography/shape-convert';
+import type { MessageKey } from '../i18n/locales';
 import { CUSTOM_CSS_ERROR_KEYS } from '../typography/animation';
+import { coerceRuns } from '../typography/rich-text';
 import {
   isKnownTheme,
   mergeThemeColors,
@@ -58,7 +75,7 @@ import {
   type LayoutRequest,
 } from '../typography/agent-ops';
 import { tr } from '../i18n/index.svelte';
-import { ControlFailure } from './types';
+import { ControlFailure, type TextOutlineResult } from './types';
 import { measureDocument, type TypographyMeasure } from './typo-measure';
 import type {
   TypographyDocIdView,
@@ -138,6 +155,10 @@ function validateNewInput(store: ProjectStore, input: TypographyElementInput): v
     throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'element' }));
   }
   if (input.kind === 'text') {
+    // `runs` 优先于 `text`；形状不对必须报错，否则会静默回落到纯文本。
+    if (input.runs !== undefined && !coerceRuns(input.runs)) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badRuns'), { runs: input.runs });
+    }
     if (typeof input.text !== 'string') {
       throw new ControlFailure('invalid-argument', tr('agent.typo.badText', { what: 'text' }));
     }
@@ -234,6 +255,15 @@ function validatePatch(el: TypographyElement, patch: Record<string, unknown>, el
   }
   if (patch.autoHeight !== undefined && el.kind !== 'text') {
     throw new ControlFailure('invalid-argument', tr('agent.typo.autoHeightNotText', { id: elementId }));
+  }
+  if (patch.runs !== undefined) {
+    if (el.kind !== 'text') {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.runsNotText', { id: elementId }));
+    }
+    if (!coerceRuns(patch.runs)) {
+      // 键名拼错（`fontWight`）在 normalizeRuns 里会被原样放过 —— 渲染静默忽略。
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badRuns'), { runs: patch.runs });
+    }
   }
   // 抠图 / 四角只存在于图片元素：形状不对时要报错，不能靠 patchElement 静默忽略。
   if ((patch.key !== undefined || patch.quad !== undefined) && el.kind !== 'image') {
@@ -539,6 +569,158 @@ export function setCanvasSize(
   });
   const after = requireDoc(store, clipId);
   return { changed, size: { ...after.size } };
+}
+
+/* ------------------------------------------------- 路径族：布尔 / 拆分 / 转路径 */
+
+/** 参与几何运算的元素：必须是存在、未锁定的图形（ids 顺序无关，运算按 z 序）。 */
+function requireShapes(store: ProjectStore, clipId: string, ids: readonly string[]): void {
+  const doc = requireDoc(store, clipId);
+  if (!Array.isArray(ids) || ids.length < 2) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.needTwoShapes'));
+  }
+  for (const id of ids) {
+    const el = doc.elements.find((e) => e.id === id);
+    if (!el) {
+      throw new ControlFailure('not-found', tr('agent.typo.elementNotFound', { id }), { elementId: id });
+    }
+    if (el.kind !== 'shape') {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.notShape', { id }), { elementId: id });
+    }
+    if (el.locked) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.locked', { id }), { elementId: id });
+    }
+  }
+}
+
+/**
+ * 布尔运算（并 / 差 / 交 / 异或）。
+ *
+ * **差集按 z 序**：最底下的那个图形是被减数（「后画的挖掉先画的」）。
+ * 结果为空的（交集为空 / 被减没了）是 `unsupported` 且**不改文档** —— 改成空图形
+ * 没有意义，而静默返回一个不存在的 id 会让模型以为画面上多了个东西。
+ */
+export function booleanShapes(
+  store: ProjectStore,
+  clipId: string,
+  ids: readonly string[],
+  op: 'union' | 'difference' | 'intersection' | 'xor',
+): { elementId: string } {
+  requireShapes(store, clipId, ids);
+  const out: { id: string | null } = { id: null };
+  withDoc(store, clipId, 'agent:typo_boolean', (d) => {
+    out.id = applyBoolean(d, ids, op);
+  });
+  if (!out.id) {
+    throw new ControlFailure('unsupported', tr('agent.typo.booleanEmpty'));
+  }
+  return { elementId: out.id };
+}
+
+/** 拆分：重叠区域切成互不重叠的若干片，每片沿用「盖在它最上面的那个操作数」的外观。 */
+export function divideShapes(
+  store: ProjectStore,
+  clipId: string,
+  ids: readonly string[],
+): { elementIds: string[] } {
+  requireShapes(store, clipId, ids);
+  const out: { ids: string[] } = { ids: [] };
+  withDoc(store, clipId, 'agent:typo_divide', (d) => {
+    out.ids = applyDivide(d, ids);
+  });
+  if (!out.ids.length) {
+    throw new ControlFailure('unsupported', tr('agent.typo.booleanEmpty'));
+  }
+  return { elementIds: out.ids };
+}
+
+/** `TextOutlineFailure.code` → 文案键（都要能照做，不能只说「失败」）。 */
+const OUTLINE_ERROR_KEYS: Record<string, MessageKey> = {
+  empty: 'agent.typo.outlineEmpty',
+  vertical: 'agent.typo.outlineVertical',
+  'no-font': 'agent.typo.outlineNoFont',
+  'local-denied': 'agent.typo.outlineLocal',
+  'local-missing': 'agent.typo.outlineLocal',
+  'local-failed': 'agent.typo.outlineLocal',
+  'missing-glyphs': 'agent.typo.outlineMissingGlyphs',
+  synthetic: 'agent.typo.outlineSynthetic',
+};
+
+/**
+ * 把元素转成路径。
+ *
+ * - 参数化 / 生成器图形：就地转成 `shape:'svg'`（生成器元素只摘掉 `gen` —— 它的
+ *   path 本来就是烘焙结果）。同步、一笔撤销。
+ * - 文本：轮廓计算要 DOM + HarfBuzz，走注入的 `outline`（控制平面自己 import
+ *   不了 `text-outline`）。**先全部算完再落库**，任何一条失败都不改文档；等算
+ *   期间文档被改过就整批放弃（与编辑器同一条判据）。
+ */
+export async function convertToPath(
+  store: ProjectStore,
+  clipId: string,
+  elementIds: readonly string[],
+  outline?: (
+    el: TextElement,
+    theme: string | undefined,
+    customThemes: TypographyTheme[] | undefined,
+  ) => Promise<TextOutlineResult>,
+): Promise<{ elementIds: string[]; converted: number }> {
+  const doc = requireDoc(store, clipId);
+  if (!Array.isArray(elementIds) || elementIds.length === 0) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.batchEmpty', { what: 'elementIds' }));
+  }
+  const targets = elementIds.map((id) => requireElement(store, clipId, id));
+  const texts = targets.filter((e): e is TextElement => e.kind === 'text');
+  if (texts.length > 0 && !outline) {
+    throw new ControlFailure('unsupported', tr('agent.typo.outlineUnavailable'));
+  }
+
+  const prepared: { source: TextElement; items: TextOutlineItem[]; shadows: ElementShadow[] }[] = [];
+  for (const el of texts) {
+    const snap = structuredClone(el);
+    const r = await outline!(snap, doc.theme, store.project.customThemes ?? undefined);
+    if (!r.ok) {
+      const d = r.detail ?? {};
+      const list = (v: unknown): string => (Array.isArray(v) ? v.join(', ') : '');
+      throw new ControlFailure('unsupported', tr(OUTLINE_ERROR_KEYS[r.code] ?? 'agent.typo.outlineEmpty', {
+        fonts: list(d.families),
+        faces: list(d.faces),
+        chars: String(d.chars ?? ''),
+        msg: String(d.message ?? ''),
+      }), r.detail);
+    }
+    prepared.push({
+      source: snap,
+      items: r.items as TextOutlineItem[],
+      shadows: r.shadows as ElementShadow[],
+    });
+  }
+
+  // 等轮廓期间文档可能变了：整批比对，任何一条对不上就整批放弃。
+  const now = requireDoc(store, clipId);
+  for (const job of prepared) {
+    const el = now.elements.find((e) => e.id === job.source.id);
+    if (!el || JSON.stringify(el) !== JSON.stringify(job.source)) {
+      throw new ControlFailure('conflict', tr('agent.typo.outlineChanged'));
+    }
+  }
+
+  const out: { ids: string[] } = { ids: [] };
+  store.commit('agent:typo_to_path', (p) => {
+    const d = findTextDoc(p, clipId);
+    if (!d) return;
+    for (const id of elementIds) {
+      const el = d.elements.find((e) => e.id === id);
+      if (!el || el.kind !== 'shape') continue;
+      // 生成器元素的 path 已是烘焙结果：脱离 = 丢掉 gen（与编辑器一致）。
+      if (el.gen) delete el.gen;
+      else if (convertShapeToPath(el)) out.ids.push(el.id);
+    }
+    for (const job of prepared) {
+      out.ids.push(...applyTextToPath(d, job.source.id, job.items, job.shadows));
+    }
+  });
+  return { elementIds: out.ids, converted: out.ids.length };
 }
 
 /** 对齐 / 分布 / 网格 / 行列。 */

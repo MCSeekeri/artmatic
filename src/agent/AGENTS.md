@@ -155,6 +155,16 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   `get_typography_capabilities().themeSlots` 取；删方案要连引用一起抹。
 - 图片元素的 `key` / `quad` 与片段共用 `core/image-fx.ts` 的 `coerce*`：两处各写一份
   的形态是「同一个 `{tolerance}` 在时间轴有效、在排版里被静默丢掉」。
+- **路径族**（2026-10-22 P3）：`typo_boolean`（差集按 z 序，最底下的是被减数）、
+  `typo_divide`、`typo_convert_to_path`（文本轮廓走注入的 `ctx.outlineText` ——
+  `text-outline` 拉 `render-dom`，控制平面不许 import）。几何逻辑在
+  `typography/shape-convert.ts`，编辑器与 agent 共用；顶点编辑不需要新工具
+  （`path` 可写）。
+- **行内富文本**：`runs` 读侧只在真有覆盖时给（否则 `text` 能重建），写侧过
+  `rich-text.ts::coerceRuns` —— `normalizeRuns` 只合并不校验，拼错的 key 会静默失效。
+- **媒体池**：`media_list` / `media_op` 经 `ctx.mediaPool` 注入（实现需要目录句柄
+  与播放器）。默认要用户确认（偏好 `mediaPoolConfirm`）：未确认 = `needs-approval`，
+  `confirm:true` 只由会话层在用户点过之后传。返回值是「真的改了几条」，0 = 什么都没做。
 - **动画是文档的一部分**：`typo_set_animation` / `typo_add_element.animation` 写的是
   `typography/animation.ts` 的 CSS 动画（预览与导出同一条求值路径）。
   `keys[].at` 收 0..1 或 `{ beat: n }`（换算在 `control-plane.ts`，文档模型只收 0..1）；

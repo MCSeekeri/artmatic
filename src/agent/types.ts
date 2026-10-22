@@ -504,6 +504,8 @@ export interface TypographyElementView {
   transform3d?: unknown;
   /** text */
   text?: string;
+  /** 行内富文本：`[{ text, style? }]`，style 的键见 `SPAN_STYLE_KEYS`。只在有覆盖时回显。 */
+  runs?: unknown;
   style?: Record<string, unknown>;
   /** true = 宽固定、高随内容（文本框的默认行为）。 */
   autoHeight?: boolean;
@@ -838,6 +840,35 @@ export interface ControlContext {
    * 提交覆盖（或者反过来）—— 两边都「看起来正常」，只是改动丢了。
    */
   stopTextEditing?: () => void;
+  /**
+   * 文本轮廓（「文字转路径」的算力）。
+   *
+   * 跑在页面里：需要 DOM 排版（`Range.getClientRects`）+ HarfBuzz，而
+   * `typography/text-outline.ts` 会拉 `render-dom` —— 控制平面不能 import 它。
+   * 这里只**计算**，不落库：快照 / 核对 / 提交都在控制平面（撤销纪律）。
+   */
+  outlineText?: (
+    el: import('../typography/document').TextElement,
+    theme: string | undefined,
+    customThemes: import('../typography/theme').TypographyTheme[] | undefined,
+  ) => Promise<TextOutlineResult>;
+
+  /**
+   * 媒体池（列 + 动作）。实现住在 `ui/project-actions.ts`（需要工程目录句柄、
+   * 素材仓与播放器），控制平面不 import `ui/`。
+   */
+  mediaPool?: {
+    list(): Promise<MediaPoolSnapshot>;
+    /** `assetId` 只对单条动作有意义（`trash_all` / `clear_trash` 等忽略它）。 */
+    run(op: MediaPoolOp, assetId?: string): Promise<{ changed: number; bytes?: number }>;
+  };
+  /**
+   * 「操作媒体池需用户确认」偏好（默认 **true**）。
+   *
+   * 这些动作会移动 / 删除用户磁盘上的文件，而 Agent 无法从画面判断哪一份是原件；
+   * 关掉它等于把这类操作交给模型自行决定。
+   */
+  getMediaPoolConfirm?: () => boolean;
 
   /** 插件宿主（`appState.plugins`）。没有工程 / 未初始化时为 null。 */
   getPluginHost?: () => AgentPluginHost | null;
@@ -852,6 +883,69 @@ export interface ControlContext {
   unloadPlugin?: (pluginId: string) => Promise<void>;
   /** 彻底移除：注册表 + 记录 + 磁盘文件。 */
   removePlugin?: (pluginId: string) => Promise<void>;
+}
+
+/**
+ * 文本轮廓的结果（`ControlContext.outlineText` 的返回）。
+ *
+ * `items` / `shadows` 的精确类型住在 `typography/text-outline.ts`（它拉 DOM），
+ * 这里只过一道不透明的形状，控件平面投给 `buildTextOutlineShapes` 时再收窄。
+ */
+export type TextOutlineResult =
+  | { ok: true; items: unknown[]; shadows: unknown[] }
+  /** `code` 与 `TextOutlineFailure['code']` 对齐（empty / no-font / synthetic …）。 */
+  | { ok: false; code: string; detail?: Record<string, unknown> };
+
+/* ------------------------------------------------------------ 媒体池 */
+
+/**
+ * 媒体池动作。
+ *
+ * 这些动作会**改磁盘上的文件**（移进回收站 / 彻底删除 / 收集进工程目录），
+ * 所以默认要用户确认一次（偏好 `mediaPoolConfirm`，见 `ControlContext`）。
+ */
+export type MediaPoolOp =
+  | 'collect'
+  | 'relink'
+  | 'restore'
+  | 'trash'
+  | 'delete'
+  | 'trash_all'
+  | 'delete_all'
+  | 'clear_trash'
+  | 'cleanup_orphans';
+
+/** 媒体池里的一条素材（`media_list` 的返回行）。 */
+export interface MediaPoolAssetView {
+  id: string;
+  name: string;
+  kind: 'audio' | 'image' | 'video';
+  /** 工程素材表里有它 —— 新片段能引用。 */
+  inProject: boolean;
+  /** 已从工程移除，但字节还在仓里（可恢复 / 可进回收站）。 */
+  retained: boolean;
+  /** 引用式素材：字节指向本机原文件。 */
+  linked: boolean;
+  /** linked 的源文件在本次会话里变过（只提示，不自动换内容）。 */
+  stale: boolean;
+  /** 工程登记了它、但仓里没有字节（打开工程时读不出来）。 */
+  missing: boolean;
+  bytes: number | null;
+  /** 被片段引用的次数（0 = 未使用）。 */
+  uses: number;
+}
+
+export interface MediaPoolSnapshot {
+  assets: MediaPoolAssetView[];
+  /** 磁盘占用；没有工程目录时为 null。 */
+  usage: {
+    projectBytes: number;
+    unusedBytes: number;
+    trashCount: number;
+    trashBytes: number;
+    orphanCount: number;
+    orphanBytes: number;
+  } | null;
 }
 
 /* ------------------------------------------------------ 排版写入的请求形状 */
@@ -882,6 +976,8 @@ export type TypographyElementInput = (
       text: string;
       /** 文档坐标（左上原点，px）。省略 = 水平居中、纵向居中偏上。 */
       frame?: Partial<TypographyFrame>;
+      /** 行内富文本（整份）：`[{ text, style? }]`。给了就不再需要 text。 */
+      runs?: unknown;
       style?: Partial<TypographyTextStyleInput>;
       fill?: unknown;
       boxFill?: unknown;
@@ -976,6 +1072,8 @@ export interface TypographyElementPatch {
   /** 元素虚化半径（文档 px）。0 = 不虚化。 */
   blur?: number;
   /** text */
+  /** 行内富文本（整份替换）：`[{ text, style? }]`；与 `text` 同时给时以它为准。 */
+  runs?: unknown;
   style?: Partial<TypographyTextStyleInput>;
   fill?: unknown;
   boxFill?: unknown;

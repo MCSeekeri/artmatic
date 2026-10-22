@@ -83,6 +83,25 @@ const TIMELINE_HELP = `# Timeline model
   extra tail is what an outgoing transition fades into black). Read \`describe()\`
   after bulk edits if the total length matters.
 
+## Media pool (\`media_list\` / \`media_op\`)
+
+\`media_list\` returns every asset with \`inProject\` / \`retained\` / \`linked\` /
+\`stale\` / \`missing\` / \`bytes\` / \`uses\` (0 = unused) plus disk usage. Read it
+before choosing an id — never guess.
+
+\`media_op({ op, assetId? })\` moves or deletes FILES ON THE USER'S DISK:
+\`collect\` (copy a linked asset into the project), \`relink\` (pick a new source
+file), \`restore\` (bring a removed asset back), \`trash\` (move a retained file
+into \`assets/.trash\`, recoverable), \`delete\` (permanent), \`trash_all\` /
+\`delete_all\`, \`clear_trash\`, \`cleanup_orphans\`.
+
+By default it returns \`needs-approval\` and the app asks the user (setting:
+"confirm media pool actions", default ON); the call runs once they confirm. The
+result's \`changed\` is how many items actually changed — **0 means nothing
+happened** (no project directory, asset not retained, source gone), so never
+report success without it. Prefer \`trash\` over \`delete\` unless the user asked for
+permanent removal.
+
 ## Sections (\`edit_sections\`)
 
 A section stores ONLY its start time: section N ends where section N+1 starts, and
@@ -282,6 +301,25 @@ one undo entry. Three forms:
   same field (\`animation\` / \`animations\`) so a new element can arrive animated
   in one call.
 
+## Paths: bake, boolean, divide
+
+- \`typo_convert_to_path({ elementIds })\` bakes elements into explicit SVG paths:
+  parametric shapes in place (same id, 0..100 authored space, shape params cleared),
+  generated shapes only lose their generator binding, and TEXT becomes real glyph
+  outlines (one shape per color / text box, \`pathUnit:"px"\`; several results are
+  wrapped in a new group). Text conversion is async and all-or-nothing: a missing
+  font / vertical text / synthetic bold fails the call and nothing changes.
+- \`typo_boolean({ elementIds, op })\` — op: union | difference | intersection | xor.
+  z order comes from the document, not from \`elementIds\`. DIFFERENCE subtracts with
+  the BOTTOM-most shape as the minuend. The result is one new \`shape:"svg"\` element
+  at the topmost operand's z position, with no animations; an empty result is an
+  error and changes nothing.
+- \`typo_divide({ elementIds })\` — splits the arrangement into non-overlapping
+  pieces; each piece keeps the look of the operand that covers it topmost.
+- Vertex editing needs no tool: \`path\` is writable (\`typo_update_element\`), so
+  insert / remove / move an anchor by editing the \`d\` string. Remember to keep
+  \`pathUnit:"px"\` for text-outline paths (0..100 would stretch their stroke).
+
 ## Canvas, group boxes, themes
 
 - \`typo_set_canvas_size({ size, scaleContent })\` changes \`doc.size\`. \`scaleContent:true\`
@@ -311,9 +349,15 @@ every unrecognised key in \`droppedKeys\` (\`elements[2].colour\`) and every ani
 entry that failed validation in \`droppedAnimations\` (\`elements[2].animations[0]\`).
 Read both — a silent normalisation looks exactly like success.
 \`get_typography_doc({detail:'full'})\` output is round-trippable: animations
-(preset, keys and custom css), paints, styles, 3D and generator state all come back,
-so edit-and-write-back is a legitimate workflow. Text is plain text on this path —
-inline per-run formatting is not expressible.
+(preset, keys and custom css), paints, styles, 3D, generator state and inline runs
+all come back, so edit-and-write-back is a legitimate workflow.
+
+Inline rich text: a text element's \`runs\` is \`[{ text, style? }]\` and is returned
+ONLY when some run actually overrides something (otherwise \`text\` rebuilds the
+same runs). Style keys are \`fontFamily\`, \`fontSize\` (px), \`fontWeight\`,
+\`fontStyle\`, \`letterSpacing\` (px), \`color\`, \`textDecoration\`, \`highlight\`; a
+missing key inherits the element style. Send \`runs\` to \`typo_update_element\` (or
+in a new element) to replace the whole list — \`text\` is the plain-text shorthand.
 
 Geometry: call \`typo_measure\` when text may overflow its frame, elements may
 collide, or something may sit outside the canvas. It reports measured text

@@ -62,6 +62,8 @@ import { decodeAudio, computeWaveform } from '../audio/decode';
 import { mimeForImageFilename, putImageBytes } from '../typography/image-assets';
 import { registerImageBytes, registerVideoMedia } from '../engine/media-assets';
 import { formatBytes } from '../core/format';
+import { buildPoolItems, clipsUsingAsset } from './media-pool';
+import type { MediaPoolOp, MediaPoolSnapshot } from '../agent/types';
 import { tr } from '../i18n/index.svelte';
 
 function msg(e: unknown): string {
@@ -825,5 +827,67 @@ export async function restoreDraftProject(key: string): Promise<boolean> {
     return false;
   } finally {
     appState.projectBusy = false;
+  }
+}
+
+/* ------------------------------------------------- Agent 媒体池桥（AGENTS §1.9） */
+
+/**
+ * 媒体池快照（`media_list`）。
+ *
+ * 面板需要的都在这里：归属（工程表 / 已移除）、字节、引用次数、源状态。
+ * **只 stat 不读字节** —— 视频素材再多也不会因为这个列表进堆。
+ */
+export async function listMediaPool(): Promise<MediaPoolSnapshot> {
+  if (!appState.hasProject) return { assets: [], usage: null };
+  const p = appState.activeProject;
+  const retained = new Set(p.assets.retainedIds());
+  const rows = buildPoolItems(appState.project.assets, p.assets).map((it) => ({
+    id: it.id,
+    name: it.name,
+    kind: it.kind,
+    inProject: Boolean(appState.project.assets[it.id]),
+    retained: retained.has(it.id),
+    linked: it.linked === true,
+    stale: it.stale === true,
+    missing: it.missing,
+    bytes: it.bytes,
+    uses: clipsUsingAsset(appState.project, it.id).length,
+  }));
+  return { assets: rows, usage: await getProjectUsage() };
+}
+
+/**
+ * 媒体池动作（`media_op`）。返回「真的改了几条」—— 0 = 条件不满足、什么都没做
+ * （没有工程目录、素材不在回收站里、源文件已经没了……），调用方据此如实回执。
+ */
+export async function runMediaPoolOp(
+  op: MediaPoolOp,
+  assetId?: string,
+): Promise<{ changed: number; bytes?: number }> {
+  const id = assetId ?? '';
+  switch (op) {
+    case 'collect':
+      return { changed: (await collectAsset(id)) ? 1 : 0 };
+    case 'relink':
+      return { changed: (await relinkAsset(id)) ? 1 : 0 };
+    case 'restore':
+      return { changed: (await restoreUnusedAsset(id)) ? 1 : 0 };
+    case 'trash':
+      return { changed: (await trashUnusedAsset(id)) ? 1 : 0 };
+    case 'delete':
+      return { changed: (await deleteUnusedAsset(id)) ? 1 : 0 };
+    case 'trash_all':
+      return { changed: await trashAllUnused() };
+    case 'delete_all':
+      return { changed: await deleteAllUnused() };
+    case 'clear_trash': {
+      const r = await clearProjectTrash();
+      return { changed: r?.removed ?? 0, bytes: r?.bytes ?? 0 };
+    }
+    case 'cleanup_orphans':
+      return { changed: await cleanupOrphanFiles() };
+    default:
+      return { changed: 0 };
   }
 }

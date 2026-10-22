@@ -41,13 +41,36 @@
 
 {#if agentState.pending}
   {@const isTry = agentState.pending.kind === 'try'}
+  {@const isMedia = agentState.pending.kind === 'media'}
   <div class="approval" data-testid="agent-approval" data-kind={agentState.pending.kind}>
     <div class="title">
       <Icon name="triangle-alert" size={13} />
-      <span>{tr(isTry ? 'agent.approval.tryTitle' : 'agent.approval.title')}</span>
-      <code>{agentState.pending.pluginId}</code>
+      <span>
+        {tr(
+          isMedia
+            ? 'agent.approval.mediaTitle'
+            : isTry
+              ? 'agent.approval.tryTitle'
+              : 'agent.approval.title',
+        )}
+      </span>
+      <code>{isMedia ? (agentState.pending.media?.op ?? '') : agentState.pending.pluginId}</code>
     </div>
-    <p>{tr(isTry ? 'agent.approval.tryBody' : 'agent.approval.body')}</p>
+    <p>
+      {tr(
+        isMedia
+          ? 'agent.approval.mediaBody'
+          : isTry
+            ? 'agent.approval.tryBody'
+            : 'agent.approval.body',
+        isMedia
+          ? {
+              op: agentState.pending.media?.op ?? '',
+              name: agentState.pending.media?.assetName ?? agentState.pending.media?.assetId ?? '—',
+            }
+          : {},
+      )}
+    </p>
     {#if isTry}
       <label class="remember">
         <input type="checkbox" data-testid="agent-approval-allow" bind:checked={rememberTry} />
@@ -55,13 +78,15 @@
       </label>
     {/if}
     <div class="row">
-      <Button
-        label={tr('agent.approval.source')}
-        variant="ghost"
-        disabled={loading}
-        testid="agent-approval-source"
-        onclick={() => void toggleSource()}
-      />
+      {#if !isMedia}
+        <Button
+          label={tr('agent.approval.source')}
+          variant="ghost"
+          disabled={loading}
+          testid="agent-approval-source"
+          onclick={() => void toggleSource()}
+        />
+      {/if}
       <span class="spacer"></span>
       <Button
         label={tr('agent.approval.reject')}
@@ -70,7 +95,13 @@
         onclick={reject}
       />
       <Button
-        label={tr(isTry ? 'agent.approval.run' : 'agent.approval.install')}
+        label={tr(
+          isMedia
+            ? 'agent.approval.mediaRun'
+            : isTry
+              ? 'agent.approval.run'
+              : 'agent.approval.install',
+        )}
         variant="accent"
         testid="agent-approval-install"
         onclick={approve}

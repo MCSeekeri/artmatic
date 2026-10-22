@@ -1027,3 +1027,21 @@ executor.ts   工具名 → 控制平面调用（唯一的应用内映射表）
 - **`save_theme` 不要求先读回整套色表**：局部色槽补丁让它能「只把 accent1 调成
   橙」，而基准从 `base` / 当前文档推出 —— 「照着一份自己以为对的色表继续做」是
   模型最容易偏的一类。
+
+### 12.8 路径族 / 行内富文本 / 媒体池（2026-10-22 P3 + 媒体池）
+
+| 新增 | 为什么 | 取舍 |
+|---|---|---|
+| `typo_boolean({ elementIds, op })` / `typo_divide({ elementIds })` | 布尔与拆分原先只在编辑器里（`actions.ts` 的私有函数），agent 既读不到也做不出 | 几何逻辑抽到 `typography/shape-convert.ts`（纯函数，编辑器与 agent 共用）。差集**按 z 序**，最底下的是被减数；结果为空 = `unsupported` 且**不改文档** |
+| `typo_convert_to_path({ elementIds })` | 参数化 / 生成器图形与文本转路径都在 UI 里；`path` 字段虽然可写，但没有「烘焙」这一步 | 图形就地转（同 id、0..100）；文本走**注入的** `ctx.outlineText`（`text-outline` 拉 `render-dom`，控制平面不能 import）。先全部算完再落库：任何一条失败都不改文档 |
+| `typo_update_element({ runs })` + `elementView` 回显 | 行内富文本只有编辑器能做；`runs` 以前在 `droppedKeys` 里 | 读侧只在「真有行内覆盖」时给 `runs`（否则 `text` 能原样重建，铺开白烧上下文）；写侧过 `rich-text.ts::coerceRuns`，拼错的 style 键直接报错 |
+| `media_list()` / `media_op({ op, assetId? })` | 媒体池的 9 个动作会移动 / 删除磁盘文件，agent 完全够不着；`get_scene` 也不列素材 | 实现注入（`ctx.mediaPool`，住在 `ui/project-actions.ts`：需要目录句柄 / 素材仓 / 播放器）。**默认要用户确认**（偏好 `mediaPoolConfirm`，设置在「安全」分节），未确认 = `needs-approval`，用户点过之后会话层带 `confirm:true` 重放 —— 模型不能自己批准 |
+
+三个实现细节：
+
+- **`applyBoolean` / `applyDivide` 是纯函数**：不 commit、不碰 store，编辑器那边
+  仍在自己的 `editorState.commit` 里调用它们，撤销粒度不变。
+- **`media_op` 的返回值是「真的改了几条」**：0 表示什么都没做（没有工程目录 /
+  素材不在回收站 / 源文件没了），不是成功 —— 模型据此才不会谎报「删掉了」。
+- **媒体池进系统提示**：模型知道 `media_op` 会先要审批、并且 `changed:0` 不等于
+  成功（见 `llm/prompt.ts` 的 `# Media pool` 一节）。

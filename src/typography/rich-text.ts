@@ -105,6 +105,39 @@ export function normalizeRuns(runs: readonly TextRun[]): TextRun[] {
 }
 
 /**
+ * 来历不明的 `runs` → 合法的 `TextRun[]`；形状不对返回 null（调用方报错）。
+ *
+ * 为什么不能直接 `normalizeRuns(raw as TextRun[])`：它只合并、不校验 ——
+ * 一个拼错的键（`fontWight`）会原样进文档，渲染侧静默忽略，而模型看到的是
+ * 「写进去了」。这里的判据只有两条：`text` 是字符串、`style` 的键在
+ * `SPAN_STYLE_KEYS` 里且值是字符串或有限数。
+ */
+export function coerceRuns(raw: unknown): TextRun[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: TextRun[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.text !== 'string') return null;
+    let style: TextSpanStyle | undefined;
+    if (rec.style !== undefined) {
+      if (typeof rec.style !== 'object' || rec.style === null || Array.isArray(rec.style)) return null;
+      const picked: Record<string, string | number> = {};
+      for (const [k, v] of Object.entries(rec.style as Record<string, unknown>)) {
+        if (!(SPAN_STYLE_KEYS as readonly string[]).includes(k)) return null;
+        if (v === undefined || v === null) continue;
+        if (typeof v === 'string') picked[k] = v;
+        else if (typeof v === 'number' && Number.isFinite(v)) picked[k] = v;
+        else return null;
+      }
+      if (Object.keys(picked).length) style = picked as TextSpanStyle;
+    }
+    out.push(style ? { text: rec.text, style } : { text: rec.text });
+  }
+  return normalizeRuns(out);
+}
+
+/**
  * 元素级样式的可读投影（把 `TextStyle` 里能行内覆盖的那几项取出来）。
  *
  * 用映射类型而不是 `Required<Pick<…>>`：`highlight` 在模型里本身就是可选的

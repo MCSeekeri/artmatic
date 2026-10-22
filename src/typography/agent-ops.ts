@@ -51,7 +51,7 @@ import {
   type TypographyElement,
   type TypographyGroup,
 } from './document';
-import { plainTextOf, runsFromText } from './rich-text';
+import { coerceRuns, hasSpanOverrides, plainTextOf, runsFromText } from './rich-text';
 import {
   ANIM_PRESETS,
   createCustomAnimation,
@@ -431,6 +431,8 @@ export interface ElementExtras {
 
 export interface NewTextInput extends AnimationCarrier, ElementExtras {
   text: string;
+  /** 行内富文本：给了就用它（`text` 退化成「纯文本速记」）。 */
+  runs?: unknown;
   frame?: FramePatch;
   style?: Record<string, unknown>;
   fill?: unknown;
@@ -552,8 +554,10 @@ function applyCommon(
 
 /** 追加一个文字元素。返回它（调用方要 id）。 */
 export function addTextElement(doc: TypographyDocument, input: NewTextInput): TextElement {
+  // `runs` 优先：带行内覆盖的内容没法用 `text` 表达。
+  const runs = input.runs === undefined ? null : coerceRuns(input.runs);
   const el = createTextElement(doc.size, {
-    text: typeof input.text === 'string' ? input.text : '',
+    ...(runs ? { runs } : { text: typeof input.text === 'string' ? input.text : '' }),
     ...(input.name ? { name: input.name } : {}),
   });
   applyFramePatch(el.frame, input.frame ?? {});
@@ -784,6 +788,11 @@ export function patchElement(
     if (raw.boxStroke !== undefined) setTextBoxStroke(el, raw.boxStroke);
     if (raw.glyphStroke !== undefined) setGlyphStroke(el, raw.glyphStroke);
     if (raw.text !== undefined && typeof raw.text === 'string') el.runs = runsFromText(raw.text);
+    // `runs` 覆盖 `text` 之后：同一份 patch 里两个都给时，后者更精确。
+    if (raw.runs !== undefined) {
+      const runs = coerceRuns(raw.runs);
+      if (runs) el.runs = runs;
+    }
     if (raw.autoHeight !== undefined) el.autoHeight = Boolean(raw.autoHeight);
   } else if (el.kind === 'shape') {
     const fillPatch = coercePaintPatch(raw.fill);
@@ -1326,6 +1335,12 @@ function elementView(el: TypographyElement): Record<string, unknown> {
     return {
       ...base,
       text: plainTextOf(el.runs),
+      /*
+       * `runs` 只在**真有行内覆盖**时给：没有覆盖时 `text` 已经能原样重建同一份
+       * runs（`runsFromText`），铺开它只会白烧上下文。反过来，有覆盖却不给
+       * runs，就等于「读一次再写回」把加粗 / 高亮整段抹掉。
+       */
+      ...(hasSpanOverrides(el.runs) ? { runs: el.runs.map((r) => ({ ...r, ...(r.style ? { style: { ...r.style } } : {}) })) } : {}),
       style: { ...el.style },
       autoHeight: el.autoHeight,
       ...(el.fill ? { fill: el.fill } : {}),
@@ -1474,7 +1489,7 @@ const ELEMENT_KEYS = new Set([
  * 静默丢弃（`runs` / `natural` 就是这么躺了一阵的）。写不了的字段宁可报出来。
  */
 const KIND_KEYS: Record<string, string[]> = {
-  text: ['text', 'style', 'fill', 'boxFill', 'boxStroke', 'glyphStroke', 'autoHeight'],
+  text: ['text', 'runs', 'style', 'fill', 'boxFill', 'boxStroke', 'glyphStroke', 'autoHeight'],
   shape: ['shape', 'path', 'pathUnit', 'clipFrame', 'fill', 'stroke', 'radius', 'sides', 'waist', 'inner', 'angle', 'evenOdd', 'gen'],
   image: ['assetId', 'fit', 'crop', 'radius', 'key', 'quad'],
 };
@@ -1560,6 +1575,11 @@ export function coerceDocument(
       if (item.boxStroke !== undefined) setTextBoxStroke(el, item.boxStroke);
       if (item.glyphStroke !== undefined) setGlyphStroke(el, item.glyphStroke);
       if (item.autoHeight !== undefined) el.autoHeight = Boolean(item.autoHeight);
+      // 富文本：`runs` 比 `text` 更精确（带行内覆盖），两者都在时以它为准。
+      if (item.runs !== undefined) {
+        const runs = coerceRuns(item.runs);
+        if (runs) el.runs = runs;
+      }
       doc.elements.push(el);
     } else if (kind === 'shape' && isShapeKind(item.shape)) {
       const el = createShapeElement(size, item.shape, {

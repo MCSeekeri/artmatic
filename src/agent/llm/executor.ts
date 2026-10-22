@@ -369,6 +369,19 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
         case 'estimate_beat_grid':
           return unwrap(await control.estimateBeatGrid());
 
+        case 'media_list':
+          return unwrap(await control.listMediaPool());
+
+        case 'media_op':
+          // `confirm` 不在这里传：需要审批时控制平面回 needs-approval，用户点过之后
+          // 由会话层带 `confirm:true` 重放（模型不能自己批准）。
+          return unwrap(
+            await control.mediaPoolOp({
+              op: String(args.op ?? '') as never,
+              ...(typeof args.assetId === 'string' ? { assetId: args.assetId } : {}),
+            }),
+          );
+
         case 'set_project':
           return unwrap(
             await control.setProject({
@@ -530,6 +543,31 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               typeof args.clipId === 'string' ? args.clipId : undefined,
               String(args.groupId ?? ''),
               asRecord(args.patch),
+            ),
+          );
+
+        case 'typo_boolean':
+          return unwrap(
+            await control.booleanTypographyShapes(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              Array.isArray(args.elementIds) ? args.elementIds.map(String) : [],
+              String(args.op ?? 'union') as never,
+            ),
+          );
+
+        case 'typo_divide':
+          return unwrap(
+            await control.divideTypographyShapes(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              Array.isArray(args.elementIds) ? args.elementIds.map(String) : [],
+            ),
+          );
+
+        case 'typo_convert_to_path':
+          return unwrap(
+            await control.convertTypographyToPath(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              Array.isArray(args.elementIds) ? args.elementIds.map(String) : [],
             ),
           );
 

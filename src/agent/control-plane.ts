@@ -106,6 +106,8 @@ import {
   type PluginInfoView,
   type PluginTryResult,
   type RenderOnly,
+  type MediaPoolOp,
+  type MediaPoolSnapshot,
   type SceneDetail,
   type SceneIdSnapshot,
   type SceneSectionView,
@@ -218,6 +220,19 @@ function paramKeys(params: ParamDef[] | undefined): string[] {
   return (params ?? []).map((p) => p.key);
 }
 
+/** 媒体池动作白名单（顺序即工具描述里的顺序）。 */
+const MEDIA_POOL_OPS: MediaPoolOp[] = [
+  'collect',
+  'relink',
+  'restore',
+  'trash',
+  'delete',
+  'trash_all',
+  'delete_all',
+  'clear_trash',
+  'cleanup_orphans',
+];
+
 /* ------------------------------------------- 片段视觉字段（key / quad / crop）
  *
  * 校验在 `core/image-fx.ts`：排版图片元素与片段共用同一组字段，两份校验必然分叉。
@@ -247,6 +262,17 @@ export interface AgentControlPlane {
   ): Promise<ControlResult<TypographyDocView | TypographyDocIdView>>;
   getClip(clipId: string): Promise<ControlResult<ClipView | null>>;
   listProjects(): Promise<ControlResult<OpenProjectView[]>>;
+  /** 媒体池快照：每条素材的归属 / 字节 / 引用次数 + 磁盘占用。 */
+  listMediaPool(): Promise<ControlResult<MediaPoolSnapshot>>;
+  /**
+   * 媒体池动作。**默认要用户确认**（偏好 `mediaPoolConfirm`）：未确认时返回
+   * `needs-approval`，`confirm: true` 只由会话层在用户点过之后传。
+   */
+  mediaPoolOp(req: {
+    op: MediaPoolOp;
+    assetId?: string;
+    confirm?: boolean;
+  }): Promise<ControlResult<{ op: string; changed: number; bytes?: number }>>;
   undoState(): Promise<ControlResult<UndoState>>;
   /**
    * 场景版本（内容版本 + 播放头）。给会话层的**重复调用判据**用：
@@ -530,6 +556,28 @@ export interface AgentControlPlane {
     patch: Record<string, unknown>,
   ): Promise<ControlResult<{ changed: boolean; group: Record<string, unknown> }>>;
   /**
+   * 图形布尔运算。**差集按 z 序**：最底下的那个是被减数。
+   * 结果为空时不改文档、返回 `unsupported`。
+   */
+  booleanTypographyShapes(
+    clipId: string | undefined,
+    elementIds: string[],
+    op: 'union' | 'difference' | 'intersection' | 'xor',
+  ): Promise<ControlResult<{ elementId: string }>>;
+  /** 拆分：重叠区域切成互不重叠的若干片（每片沿用最上面那个操作数的外观）。 */
+  divideTypographyShapes(
+    clipId: string | undefined,
+    elementIds: string[],
+  ): Promise<ControlResult<{ elementIds: string[] }>>;
+  /**
+   * 转路径：参数化 / 生成器图形就地转，文本走宿主注入的轮廓计算。
+   * 任何一条失败都不改文档（整批原子）。
+   */
+  convertTypographyToPath(
+    clipId: string | undefined,
+    elementIds: string[],
+  ): Promise<ControlResult<{ elementIds: string[]; converted: number }>>;
+  /**
    * 整体替换文档。坏元素丢弃（`dropped`），**未知键逐条报出来**（`droppedKeys`）：
    * 静默归一化会让模型照着一份自己以为对的文档继续往下做。
    */
@@ -724,6 +772,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'getTypographyDoc'
     | 'getClip'
     | 'listProjects'
+    | 'listMediaPool'
     | 'undoState'
     | 'sceneVersion'
     | 'help'
@@ -788,6 +837,16 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
 
     async listProjects() {
       return run(() => ctx.listProjects());
+    },
+
+    async listMediaPool() {
+      return run(async () => {
+        needStore();
+        if (!ctx.mediaPool) {
+          throw new ControlFailure('unsupported', tr('agent.media.unsupported'));
+        }
+        return ctx.mediaPool.list();
+      });
     },
 
     async undoState() {
@@ -913,6 +972,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'setProject'
     | 'editSections'
     | 'estimateBeatGrid'
+    | 'mediaPoolOp'
     | 'loadScene'
     | 'beginTx'
     | 'endTx'
@@ -1769,6 +1829,44 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
+    async mediaPoolOp(req) {
+      return run(async () => {
+        const store = beforeWrite();
+        if (!ctx.mediaPool) {
+          throw new ControlFailure('unsupported', tr('agent.media.unsupported'));
+        }
+        if (!isRecord(req)) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'mediaPoolOp' }));
+        }
+        const op = String(req.op ?? '');
+        if (!MEDIA_POOL_OPS.includes(op as MediaPoolOp)) {
+          throw new ControlFailure('invalid-argument', tr('agent.media.badOp', { op }), {
+            validIds: MEDIA_POOL_OPS,
+          });
+        }
+        const one = op === 'collect' || op === 'relink' || op === 'restore' || op === 'trash' || op === 'delete';
+        const assetId = typeof req.assetId === 'string' ? req.assetId : '';
+        if (one && !assetId) {
+          throw new ControlFailure('invalid-argument', tr('agent.media.needAsset', { op }));
+        }
+        /*
+         * 「操作媒体池需用户确认」：默认开着。关掉它等于把「移动 / 删除磁盘文件」
+         * 交给模型自行决定，所以这里是**偏好**而不是工具参数 —— 模型不能自己批准
+         * （`confirm` 只由会话层在用户点过之后传）。
+         */
+        if (req.confirm !== true && (ctx.getMediaPoolConfirm?.() ?? true)) {
+          const name = (assetId && store.project.assets[assetId]?.name) || assetId;
+          throw new ControlFailure('needs-approval', tr('agent.media.needsApproval', { op, name }), {
+            kind: 'media',
+            op,
+            ...(assetId ? { assetId, assetName: name } : {}),
+          });
+        }
+        const result = await ctx.mediaPool.run(op as MediaPoolOp, assetId || undefined);
+        return { op, ...result };
+      });
+    },
+
     /**
      * 整体改写（方案 §3.6 的路径 B）：传一份完整 `Project`。
      *
@@ -2572,6 +2670,9 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'removeTypographyTheme'
     | 'setTypographyCanvasSize'
     | 'updateTypographyGroup'
+    | 'booleanTypographyShapes'
+    | 'divideTypographyShapes'
+    | 'convertTypographyToPath'
     | 'replaceTypographyDoc'
   > = {
     /**
@@ -2767,6 +2868,37 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'patch' }), { patch });
         }
         return typo.updateGroupBox(store, typoClipId(clipId), String(groupId ?? ''), patch);
+      });
+    },
+
+    async booleanTypographyShapes(clipId, elementIds, op) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!['union', 'difference', 'intersection', 'xor'].includes(op)) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: `op=${String(op)}` }), {
+            validIds: ['union', 'difference', 'intersection', 'xor'],
+          });
+        }
+        return typo.booleanShapes(store, typoClipId(clipId), Array.isArray(elementIds) ? elementIds : [], op);
+      });
+    },
+
+    async divideTypographyShapes(clipId, elementIds) {
+      return run(() => {
+        const store = beforeWrite();
+        return typo.divideShapes(store, typoClipId(clipId), Array.isArray(elementIds) ? elementIds : []);
+      });
+    },
+
+    async convertTypographyToPath(clipId, elementIds) {
+      return run(async () => {
+        const store = beforeWrite();
+        return typo.convertToPath(
+          store,
+          typoClipId(clipId),
+          Array.isArray(elementIds) ? elementIds : [],
+          ctx.outlineText,
+        );
       });
     },
 

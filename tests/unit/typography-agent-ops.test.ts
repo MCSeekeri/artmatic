@@ -431,9 +431,9 @@ describe('整份替换：未知键与动画', () => {
     expect(report.droppedAnimations).toEqual(['elements[0].animations[1]', 'elements[0].animations[2]']);
   });
 
-  it('白名单只放实现真的会读的键：runs / natural 会进 droppedKeys', () => {
+  it('白名单只放实现真的会读的键：natural 会进 droppedKeys，runs 会被保留', () => {
     const report = { droppedKeys: [] as string[], droppedAnimations: [] as string[] };
-    coerceDocument(
+    const out = coerceDocument(
       {
         size: { w: 800, h: 600 },
         elements: [
@@ -444,7 +444,9 @@ describe('整份替换：未知键与动画', () => {
       doc(),
       report,
     );
-    expect(report.droppedKeys).toContain('elements[0].runs');
+    // 行内富文本现在真的会读（不再是「放行但不处理」）。
+    expect(report.droppedKeys).not.toContain('elements[0].runs');
+    expect(out.elements[0]!.kind === 'text' && out.elements[0]!.runs[0]!.text).toBe('hi');
     expect(report.droppedKeys).toContain('elements[1].natural');
   });
 });

@@ -66,24 +66,18 @@ import {
   ungroupElements,
   type GroupedFragment,
 } from '../../typography/groups';
-import { shapeGeometry, type ShapePreset } from '../../typography/shapes';
+import { type ShapePreset } from '../../typography/shapes';
 import { buildFromSpec, defaultsOf, generatorById, nextSeed } from '../../typography/svg-gen';
 import { cloneAsCustomTheme, type TypographyTheme } from '../../typography/theme';
 import { ICON_STROKE_WIDTH, iconGridFrames, type IconInsert } from '../../typography/icon-shapes';
+import { insertNodeOnSegment, parsePathNodes, removeNode, serializePathNodes } from '../../typography/path-nodes';
+import { type BoolOp } from '../../typography/path-ops';
 import {
-  insertNodeOnSegment,
-  mapNodes,
-  parsePathNodes,
-  removeNode,
-  serializePathNodes,
-} from '../../typography/path-nodes';
-import {
-  booleanOp,
-  dividePolygons,
-  multiToShape,
-  shapeToMultiPolygon,
-  type BoolOp,
-} from '../../typography/path-ops';
+  applyBoolean,
+  applyDivide,
+  buildTextOutlineShapes,
+  convertShapeToPath,
+} from '../../typography/shape-convert';
 import {
   applySpanStyle,
   clearSpanStyle as clearRunsSpanStyle,
@@ -187,127 +181,6 @@ function applyGenParam(doc: TypographyDocument, key: string, value: number | str
   }
 }
 
-/**
- * 把参数化图形**就地**转成路径（`shape: 'svg'`）。返回是否真的转了。
- *
- * 像素盒坐标 → 0..100 authored。各轴**分别**缩放是必须的：`svg` 图形渲染时会
- * 套一层 `scale(w/100, h/100)`，所以这里存 `100/w`、`100/h`，渲染时正好抵消。
- * 用统一的 100/短边的话，非等比盒里的圆角会变成椭圆弧。
- *
- * 参数化字段一并清掉：留着它们会让「图形格式」面板继续显示一排对当前形状
- * 毫无作用的滑杆（形状已经是那串路径了）。
- */
-function shapeToPath(el: ShapeElement): boolean {
-  if (el.shape === 'svg') return false;
-  const geo = shapeGeometry(el.shape, {
-    w: el.frame.w,
-    h: el.frame.h,
-    radius: el.radius,
-    sides: el.sides,
-    waist: el.waist,
-    inner: el.inner,
-    angle: el.angle,
-  });
-  if (!geo.d) return false;
-  const kx = 100 / Math.max(1, el.frame.w);
-  const ky = 100 / Math.max(1, el.frame.h);
-  const subs = mapNodes(parsePathNodes(geo.d), (p) => ({ x: p.x * kx, y: p.y * ky }));
-  const path = serializePathNodes(subs);
-  if (!path) return false;
-  el.path = path;
-  el.shape = 'svg';
-  // 搬洞：不搬这一行，一次「转换为路径」就把圆环 / 方框变成实心盘。
-  el.evenOdd = geo.evenOdd ? true : undefined;
-  el.radius = undefined;
-  el.sides = undefined;
-  el.waist = undefined;
-  el.inner = undefined;
-  el.angle = undefined;
-  // 参数化图形本来就不该带生成器元数据；真带上了（手改过的档）也一并清掉。
-  el.gen = undefined;
-  return true;
-}
-
-/**
- * 文本转路径的产物 → 一组 `ShapeElement`。
- *
- * 三条约定：
- *  - **路径是像素空间**（`pathUnit: 'px'` + `clipFrame`）：文本框通常是几百乘
- *    几十，落回 0..100 authored 会把描边拉成一边粗一边细（见 shapes.ts 文件头）。
- *  - **第一个产物沿用源元素的 id**：它就是「这个元素变成了路径」，选区与
- *    上游引用（图层滚动位置之类）不用重算。
- *  - **动画 id 逐个换新**：同一段文字按颜色拆成多个图形时，动画要各演各的，
- *    共用 id 会让 `bake-animation` 的按 id 索引串味。
- */
-function buildTextOutlineShapes(
-  source: TextElement,
-  items: readonly TextOutlineItem[],
-  shadows: readonly ElementShadow[],
-): ShapeElement[] {
-  const common = {
-    name: source.name,
-    frame: { ...source.frame },
-    blend: source.blend,
-    opacity: source.opacity,
-    visible: source.visible,
-    locked: source.locked,
-    groupId: source.groupId,
-    transform3d: source.transform3d ? structuredClone(source.transform3d) : undefined,
-    blur: source.blur,
-    // 文本框本来就是 overflow: hidden：溢出的字形 / 描边不该在转换后冒出来。
-    clipFrame: true,
-  };
-  /*
-   * 阴影要**分角色**给：
-   *  - `shadows` 是「文字阴影 + 元素阴影」，只该落在字形 / 装饰线上；
-   *  - 文本框底色与高亮只该带**元素阴影**（原来它们也不吃 text-shadow）。
-   * 全给的话，文本框会凭空长出一圈文字阴影。
-   */
-  const elementShadows = (source.shadows ?? []).map((s) => ({ ...s }));
-
-  return items.map((item, i): ShapeElement => {
-    const glyphLike = item.role === 'glyph' || item.role === 'decoration';
-    const base = {
-      ...common,
-      id: i === 0 ? source.id : newId(),
-      animations: source.animations.map((a) => ({ ...structuredClone(a), id: newId() })),
-      shadows: glyphLike
-        ? shadows.length
-          ? shadows.map((s) => ({ ...s }))
-          : undefined
-        : elementShadows.length
-          ? elementShadows.map((s) => ({ ...s }))
-          : undefined,
-    };
-    if (item.role === 'box') {
-      return {
-        ...base,
-        kind: 'shape',
-        shape: 'rect',
-        fill: item.paint,
-        stroke: item.stroke ? { ...item.stroke } : null,
-      };
-    }
-    const glyphStroke = item.role === 'glyph' && source.glyphStroke && source.glyphStroke.width > 0
-      ? {
-          color: source.glyphStroke.color,
-          width: source.glyphStroke.width,
-          // `-webkit-text-stroke` 没有线型；带上原字段会让 SVG 画出虚线。
-          style: 'solid' as const,
-        }
-      : null;
-    return {
-      ...base,
-      kind: 'shape',
-      shape: 'svg',
-      path: item.d,
-      pathUnit: 'px',
-      fill: item.paint,
-      stroke: glyphStroke,
-    };
-  });
-}
-
 /** 转路径失败 → 一条能照做的提示（不是「失败了」三个字）。 */
 function textOutlineFailureText(failure: TextOutlineFailure): string {
   switch (failure.code) {
@@ -334,40 +207,6 @@ function textOutlineFailureText(failure: TextOutlineFailure): string {
     default:
       return tr('typo.textToPathEmpty');
   }
-}
-
-/**
- * 布尔 / 拆分结果的公共字段：外观与名字跟着来源，**几何身份**全部重置。
- *
- * - `multiToShape` 的输出恒为 0..100 authored，与来源原来的坐标系无关；
- * - `clipFrame` 是「文本框转过来」的语义，结果已是新的外接框，不该继承；
- * - 形状参数（圆角 / 边数 / 腰 / 内径 / 角度）只对原始图形有意义；
- * - 动画清空：多个操作数各有一套，拆分的各片也不该各自重复播同一段；
- * - `groupId` 由调用方决定（布尔清掉；拆分保留原组）。
- */
-function booleanResultFrom(
-  src: ShapeElement,
-  id: string,
-  shaped: { path: string; frame: { x: number; y: number; w: number; h: number } },
-  keepGroup: boolean,
-): ShapeElement {
-  return {
-    ...structuredClone(src),
-    id,
-    kind: 'shape',
-    shape: 'svg',
-    path: shaped.path,
-    frame: { x: shaped.frame.x, y: shaped.frame.y, w: shaped.frame.w, h: shaped.frame.h, rot: 0 },
-    pathUnit: undefined,
-    clipFrame: undefined,
-    radius: undefined,
-    sides: undefined,
-    waist: undefined,
-    inner: undefined,
-    angle: undefined,
-    animations: [],
-    groupId: keepGroup ? src.groupId : undefined,
-  };
 }
 
 /**
@@ -2035,7 +1874,7 @@ export function createTypographyActions(): TypographyActions {
           const target = doc.elements.find((e) => e.id === el.id);
           if (!target || target.kind !== 'shape') return;
           if (target.gen) target.gen = undefined;
-          else shapeToPath(target);
+          else convertShapeToPath(target);
         });
       }
       editorState.nodeEditId = el.id;
@@ -2046,7 +1885,7 @@ export function createTypographyActions(): TypographyActions {
         for (const el of onlyShape(doc)) {
           // 生成器元素：path 已是烘焙结果，脱离 = 丢掉 gen。
           if (el.gen) el.gen = undefined;
-          else shapeToPath(el);
+          else convertShapeToPath(el);
         }
       });
     },
@@ -2187,40 +2026,21 @@ export function createTypographyActions(): TypographyActions {
     booleanShapes(op) {
       const doc = editorState.doc;
       if (!doc) return;
-      // 只取图形，并按 **z 序**排列（底 → 顶）。差集依赖顺序：数组第一个是
-      // 被减数，其余是减数 —— 与「后画的挖掉先画的」直觉一致。
-      const picked = new Set(
-        editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).map((e) => e.id),
-      );
-      const ordered = doc.elements.filter((e) => picked.has(e.id)) as ShapeElement[];
-      if (ordered.length < 2) return;
+      // 只取图形，按 **z 序**（底 → 顶）参与运算；差集依赖顺序，最底下的是被减数。
+      const ids = editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).map((e) => e.id);
+      if (ids.length < 2) return;
 
-      const top = ordered[ordered.length - 1]!;
-      const freshId = newId();
-      let empty = false;
-
+      const out: { id: string | null } = { id: null };
       editorState.commit(tr('typo.undo.boolean'), (d) => {
-        const result = booleanOp(op, ordered.map(shapeToMultiPolygon));
-        const shaped = multiToShape(result);
-        if (!shaped) {
-          // 交集为空 / 被减没了。改成一个空图形没有意义，干脆不动，让用户看到提示。
-          empty = true;
-          return;
-        }
-        const fresh = booleanResultFrom(top, freshId, shaped, false);
-
-        const ids = new Set(ordered.map((o) => o.id));
-        const topIndex = d.elements.findIndex((e) => e.id === top.id);
-        let insertAt = 0;
-        for (let i = 0; i < topIndex; i++) if (!ids.has(d.elements[i]!.id)) insertAt += 1;
-        const kept = d.elements.filter((e) => !ids.has(e.id));
-        d.elements = [...kept.slice(0, insertAt), fresh, ...kept.slice(insertAt)];
+        // 交集为空 / 被减没了：改成一个空图形没有意义，干脆不动，让用户看到提示。
+        out.id = applyBoolean(d, ids, op);
       });
 
-      if (empty) {
+      if (!out.id) {
         appState.flash(tr('typo.booleanEmpty'), 'error');
         return;
       }
+      const freshId = out.id;
       queueMicrotask(() => editorState.setSelection([freshId]));
     },
 
@@ -2228,50 +2048,20 @@ export function createTypographyActions(): TypographyActions {
       const doc = editorState.doc;
       if (!doc) return;
       /* 与布尔运算同一条选择口径：只取未锁定的图形，按 z 序（底 → 顶）传入。 */
-      const picked = new Set(
-        editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).map((e) => e.id),
-      );
-      const ordered = doc.elements.filter((e) => picked.has(e.id)) as ShapeElement[];
-      if (ordered.length < 2) return;
+      const ids = editorState.selected.filter((e) => e.kind === 'shape' && !e.locked).map((e) => e.id);
+      if (ids.length < 2) return;
 
-      const freshIds: string[] = [];
-      let empty = false;
-
+      const out = { ids: [] as string[] };
       editorState.commit(tr('typo.undo.divide'), (d) => {
-        const regions = dividePolygons(ordered.map(shapeToMultiPolygon));
-        const fresh: ShapeElement[] = [];
-        for (const region of regions) {
-          const shaped = multiToShape(region.mp);
-          if (!shaped) continue;
-          /*
-           * 每一片沿用「盖在它最上面的那个操作数」的外观：A−B 是 A 的颜色，
-           * 重叠区与 B−A 是 B 的颜色。全用最顶层的话，A 独有的部分会被
-           * 染成 B 的色 —— 拆分就失去了「保留原观感」的意义。
-           */
-          const src = ordered[region.top]!;
-          const el = booleanResultFrom(src, newId(), shaped, true);
-          fresh.push(el);
-          freshIds.push(el.id);
-        }
-        if (!fresh.length) {
-          empty = true;
-          return;
-        }
-
-        const ids = new Set(ordered.map((o) => o.id));
-        // 插在**最前景那个操作数**的位置：拆分不改变整体前后关系。
-        const topIndex = d.elements.findIndex((e) => e.id === ordered[ordered.length - 1]!.id);
-        let insertAt = 0;
-        for (let i = 0; i < topIndex; i++) if (!ids.has(d.elements[i]!.id)) insertAt += 1;
-        const kept = d.elements.filter((e) => !ids.has(e.id));
-        d.elements = [...kept.slice(0, insertAt), ...fresh, ...kept.slice(insertAt)];
+        out.ids = applyDivide(d, ids);
       });
 
-      if (empty) {
+      if (!out.ids.length) {
         appState.flash(tr('typo.booleanEmpty'), 'error');
         return;
       }
       // 全部选中：用户可以立刻整体拖动，也可以点其中一片单独改色 / 移动。
+      const freshIds = out.ids;
       queueMicrotask(() => editorState.setSelection(freshIds));
     },
 

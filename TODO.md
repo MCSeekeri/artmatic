@@ -42,22 +42,28 @@
 - [x] 图层下标：`typo_reorder_element({ op:'index', index })`。
 - 文档：`docs/agent-control-plane.md` §12.7；help 新增「Canvas, group boxes, themes」。
 
-## P3（需要先定工具形态）
+## P3（本轮）✔ 已完成 2026-10-22
 
-- [ ] 布尔运算 / 拆分 / 参数化图形转路径 / 文字转路径 / 顶点增删锚点
-      （`actions.ts:2017-2227`，`path-ops.ts`、`text-outline.ts`）。
-      共同点：都是「选中若干元素 → 产出一批新元素」，要先定选中集与失败回滚语义。
-- [ ] 行内富文本（`runs[].style`）：`typo_set_text` / `typo_replace_doc` 目前只能整段一个样式。
-- [ ] 字体导入：需要字节 / 路径通道，与素材导入同一取舍（用户侧导入前不暴露）。
+- [x] 布尔运算 / 拆分 / 参数化图形转路径 / 文字转路径 → `typo_boolean` /
+      `typo_divide` / `typo_convert_to_path`；几何逻辑下沉到
+      `typography/shape-convert.ts`（编辑器与 agent 共用）。
+      顶点增删**不需要新工具**：`path` 早已可写（`typo_update_element`），
+      手改 `d` 即可增删锚点。
+- [x] 行内富文本：`typo_update_element({ runs })` + 读侧回显 + 整份往返；
+      校验在 `rich-text.ts::coerceRuns`。
+- [ ] 字体导入：**不做**（与素材导入同一判定：Agent 不知道用户电脑上的文件在哪；
+      用户导入字体后 agent 仍可选用已有字族）。
 
-## 媒体池操作（若将来暴露，必须带「需用户确认」）
+## 媒体池操作 ✔ 已完成 2026-10-22
 
-- 涉及：`collectAsset` / `relinkAsset` / `restoreUnusedAsset` / `trashUnusedAsset` /
-  `deleteUnusedAsset` / `clearProjectTrash` / `cleanupOrphanFiles`
-  （`ui/project-actions.ts:495-734`）。
-- 要求：**可选项**「操作媒体池需用户确认」（默认待定，与插件安装的审批卡同一机制），
-  确认挡在写盘之前；未确认时返回 `needs-approval`。
-- 理由：这些操作会移动 / 删除**用户磁盘上的文件**，而 Agent 无法从画面判断哪一份是原件。
+- [x] `media_list`（素材归属 / 字节 / 引用次数 / 磁盘占用）+ `media_op` 九种动作：
+      `collect` / `relink` / `restore` / `trash` / `delete` / `trash_all` /
+      `delete_all` / `clear_trash` / `cleanup_orphans`。
+- [x] **可选项「操作媒体池需我确认」**（Agent 设置 → 安全，默认**开**）：
+      开着时 `media_op` 返回 `needs-approval`，应用弹确认卡；用户点过之后会话层
+      带 `confirm:true` 重放，模型不能自己批准。关掉则直接执行。
+- 实现：`ui/project-actions.ts` 的 `listMediaPool` / `runMediaPoolOp`，经
+  `ControlContext.mediaPool` 注入（控制平面不 import `ui/`）。
 
 ## 反向缺口（Agent 有、UI 没有；不阻塞，记录备查）
 

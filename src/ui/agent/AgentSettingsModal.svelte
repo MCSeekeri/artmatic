@@ -225,6 +225,13 @@
         />
         <p class="agent-hint">{tr('agent.screenshotsHint')}</p>
       {:else if section === 'security'}
+        <Checkbox
+          checked={agentState.prefs.mediaPoolConfirm}
+          label={tr('agent.mediaPoolConfirm')}
+          testid="agent-media-confirm"
+          onchange={(v) => agentState.setPrefs({ mediaPoolConfirm: v })}
+        />
+        <p class="agent-hint">{tr('agent.mediaPoolConfirmHint')}</p>
         <p class="agent-hint risk">{tr('agent.pluginRiskHint')}</p>
         <p class="agent-hint">{tr('agent.privacyHint')}</p>
       {/if}

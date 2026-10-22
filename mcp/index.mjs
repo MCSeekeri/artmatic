@@ -224,6 +224,17 @@ async function dispatch(name, args, extra) {
         await bridge.call('updateTypographyGroup', [args.clipId, args.groupId, args.patch]),
       );
 
+    case 'artmatic_typo_boolean':
+      return unwrap(
+        await bridge.call('booleanTypographyShapes', [args.clipId, args.elementIds, args.op]),
+      );
+
+    case 'artmatic_typo_divide':
+      return unwrap(await bridge.call('divideTypographyShapes', [args.clipId, args.elementIds]));
+
+    case 'artmatic_typo_convert_to_path':
+      return unwrap(await bridge.call('convertTypographyToPath', [args.clipId, args.elementIds]));
+
     case 'artmatic_typo_set_canvas_size':
       return unwrap(
         await bridge.call('setTypographyCanvasSize', [args.clipId, args.size, args.scaleContent === true]),
@@ -385,6 +396,13 @@ async function dispatch(name, args, extra) {
 
     case 'artmatic_estimate_beat_grid':
       return unwrap(await bridge.call('estimateBeatGrid'));
+
+    case 'artmatic_media_list':
+      return unwrap(await bridge.call('listMediaPool'));
+
+    case 'artmatic_media_op':
+      // 不带 confirm：需要审批时应用会弹卡，用户确认之前不会真的动文件。
+      return unwrap(await bridge.call('mediaPoolOp', [{ op: args.op, assetId: args.assetId }]));
 
     case 'artmatic_edit_sections': {
       const op = args.op;
