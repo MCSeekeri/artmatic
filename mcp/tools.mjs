@@ -525,19 +525,97 @@ export const TOOLS = [
   {
     name: 'artmatic_set_transition',
     kind: 'write',
-    description: '设出画转场（窗口以 clip.end 为中心，作用于**同轨紧邻的下一个 source 片段**）。',
+    description:
+      '设片段一端的转场。side=out（默认）窗口以 clip.end 为中心、作用于同轨紧邻的下一个 source 片段；' +
+      'side=in 窗口以 clip.start 为中心、作用于同轨紧邻的上一个片段。**没有邻片段时那一侧是全透明**，' +
+      '所以首尾片段也能做入场 / 出场。时长会被两侧长度钳制。',
     args: {
       clipId: ID('片段'),
       defId: F.string({ required: true }),
       duration: F.number({ required: true, minimum: 0.01 }),
       values: F.scalars(),
+      side: F.string({ enum: ['in', 'out'], description: 'in = 入场，out = 出场（默认）。' }),
     },
   },
   {
     name: 'artmatic_clear_transition',
     kind: 'write',
-    description: '删掉片段上的出画转场（A/B 时用它做对照）。',
-    args: { clipId: ID('片段') },
+    description: '删掉片段一端的转场（side 缺省 out）。',
+    args: {
+      clipId: ID('片段'),
+      side: F.string({ enum: ['in', 'out'], description: 'in = 入场，out = 出场（默认）。' }),
+    },
+  },
+  {
+    name: 'artmatic_get_asset_ranges',
+    kind: 'read',
+    description:
+      '读视频素材保存的预剪辑 In/Out 范围与当前激活范围。时间单位是**源内秒**；' +
+      'frames 是按工程 fps 换算的帧数（插入片段时落下的长度就是它）。',
+    args: { assetId: F.string({ required: true, description: '素材 id（media_list 给）。' }) },
+  },
+  {
+    name: 'artmatic_set_asset_range',
+    kind: 'write',
+    description:
+      '在视频素材上新增或更新（给 rangeId）一条 In/Out 范围。值按帧取整、钳到素材时长、至少 1 帧；' +
+      '第一条自动成为激活范围。',
+    args: {
+      assetId: F.string({ required: true }),
+      inSec: F.number({ required: true, minimum: 0, description: '入点（源内秒）。' }),
+      outSec: F.number({ required: true, minimum: 0, description: '出点（源内秒）。' }),
+      name: F.string({ description: '范围名；省略则生成「范围 N」。' }),
+      rangeId: F.string({ description: '给 id = 更新已有范围。' }),
+    },
+  },
+  {
+    name: 'artmatic_remove_asset_range',
+    kind: 'write',
+    description: '删掉视频素材上的一条预剪辑范围。',
+    args: {
+      assetId: F.string({ required: true }),
+      rangeId: F.string({ required: true }),
+    },
+  },
+  {
+    name: 'artmatic_set_active_range',
+    kind: 'write',
+    description: '指定插入素材时使用哪条范围；rangeId=null 清除（插入整段）。',
+    args: {
+      assetId: F.string({ required: true }),
+      rangeId: F.string({ description: '省略 / null = 清除。' }),
+    },
+  },
+  {
+    name: 'artmatic_detach_video_audio',
+    kind: 'write',
+    description:
+      '把视频片段的内嵌音轨分离到**新建的音频轨**上，位置对齐并默认锁定到视频（移动 / 裁剪 / 分裂跟随），' +
+      '视频内嵌音轨同时静音。返回 audioClipId 与 trackId。',
+    args: { clipId: ID('视频片段') },
+  },
+  {
+    name: 'artmatic_set_audio_lock',
+    kind: 'write',
+    description: '锁定 / 解锁分离出来的音频片段。解锁保留血缘但不跟随；重新锁定会立刻对齐几何。',
+    args: {
+      clipId: ID('音频片段'),
+      locked: F.boolean({ required: true, description: 'true = 跟随视频。' }),
+    },
+  },
+  {
+    name: 'artmatic_set_clip_audio',
+    kind: 'write',
+    description:
+      '调音频片段 / 视频片段内嵌音轨的响度：gainDb 为 -60..+12 dB（0 = 原音量，-60 = 静音），' +
+      'fadeIn / fadeOut 单位秒；muted 只对视频片段有意义。预览与导出走同一份求值。',
+    args: {
+      clipId: ID('片段'),
+      gainDb: F.number({ minimum: -60, maximum: 12 }),
+      fadeIn: F.number({ minimum: 0 }),
+      fadeOut: F.number({ minimum: 0 }),
+      muted: F.boolean(),
+    },
   },
   {
     name: 'artmatic_media_list',

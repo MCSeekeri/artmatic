@@ -28,7 +28,7 @@ import type { MessageKey } from '../i18n/locales';
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -86,6 +86,19 @@ export interface Project {
  * 挂在 Project 上的代价是「聊一句 = 重写整份工程」，而且撤销栈要专门绕开它。
  */
 
+/**
+ * 预剪辑范围（v13）：素材上保存的一组 In/Out 对，随工程保存。
+ *
+ * **秒落库**（与 `clip.start` 同口径），UI 按工程 fps 换算成帧展示与打点 ——
+ * 存帧号会把「改了工程 fps」变成对所有素材范围的静默重算。
+ */
+export interface AssetTrimRange {
+  id: string;
+  name: string;
+  inSec: number;
+  outSec: number;
+}
+
 export interface Asset {
   id: string;
   /**
@@ -100,6 +113,18 @@ export interface Asset {
   hash?: string;
   durationSec?: number;
   size?: { w: number; h: number };
+  /**
+   * 视频预剪辑范围（v13）。缺省 = 没有保存过范围，插入整段素材。
+   * 坏条目由 `validateProject` 逐条丢弃，工程必须打得开。
+   */
+  ranges?: AssetTrimRange[];
+  /** 当前激活范围（v13）。双击 / 「+」插入时用它；坏 id 在打开时清掉。 */
+  activeRangeId?: string;
+  /**
+   * 视频是否含音轨（v13，导入/打开时探测）。`false` = 不必尝试解码音频；
+   * 缺省 = 未知，需要时再探。
+   */
+  hasAudio?: boolean;
 }
 
 /* ---------------------------------------------------------------- tracks */
@@ -156,11 +181,16 @@ export const BLEND_MODES: { id: BlendMode; labelKey: MessageKey }[] = [
 export type AlgoSource = { type: 'algo'; generator: string; params: Record<string, number | string> };
 
 /**
- * 出画转场（gl-transitions 的一条）。
+ * 片段边界的转场（gl-transitions 的一条）。
  *
- * 窗口以 `clip.end` 为剪切点、前后各 `duration / 2`，两侧的内容由窗口解析
- * （`core/transitions.ts`）自动取到「同轨紧邻的下一个 SourceClip」，所以这里
- * **不存 toClipId** —— 存 id 会引入悬空引用与它的一整套清理逻辑，而片段几何
+ * 同一个类型用在两处（v13 起双侧）：
+ * - `SourceClip.transitionOut`：剪切点 `clip.end`，另一侧是同轨紧邻的下一个
+ *   SourceClip；没有下一个片段时另一侧是**全透明**。
+ * - `SourceClip.transitionIn`：剪切点 `clip.start`，另一侧是同轨紧邻的上一个
+ *   SourceClip；没有上一个片段时另一侧是**全透明**。
+ *
+ * 两侧的内容由窗口解析（`core/transitions.ts`）按几何自动取到，所以这里
+ * **不存邻居 id** —— 存 id 会引入悬空引用与它的一整套清理逻辑，而片段几何
  * 天然保持相邻（push / trim 都保持）。
  */
 export interface TransitionRef {
@@ -183,6 +213,20 @@ export interface TransitionRef {
  */
 export type { KeySettings, QuadCorners, CropSettings } from './image-fx';
 export { defaultKeySettings, identityQuad, identityCrop, isIdentityCrop } from './image-fx';
+
+/**
+ * 视频片段的内嵌音轨设置（v13，仅 `source.type === 'video'` 有意义）。
+ *
+ * 视频默认参与混流（`core/audio-plan.ts`）；`muted` 在「分离音频」时置 true，
+ * 避免与独立音频片段重复出声。`gainDb` / `fadeIn` / `fadeOut` 与 `AudioClip`
+ * 同名同义，求值共用 `core/audio-envelope.ts`。
+ */
+export interface VideoAudioSettings {
+  gainDb?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  muted?: boolean;
+}
 
 /** 有画面来源，参与合成。被特效影响的就是它。 */
 export interface SourceClip extends ClipBase {
@@ -216,8 +260,17 @@ export interface SourceClip extends ClipBase {
    * `ImageElement.crop` 的差别见 `core/image-fx.ts::CropSettings`。
    */
   crop?: CropSettings;
+  /** 入场转场（v13）。缺失 = 不设。无前片段时另一侧为全透明。 */
+  transitionIn?: TransitionRef;
   /** 出画转场。缺失 = 不设转场。语义与钳制规则见 core/transitions.ts。 */
   transitionOut?: TransitionRef;
+  /** 内嵌音轨设置（v13，仅 video 源有意义）。缺失 = 默认（有声、0 dB、不淡）。 */
+  audio?: VideoAudioSettings;
+  /**
+   * 分离出的音频片段 id（v13，仅 video 源）。存在 = 内嵌音轨已被搬走
+   * （`audio.muted` 同时为 true），store 靠它做移动 / 裁剪 / 分裂的联动。
+   */
+  linkedAudioId?: string;
 }
 
 /** 特效实例：参考 openmosh EffectInstance，去掉 mosh/volumeLink。 */
@@ -281,6 +334,18 @@ export interface AudioClip extends ClipBase {
    */
   fadeIn?: number;
   fadeOut?: number;
+  /**
+   * 静态增益（dB，v13）。缺省 0 = 原音量。与 `curves.gain` 相乘，
+   * 求值仍在 `core/audio-envelope.ts`（唯一真源）。
+   */
+  gainDb?: number;
+  /** 血缘：这个音频是从哪个视频片段的音轨分离出来的（v13）。解锁后仍保留。 */
+  linkedVideoId?: string;
+  /**
+   * 锁定目标片段 id（v13）。非空 = 跟随该视频片段的移动 / 裁剪 / 分裂 / 删除。
+   * 用户在检查器里手动解锁时清空，`linkedVideoId` 保留。
+   */
+  lockedTo?: string;
 }
 
 /* ------------------------------------------------------------- 构造工具 */
@@ -489,6 +554,18 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
     delete next.agentSessions;
     return next;
   },
+
+  /**
+   * v12 → v13：`Asset` 新增预剪辑范围 / `hasAudio`，`SourceClip` 新增
+   * `transitionIn` / `audio` / `linkedAudioId`，`AudioClip` 新增
+   * `gainDb` / `linkedVideoId` / `lockedTo`。
+   *
+   * **恒等迁移**：全部可选（缺省语义分别是「没保存范围」「有声」「无入场转场」
+   * 「0 dB」「无链接」），v12 的工程读进来天然合法。抬版本号的唯一目的仍然是让
+   * 「新版存出的工程被旧版打开」走 `versionTooNew` 明确报错 —— 旧版静默忽略
+   * 这些字段再保存，用户存好的预剪辑范围与入场转场就没了（静默数据丢失）。
+   */
+  12: (p) => ({ ...p, schemaVersion: 13 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -526,6 +603,12 @@ export function validateProject(raw: unknown): Project {
   }
   if (!p.assets || typeof p.assets !== 'object') throw new SchemaError(tr('err.schema.badAssets'));
   if (!Array.isArray(p.tracks)) throw new SchemaError(tr('err.schema.badTracks'));
+  /*
+   * 素材上的预剪辑范围（v13）。与段落 / 配色同一条纪律：**坏条目逐条丢弃**，
+   * 工程必须打得开。范围是「重放 In/Out」的便利数据，为它让整份工程打不开
+   * 不成比例；而坏 id 留在 `activeRangeId` 里会让双击插入静默落回整段素材。
+   */
+  for (const asset of Object.values(p.assets) as Asset[]) sanitizeAssetRanges(asset);
   /*
    * 工程级配色方案（v6 的两个可选字段）。**坏数据回落而不是抛错** ——
    * 工程必须打得开，颜色这种事不值得让整份工程打不开。
@@ -578,7 +661,73 @@ export function validateProject(raw: unknown): Project {
     if (!Array.isArray(tk.clips)) throw new SchemaError(tr('err.schema.trackMissingClips'));
     for (const c of tk.clips as AnyClip[]) validateClip(c, tk.kind);
   }
+  /*
+   * 悬空链接清扫（v13）。链接字段是「跟随另一条片段」的指令，指向不存在的
+   * 片段时表现是「拖视频时音频不动 / 锁定的音频永远找不到主人」，而且没有任何
+   * 报错。统一在打开时清掉，让数据回到「没有链接」这个能继续工作的状态。
+   *
+   * 只清同一工程内可解析的引用；删除视频时删除音频是 store 的事（见
+   * `ProjectStore` 的链接同步）——这里兜的是手改 JSON 与历史数据。
+   */
+  const clipsById = new Map<string, AnyClip>();
+  for (const tk of p.tracks as Track[]) for (const c of tk.clips) clipsById.set(c.id, c);
+  for (const c of clipsById.values()) {
+    if (c.kind === 'source') {
+      if (c.linkedAudioId !== undefined && clipsById.get(c.linkedAudioId)?.kind !== 'audio') {
+        delete c.linkedAudioId;
+      }
+    } else if (c.kind === 'audio') {
+      if (c.linkedVideoId !== undefined) {
+        const v = clipsById.get(c.linkedVideoId);
+        if (!v || v.kind !== 'source' || v.source.type !== 'video') delete c.linkedVideoId;
+      }
+      if (c.lockedTo !== undefined) {
+        const v = clipsById.get(c.lockedTo);
+        if (!v || v.kind !== 'source' || v.source.type !== 'video') delete c.lockedTo;
+      }
+    }
+  }
   return p;
+}
+
+/** 预剪辑范围的清洗（就地改）。缺省 / 坏值都不抛 —— 见调用点的注释。 */
+function sanitizeAssetRanges(a: Asset): void {
+  const raw = (a as { ranges?: unknown }).ranges;
+  if (!Array.isArray(raw)) {
+    delete (a as { ranges?: unknown }).ranges;
+  } else {
+    const limit = typeof a.durationSec === 'number' && a.durationSec > 0 ? a.durationSec : null;
+    const out: AssetTrimRange[] = [];
+    const seen = new Set<string>();
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const r = item as Partial<AssetTrimRange>;
+      if (typeof r.id !== 'string' || !r.id || seen.has(r.id)) continue;
+      const inSec = Number(r.inSec);
+      const outSec = Number(r.outSec);
+      if (!Number.isFinite(inSec) || !Number.isFinite(outSec)) continue;
+      const lo = Math.max(0, inSec);
+      const hi = limit === null ? outSec : Math.min(limit, outSec);
+      if (!(hi > lo)) continue;
+      seen.add(r.id);
+      out.push({
+        id: r.id,
+        name: typeof r.name === 'string' && r.name ? r.name : tr('preclip.rangeDefault', { n: out.length + 1 }),
+        inSec: lo,
+        outSec: hi,
+      });
+    }
+    if (out.length) (a as { ranges?: AssetTrimRange[] }).ranges = out;
+    else delete (a as { ranges?: unknown }).ranges;
+  }
+
+  const ranges = (a as { ranges?: AssetTrimRange[] }).ranges;
+  const active = (a as { activeRangeId?: unknown }).activeRangeId;
+  if (typeof active !== 'string' || !ranges?.some((r) => r.id === active)) {
+    delete (a as { activeRangeId?: unknown }).activeRangeId;
+  }
+  const hasAudio = (a as { hasAudio?: unknown }).hasAudio;
+  if (hasAudio !== undefined && typeof hasAudio !== 'boolean') delete (a as { hasAudio?: unknown }).hasAudio;
 }
 
 /**
@@ -640,6 +789,11 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
       const v = Number(a[key]);
       a[key] = Number.isFinite(v) ? Math.max(0, v) : 0;
     }
+    /* 静态增益（v13）：钳到 [-60, +12] dB，NaN 归 0（原音量）。 */
+    if (a.gainDb !== undefined) {
+      const v = Number(a.gainDb);
+      a.gainDb = Number.isFinite(v) ? Math.min(12, Math.max(-60, v)) : 0;
+    }
   } else {
     if (c.kind !== 'source' && c.kind !== 'effect') {
       throw new SchemaError(tr('err.schema.visualTrackHasNonVisual'));
@@ -689,8 +843,9 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
         }
       }
       // 转场同样是「形状不对就穿透到渲染期」的那一类，在这里挡住。
-      const trRef = (c as SourceClip).transitionOut;
-      if (trRef !== undefined) {
+      // v13 起两端各一个（入场 / 出场），共用同一套形状校验。
+      for (const trRef of [(c as SourceClip).transitionIn, (c as SourceClip).transitionOut]) {
+        if (trRef === undefined) continue;
         if (!trRef || typeof trRef !== 'object' || typeof trRef.defId !== 'string' || !trRef.defId) {
           throw new SchemaError(tr('err.schema.transitionBadDefId', { id: c.id }));
         }
@@ -700,6 +855,40 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
         if (!trRef.values || typeof trRef.values !== 'object') {
           throw new SchemaError(tr('err.schema.transitionBadValues', { id: c.id }));
         }
+      }
+      /*
+       * 内嵌音轨设置（v13）。只有 video 源有意义：其他源带着这两个字段是
+       * 数据矛盾（手改 JSON / 从视频片段改源），删掉而不是让渲染侧去猜。
+       */
+      const src2 = (c as SourceClip).source;
+      if (src2?.type === 'video') {
+        const va = (c as SourceClip).audio;
+        if (va !== undefined) {
+          if (!va || typeof va !== 'object' || Array.isArray(va)) {
+            delete (c as SourceClip).audio;
+          } else {
+            if (va.muted !== undefined && typeof va.muted !== 'boolean') delete va.muted;
+            if (va.gainDb !== undefined) {
+              const v = Number(va.gainDb);
+              va.gainDb = Number.isFinite(v) ? Math.min(12, Math.max(-60, v)) : 0;
+            }
+            for (const key of ['fadeIn', 'fadeOut'] as const) {
+              if (va[key] === undefined) continue;
+              const v = Number(va[key]);
+              va[key] = Number.isFinite(v) ? Math.max(0, v) : 0;
+            }
+            if (!('gainDb' in va || 'fadeIn' in va || 'fadeOut' in va || 'muted' in va)) {
+              delete (c as SourceClip).audio;
+            }
+          }
+        }
+        if ((c as SourceClip).linkedAudioId !== undefined &&
+            (typeof (c as SourceClip).linkedAudioId !== 'string' || !(c as SourceClip).linkedAudioId)) {
+          delete (c as SourceClip).linkedAudioId;
+        }
+      } else {
+        delete (c as SourceClip).audio;
+        delete (c as SourceClip).linkedAudioId;
       }
       /*
        * 抠图 / 四角的形状校验。它们是「形状不对就穿透到渲染期」的那一类：

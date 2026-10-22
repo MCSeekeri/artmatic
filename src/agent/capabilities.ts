@@ -201,6 +201,17 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
     fits: [...FITS],
     curveModes: [...CURVE_MODES],
     sourceTypes: [...SOURCE_TYPES],
+    features: {
+      transitions: { sides: ['in', 'out'], transparentSide: true, shadowedBy: 'out' },
+      videoPreclip: { ranges: true, frameAccurate: true, activeRange: true },
+      videoAudio: {
+        embeddedByDefault: true,
+        detachToTrack: true,
+        linkLock: true,
+        gainDb: [-60, 12],
+        fades: true,
+      },
+    },
   };
 
   if (wantAll) {

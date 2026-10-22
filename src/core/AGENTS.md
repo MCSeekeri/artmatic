@@ -59,8 +59,13 @@ interface SourceClip extends ClipBase {
   key?: KeySettings
   /** 四角调整（透视变形）。坐标在**层空间**：默认四角 = 单位方的四个角。 */
   quad?: QuadCorners
-  /** 出画转场，见 `src/effects/AGENTS.md`。窗口以 clip.end 为中心。 */
+  /** v13 片段两端的转场（见 `core/transitions.ts`）。另一侧没有邻居 = 全透明。 */
+  transitionIn?: { defId: string; duration: number; values: Record<string, number> }
   transitionOut?: { defId: string; duration: number; values: Record<string, number> }
+  /** v13 视频内嵌音轨设置。缺省 = 有声 / 0 dB / 不淡；分离音频时 `muted` 置 true。 */
+  audio?: { gainDb?: number; fadeIn?: number; fadeOut?: number; muted?: boolean }
+  /** v13 分离出来的音频片段 id。store 靠它做移动 / 裁剪 / 分裂的联动。 */
+  linkedAudioId?: string
 }
 
 /** 无画面来源，把自己插进渲染链。所有特效都是它 —— 含摄像机 / 画幅 / OSD。 */
@@ -84,6 +89,11 @@ interface AudioClip extends ClipBase {
   gain: Curve
   /** v8：编排用的淡变（秒）。与 fadeSec 复合，求值见 core/audio-envelope.ts。 */
   fadeIn?: number; fadeOut?: number
+  /** v13：静态增益（dB，-60..+12）。与曲线 / 淡变相乘，求值仍只有一处。 */
+  gainDb?: number
+  /** v13 血缘与锁定：`linkedVideoId` 解锁后保留，`lockedTo` 非空 = 跟随视频。 */
+  linkedVideoId?: string
+  lockedTo?: string
 }
 
 /** v8：段落标记。标记，不是容器 —— 片段不归属它，它也不裁剪片段。 */
@@ -94,6 +104,19 @@ interface Section {
   color?: string
 }
 ```
+
+### 预剪辑范围与声音事件表（v13）
+
+- `Asset.ranges` 是一组 `{ id, name, inSec, outSec }`，**秒落库、帧展示**；取整只有
+  `core/preclip.ts` 一处（`normalizeRange` / `spanFromRange`）。别在 UI 里再写
+  `Math.round(t * fps) / fps`。
+- `Asset.activeRangeId` 决定双击 / 「+」插入哪个范围；失效时 `activeRangeOf` 回落到
+  第一个（而不是悄悄插整段）。
+- **谁出声只有 `core/audio-plan.ts` 一处**：独立 `AudioClip` + 未静音的 video
+  `SourceClip`（`asset.hasAudio !== false`）。预览（`audio/player.ts`）与导出
+  （`exporters/mixdown.ts`）都消费 `AudioSpan[]`，不要再各自遍历一遍工程。
+- 视频音轨的解码在 `engine/video-audio.ts`（只解使用区间、按 assetId 缓存），
+  不属于 core。
 
 ### 段落标记（`Project.sections`，v8）
 

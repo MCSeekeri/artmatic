@@ -12,8 +12,8 @@
  */
 
 import { sampleAudioEnvelope } from '../core/audio-envelope';
+import { audioSpans } from '../core/audio-plan';
 import type { Project } from '../core/schema';
-import { isAudioClip } from '../core/project-store';
 
 export class AudioPlayer {
   private ctx: AudioContext | null = null;
@@ -66,35 +66,41 @@ export class AudioPlayer {
     if (ctx.state === 'suspended') await ctx.resume();
     const startAt = ctx.currentTime + 0.03;
 
-    for (const track of project.tracks) {
-      if (!track.enabled || track.kind !== 'audio') continue;
-      for (const clip of track.clips) {
-        if (!isAudioClip(clip)) continue;
-        const buffer = this.buffers.get(clip.assetId);
-        if (!buffer) continue;
-        if (fromT >= clip.end) continue;
-        const when = Math.max(0, clip.start - fromT);
-        const intoClip = Math.max(0, fromT - clip.start);
-        const remain = clip.end - Math.max(fromT, clip.start);
-        if (remain <= 0) continue;
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
-        /*
-         * 增益包络：采样「从片段内 intoClip 秒到结尾」这一段。
-         *
-         * 用 `setValueCurveAtTime` 而不是一串 `linearRampToValueAtTime`：
-         * 淡变时长是用户随手拖出来的小数，逐段排 ramp 要自己算拐点，而曲线上
-         * 的拐点只有 `core/audio-envelope.ts` 知道。128 点是采样下限的折中
-         * （WebAudio 内部本来就按采样点线性插值）。
-         */
-        const gain = ctx.createGain();
-        const curve = sampleAudioEnvelope(clip, project.beatGrid, intoClip, intoClip + remain);
-        gain.gain.setValueCurveAtTime(curve, startAt + when, remain);
-        src.connect(gain);
-        gain.connect(ctx.destination);
-        src.start(startAt + when, clip.srcIn + intoClip, remain);
-        this.sources.push(src);
-      }
+    /*
+     * 声音事件来自 `core/audio-plan.ts`（独立音频片段 + 未静音的视频内嵌音轨），
+     * 与导出混流同一张表。这里只管把它排上 WebAudio 的时间线。
+     */
+    for (const span of audioSpans(project)) {
+      const buffer = this.buffers.get(span.assetId);
+      if (!buffer) continue;
+      if (fromT >= span.end) continue;
+      const when = Math.max(0, span.start - fromT);
+      const intoClip = Math.max(0, fromT - span.start);
+      const remain = span.end - Math.max(fromT, span.start);
+      if (remain <= 0) continue;
+      const speed = Math.max(0.01, span.speed || 1);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.playbackRate.value = speed;
+      /*
+       * 增益包络：采样「从片段内 intoClip 秒到结尾」这一段。
+       *
+       * 用 `setValueCurveAtTime` 而不是一串 `linearRampToValueAtTime`：
+       * 淡变时长是用户随手拖出来的小数，逐段排 ramp 要自己算拐点，而曲线上
+       * 的拐点只有 `core/audio-envelope.ts` 知道。128 点是采样下限的折中
+       * （WebAudio 内部本来就按采样点线性插值）。
+       */
+      const gain = ctx.createGain();
+      const curve = sampleAudioEnvelope(span, project.beatGrid, intoClip, intoClip + remain);
+      gain.gain.setValueCurveAtTime(curve, startAt + when, remain);
+      src.connect(gain);
+      gain.connect(ctx.destination);
+      /*
+       * `start(when, offset, duration)` 的 offset / duration 都是**素材时间**
+       * （秒，不受 playbackRate 影响），所以变速要自己乘过去。
+       */
+      src.start(startAt + when, span.srcIn + intoClip * speed, remain * speed);
+      this.sources.push(src);
     }
     this.startCtxTime = startAt;
     this.startT = fromT;

@@ -32,6 +32,7 @@ import { PngSequenceSink } from '../exporters/png-sequence';
 import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
 import { planGif, type GifPlan } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
+import { prepareProjectVideoAudio } from '../engine/video-audio';
 import { platform } from '../platform/index';
 import { withExportFrame } from '../render/export-frame';
 import { saveProjectNow } from './project-actions';
@@ -318,6 +319,12 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
   }
 
   const project = appState.store.project;
+  /*
+   * 视频内嵌音轨是**异步**解码的，而 `mixdown` 是同步的：先把用到的视频音轨
+   * 全部解出来并注册进 player，混流的 resolver 才有东西可取。失败 → 静音，
+   * 不影响导出（与预览同一条降级路径）。
+   */
+  await prepareProjectVideoAudio(project, (id, buf) => appState.player.register(id, buf));
   const audio = mixdown(project, (id) => appState.player.buffer(id));
   if (audio && audio.peak < 1e-4) {
     // 全静音还给用户一个带音轨的 MP4，会让人以为混流坏了。

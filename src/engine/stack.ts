@@ -52,7 +52,7 @@ import { evalCurve } from '../core/curve';
 import { fadeWeight } from '../core/clips';
 import { isIdentityQuad, quadInverseMatrix } from '../core/quad';
 import { isIdentityCrop } from '../core/image-fx';
-import { transitionAt } from '../core/transitions';
+import { transitionAt, type TransitionWindow } from '../core/transitions';
 import type { BeatGrid } from '../core/time';
 import type {
   BlendMode,
@@ -108,20 +108,37 @@ export interface ResolvedSource {
 /**
  * 转场 op。
  *
+ * `from` / `to` **可以为 null**（v13）：那一侧没有片段（轨道首尾、缝隙、邻居是
+ * 特效片段）时，转场着色器拿到的是一张全透明贴图 —— 也就是用户说的「把空白当成
+ * 一个全透明的纯色片段」。`null` 与「源这帧没准备好」是两件事：后者仍然是
+ * `ResolvedSource`，由 compositor 的 `placeLayer` 返回 false 处理。
+ *
  * `blend` 取**入画片段**的混合模式：窗口结束后的下一帧画的就是入画片段，
- * 用它的 blend 才不会有跳变。已知代价是出画片段的 blend ≠ normal 时，
- * 窗口开始处有一次混合模式跳变（blend 是离散枚举，插值没有定义）。
+ * 用它的 blend 才不会有跳变；没有入画片段（淡出到透明）时取出画片段的。
  */
 export interface TransitionOp {
   type: 'transition';
   z: number;
-  from: ResolvedSource;
-  to: ResolvedSource;
+  from: ResolvedSource | null;
+  to: ResolvedSource | null;
+  /**
+   * 单侧（另一侧是透明）时非 null。compositor 据此走 premultiplied 补偿：
+   * 转场着色器对透明侧输出 `mix(vec4(0), c, f)`，颜色其实已经乘过 alpha 了。
+   */
+  single: 'from' | 'to' | null;
   defId: string;
   values: Record<string, number>;
   /** 窗口内进度 ∈ [0,1)。 */
   progress: number;
   blend: BlendMode;
+}
+
+/** 转场 op 里真实存在的两侧（null 侧被跳过）。所有旁路消费方都该用它。 */
+export function transitionSources(op: TransitionOp): ResolvedSource[] {
+  const out: ResolvedSource[] = [];
+  if (op.from) out.push(op.from);
+  if (op.to) out.push(op.to);
+  return out;
 }
 
 /** 特效 op。`scope` 有值 = 这个片段设了影响深度（见文件头），那一段要从透明独立合成。 */
@@ -294,33 +311,70 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
     const z = last - vis;
     // 带下标的 for：转场要跳过一个片段，forEach 做不到。
     const clips: VisualTrack['clips'] = track.clips;
+
+    /**
+     * 一个窗口 → 一个 transition op。两侧各带自己的绑定链（贴在 from 上的滤镜
+     * 不该跑到 to 上）；`null` 侧不解析、由 compositor 用透明贴图。
+     */
+    const pushTransition = (win: TransitionWindow): void => {
+      const ref = win.side === 'out' ? win.from!.transitionOut! : win.to!.transitionIn!;
+      const from = win.from ? resolveSource(win.from, t, grid, boundChains.get(win.from.id)) : null;
+      const to = win.to ? resolveSource(win.to, t, grid, boundChains.get(win.to.id)) : null;
+      const single = from && !to ? 'from' : !from && to ? 'to' : null;
+      flat.push({
+        vis,
+        op: {
+          type: 'transition',
+          z,
+          from,
+          to,
+          single,
+          defId: ref.defId,
+          values: ref.values,
+          progress: win.progress,
+          // 窗口结束后的下一帧画的是入画片段；没有入画片段时用出画的。
+          blend: (to ?? from)!.blend,
+        },
+      });
+    };
+
     for (let i = 0; i < clips.length; i += 1) {
       const clip = clips[i]!;
 
       /*
        * ⚠️ 顺序要紧：转场判断放在 span 过滤**之前**。
-       * 窗口后半段的 t 已经 `>= from.end`，先过滤掉就永远出不了 transition op。
+       * 窗口里的 t 可能已经越过了某一侧的 `start` / `end`，先过滤掉就永远出不了
+       * transition op。
+       *
+       * v13 起每个边界只产出一个 op，且**在左侧参与者那一轮产出**：
+       *   1. 本片段的出场窗口（右半段吃下一片段的头）；
+       *   2. 下一片段的入场窗口且它有 from（左半段吃本片段的尾）；
+       *   3. 本片段的入场窗口且 from 为 null（轨道开头 / 缝隙 / 特效片段隔开）。
+       * 第 2 条是「不把 from 再单独画一遍」的关键：若等走到下一片段再判定，
+       * 本片段已经作为普通 source 推进去了。
        */
       if (clip.kind === 'source') {
-        const win = transitionAt(track, i, t);
-        const tr = clip.transitionOut;
-        if (win && tr) {
-          flat.push({
-            vis,
-            op: {
-              type: 'transition',
-              z,
-              // 转场两侧各带自己的绑定链：贴在 from 上的滤镜不该跑到 to 上。
-              from: resolveSource(win.from, t, grid, boundChains.get(win.from.id)),
-              to: resolveSource(win.to, t, grid, boundChains.get(win.to.id)),
-              defId: tr.defId,
-              values: tr.values,
-              progress: win.progress,
-              blend: win.to.blend,
-            },
-          });
+        const outWin = transitionAt(track, i, 'out', t);
+        if (outWin) {
+          pushTransition(outWin);
           // 入画片段这一帧由转场全权负责；不跳就会把它再单独画一遍。
-          i += 1;
+          if (outWin.to) i += 1;
+          continue;
+        }
+
+        const next = clips[i + 1];
+        if (next?.kind === 'source' && next.transitionIn) {
+          const nextIn = transitionAt(track, i + 1, 'in', t);
+          if (nextIn?.from) {
+            pushTransition(nextIn);
+            i += 1;
+            continue;
+          }
+        }
+
+        const inWin = clip.transitionIn ? transitionAt(track, i, 'in', t) : null;
+        if (inWin && !inWin.from) {
+          pushTransition(inWin);
           continue;
         }
       }

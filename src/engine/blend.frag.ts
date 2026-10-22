@@ -25,6 +25,15 @@ uniform sampler2D u_texture;   // 已合成的下层（accumulator）
 uniform sampler2D u_texture2;  // 本层（placement 后的 SourceClip）
 uniform int u_blendMode;       // 0..7，编号见 BLEND_MODE_INDEX
 uniform float u_opacity;       // 已含 fade 斜坡与 opacity 曲线
+/*
+ * 本层颜色是否已经被 alpha 预乘（v13，单侧转场专用）。
+ *
+ * gl-transitions 拿着一侧的全透明贴图做 mix(vec4(0), c, f)：rgb 于是变成
+ * f * c.rgb，alpha 变成 f * c.a —— 已经乘过一次 alpha 了。普通 blend 公式
+ * 会再乘一次，dissolve 类转场淡到透明时会明显偏黑。这里除回去。
+ * 缺省 0 = 老路径逐字节不变。
+ */
+uniform int u_unpremult;
 in vec2 vUv;
 out vec4 outColor;
 void main() {
@@ -35,6 +44,7 @@ void main() {
   float a = textC.a * u_opacity;
   vec3 mainRgb = mainC.rgb;
   vec3 textRgb = textC.rgb;
+  if (u_unpremult != 0 && textC.a > 0.0) textRgb = clamp(textRgb / textC.a, 0.0, 1.0);
   vec3 blended;
   if (u_blendMode == 1) {
     blended = mainRgb * mix(vec3(1.0), textRgb, a);

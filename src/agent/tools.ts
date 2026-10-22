@@ -75,6 +75,7 @@ const req = (key: string, kind: ToolParamKind, desc: string, extra: Partial<Tool
 });
 
 const CLIP_ID = req('clipId', 'string', 'Clip id (from get_scene).');
+const ASSET_ID = req('assetId', 'string', 'Asset id (from media_list / get_scene).');
 const OPT_CLIP_ID = p('clipId', 'string', 'Text clip id. Omit to use the document open in the typography editor.');
 const ELEMENT_ID = req('elementId', 'string', 'Typography element id.');
 const T = p('t', 'number', 'Time in SECONDS (snapped to the frame grid). Omit = current playhead.');
@@ -474,20 +475,89 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'set_transition',
     description:
-      'Attach an outgoing transition to a source clip. The window is centred on clip.end and clamped ' +
-      'by both neighbours; the next clip on the same track is the incoming side.',
+      'Attach a transition to one edge of a source clip. side=out (default): window centred on clip.end, ' +
+      'next clip on the same track is the incoming side. side=in: window centred on clip.start, previous ' +
+      'clip is the outgoing side. When that neighbour is missing the other side is FULLY TRANSPARENT, ' +
+      'so an intro/outro transition still works. Duration is clamped by both sides.',
     params: [
       CLIP_ID,
       req('defId', 'string', 'Transition id.'),
       req('duration', 'number', 'Duration in seconds.'),
       p('values', 'scalars', 'Transition parameter overrides.'),
+      p('side', 'string', 'in | out (default out)', { enum: ['in', 'out'] }),
     ],
     writes: true,
   },
   {
     name: 'clear_transition',
-    description: 'Remove the outgoing transition from a clip.',
+    description: 'Remove the transition on one edge of a clip (side defaults to out).',
+    params: [CLIP_ID, p('side', 'string', 'in | out (default out)', { enum: ['in', 'out'] })],
+    writes: true,
+  },
+  {
+    name: 'get_asset_ranges',
+    description:
+      'Read the saved pre-clip In/Out ranges of a video asset, plus the activeRangeId. Times are ' +
+      'source seconds; frames are given for the project fps.',
+    params: [ASSET_ID],
+    writes: false,
+  },
+  {
+    name: 'set_asset_range',
+    description:
+      'Create or update (rangeId) one In/Out range on a video asset. Values are snapped to the frame ' +
+      'grid and clamped to the asset duration; at least 1 frame. The first range becomes active.',
+    params: [
+      ASSET_ID,
+      req('inSec', 'number', 'In point in source seconds.'),
+      req('outSec', 'number', 'Out point in source seconds.'),
+      p('name', 'string', 'Range name (generated when omitted).'),
+      p('rangeId', 'string', 'Update an existing range instead of creating one.'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'remove_asset_range',
+    description: 'Delete one saved range from a video asset.',
+    params: [ASSET_ID, req('rangeId', 'string', 'Range id.')],
+    writes: true,
+  },
+  {
+    name: 'set_active_range',
+    description:
+      'Pick which saved range is used when the asset is inserted to the timeline. rangeId=null clears ' +
+      'it (insert the full asset).',
+    params: [ASSET_ID, p('rangeId', 'string', 'Range id, or null to clear.')],
+    writes: true,
+  },
+  {
+    name: 'detach_video_audio',
+    description:
+      'Move the embedded audio of a video clip onto a NEW audio track, aligned and locked to the video. ' +
+      'The video is muted in the same step. Returns audioClipId + trackId.',
     params: [CLIP_ID],
+    writes: true,
+  },
+  {
+    name: 'set_audio_lock',
+    description:
+      'Lock or unlock a detached audio clip. While locked it follows the video clip on move / trim / ' +
+      'split. Unlock keeps linkedVideoId but stops following.',
+    params: [CLIP_ID, req('locked', 'boolean', 'true = follow the video again (snaps geometry now).')],
+    writes: true,
+  },
+  {
+    name: 'set_clip_audio',
+    description:
+      'Set audio properties of an audio clip OR a video clip (embedded track). gainDb is -60..+12 ' +
+      '(0 = original, -60 = silent); fadeIn/fadeOut are seconds; muted only applies to video clips.',
+    params: [
+      CLIP_ID,
+      p('gainDb', 'number', 'Static gain in dB (-60..+12).'),
+      p('fadeIn', 'number', 'Fade-in in seconds.'),
+      p('fadeOut', 'number', 'Fade-out in seconds.'),
+      p('muted', 'boolean', 'Mute the embedded video track.'),
+    ],
     writes: true,
   },
   {

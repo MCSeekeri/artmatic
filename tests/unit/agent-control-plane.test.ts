@@ -328,11 +328,23 @@ describe('错误码（agent 靠它决定下一步，不许只有一句字符串�
     const h = harness();
     const track = visualTrackId(h);
     await h.cp.addClip(track, { kind: 'solid', color: '#111111', start: 0, end: 1, id: 'a' });
-    const r = await h.cp.setTransition('a', 'fade', 0.5);
+    // t=0 的入场转场：窗口左半没有地方可放 → too-short。
+    const r = await h.cp.setTransition('a', 'fade', 0.5, undefined, 'in');
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error('应当失败');
     expect(r.error.code).toBe('unsupported');
-    expect(r.error.detail).toEqual({ reason: 'no-next' });
+    expect(r.error.detail).toEqual({ reason: 'too-short', side: 'in' });
+  });
+
+  it('没有邻片段也能设出场转场（另一侧视为全透明）', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    await h.cp.addClip(track, { kind: 'solid', color: '#111111', start: 0, end: 1, id: 'a' });
+    expect(await ok(h.cp.setTransition('a', 'fade', 0.5))).toEqual({ changed: true, side: 'out' });
+    const clip = h.store.findClip('a')!.clip;
+    if (clip.kind !== 'source') throw new Error('应为 source');
+    expect(clip.transitionOut?.defId).toBe('fade');
+    expect(await ok(h.cp.clearTransition('a'))).toEqual({ changed: true });
   });
 
   it('相邻的两个 source 片段上转场能落地', async () => {
@@ -340,7 +352,7 @@ describe('错误码（agent 靠它决定下一步，不许只有一句字符串�
     const track = visualTrackId(h);
     await h.cp.addClip(track, { kind: 'solid', color: '#111111', start: 0, end: 2, id: 'a' });
     await h.cp.addClip(track, { kind: 'solid', color: '#222222', start: 2, end: 4, id: 'b' });
-    expect(await ok(h.cp.setTransition('a', 'fade', 1))).toEqual({ changed: true });
+    expect(await ok(h.cp.setTransition('a', 'fade', 1))).toEqual({ changed: true, side: 'out' });
     const clip = h.store.findClip('a')!.clip;
     if (clip.kind !== 'source') throw new Error('应为 source');
     expect(clip.transitionOut!.defId).toBe('fade');

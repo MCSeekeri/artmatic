@@ -121,6 +121,19 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
 
 ---
 
+### v13 三块能力的守卫
+
+- **预剪辑**：`tests/unit/preclip.test.ts` 钉帧↔秒取整；`tests/e2e/preclip.spec.ts`
+  钉「单击开弹窗 / 双击仍插整段 / 插入长度 = 范围帧数 ÷ fps」。测试视频是 10 fps、
+  工程是 30 fps —— **故意不同**，这样「用工程 fps 换算」不会被巧合掩盖。
+- **视频音频**：`tests/unit/audio-plan.test.ts` 钉「谁出声」（静音视频 / 禁用轨 /
+  `hasAudio:false`）与 gainDb；`tests/unit/project-store-audio-link.test.ts` 钉
+  分离 / 锁定 / 跟随 / 分裂 / 删除；E2E 只测 UI 可达性（测试视频本身无声）。
+- **零片段转场**：`tests/unit/transitions-sides.test.ts` 钉透明侧、遮蔽与半窗不重叠；
+  `tests/e2e/transition-edges.spec.ts` 钉「进度 0.5 的画面必须真的是半透明」。
+  ⚠️ 单侧转场依赖 `u_unpremult` **int** uniform（`u1i`），把读数从 127 打到 63
+  就是它失效的形态 —— 别把那条断言放宽成「比 0 大」。
+
 ## 变异测试（测试的测试）
 
 `bun run test:mutate` 走 **Stryker**：把源码逐处改错（一个 mutant = 一处改动）再跑测试。

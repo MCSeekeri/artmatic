@@ -10,6 +10,7 @@
   import type { Snippet } from 'svelte';
   import IconButton from './IconButton.svelte';
   import { tr } from '../../i18n/index.svelte';
+  import { appState } from '../app-state.svelte';
 
   interface Props {
     title: string;
@@ -80,6 +81,34 @@
     onclose();
   }
 
+  /**
+   * 遮罩点击是否从**遮罩本身**开始。
+   *
+   * 只看 click 的 target 不够：在面板里按下、拖到外面松手时，click 的目标是
+   * 「按下点与松手点的最近公共祖先」= 遮罩，于是拖动会顺手把弹窗关掉
+   * （预剪辑拖 in/out 出界就是这个问题）。记录 pointerdown 是否真的落在遮罩上。
+   */
+  let backdropDown = false;
+  function onBackdropDown(e: PointerEvent): void {
+    backdropDown = e.target === e.currentTarget;
+  }
+  function onBackdropClick(e: MouseEvent): void {
+    const fromBackdrop = backdropDown && e.target === e.currentTarget;
+    backdropDown = false;
+    if (fromBackdrop) onclose();
+  }
+
+  /*
+   * 模态期间全局快捷键必须让路（见 `appState.modalDepth`）。用计数而不是布尔：
+   * 转场选择器可以从设置里再叠一层，先进先出不能互相覆盖。
+   */
+  $effect(() => {
+    appState.modalDepth += 1;
+    return () => {
+      appState.modalDepth -= 1;
+    };
+  });
+
   $effect(() => {
     window.addEventListener('keydown', onkeydown, true);
     return () => window.removeEventListener('keydown', onkeydown, true);
@@ -92,7 +121,8 @@
   class="backdrop"
   use:portal
   data-testid={testid ? `${testid}-backdrop` : undefined}
-  onclick={onclose}
+  onpointerdown={onBackdropDown}
+  onclick={onBackdropClick}
 >
   <div
     class="modal {width}"

@@ -18,11 +18,22 @@ import { evalCurve } from './curve';
 import type { AudioClip } from './schema';
 import type { BeatGrid } from './time';
 
-/** 一个音频片段上决定响度的所有字段（导出/播放共用）。 */
+/**
+ * 一个声音事件上决定响度的所有字段（导出/播放共用）。
+ *
+ * v13 起也覆盖视频片段的内嵌音轨（`core/audio-plan.ts::AudioSpan` 结构兼容），
+ * 所以这里不绑定 `AudioClip` 的具体形状。
+ */
 export type AudioGainSource = Pick<AudioClip, 'start' | 'end' | 'curves'> &
-  Partial<Pick<AudioClip, 'fadeSec' | 'fadeIn' | 'fadeOut'>>;
+  Partial<Pick<AudioClip, 'fadeSec' | 'fadeIn' | 'fadeOut' | 'gainDb'>>;
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/** dB → 线性倍数。-60 dB 及以下直接归 0（滑杆底 = 静音，而不是「很轻」）。 */
+export function dbToLinear(db: number): number {
+  if (!Number.isFinite(db) || db <= -60) return 0;
+  return 10 ** (db / 20);
+}
 
 /**
  * 片内位置 `posSec` 处的淡变包络（0..1）。
@@ -61,8 +72,12 @@ export function audioEnvelopeAt(posSec: number, clipDur: number, env: AudioGainS
 }
 
 /** 片段 `tAbs`（工程绝对秒）处的 gain 曲线值；没有曲线约定为 1（不是 0）。 */
-export function audioGainAt(clip: AudioClip, grid: BeatGrid, tAbs: number): number {
-  const curve = clip.curves.gain;
+export function audioGainAt(
+  source: Pick<AudioClip, 'curves'>,
+  grid: BeatGrid,
+  tAbs: number,
+): number {
+  const curve = source.curves.gain;
   if (!curve) return 1;
   const g = evalCurve(curve, tAbs, { grid, clipStart: 0 });
   return Number.isFinite(g) ? Math.max(0, g) : 1;
@@ -74,11 +89,12 @@ export function audioGainAt(clip: AudioClip, grid: BeatGrid, tAbs: number): numb
  * `tAbs` 是工程时间（秒）。片外返回 0 —— 调用方仍要先判 `tAbs` 是否落在
  * `[clip.start, clip.end)`，这里只是不让它算出「负数位置」的怪值。
  */
-export function audioClipGainAt(clip: AudioClip, grid: BeatGrid, tAbs: number): number {
+export function audioClipGainAt(clip: AudioGainSource, grid: BeatGrid, tAbs: number): number {
   const pos = tAbs - clip.start;
   const dur = clip.end - clip.start;
   if (pos < 0 || pos > dur) return 0;
-  return audioGainAt(clip, grid, tAbs) * audioEnvelopeAt(pos, dur, clip);
+  /* 静态增益（v13）在这里乘一次；曲线与淡变仍是各自相乘。 */
+  return audioGainAt(clip, grid, tAbs) * audioEnvelopeAt(pos, dur, clip) * dbToLinear(clip.gainDb ?? 0);
 }
 
 /**
@@ -90,7 +106,7 @@ export function audioClipGainAt(clip: AudioClip, grid: BeatGrid, tAbs: number): 
  * 已经远超耳朵的分辨率，而 `setValueCurveAtTime` 的实现是线性插值。
  */
 export function sampleAudioEnvelope(
-  clip: AudioClip,
+  clip: AudioGainSource,
   grid: BeatGrid,
   fromSec: number,
   toSec: number,

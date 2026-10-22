@@ -50,7 +50,10 @@ export interface SourceClipInput {
   fit?: SourceClip['fit'];
   fadeSec?: number;
   curves?: Record<string, Curve>;
+  transitionIn?: SourceClip['transitionIn'];
   transitionOut?: SourceClip['transitionOut'];
+  /** 视频内嵌音轨设置（v13，只有 video 源有意义）。 */
+  audio?: SourceClip['audio'];
 }
 
 function checkSpan(start: number, end: number): void {
@@ -143,7 +146,9 @@ export function makeSourceClip(input: SourceClipInput): SourceClip {
      * 与 UI 新建纯色片段同档（`ui/Timeline.svelte`）。
      */
     fit: input.fit ?? (input.kind === 'solid' ? 'stretch' : 'contain'),
+    ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
+    ...(input.kind === 'video' && input.audio ? { audio: { ...input.audio } } : {}),
   };
 }
 

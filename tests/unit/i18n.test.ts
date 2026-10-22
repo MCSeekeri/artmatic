@@ -8,6 +8,7 @@ import { LOCALES, type MessageKey } from '../../src/i18n/locales';
 import { common } from '../../src/i18n/locales/zh-CN/common';
 import { media } from '../../src/i18n/locales/zh-CN/media';
 import { pool } from '../../src/i18n/locales/zh-CN/pool';
+import { preclip } from '../../src/i18n/locales/zh-CN/preclip';
 import { effects } from '../../src/i18n/locales/zh-CN/effects';
 import { app } from '../../src/i18n/locales/zh-CN/app';
 import { project } from '../../src/i18n/locales/zh-CN/project';
@@ -89,6 +90,7 @@ describe('文案表结构', () => {
     common,
     media,
     pool,
+    preclip,
     effects,
     app,
     project,

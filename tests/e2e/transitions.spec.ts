@@ -170,7 +170,7 @@ test('换一条转场（circleopen）画面与 fade 不同 —— defId 与 unif
   expect(split.bluish).toBeGreaterThan(1000);
 });
 
-test('不相邻的片段之间转场静默失效（不报错、也不悄悄画错）', async ({ page }) => {
+test('留缝时转场退化为「淡到透明」（v13：另一侧没有片段 = 全透明）', async ({ page }) => {
   const errors: string[] = [];
   await boot(page);
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -211,11 +211,19 @@ test('不相邻的片段之间转场静默失效（不报错、也不悄悄画�
     { toId: stage.toId },
   );
 
-  // 缝隙里什么都没有；转场窗口原本覆盖 [1.5,2.5]，现在只剩 from 自己
+  /*
+   * 缝隙里没有片段，所以转场的右半侧是全透明：fade 把红色淡到 0。
+   * progress = (2.2 - 1.5) / 1 = 0.7 → 只剩 30% 红≈76（读回是预乘 alpha）。
+   */
   const mid = await rgbMeanAt(page, 2.2);
-  near(mid, [0, 0, 0], 1);
-  // from 仍然正常显示
+  expect(mid[1]).toBeLessThan(8);
+  expect(mid[2]).toBeLessThan(8);
+  expect(mid[0]).toBeGreaterThan(55);
+  expect(mid[0]).toBeLessThan(105);
+
+  // 窗口外：from 仍是纯红，缝隙之后的入画片段仍是纯蓝
   near(await rgbMeanAt(page, 1.2), [255, 0, 0]);
+  near(await rgbMeanAt(page, 2.8), [0, 0, 255]);
   expect(errors).toEqual([]);
 });
 

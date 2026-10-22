@@ -17,7 +17,7 @@
 
 import type { Project } from '../core/schema';
 import { audioClipGainAt } from '../core/audio-envelope';
-import { isAudioClip } from '../core/project-store';
+import { audioSpans } from '../core/audio-plan';
 
 /** 导出音频的统一采样率。48 kHz 是影视与 AAC 的通用值，浏览器也都支持。 */
 export const EXPORT_SAMPLE_RATE = 48000;
@@ -44,14 +44,13 @@ export function mixdown(
   project: Project,
   resolve: (assetId: string) => AudioBuffer | null,
 ): MixedAudio | null {
-  const clips = [];
-  for (const track of project.tracks) {
-    if (!track.enabled || track.kind !== 'audio') continue;
-    for (const clip of track.clips) {
-      if (isAudioClip(clip)) clips.push(clip);
-    }
-  }
-  if (!clips.length) return null;
+  /*
+   * 声音事件表由 `core/audio-plan.ts` 给出：独立音频片段 + 视频片段的内嵌音轨
+   * （未静音的那些）。混流本身不该再知道「哪些片段算声音」—— 预览播放对着
+   * 同一张表，两处各写一份的结果是「预览有、导出没有」。
+   */
+  const spans = audioSpans(project);
+  if (!spans.length) return null;
 
   const sampleRate = EXPORT_SAMPLE_RATE;
   const total = Math.max(1, Math.ceil(project.duration * sampleRate));
@@ -59,32 +58,46 @@ export function mixdown(
   for (let c = 0; c < EXPORT_CHANNELS; c++) out.push(new Float32Array(total));
 
   let peak = 0;
-  for (const clip of clips) {
-    const buf = resolve(clip.assetId);
-    if (!buf) continue; // 素材缺失：跳过，不中断整条混流
-    const clipDur = clip.end - clip.start;
+  for (const span of spans) {
+    const buf = resolve(span.assetId);
+    if (!buf) continue; // 素材缺失 / 视频音轨没解出来：跳过，不中断整条混流
+    const clipDur = span.end - span.start;
     if (clipDur <= 0) continue;
 
     // 片段在工程时间轴上的起点换算成样本下标。
-    const startSample = Math.round(clip.start * sampleRate);
+    const startSample = Math.round(span.start * sampleRate);
     const len = Math.round(clipDur * sampleRate);
+    const srcRate = buf.sampleRate;
+    const speed = Math.max(0.01, span.speed || 1);
+    const channels = Math.max(1, buf.numberOfChannels);
 
     for (let i = 0; i < len; i++) {
       const dst = startSample + i;
       if (dst < 0 || dst >= total) continue; // 超出工程时长的部分不写
-      // 源样本下标：`srcIn` 是片段内偏移，speed 恒为 1（schema 暂无 speed 字段）。
-      const srcPos = clip.srcIn * sampleRate + i;
-      const srcIdx = Math.floor(srcPos);
-      if (srcIdx < 0 || srcIdx >= buf.length) continue;
 
-      const tAbs = clip.start + i / sampleRate;
-      // 曲线 × 淡变（fadeSec + fadeIn/fadeOut）只有一份实现在 core/audio-envelope。
-      const g = audioClipGainAt(clip, project.beatGrid, tAbs);
+      /*
+       * 源位置：`srcIn + 片内秒数 × speed`，再乘**素材自己的采样率**。
+       *
+       * 这一处曾经写死用 `EXPORT_SAMPLE_RATE` 索引源 buffer，而 `decodeAudio`
+       * 产出的是 44.1 kHz 的 AudioBuffer —— 导出会比预览快 8.8%。视频音轨
+       * 还可能来自任意采样率，所以统一按 buf.sampleRate 映射、线性插值。
+       */
+      const srcPos = (span.srcIn + (i / sampleRate) * speed) * srcRate;
+      const i0 = Math.floor(srcPos);
+      if (i0 < 0 || i0 >= buf.length) continue;
+      const frac = srcPos - i0;
+
+      const tAbs = span.start + i / sampleRate;
+      // 曲线 × 淡变（fadeSec + fadeIn/fadeOut）× 静态增益，只有一份实现。
+      const g = audioClipGainAt(span, project.beatGrid, tAbs);
+      if (g === 0) continue;
 
       for (let c = 0; c < EXPORT_CHANNELS; c++) {
-        // 单声道素材复制到双声道，否则 srcIdx 可能越界。
-        const src = buf.numberOfChannels > 1 ? buf.getChannelData(Math.min(c, buf.numberOfChannels - 1)) : buf.getChannelData(0);
-        const v = (src[srcIdx] ?? 0) * g;
+        // 单声道素材复制到双声道。
+        const src = buf.getChannelData(Math.min(c, channels - 1));
+        const s0 = src[i0] ?? 0;
+        const s1 = frac > 0 ? (src[i0 + 1] ?? s0) : s0;
+        const v = (s0 + (s1 - s0) * frac) * g;
         out[c]![dst] += v;
         const a = Math.abs(v);
         if (a > peak) peak = a;

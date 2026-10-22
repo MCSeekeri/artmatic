@@ -36,6 +36,7 @@ import type { AnyClip, Section, Track } from '../core/schema';
 import { tr } from '../i18n/index.svelte';
 import { statusHint } from '../ui/status-hint.svelte';
 import { dragHint, ILLEGAL_DROP_HINT } from '../ui/hints';
+import { beginTrim, endTrim } from './live-trim.svelte';
 
 /**
  * `fade-in` / `fade-out` 是音频片段两端的三角手柄：拖的是**淡变时长**（秒），
@@ -247,6 +248,11 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
     }
 
     const edge = mode === 'resize-l' ? 'start' : 'end';
+    /*
+     * 裁剪态：标签在拖动中以**手势起点的内容原点**定位，于是左边界右移时名字
+     * 被左边界裁掉（而不是整块跟着片段平移 —— 后者看起来和移动片段一模一样）。
+     */
+    beginTrim(clip.id, edge, origStart);
     const raw = edge === 'start' ? origStart + dtSec(ev.clientX) : origEnd + dtSec(ev.clientX);
     const cand = snapTimeWithSections(raw, opts.snapMode, g, p.sections, p.fps);
     // 缩放不换轨；reject 实时钳制（非破坏性），其余策略先自由移动、松手才结算
@@ -260,6 +266,11 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onCancel);
     window.removeEventListener('keydown', onKey);
+    /*
+     * 松手后标签回到新边界（用户要的「重新计算并渲染 display name 的位置」）。
+     * 这一步同时是「边框恢复常态」的开关 —— 忘了清会让片段永远停在裁剪态。
+     */
+    endTrim();
     opts.onHint?.(false);
     // 手势提示必须跟着手势一起结束（忘了清 = 底栏永远停在「松开放置」上）。
     statusHint.clearGesture();

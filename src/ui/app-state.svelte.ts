@@ -43,6 +43,7 @@ import {
   videoMediaFor,
 } from '../engine/media-assets';
 import type { VideoSourceManager } from '../engine/video-source';
+import { forgetVideoAudio, prepareProjectVideoAudio } from '../engine/video-audio';
 import { estimateTempo } from '../audio/tempo';
 import type { WaveformData } from '../audio/decode';
 import { platform } from '../platform/index';
@@ -438,6 +439,19 @@ class AppState {
    * 只读，由 timeline/drag.ts 的 onHint 写入——拖动结束时必须归 false。
    */
   dragIllegal = $state(false);
+  /**
+   * 当前打开的 Modal 数量（由 `controls/Modal.svelte` 自己增减）。
+   *
+   * 全局快捷键（App.svelte 的 onKey）在 > 0 时整段让路：modal 是真正的模态，
+   * 否则「在预剪辑弹窗里按空格」会同时把主时间线也播起来 —— 两个 onKey 都挂在
+   * window 上，`preventDefault()` 挡不住另一个监听器。
+   *
+   * **刻意不是 `$state`**：它只在事件回调里被读，没有任何视图依赖它。写成
+   * `$state` 并在 `Modal` 的 `$effect` 里 `+=` 会自我追踪（`+=` 同时读与写），
+   * 直接触发 Svelte 的 `effect_update_depth_exceeded` —— 表现是弹窗一打开
+   * 整个响应式系统就崩，播放画面停在某一帧。
+   */
+  modalDepth = 0;
   waveforms = $state<Record<string, WaveformData>>({});
   /** 新关键帧默认锚到拍（Inspector 的 ◆ 按钮读这个）。 */
   beatAnchorNewKeys = $state(true);
@@ -1202,6 +1216,7 @@ class AppState {
     forgetImageAsset(id);
     this.audio?.forget(id);
     this.player?.forget(id);
+    forgetVideoAudio(id);
     const wave = { ...this.waveforms };
     delete wave[id];
     this.waveforms = wave;
@@ -2448,12 +2463,26 @@ class AppState {
     if (opts.snap) nt = snapTimeWithSections(nt, this.snap, p.beatGrid, p.sections, p.fps);
     this.playT = nt;
     this.renderer.onSeek();
-    if (this.playing) void this.player.play(p, nt);
+    if (this.playing) void this.playAudio(nt);
+  }
+
+  /**
+   * 播放（含 seek 后的重排）：先把视频内嵌音轨解出来再排 WebAudio 时间线。
+   *
+   * 预热是**幂等且按区间缓存**的，重复调用几乎零成本；失败只记一次 warn，
+   * 于是「视频没有音轨 / 编码解不动」表现为静音而不是播放中断。
+   */
+  private async playAudio(fromT: number): Promise<void> {
+    const project = this.store.project;
+    await prepareProjectVideoAudio(project, (id, buf) => this.player.register(id, buf));
+    // 等待解码期间用户可能已经暂停 / seek 到别处。
+    if (!this.playing) return;
+    await this.player.play(project, fromT);
   }
 
   async play(): Promise<void> {
     this.playing = true;
-    await this.player.play(this.store.project, this.playT);
+    await this.playAudio(this.playT);
   }
 
   pause(): void {

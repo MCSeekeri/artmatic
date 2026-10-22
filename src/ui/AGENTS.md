@@ -446,6 +446,21 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
 - **工具卡显示的是「设置轨道」而不是 `set_track`**：`ui/agent/tool-labels.ts`
   把 id 转成 `agent.toolName.<camelCase>`；状态用名字前的小圆点编码，
   不用左边框色条。整轮结束后所有过程卡自动折叠。
+- **Modal 打开期间全局快捷键整段让路**（`appState.modalDepth`，由 `controls/Modal.svelte`
+  增减）。两个 keydown 都挂在 window 上时 `preventDefault()` 挡不住对方 —— 少了这条，
+  弹窗里按空格会把主时间线一起播起来。计数刻意**不是 `$state`**：`$effect` 里
+  `+=` 会自追踪，直接把响应式系统打崩。
+- **弹窗内的视频预览按墙钟配速**（`ui/preclip/preclip-preview.ts`）：`samples()`
+  的解码吞吐远高于实时，不等待就会 4–8 倍速。等待只用于 pacing，画面时间仍来自
+  `sample.timestamp`，不要把它接进确定性渲染路径。稀疏取帧带「最新一次」令牌，
+  拖动打点时旧帧晚到会被丢弃（否则画面回跳）。
+- **预剪辑（v13）的入口是单击视频条目**：弹窗在 `ui/preclip/`，范围存 `Asset.ranges`
+  （秒落库、帧展示，取整只在 `core/preclip.ts`）。单击与双击必须**人为区分**
+  （220ms 定时器；`+` / `⋯` 要 `stopPropagation`），否则双击会先开弹窗再插入。
+  排版页（`oninsert` 有值）不打开它 —— 那里没有时间线可插。
+- **拖片段首尾裁剪时显示名要跟着被裁**（v13）：`timeline/live-trim.svelte.ts` 记录
+  手势起点的内容原点，`ClipView` 把 label 的 `left` 反向偏移；松手清空。只靠边框变色
+  不够 —— 裁剪与移动必须在按下那一刻就能区分。
 - **媒体池的列表是「合成」出来的**：`Project.assets`（kind / 名字 / 时长 / 尺寸）与
   `AssetStore`（来源 / 字节数）各说一半，合成规则与「素材 → 片段」的默认值都在
   `ui/media-pool.ts`（纯函数，有单测）；面板只管把 `appState` 喂进去。想改

@@ -27,7 +27,13 @@ interface ControlApi {
   addClip(trackId: string, input: unknown): Promise<unknown>;
   removeClip(clipId: string): Promise<unknown>;
   moveClip(clipId: string, trackId: string, start: number): Promise<unknown>;
-  setTransition(clipId: string, defId: string, duration: number): Promise<unknown>;
+  setTransition(
+    clipId: string,
+    defId: string,
+    duration: number,
+    values?: Record<string, number>,
+    side?: 'in' | 'out',
+  ): Promise<unknown>;
   setCurve(clipId: string, param: string, curve: unknown): Promise<unknown>;
   setProject(patch: unknown): Promise<unknown>;
   loadScene(project: unknown): Promise<unknown>;
@@ -254,7 +260,9 @@ test('M1：落点被策略拒绝时**整次不动**（agent 不该把工程改�
     const before = ((await C.getScene({ t: 2, detail: 'ids' })) as Ok<{ tracks: { clips: unknown[] }[] }>).data;
     const moved = (await C.moveClip('lo', 'v1', 0.5)) as Err;
     const after = ((await C.getScene({ t: 2, detail: 'ids' })) as Ok<{ tracks: { clips: unknown[] }[] }>).data;
-    const repeated = (await C.setTransition('hi', 'fade', 0.5)) as Err;
+    // v13：末片段的**出场**是合法的（淡到透明），所以这里用 t=0 的**入场**
+    // 制造一个真正落不了地的剪切点（窗口左半没有地方可放）。
+    const repeated = (await C.setTransition('hi', 'fade', 0.5, undefined, 'in')) as Err;
     return {
       moveCode: moved.ok ? null : moved.error.code,
       unchanged: JSON.stringify(before) === JSON.stringify(after),
@@ -267,7 +275,7 @@ test('M1：落点被策略拒绝时**整次不动**（agent 不该把工程改�
   expect(result.moveCode).toBe('conflict');
   expect(result.unchanged).toBe(true);
   expect(result.transitionCode).toBe('unsupported');
-  expect(result.transitionDetail).toEqual({ reason: 'no-next' });
+  expect(result.transitionDetail).toEqual({ reason: 'too-short', side: 'in' });
 });
 
 test('M2：同一 t 的指纹逐位相同，且上下方向正确', async ({ page }) => {

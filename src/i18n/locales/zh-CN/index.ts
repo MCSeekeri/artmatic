@@ -12,6 +12,7 @@
 import { common } from './common';
 import { media } from './media';
 import { pool } from './pool';
+import { preclip } from './preclip';
 import { effects } from './effects';
 import { app } from './app';
 import { project } from './project';
@@ -32,6 +33,7 @@ export const zhCN = {
   ...common,
   ...media,
   ...pool,
+  ...preclip,
   ...effects,
   ...app,
   ...project,

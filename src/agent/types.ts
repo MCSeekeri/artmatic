@@ -182,7 +182,19 @@ export interface ClipView extends ClipIdView {
   opacity?: number;
   transform?: { x: number; y: number; sx: number; sy: number; rot: number };
   fit?: 'contain' | 'cover' | 'stretch';
+  /** 入场转场（v13）。无前片段时另一侧是全透明。 */
+  transitionIn?: { defId: string; duration: number; values: Record<string, number> };
   transitionOut?: { defId: string; duration: number; values: Record<string, number> };
+  /** 视频片段的内嵌音轨设置（v13）。缺省 = 有声、0 dB、不淡。 */
+  audio?: { gainDb?: number; fadeIn?: number; fadeOut?: number; muted?: boolean };
+  /** 视频片段分离出来的音频片段 id（v13）。 */
+  linkedAudioId?: string;
+  /** 音频片段的静态增益（dB，v13）。缺省 0。 */
+  gainDb?: number;
+  /** 音频片段的血缘：从哪个视频片段分离出来的（v13）。 */
+  linkedVideoId?: string;
+  /** 音频片段的锁定目标；非空 = 跟随该视频片段（v13）。 */
+  lockedTo?: string;
   chain?: EffectInstanceView[];
   /**
    * 影响深度（只有特效片段有）：只作用于下方最近的 N 条**启用**视觉轨；
@@ -382,6 +394,15 @@ export interface Capabilities {
   fits: ('contain' | 'cover' | 'stretch')[];
   curveModes: ('keyframe' | 'impulse' | 'follower')[];
   sourceTypes: SourceType[];
+  /**
+   * 跨子系统能力的**形状说明**（v13）。模型只信这张表：它猜不到「转场还有入场」、
+   * 「视频自带声音」「增益的单位是 dB」这些事，猜错的表现是静默无效。
+   */
+  features: {
+    transitions: { sides: ('in' | 'out')[]; transparentSide: boolean; shadowedBy: 'out' };
+    videoPreclip: { ranges: true; frameAccurate: true; activeRange: true };
+    videoAudio: { embeddedByDefault: true; detachToTrack: true; linkLock: true; gainDb: [number, number]; fades: true };
+  };
 }
 
 /* ------------------------------------------------------------ 排版能力 */
@@ -813,6 +834,11 @@ export interface ControlContext {
   setPlayT(t: number): void;
   /** 音频字节（导出 mp4 混流用）。没有就返回 null。 */
   getAudioBuffer(assetId: string): AudioBuffer | null;
+  /**
+   * 导出前预热音频：把视频片段的内嵌音轨解成 `AudioBuffer` 并注册进播放器
+   * （`engine/video-audio.ts`）。缺省 = 这个宿主不支持视频音频。
+   */
+  prepareAudio?: (project: import('../core/schema').Project) => Promise<void>;
   listProjects(): OpenProjectView[];
   /** 写盘。返回 false = 没写成（未绑定目录 / 目录选择器不可用）。 */
   saveProject(): Promise<boolean>;
@@ -933,6 +959,29 @@ export interface MediaPoolAssetView {
   bytes: number | null;
   /** 被片段引用的次数（0 = 未使用）。 */
   uses: number;
+}
+
+/* ------------------------------------------------------ 视频预剪辑（v13） */
+
+export interface AssetRangeView {
+  id: string;
+  name: string;
+  /** 源内入点（秒）。 */
+  inSec: number;
+  /** 源内出点（秒）。 */
+  outSec: number;
+  /** 帧数（按工程 fps 换算，插片段时落下的长度就是它）。 */
+  frames: number;
+}
+
+export interface AssetRangesView {
+  assetId: string;
+  /** 素材总时长（秒）；未知 = null。 */
+  durationSec: number | null;
+  fps: number;
+  ranges: AssetRangeView[];
+  /** 当前激活范围；没有 = null（插入整段素材）。 */
+  activeRangeId: string | null;
 }
 
 export interface MediaPoolSnapshot {

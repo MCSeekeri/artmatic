@@ -194,16 +194,34 @@ export const inspector = {
      **中文名与说明在 `transitions.ts`（`tns.*`）**，不在这里：那是每一条转场一条
      的成批数据，和本文件的「界面文案」不是一类东西。 */
   'insp.transition': '转场（出画）',
+  /* v13 起两端各一块。`insp.transition` 保留给旧调用点，新界面用下面两个。 */
+  'insp.transitionIn': '入场',
+  'insp.transitionOut': '出场',
   'insp.transitionNone': '无',
   'insp.transitionDuration': '时长',
   'insp.transitionPick': '选择转场',
   'insp.setTransition': '设置转场',
   'insp.changeTransitionDuration': '改转场时长',
   'insp.editTransitionParam': '修改转场参数',
-  'insp.transitionNoNext': '这条轨道后面没有片段，转场无处可去。',
+  /* 另一侧没有片段（v13）：**不是错误**，那一侧就是全透明。 */
+  'insp.transitionToTransparent': '后面没有片段：淡出到透明',
+  'insp.transitionFromTransparent': '前面没有片段：从透明淡入',
+  'insp.transitionShadowed': '与前一段的出场转场落在同一边界，以出场为准。',
   'insp.transitionNextNotSource': '下一个片段是特效片段，没有画面可以作为「入画」内容。',
   'insp.transitionNotAdjacent': '与下一个片段之间有缝隙。转场需要两个片段紧邻；把片段拖到贴合即可生效。',
   'insp.transitionTooShort': '两侧片段太短，放不下转场。',
+
+  /* ------------------------------------------------ 片段音频（v13） */
+  'insp.audio': '音频',
+  'insp.audioGain': '音量',
+  'insp.audioFadeIn': '渐入',
+  'insp.audioFadeOut': '渐出',
+  'insp.audioDetach': '分离音频',
+  'insp.audioDetached': '已分离到「{track}」',
+  'insp.audioLock': '锁定到视频',
+  'insp.audioUnlock': '解锁',
+  'insp.audioLockedTo': '已锁定到「{name}」',
+  'insp.audioUnlinked': '这条音频不是从视频分离出来的',
   'insp.transitionClamped': '时长超过两侧片段能容纳的上限，实际按 {max}s 生效。',
   'insp.transitionFadeTip': '这个片段同时设了淡变，窗口内会叠加成二次淡出，通常只需要其中一种。',
   'insp.transitionInactive': '当前未生效',

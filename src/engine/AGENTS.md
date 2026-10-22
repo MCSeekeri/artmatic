@@ -76,6 +76,17 @@ function buildStack(project: Project, t: number): Stack {
   from / to 各跑自己的绑定链。
 - 缺省（没有 `boundClipId`）走的是老路，**逐字节没变** —— 这条是回归的前提。
 
+### 视频音频与单侧转场（v13）
+
+- 视频的内嵌音轨**默认就出声**：`core/audio-plan.ts` 给出 span，`engine/video-audio.ts`
+  按区间解成 `AudioBuffer` 并注册进播放器。解码失败一律降级为静音，只 warn 一次，
+  **不许阻塞播放 / 导出**。`prepareProjectVideoAudio` 在播放前与导出前各调一次。
+- 转场 op 的 `from` / `to` 可以为 `null`（那一侧没有片段 = 全透明）。compositor 用
+  一张清空的 Target 照常跑转场着色器，并置 `single`；此时着色器输出是**预乘 alpha**
+  的，`BLEND_FRAG` 的 `u_unpremult` 会除回去。
+- ⚠️ `u_unpremult` 是 **int** uniform，必须用 `u1i` 而不是 `u()`（后者走 uniform1f，
+  在 int location 上是 INVALID_OPERATION，值保持 0 —— 画面偏黑且不报错）。
+
 > **z 序 = 列表位置取反**（`engine/stack.ts` 的 `buildStack`：`z = 视觉轨数 - 1 - 视觉轨下标`）。
 > `tracks[0]` 渲染在轨道列表最顶部，按 NLE 惯例就是最前景 ⇒ 它的 z 必须最大。
 > **编号只数视觉轨**（音频轨不参与合成）。

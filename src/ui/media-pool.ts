@@ -26,11 +26,13 @@ import {
   newId,
   type AnyClip,
   type Asset,
+  type AssetTrimRange,
   type AudioClip,
   type Project,
   type SourceClip,
   type Track,
 } from '../core/schema';
+import { activeRangeOf, rangeDurationSec } from '../core/preclip';
 import type { ProjectStore } from '../core/project-store';
 import type { AssetStore } from '../project/asset-store';
 
@@ -56,6 +58,9 @@ export interface PoolItem {
   linked?: boolean;
   /** linked 的原文件在本次会话里变过（只提示，不自动换内容）。 */
   stale?: boolean;
+  /** 预剪辑范围（v13，只有视频有）。插入时用当前激活的那一个。 */
+  ranges?: AssetTrimRange[];
+  activeRange?: AssetTrimRange | null;
 }
 
 /**
@@ -90,6 +95,9 @@ export function buildPoolItems(
       missing: !store.input(id),
       linked: store.modeOf?.(id) === 'linked',
       stale: store.isStale?.(id) === true,
+      ...(a.kind === 'video' && a.ranges?.length
+        ? { ranges: a.ranges, activeRange: activeRangeOf(a) }
+        : {}),
     });
   }
 
@@ -243,8 +251,21 @@ export function stillLength(grid: BeatGrid): number {
   return Math.max(0.5, beatDur(grid) * 4);
 }
 
-/** 视频/音频按素材自身时长，图片按 4 拍。都是**默认值**，插进去之后随拖随改。 */
-function clipLength(item: PoolItem, grid: BeatGrid): number {
+/**
+ * 视频/音频按素材自身时长，图片按 4 拍。都是**默认值**，插进去之后随拖随改。
+ *
+ * 视频带预剪辑范围时按范围的帧数算（v13）：显示的帧数与实际落下的长度
+ * 必须是同一个数，否则「插入 3 秒的范围得到 3.03 秒」会在时间轴上错半帧。
+ */
+function clipLength(
+  item: PoolItem,
+  grid: BeatGrid,
+  range: AssetTrimRange | null,
+  fps: number,
+): number {
+  if (range && item.kind === 'video') {
+    return Math.max(1 / Math.max(1, fps), rangeDurationSec(range, fps));
+  }
   if (item.kind === 'image') return stillLength(grid);
   return Math.max(0.1, item.durationSec ?? stillLength(grid));
 }
@@ -256,10 +277,16 @@ function clipLength(item: PoolItem, grid: BeatGrid): number {
  * 图片 `contain`（一张照片不该被默认裁掉一部分）。这两条与时间轴菜单里的
  * 「导入视频 / 导入图片」是同一套默认值。
  */
-export function clipForAsset(item: PoolItem, at: number, grid: BeatGrid): AnyClip | null {
+export function clipForAsset(
+  item: PoolItem,
+  at: number,
+  grid: BeatGrid,
+  range: AssetTrimRange | null = null,
+  fps = 30,
+): AnyClip | null {
   if (item.missing) return null;
   const start = Math.max(0, at);
-  const end = start + clipLength(item, grid);
+  const end = start + clipLength(item, grid, range, fps);
 
   if (item.kind === 'audio') {
     const clip: AudioClip = {
@@ -293,7 +320,8 @@ export function clipForAsset(item: PoolItem, at: number, grid: BeatGrid): AnyCli
       : {
           ...base,
           kind: 'source',
-          source: { type: 'video', assetId: item.id, srcIn: 0, speed: 1 },
+          // 预剪辑范围决定 srcIn 与长度（v13）：插入的就是已经剪好的片段。
+          source: { type: 'video', assetId: item.id, srcIn: range?.inSec ?? 0, speed: 1 },
           fit: 'cover',
         };
   return clip;
@@ -305,6 +333,12 @@ export interface InsertOptions {
   grid: BeatGrid;
   /** 主选中片段所在轨道。能装就优先用它（「插到我正在编辑的那条轨上」）。 */
   preferredTrackId?: string | null;
+  /**
+   * 用哪个预剪辑范围。**缺省 = 用条目当前激活的那个**；显式 `null` = 整段素材。
+   * 两种语义必须区分：双击 / 「+」要复用激活范围，而「素材 → 片段」的其它
+   * 调用点（排版、粘贴重建）不该被一个界面状态偷偷改长度。
+   */
+  range?: AssetTrimRange | null;
 }
 
 /**
@@ -319,7 +353,8 @@ export function insertAssetClip(
   item: PoolItem,
   opts: InsertOptions,
 ): string | null {
-  const clip = clipForAsset(item, opts.at, opts.grid);
+  const range = opts.range === undefined ? (item.activeRange ?? null) : opts.range;
+  const clip = clipForAsset(item, opts.at, opts.grid, range, store.project.fps);
   if (!clip) return null;
 
   const preferred: Track | null = opts.preferredTrackId ? store.track(opts.preferredTrackId) : null;

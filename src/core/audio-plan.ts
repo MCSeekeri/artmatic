@@ -1,0 +1,126 @@
+/**
+ * audio-plan.ts — 工程在时刻无关意义上的「声音事件表」：**唯一入口**。
+ *
+ * 为什么要有这一层：预览（`audio/player.ts`）与导出混流（`exporters/mixdown.ts`）
+ * 本来各遍历一遍 `AudioClip`。v13 起视频片段的内嵌音轨也要出声，如果两边各自再
+ * 加一段「顺便看看视频片段」，第三处（比如将来的 waveform 绘制）就会漏掉 ——
+ * 表现是「预览有声音、导出没有」，而没人会逐帧比对两边的混音。
+ *
+ * 所以两个消费方都只认 `AudioSpan[]`：
+ * - 独立的 `AudioClip`（含从视频分离出来的那条）；
+ * - 启用视觉轨上、未静音的 video `SourceClip`（`assetId` 就是视频素材 id，
+ *   解码侧按「这个素材的音轨」取 buffer）。
+ *
+ * 分离音频时 store 会把视频的 `audio.muted` 置 true，所以同一段声音不会既走
+ * 内嵌音轨又走独立音频片段。
+ *
+ * 纯函数，可单测（`tests/unit/audio-plan.test.ts`）。
+ */
+
+import type { Curve } from './curve';
+import type { AudioClip, Project, SourceClip } from './schema';
+
+/** 一条要混进最终波形的事件。时间一律是工程秒。 */
+export interface AudioSpan {
+  /** 唯一 id：独立音频片段用 clip.id，内嵌音轨用 `${clipId}:embedded`。 */
+  id: string;
+  assetId: string;
+  start: number;
+  end: number;
+  /** 源内偏移（秒）。 */
+  srcIn: number;
+  /**
+   * 播放速率。1 = 原速。视频的 `speed` 也会走这一条（变调是已知近似，
+   * 见 `exporters/mixdown.ts` 的注释）。
+   */
+  speed: number;
+  /** 静态增益（dB）。0 = 原音量。 */
+  gainDb: number;
+  /** 头尾各淡多少秒（剪辑点防爆音，`ClipBase.fadeSec`）。 */
+  fadeSec: number;
+  /** 编排用的淡入 / 淡出（秒）。 */
+  fadeIn: number;
+  fadeOut: number;
+  /** 增益关键帧曲线（只有独立音频片段有）。 */
+  curves: Record<string, Curve>;
+  /** 视频内嵌音轨的宿主片段 id；独立音频片段没有这个字段。 */
+  videoClipId?: string;
+}
+
+/** 独立音频片段 → span。 */
+export function spanFromAudioClip(clip: AudioClip): AudioSpan {
+  return {
+    id: clip.id,
+    assetId: clip.assetId,
+    start: clip.start,
+    end: clip.end,
+    srcIn: clip.srcIn,
+    speed: 1,
+    gainDb: clip.gainDb ?? 0,
+    fadeSec: clip.fadeSec,
+    fadeIn: clip.fadeIn ?? 0,
+    fadeOut: clip.fadeOut ?? 0,
+    curves: clip.curves,
+  };
+}
+
+/**
+ * 视频片段 → span。返回 null = 这条片段这一帧不出声（非 video / 已静音 / 素材
+ * 明确没有音轨）。`asset` 可以缺失（工程里的悬空 assetId）：那种情况下仍给
+ * span，播放侧解析不到 buffer 就跳过 —— 与音频片段缺素材同一条路。
+ */
+export function spanFromVideoClip(clip: SourceClip, hasAudio: boolean | undefined): AudioSpan | null {
+  if (clip.source.type !== 'video' || !clip.source.assetId) return null;
+  if (clip.audio?.muted) return null;
+  if (hasAudio === false) return null;
+  return {
+    id: `${clip.id}:embedded`,
+    assetId: clip.source.assetId,
+    start: clip.start,
+    end: clip.end,
+    srcIn: clip.source.srcIn ?? 0,
+    speed: clip.source.speed ?? 1,
+    gainDb: clip.audio?.gainDb ?? 0,
+    fadeSec: clip.fadeSec,
+    fadeIn: clip.audio?.fadeIn ?? 0,
+    fadeOut: clip.audio?.fadeOut ?? 0,
+    curves: {},
+    videoClipId: clip.id,
+  };
+}
+
+/** 工程 → 全部声音事件（按轨道顺序；混流本身与顺序无关）。 */
+export function audioSpans(project: Project): AudioSpan[] {
+  const spans: AudioSpan[] = [];
+  for (const track of project.tracks) {
+    if (!track.enabled) continue;
+    if (track.kind === 'audio') {
+      for (const clip of track.clips) spans.push(spanFromAudioClip(clip));
+      continue;
+    }
+    for (const clip of track.clips) {
+      if (clip.kind !== 'source' || clip.source.type !== 'video') continue;
+      const span = spanFromVideoClip(clip, project.assets[clip.source.assetId]?.hasAudio);
+      if (span) spans.push(span);
+    }
+  }
+  return spans;
+}
+
+/**
+ * 需要**解码音轨**的视频素材 id（去重）。导出 / 播放前按这张表预热。
+ *
+ * 只收视频：独立音频素材本来就有 `AudioBuffer`（导入时 `decodeAudio` 过），
+ * 把它们也塞进来只会让预热多等一次无意义的缓存查询。
+ */
+export function videoAudioAssetIds(project: Project): string[] {
+  const ids = new Set<string>();
+  for (const track of project.tracks) {
+    if (!track.enabled || track.kind !== 'visual') continue;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'source' || clip.source.type !== 'video') continue;
+      if (spanFromVideoClip(clip, project.assets[clip.source.assetId]?.hasAudio)) ids.add(clip.source.assetId);
+    }
+  }
+  return [...ids];
+}

@@ -69,7 +69,7 @@ describe('transitionCut：剪切点几何', () => {
     expect(cut.ok).toBe(true);
     if (!cut.ok) return;
     expect(cut.max).toBe(8); // 两侧各 4s
-    expect(cut.to.id).toBe(t.clips[1]!.id);
+    expect(cut.to!.id).toBe(t.clips[1]!.id);
   });
 
   it('上限由较短的一侧决定（from 只有 1s → max 2）', () => {
@@ -77,12 +77,15 @@ describe('transitionCut：剪切点几何', () => {
     expect(transitionMaxDuration(t, 0)).toBe(2);
   });
 
-  it('留缝 → not-adjacent（reject 策略可能留下缝隙）', () => {
+  it('留缝 → 另一侧为 null（透明），转场仍然成立', () => {
     const t = track([sourceClip(0, 4, { transitionOut: tr(1) }), sourceClip(4.5, 8)]);
     const cut = transitionCut(t, 0);
-    expect(cut).toEqual({ ok: false, reason: 'not-adjacent' });
-    expect(transitionMaxDuration(t, 0)).toBe(0);
-    expect(resolveTransition(t, 0)).toBeNull();
+    expect(cut.ok).toBe(true);
+    if (!cut.ok) return;
+    expect(cut.to).toBeNull();
+    // 只有左侧有内容 → 上限由本片段自身长度决定（窗口另一半落在缝里）。
+    expect(cut.max).toBe(8);
+    expect(resolveTransition(t, 0)?.duration).toBe(1);
   });
 
   it('容差内的浮点误差仍算相邻', () => {
@@ -90,12 +93,22 @@ describe('transitionCut：剪切点几何', () => {
     expect(transitionCut(t, 0).ok).toBe(true);
   });
 
-  it('末片段 → no-next；下一个是特效片段 → next-not-source', () => {
+  it('末片段 / 下一个是特效片段 → to = null（v13 零片段转场）', () => {
     const last = track([sourceClip(0, 4, { transitionOut: tr(1) })]);
-    expect(transitionCut(last, 0)).toEqual({ ok: false, reason: 'no-next' });
+    const lastCut = transitionCut(last, 0);
+    expect(lastCut.ok).toBe(true);
+    if (lastCut.ok) expect(lastCut.to).toBeNull();
 
     const withEffect = track([sourceClip(0, 4, { transitionOut: tr(1) }), effectClip(4, 8)]);
-    expect(transitionCut(withEffect, 0)).toEqual({ ok: false, reason: 'next-not-source' });
+    const fxCut = transitionCut(withEffect, 0);
+    expect(fxCut.ok).toBe(true);
+    if (fxCut.ok) expect(fxCut.to).toBeNull();
+  });
+
+  it('没设转场 → 几何上仍可放（控制平面靠它判断首次设置），解析结果是 null', () => {
+    const t = track([sourceClip(0, 4), sourceClip(4, 8)]);
+    expect(transitionCut(t, 0).ok).toBe(true);
+    expect(resolveTransition(t, 0)).toBeNull();
   });
 
   it('上一个转场占掉的右半会挤短本转场的左半', () => {
@@ -161,35 +174,35 @@ describe('transitionAt：窗口与进度（半开）', () => {
   const t = track([sourceClip(0, 2, { transitionOut: tr(1) }), sourceClip(2, 4)]);
 
   it('窗口内命中，progress 线性', () => {
-    const w0 = transitionAt(t, 0, 1.5)!;
+    const w0 = transitionAt(t, 0, 'out', 1.5)!;
     expect(w0.start).toBeCloseTo(1.5, 9);
     expect(w0.end).toBeCloseTo(2.5, 9);
     expect(w0.progress).toBeCloseTo(0, 9);
 
-    expect(transitionAt(t, 0, 2)!.progress).toBeCloseTo(0.5, 9);
-    expect(transitionAt(t, 0, 2.4999)!.progress).toBeGreaterThan(0.99);
+    expect(transitionAt(t, 0, 'out', 2)!.progress).toBeCloseTo(0.5, 9);
+    expect(transitionAt(t, 0, 'out', 2.4999)!.progress).toBeGreaterThan(0.99);
   });
 
   it('半开区间：t = end 不命中，t = start 命中（端点归属不重叠）', () => {
-    expect(transitionAt(t, 0, 2.5)).toBeNull();
-    expect(transitionAt(t, 0, 1.5)).not.toBeNull();
+    expect(transitionAt(t, 0, 'out', 2.5)).toBeNull();
+    expect(transitionAt(t, 0, 'out', 1.5)).not.toBeNull();
   });
 
   it('窗口外 → null', () => {
-    expect(transitionAt(t, 0, 1.4999)).toBeNull();
-    expect(transitionAt(t, 0, 3)).toBeNull();
+    expect(transitionAt(t, 0, 'out', 1.4999)).toBeNull();
+    expect(transitionAt(t, 0, 'out', 3)).toBeNull();
   });
 
   it('from 在窗口后半段已出界，但窗口依然命中（这是 stack 必须早点判的原因）', () => {
     // t = 2.2 > from.end(2)，若先做 span 过滤就会漏掉整个右半窗口
-    const w = transitionAt(t, 0, 2.2);
+    const w = transitionAt(t, 0, 'out', 2.2);
     expect(w).not.toBeNull();
     expect(w!.progress).toBeCloseTo(0.7, 9);
   });
 
-  it('首片段的窗口不越过 t = 0', () => {
+  it('首片段的窗口不越过 t = 0（左半受片段自身长度钳制）', () => {
     const head = track([sourceClip(0, 1, { transitionOut: tr(2) }), sourceClip(1, 3)]);
-    const w = transitionAt(head, 0, 0)!;
+    const w = transitionAt(head, 0, 'out', 0)!;
     expect(w.start).toBe(0);
     expect(w.progress).toBe(0);
   });
@@ -202,10 +215,10 @@ describe('transitionAt：窗口与进度（半开）', () => {
     ]);
     // 从窗口起点到终点的每一步都只应命中 from/to 两个片段（同轨不重叠）
     for (let x = 1.0001; x < 3.9999; x += 0.1) {
-      const w = transitionAt(three, 0, x);
+      const w = transitionAt(three, 0, 'out', x);
       if (!w) continue;
-      expect(w.start).toBeGreaterThanOrEqual(w.from.start);
-      expect(w.end).toBeLessThanOrEqual(w.to.end);
+      expect(w.start).toBeGreaterThanOrEqual(w.from!.start);
+      expect(w.end).toBeLessThanOrEqual(w.to!.end);
       expect(three.clips.some((c) => c.start > w.start && c.start < w.end && c !== w.to && c !== w.from)).toBe(false);
     }
   });

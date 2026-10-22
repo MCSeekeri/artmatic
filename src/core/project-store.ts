@@ -11,6 +11,7 @@ import {
   cloneProject,
   newId,
   type AnyClip,
+  type AssetTrimRange,
   type AudioClip,
   type EffectClip,
   type OverlapBehavior,
@@ -38,7 +39,7 @@ import {
   withTrimIn,
   type Span,
 } from './clips';
-import { clampTransitionDuration, transitionMaxDuration } from './transitions';
+import { clampTransitionDuration, transitionMaxDuration, type TransitionSide } from './transitions';
 import { evalCurve, type Curve } from './curve';
 import type { BeatGrid } from './time';
 import { CommandStack } from './commands';
@@ -344,11 +345,10 @@ export class ProjectStore {
 
   removeClip(clipId: string): void {
     this.commit(tr('tl.removeClip'), (p) => {
-      for (const t of p.tracks) {
-        const before = t.clips.length;
-        t.clips = t.clips.filter((c) => c.id !== clipId) as typeof t.clips;
-        if (t.clips.length !== before) return;
-      }
+      // 删视频时把锁定 / 分离出来的音频一起删掉：只留一条无声的音频轨
+      // 是「删了画面、声音还在响」，那几乎不会是用户想要的。
+      const extra = this.linkedAudioIdIn(p, clipId);
+      this.removeClipIds(p, new Set(extra ? [clipId, extra] : [clipId]));
     });
   }
 
@@ -365,11 +365,36 @@ export class ProjectStore {
       return;
     }
     const set = new Set(clipIds);
+    for (const id of clipIds) {
+      const extra = this.linkedAudioIdIn(this.project, id);
+      if (extra) set.add(extra);
+    }
     this.commit(tr('tl.removeClips', { n: clipIds.length }), (p) => {
-      for (const t of p.tracks) {
-        t.clips = t.clips.filter((c) => !set.has(c.id)) as typeof t.clips;
-      }
+      this.removeClipIds(p, set);
     });
+  }
+
+  /** 视频片段分离出来的音频 id（没有 / 不是视频 → null）。 */
+  private linkedAudioIdIn(p: Project, clipId: string): string | null {
+    const c = this.findClipIn(p, clipId)?.clip;
+    return c?.kind === 'source' ? (c.linkedAudioId ?? null) : null;
+  }
+
+  /** 按 id 集合删除片段，并清掉指向已删片段的所有链接（不留下悬空引用）。 */
+  private removeClipIds(p: Project, ids: ReadonlySet<string>): void {
+    for (const t of p.tracks) {
+      t.clips = t.clips.filter((c) => !ids.has(c.id)) as typeof t.clips;
+    }
+    for (const t of p.tracks) {
+      for (const c of t.clips) {
+        if (c.kind === 'source') {
+          if (c.linkedAudioId && !this.findClipIn(p, c.linkedAudioId)) delete c.linkedAudioId;
+        } else if (c.kind === 'audio') {
+          if (c.lockedTo && !this.findClipIn(p, c.lockedTo)) delete c.lockedTo;
+          if (c.linkedVideoId && !this.findClipIn(p, c.linkedVideoId)) delete c.linkedVideoId;
+        }
+      }
+    }
   }
 
   /* ------------------------------------------------ 手势：实时 vs 结算 */
@@ -395,10 +420,12 @@ export class ProjectStore {
     const moved = { ...found.clip, start, end };
     if (found.track.id === target.id) {
       target.clips = replaceSpan(target.clips as AnyClip[], moved) as typeof target.clips;
+      this.syncLockedAudio(this.project, clipId);
       return;
     }
     found.track.clips = (found.track.clips as AnyClip[]).filter((c) => c.id !== clipId) as typeof found.track.clips;
     target.clips = sortSpans([...(target.clips as AnyClip[]), moved]) as typeof target.clips;
+    this.syncLockedAudio(this.project, clipId);
   }
 
   /** 拖拽期间的实时缩放：只在 0 / 末尾 / MIN_CLIP_LENGTH 上钳，不碰邻居。 */
@@ -424,11 +451,13 @@ export class ProjectStore {
       const ti = trimInOf(clip);
       if (ti) setTrimIn(clip, ti.srcIn + delta * ti.speed);
       clip.start = next;
+      this.syncLockedAudio(this.project, clipId);
       return;
     }
     const end = Math.max(time, clip.start + MIN_CLIP_LENGTH);
     if (end > this.project.duration) this.project.duration = end;
     clip.end = end;
+    this.syncLockedAudio(this.project, clipId);
   }
 
   /**
@@ -449,6 +478,8 @@ export class ProjectStore {
     if (found.track.id !== target.id) {
       found.track.clips = (found.track.clips as AnyClip[]).filter((c) => c.id !== clipId) as typeof found.track.clips;
     }
+    // 落点策略可能顺延 / 挤开了片段：以结算后的真实几何为准再拉齐一次。
+    this.syncLockedAudio(this.project, clipId);
     return true;
   }
 
@@ -481,6 +512,8 @@ export class ProjectStore {
       this.project.overlapBehavior,
     ) as AnyClip[];
     this.writeLane(track, applyTrimIn(before, lane));
+    // trim / push 都可能改动锁定视频的几何（push 会把它挤开）。
+    this.syncLockedAudio(this.project, clipId);
     return true;
   }
 
@@ -504,6 +537,42 @@ export class ProjectStore {
    */
   private writeLane(track: Track, lane: AnyClip[]): void {
     track.clips = lane.map((c) => (c.id.endsWith('#r') ? { ...c, id: newId() } : c)) as typeof track.clips;
+  }
+
+  /* ------------------------------------------------------- 音频链接同步 */
+
+  private findClipIn(p: Project, clipId: string): { track: Track; clip: AnyClip } | null {
+    for (const track of p.tracks) {
+      const clip = (track.clips as AnyClip[]).find((c) => c.id === clipId);
+      if (clip) return { track, clip };
+    }
+    return null;
+  }
+
+  /** 音频片段对齐到视频的几何与源内偏移（锁定时 / 视频被写之后）。 */
+  private mirrorVideoGeometry(audio: AudioClip, video: SourceClip): void {
+    audio.start = video.start;
+    audio.end = video.end;
+    const src = video.source;
+    if (src.type === 'video') audio.srcIn = Math.max(0, src.srcIn);
+  }
+
+  /**
+   * 视频几何变了 → 把锁定的音频拉齐。
+   *
+   * **每一条几何写操作里都要调**（拖动中也要，不能只等松手）：拖动中不同步的
+   * 表现是「松手瞬间音频跳一下」，而那种跳变会让用户以为锁定没生效。
+   * 通过 `linkedAudioId` O(1) 定位，不需要扫全工程找 `lockedTo`。
+   */
+  private syncLockedAudio(p: Project, videoClipId: string): void {
+    const video = this.findClipIn(p, videoClipId)?.clip;
+    if (!video || video.kind !== 'source' || video.source.type !== 'video') return;
+    const audioId = video.linkedAudioId;
+    if (!audioId) return;
+    const audio = this.findClipIn(p, audioId)?.clip;
+    if (!audio || audio.kind !== 'audio') return;
+    if (audio.lockedTo !== video.id) return;
+    this.mirrorVideoGeometry(audio, video);
   }
 
   /* ------------------------------------------------------------ 跨轨 */
@@ -620,7 +689,7 @@ export class ProjectStore {
      * 视频同理。这是与「拖左边界要改 srcIn」同一个道理的两处落点。
      */
     const ti = trimInOf(clip);
-    return this.commit(tr('tl.splitClip'), () => {
+    return this.commit(tr('tl.splitClip'), (p) => {
       const curvesFor = (c: AnyClip, side: 'left' | 'right'): Record<string, Curve> => {
         const curves: Record<string, Curve> = {};
         for (const [k, curve] of Object.entries(c.curves)) {
@@ -656,7 +725,54 @@ export class ProjectStore {
         return c;
       }) as typeof track.clips;
       track.clips.sort((a, b) => a.start - b.start);
+      // 锁定的音频跟着视频一起切开，右半段重新链接到右半段视频。
+      this.splitLockedAudio(p, clipId, at);
     });
+  }
+
+  /**
+   * 分裂视频时把锁定音频一起切开。
+   *
+   * 不切的话症状是「视频切成两段、声音还是完整一条」——时间轴上看着对齐，
+   * 拖动右半段视频时声音留在原地（因为它仍锁在左半脚本身）。曲线不复制到右半：
+   * 曲线的 keys 是相对片段起点的，照搬会整体前移（与视频曲线的处理不同 ——
+   * 视频的 `curves` 由 `splitClipAt` 自己按 key 切）。
+   */
+  private splitLockedAudio(p: Project, videoClipId: string, at: number): void {
+    const video = this.findClipIn(p, videoClipId)?.clip;
+    if (!video || video.kind !== 'source' || video.source.type !== 'video') return;
+    const audioId = video.linkedAudioId;
+    if (!audioId) return;
+    const found = this.findClipIn(p, audioId);
+    if (!found || found.clip.kind !== 'audio' || found.clip.lockedTo !== videoClipId) return;
+    const audio = found.clip;
+    if (at <= audio.start + MIN_CLIP_LENGTH || at >= audio.end - MIN_CLIP_LENGTH) return;
+
+    const rightVideoClip = p.tracks
+      .filter((t): t is VisualTrack => t.kind === 'visual')
+      .flatMap((t) => t.clips)
+      .find((c): c is SourceClip => c.kind === 'source' && c.id !== videoClipId && Math.abs(c.start - at) <= 1e-6);
+
+    const atRel = at - audio.start;
+    const ti = trimInOf(audio);
+    const right: AudioClip = {
+      ...audio,
+      id: newId(),
+      start: at,
+      end: audio.end,
+      srcIn: (ti ? ti.srcIn : audio.srcIn) + atRel * (ti?.speed ?? 1),
+      curves: {},
+      linkedVideoId: rightVideoClip?.id,
+      lockedTo: rightVideoClip?.id,
+    };
+    delete right.fadeIn;
+    delete right.fadeOut;
+    audio.end = at;
+    delete audio.fadeOut;
+
+    (found.track.clips as AudioClip[]).push(right);
+    found.track.clips.sort((a, b) => a.start - b.start);
+    if (rightVideoClip) rightVideoClip.linkedAudioId = right.id;
   }
 
   /* ------------------------------------------------------------ 属性 */
@@ -733,13 +849,14 @@ export class ProjectStore {
   }
 
   /**
-   * 设 / 改出画转场。`defId` 为空串 = 删除。
+   * 设 / 改一端转场（v13：`side` = 入场 / 出场）。`defId` 为空串 = 删除。
    *
    * `values` 由调用方给（core 不认识 effects/transitions 的注册表，
    * 默认参数得由 UI 侧先 `defaultTransitionValues(defId)` 取好）。
    */
-  setTransitionOut(
+  setTransition(
     clipId: string,
+    side: TransitionSide,
     defId: string,
     duration: number,
     values: Record<string, number>,
@@ -748,42 +865,256 @@ export class ProjectStore {
     if (!host) return;
     this.commit(tr('insp.setTransition'), () => {
       const clip = host.track.clips[host.index] as SourceClip;
+      const key = side === 'out' ? 'transitionOut' : 'transitionIn';
       if (!defId) {
-        delete clip.transitionOut;
+        delete clip[key];
         return;
       }
-      const max = transitionMaxDuration(host.track, host.index);
-      clip.transitionOut = {
-        defId,
-        duration: clampTransitionDuration(duration, max),
-        values: { ...values },
-      };
+      // 先写一个占位值再算上限：`transitionMaxDuration` 会读到「同片段另一端」
+      // 的存储值，而这一端此刻还没有值 —— 两端的相互钳制在下一帧由 UI 重算。
+      clip[key] = { defId, duration: clampTransitionDuration(duration, 0), values: { ...values } };
+      const max = transitionMaxDuration(host.track, host.index, side);
+      clip[key]!.duration = clampTransitionDuration(duration, max);
     });
   }
 
+  setTransitionOut(
+    clipId: string,
+    defId: string,
+    duration: number,
+    values: Record<string, number>,
+  ): void {
+    this.setTransition(clipId, 'out', defId, duration, values);
+  }
+
+  setTransitionIn(
+    clipId: string,
+    defId: string,
+    duration: number,
+    values: Record<string, number>,
+  ): void {
+    this.setTransition(clipId, 'in', defId, duration, values);
+  }
+
   clearTransitionOut(clipId: string): void {
-    this.setTransitionOut(clipId, '', 0, {});
+    this.setTransition(clipId, 'out', '', 0, {});
+  }
+
+  clearTransitionIn(clipId: string): void {
+    this.setTransition(clipId, 'in', '', 0, {});
   }
 
   /** 改时长。钳制走同一个函数，UI 与这里不许各写一套。 */
-  setTransitionDuration(clipId: string, seconds: number): void {
+  setTransitionDuration(clipId: string, seconds: number, side: TransitionSide = 'out'): void {
     const host = this.transitionHost(clipId);
     if (!host) return;
     this.commit(tr('insp.changeTransitionDuration'), () => {
       const clip = host.track.clips[host.index] as SourceClip;
-      if (!clip.transitionOut) return;
-      const max = transitionMaxDuration(host.track, host.index);
-      clip.transitionOut.duration = clampTransitionDuration(seconds, max);
+      const ref = side === 'out' ? clip.transitionOut : clip.transitionIn;
+      if (!ref) return;
+      const max = transitionMaxDuration(host.track, host.index, side);
+      ref.duration = clampTransitionDuration(seconds, max);
     });
   }
 
   /** 改转场参数。 */
-  updateTransition(clipId: string, label: string, fn: (t: TransitionRef) => void): void {
+  updateTransition(
+    clipId: string,
+    label: string,
+    fn: (t: TransitionRef) => void,
+    side: TransitionSide = 'out',
+  ): void {
     const host = this.transitionHost(clipId);
     if (!host) return;
     this.commit(label, () => {
       const clip = host.track.clips[host.index] as SourceClip;
-      if (clip.transitionOut) fn(clip.transitionOut);
+      const ref = side === 'out' ? clip.transitionOut : clip.transitionIn;
+      if (ref) fn(ref);
+    });
+  }
+
+  /* ------------------------------------------------------ 预剪辑范围（v13） */
+
+  /** 新增或按 id 覆盖一条范围。第一条自动成为激活范围。 */
+  setAssetRange(assetId: string, range: AssetTrimRange): void {
+    this.commit(tr('preclip.saveRange'), (p) => {
+      const asset = p.assets[assetId];
+      if (!asset) return;
+      const ranges = (asset.ranges ??= []);
+      const i = ranges.findIndex((r) => r.id === range.id);
+      if (i >= 0) ranges[i] = { ...range };
+      else ranges.push({ ...range });
+      // 新建的范围直接激活：用户刚保存一个范围，下一步多半就是插它。
+      // 更新已有范围时不动激活项（否则「改一下别的范围」会把手上的落点换掉）。
+      if (i < 0 || !asset.activeRangeId) asset.activeRangeId = range.id;
+    });
+  }
+
+  removeAssetRange(assetId: string, rangeId: string): void {
+    this.commit(tr('preclip.remove'), (p) => {
+      const asset = p.assets[assetId];
+      if (!asset?.ranges) return;
+      asset.ranges = asset.ranges.filter((r) => r.id !== rangeId);
+      if (!asset.ranges.length) delete asset.ranges;
+      if (asset.activeRangeId === rangeId) {
+        if (asset.ranges?.length) asset.activeRangeId = asset.ranges[0]!.id;
+        else delete asset.activeRangeId;
+      }
+    });
+  }
+
+  setActiveRange(assetId: string, rangeId: string | null): void {
+    this.commit(tr('preclip.saveRange'), (p) => {
+      const asset = p.assets[assetId];
+      if (!asset?.ranges?.length) return;
+      if (rangeId && asset.ranges.some((r) => r.id === rangeId)) asset.activeRangeId = rangeId;
+      else delete asset.activeRangeId;
+    });
+  }
+
+  /** 视频是否含音轨（导入 / 打开工程时探测一次；null = 未知，删掉这个键）。 */
+  setAssetHasAudio(assetId: string, hasAudio: boolean | null): void {
+    this.commit(tr('preclip.saveRange'), (p) => {
+      const asset = p.assets[assetId];
+      if (!asset) return;
+      if (hasAudio === null) delete asset.hasAudio;
+      else asset.hasAudio = hasAudio;
+    });
+  }
+
+  /* ------------------------------------------------------ 片段音频（v13） */
+
+  /**
+   * 把视频片段的内嵌音轨分离到一条**新建的音频轨**上。
+   *
+   * 一笔撤销做完四件事：建轨、建音频片段、把视频内嵌音轨静音、双向链接。
+   * 默认 `lockedTo` = 视频片段，于是移动 / 裁剪 / 分裂视频时音频跟随
+   * （`syncLockedAudio`）；用户在检查器里解锁后独立编辑。
+   *
+   * 返回新音频片段 id；不是视频片段时返回 null。
+   */
+  detachVideoAudio(clipId: string): string | null {
+    const found = this.findClip(clipId);
+    if (!found || found.clip.kind !== 'source' || found.clip.source.type !== 'video') return null;
+    const video = found.clip;
+    // 已经分离过：返回现有片段（重复点击不该造出第二条声音）。
+    if (video.linkedAudioId) {
+      const existing = this.findClip(video.linkedAudioId);
+      if (existing?.clip.kind === 'audio') return existing.clip.id;
+    }
+
+    const audioId = newId();
+    this.commit(tr('insp.audioDetach'), (p) => {
+      const v = this.findClipIn(p, clipId)?.clip;
+      if (!v || v.kind !== 'source' || v.source.type !== 'video') return;
+      const n = p.tracks.filter((t) => t.kind === 'audio').length + 1;
+      const trackId = newId();
+      p.tracks.push({
+        kind: 'audio',
+        id: trackId,
+        name: `A${n}`,
+        enabled: true,
+        clips: [],
+        bus: 'master',
+      });
+      const audio: AudioClip = {
+        kind: 'audio',
+        id: audioId,
+        start: v.start,
+        end: v.end,
+        label: tr('tl.audioOfClip', { name: v.label }),
+        fadeSec: 0,
+        curves: {},
+        assetId: v.source.assetId,
+        srcIn: v.source.srcIn,
+        gainDb: v.audio?.gainDb,
+        fadeIn: v.audio?.fadeIn,
+        fadeOut: v.audio?.fadeOut,
+        linkedVideoId: v.id,
+        lockedTo: v.id,
+      };
+      v.audio = { ...v.audio, muted: true };
+      v.linkedAudioId = audio.id;
+      const track = p.tracks[p.tracks.length - 1]!;
+      (track.clips as AudioClip[]).push(audio);
+      track.clips.sort((a, b) => a.start - b.start);
+    });
+    return audioId;
+  }
+
+  /**
+   * 锁定 / 解锁分离出来的音频。锁定时**立刻对齐**视频的几何与源内偏移 ——
+   * 「锁上了但位置差半秒」比锁不上更难查。
+   */
+  setAudioLocked(audioClipId: string, locked: boolean): void {
+    this.commit(locked ? tr('insp.audioLock') : tr('insp.audioUnlock'), (p) => {
+      const found = this.findClipIn(p, audioClipId);
+      if (!found || found.clip.kind !== 'audio') return;
+      const audio = found.clip;
+      const videoId = audio.linkedVideoId;
+      const video = videoId ? this.findClipIn(p, videoId)?.clip : null;
+      if (locked) {
+        if (!video || video.kind !== 'source' || video.source.type !== 'video') {
+          delete audio.lockedTo;
+          return;
+        }
+        audio.lockedTo = video.id;
+        video.linkedAudioId = audio.id;
+        this.mirrorVideoGeometry(audio, video);
+      } else {
+        delete audio.lockedTo;
+      }
+    });
+  }
+
+  /** 音频片段 / 视频片段的静态增益（dB）。视频写进 `source` 的 audio 设置。 */
+  setClipGainDb(clipId: string, db: number): void {
+    const v = Math.min(12, Math.max(-60, Number.isFinite(db) ? db : 0));
+    this.commit(tr('insp.audioGain'), () => {
+      const clip = this.findClip(clipId)?.clip;
+      if (!clip) return;
+      if (clip.kind === 'audio') clip.gainDb = v === 0 ? undefined : v;
+      else if (clip.kind === 'source' && clip.source.type === 'video') {
+        clip.audio = { ...clip.audio, gainDb: v === 0 ? undefined : v };
+      }
+    });
+  }
+
+  /** 音频片段 / 视频片段内嵌音轨的渐入 / 渐出（秒）。 */
+  setClipAudioFade(clipId: string, side: 'in' | 'out', seconds: number): void {
+    const sec = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+    this.commit(tr(side === 'in' ? 'insp.audioFadeIn' : 'insp.audioFadeOut'), () => {
+      const clip = this.findClip(clipId)?.clip;
+      if (!clip) return;
+      const dur = Math.max(0, clip.end - clip.start);
+      if (clip.kind === 'audio') {
+        const other = side === 'in' ? (clip.fadeOut ?? 0) : (clip.fadeIn ?? 0);
+        const v = Math.min(sec, Math.max(0, dur - Math.min(other, dur)));
+        if (side === 'in') {
+          if (v === 0) delete clip.fadeIn;
+          else clip.fadeIn = v;
+        } else if (v === 0) delete clip.fadeOut;
+        else clip.fadeOut = v;
+        return;
+      }
+      if (clip.kind !== 'source' || clip.source.type !== 'video') return;
+      const audio = (clip.audio ??= {});
+      const other = side === 'in' ? (audio.fadeOut ?? 0) : (audio.fadeIn ?? 0);
+      const v = Math.min(sec, Math.max(0, dur - Math.min(other, dur)));
+      if (side === 'in') {
+        if (v === 0) delete audio.fadeIn;
+        else audio.fadeIn = v;
+      } else if (v === 0) delete audio.fadeOut;
+      else audio.fadeOut = v;
+    });
+  }
+
+  /** 视频内嵌音轨静音开关（分离音频会自动置 true）。 */
+  setVideoAudioMuted(clipId: string, muted: boolean): void {
+    this.commit(tr(muted ? 'tl.muteAudioTrack' : 'tl.unmuteAudioTrack'), () => {
+      const clip = this.findClip(clipId)?.clip;
+      if (!clip || clip.kind !== 'source' || clip.source.type !== 'video') return;
+      clip.audio = { ...clip.audio, muted: muted || undefined };
     });
   }
 

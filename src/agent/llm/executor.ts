@@ -360,11 +360,58 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               String(args.defId ?? ''),
               Number(args.duration),
               asRecord(args.values) as Record<string, number>,
+              args.side === 'in' ? 'in' : 'out',
             ),
           );
 
         case 'clear_transition':
-          return unwrap(await control.clearTransition(String(args.clipId ?? '')));
+          return unwrap(
+            await control.clearTransition(String(args.clipId ?? ''), args.side === 'in' ? 'in' : 'out'),
+          );
+
+        case 'get_asset_ranges':
+          return unwrap(await control.getAssetRanges(String(args.assetId ?? '')));
+
+        case 'set_asset_range':
+          return unwrap(
+            await control.setAssetRange(String(args.assetId ?? ''), {
+              ...(typeof args.rangeId === 'string' ? { id: args.rangeId } : {}),
+              ...(typeof args.name === 'string' ? { name: args.name } : {}),
+              inSec: Number(args.inSec),
+              outSec: Number(args.outSec),
+            }),
+          );
+
+        case 'remove_asset_range':
+          return unwrap(
+            await control.removeAssetRange(String(args.assetId ?? ''), String(args.rangeId ?? '')),
+          );
+
+        case 'set_active_range':
+          return unwrap(
+            await control.setActiveRange(
+              String(args.assetId ?? ''),
+              typeof args.rangeId === 'string' && args.rangeId ? args.rangeId : null,
+            ),
+          );
+
+        case 'detach_video_audio':
+          return unwrap(await control.detachVideoAudio(String(args.clipId ?? '')));
+
+        case 'set_audio_lock':
+          return unwrap(
+            await control.setAudioLock(String(args.clipId ?? ''), args.locked !== false),
+          );
+
+        case 'set_clip_audio':
+          return unwrap(
+            await control.setClipAudio(String(args.clipId ?? ''), {
+              ...(typeof args.gainDb === 'number' ? { gainDb: args.gainDb } : {}),
+              ...(typeof args.fadeIn === 'number' ? { fadeIn: args.fadeIn } : {}),
+              ...(typeof args.fadeOut === 'number' ? { fadeOut: args.fadeOut } : {}),
+              ...(typeof args.muted === 'boolean' ? { muted: args.muted } : {}),
+            }),
+          );
 
         case 'estimate_beat_grid':
           return unwrap(await control.estimateBeatGrid());

@@ -47,6 +47,7 @@ import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
+import { prepareProjectVideoAudio } from './engine/video-audio';
 import {
   importAudioBlob,
   importImageBlob,
@@ -358,6 +359,9 @@ const controlContext: ControlContext = {
     appState.playT = t;
   },
   getAudioBuffer: (id) => appState.player?.buffer(id) ?? null,
+  prepareAudio: async (project) => {
+    await prepareProjectVideoAudio(project, (id, buf) => appState.player.register(id, buf));
+  },
   listProjects: projectList,
   saveProject: () => saveProjectNow(),
   // 给 name 走 OPFS（headless 驱动可用）；不给就弹系统对话框（必须有用户手势）。
@@ -685,6 +689,8 @@ registerControlPlane(control);
         audioPeak: null,
       };
     }
+    // 视频内嵌音轨是异步解码的：与 ui/export.ts 同一条预热路径。
+    await prepareProjectVideoAudio(project, (id, buf) => appState.player.register(id, buf));
     const audio = mixdown(project, (id) => appState.player.buffer(id));
     const blob = (await runExport(appState.renderer, project, {
       sink: new Mp4Sink({

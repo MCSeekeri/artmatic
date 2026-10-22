@@ -2,6 +2,7 @@
   import { appState } from '../ui/app-state.svelte';
   import { pxPerSec, xOfTime } from './view-model';
   import { startClipDrag, type DragPeer, type DragMode } from './drag';
+  import { liveTrim } from './live-trim.svelte';
   import { clipCurvePath, curveAreaPath } from '../ui/curve-editor/curve-geometry';
   import { curveParamOf } from '../ui/curve-editor/curve-meta';
   import { lastCurveKeyOf } from '../ui/curve-editor/curve-editor-state.svelte';
@@ -32,6 +33,32 @@
   const selected = $derived(appState.isClipSelected(clip.id));
   /** 拖拽中且当前落点会被拒收（reject 策略）：红框预告，避免「松手弹回去」的困惑。 */
   const illegal = $derived(selected && appState.dragIllegal);
+
+  /**
+   * 正在裁剪这条片段吗（v13）。
+   *
+   * 裁剪与移动看起来一模一样，用户分不清「我是在挪它还是在裁它」。这个状态
+   * 同时驱动两件事：边框切成裁剪态（accent），以及显示名被边界裁掉。
+   */
+  const trimming = $derived.by(() => {
+    const v = liveTrim.value;
+    return v && v.clipId === clip.id ? v : null;
+  });
+
+  /**
+   * 显示名相对常规位置（5px）的横向偏移。
+   *
+   * 拖左边界时文字锚在**手势起点的内容原点**：`clip.start` 右移多少，文字就
+   * 左移多少 —— 于是它被片段左边界一点点裁掉，而不是整块跟着平移。
+   * 松手时 `liveTrim` 清空，偏移回到 0（名字重新出现在新边界右侧 5px）。
+   *
+   * 右边界不需要偏移：容器 `overflow: hidden` 本来就会把超出右边的文字截断。
+   */
+  const labelShift = $derived.by(() => {
+    void appState.version;
+    if (!trimming || trimming.edge !== 'start') return 0;
+    return -(clip.start - trimming.anchorStart) * pxPerSec(appState.pxPerBeat, grid);
+  });
 
   /**
    * 影响深度（0 = 下方全部）。
@@ -188,6 +215,7 @@
   class:selected
   class:effect={clip.kind === 'effect'}
   class:audio={clip.kind === 'audio'}
+  class:trimming={trimming !== null}
   data-clip-id={clip.id}
   data-testid="clip"
   data-illegal={illegal ? 'true' : undefined}
@@ -250,7 +278,7 @@
       名字**不吃指针事件**（见 CSS 的 `.label`）：双击必须原样落到片段本体上
       —— 那是「打开编辑器」，是这里被点得最多的那一下。改名的入口是 F2。
     -->
-    <span class="label" data-testid="clip-name">{clip.label || clip.kind}</span>
+    <span class="label" style:left={`${5 + labelShift}px`} data-testid="clip-name">{clip.label || clip.kind}</span>
   {/if}
   {#if affectDepth > 0}
     <!-- 影响深度角标：不写出来就没人知道这条特效被限过范围（画面差别还很隐蔽） -->
@@ -452,6 +480,18 @@
   /* 纯图标/纯热区 hover 不用底色块，只提亮——与全局「图标按钮 hover 只变色」一致 */
   .edge:hover {
     background: color-mix(in srgb, currentColor 22%, transparent);
+  }
+  /*
+   * 裁剪态（v13）：边框转 accent、正在拖的那条边加底色。
+   *
+   * 之前拖动首尾与拖动整段长得分毫不差，用户只能从「松手后长度变了」反推自己
+   * 刚才在裁剪。这里让**按下那一刻**就能看出来（配合显示名被边界裁掉）。
+   */
+  .clip.trimming {
+    border-color: var(--accent);
+  }
+  .clip.trimming .edge {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
   }
   /*
    * 淡变手柄：零尺寸 + 两条边框拼出的三角（视觉纪律：不用渐变 / 阴影 / 图标）。

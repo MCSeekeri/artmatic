@@ -48,7 +48,7 @@ import {
 } from 'mediabunny';
 import type { Kit } from './kit';
 import type { SourceTexture } from './compositor';
-import { buildStack, walkOps } from './stack';
+import { buildStack, transitionSources, walkOps } from './stack';
 import { videoMediaFor, type VideoMedia } from './media-assets';
 import { planEviction } from './video-budget';
 import { getLimits, mbToBytes } from '../core/capacity';
@@ -244,6 +244,8 @@ export interface VideoProbe {
   duration: number;
   width: number;
   height: number;
+  /** 是否含音轨（v13）。媒体池据此决定要不要显示「分离音频」。 */
+  hasAudio: boolean;
 }
 
 /**
@@ -253,7 +255,7 @@ export interface VideoProbe {
  * 把 2 GB 读进内存，正好是 W1.1 消灭的动作。`CustomSource` 只按请求的范围
  * 读，缓存上限 8 MiB（与 `BufferSource` 的量级一致）。
  */
-function sourceOf(media: VideoMedia): Source {
+export function videoSourceOf(media: VideoMedia): Source {
   if (media instanceof Blob) return new BlobSource(media);
   if (media instanceof Uint8Array) return new BufferSource(media);
   return new CustomSource({
@@ -274,17 +276,18 @@ function sourceOf(media: VideoMedia): Source {
 export async function probeVideo(media: VideoMedia): Promise<VideoProbe | null> {
   let input: Input<Source> | null = null;
   try {
-    const source = sourceOf(media);
+    const source = videoSourceOf(media);
     input = new Input({ formats: ALL_FORMATS, source });
     if (!(await input.canRead())) return null;
     const track = await input.getPrimaryVideoTrack();
     if (!track) return null;
-    const [duration, width, height] = await Promise.all([
+    const [duration, width, height, audioTrack] = await Promise.all([
       input.computeDuration(),
       track.getDisplayWidth(),
       track.getDisplayHeight(),
+      input.getPrimaryAudioTrack().catch(() => null),
     ]);
-    return { duration, width, height };
+    return { duration, width, height, hasAudio: audioTrack !== null };
   } catch (e) {
     console.warn('[video] probe 失败：', e instanceof Error ? e.message : e);
     return null;
@@ -320,7 +323,7 @@ export async function videoThumbnail(
 
   let input: Input<Source> | null = null;
   try {
-    const source = sourceOf(media);
+    const source = videoSourceOf(media);
     input = new Input({ formats: ALL_FORMATS, source });
     if (!(await input.canRead())) return null;
     const track = await input.getPrimaryVideoTrack();
@@ -455,7 +458,7 @@ export function createVideoSourceManager(
       // Blob → 磁盘背书（本地导入的 File 走这条，零内存）
       // Uint8Array → 零拷贝包住（打开工程时素材已在内存里，不再多一份）
       // path → CustomSource 按范围读（桌面版 linked，不整份进堆）
-      const source = sourceOf(media);
+      const source = videoSourceOf(media);
       const input = new Input({ formats: ALL_FORMATS, source });
       entry.input = input;
       entry.chain = entry.chain.then(async () => {
@@ -672,7 +675,9 @@ export function createVideoSourceManager(
       // （见 engine/stack.ts），只看顶层会漏掉那些轨道上的视频源。
       walkOps(buildStack(project, t), (op) => {
         if (op.type === 'source') clips.push(op.source.clip);
-        else if (op.type === 'transition') clips.push(op.from.clip, op.to.clip);
+        else if (op.type === 'transition') {
+          for (const side of transitionSources(op)) clips.push(side.clip);
+        }
       });
       await Promise.all(clips.map((c) => api.prepare(c, t, renderW)));
     },

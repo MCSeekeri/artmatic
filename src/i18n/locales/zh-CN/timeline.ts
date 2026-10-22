@@ -40,6 +40,12 @@ export const timeline = {
   'tl.renameTrack': '重命名轨道',
   'tl.removeTrack': '删除轨道',
   'tl.moveTrack': '调整轨道顺序',
+  /* 从视频分离出来的音频片段的默认名（视频名 + 后缀）。 */
+  'tl.audioOfClip': '{name} 音频',
+  /* 右键菜单：视频片段分离音频 / 锁定音频。 */
+  'tl.detachAudio': '分离音频',
+  'tl.audioLock': '锁定到视频',
+  'tl.audioUnlock': '解锁',
   /* 导入音频：菜单项带省略号（要弹文件框），撤销标签不带。 */
   'tl.importAudio': '导入音频',
   'tl.importAudioMenu': '导入音频…',

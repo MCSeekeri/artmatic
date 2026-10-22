@@ -11,9 +11,14 @@
 ---
 
 - **音频包络求值不在本目录**：`mixdown` 逐样本调 `core/audio-envelope.ts` 的
-  `audioClipGainAt`（gain 曲线 × `fadeSec` × `fadeIn` / `fadeOut`）。预览播放
+  `audioClipGainAt`（gain 曲线 × `fadeSec` × `fadeIn` / `fadeOut` × `gainDb`）。预览播放
   （`audio/player.ts`）对的是**同一个函数**。别在这里另写一份斜坡 —— 两边各写一份的
   形态是「预览听着对、导出多了一段渐入」，没有人会去逐帧比对。
+- **「哪些片段出声」也不在本目录**：`mixdown` 只消费 `core/audio-plan.ts` 的
+  `AudioSpan[]`（独立音频片段 + 未静音的视频内嵌音轨）。视频音轨要在调 `mixdown`
+  之前 `await prepareProjectVideoAudio`（解码是异步的，混流是同步的）。
+- 取样按 **`buf.sampleRate`** 映射并线性插值，不能假设素材是 48 kHz：`decodeAudio`
+  给的是 44.1 kHz，视频容器里还可能是任意采样率（写死 48k 会让导出比预览快 8.8%）。
 - 所有导出走统一 `FrameSink`（`exporters/frame-sink.ts`）：`webcodecs`（主路径）、
   `png-sequence`（永远可用的逃生舱）、`gif`（**分享格式**：256 色、无音轨，
   但哪儿都能直接播）。**浏览器没有 GIF 硬件编码**，它是唯一纯 CPU 的后端，

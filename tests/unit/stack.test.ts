@@ -119,7 +119,7 @@ describe('buildStack 的 z 序 = 列表顶部在前景', () => {
         op.type === 'effect'
           ? op.clip.id
           : op.type === 'transition'
-            ? op.from.clip.id
+            ? op.from!.clip.id
             : op.source.clip.id;
       const trackIdx = visual.findIndex((t) => t.clips.some((c) => c.id === clipId));
       expect(trackIdx, `找不到 ${clipId} 所属轨道`).toBeGreaterThanOrEqual(0);
@@ -186,8 +186,8 @@ describe('buildStack：转场 op', () => {
     expect(op.defId).toBe('fade');
     expect(op.values).toEqual({ foo: 3 });
     expect(op.progress).toBeCloseTo(0.1, 9);
-    expect(op.from.clip.label).toBe('#ff0000');
-    expect(op.to.clip.label).toBe('#0000ff');
+    expect(op.from!.clip.label).toBe('#ff0000');
+    expect(op.to!.clip.label).toBe('#0000ff');
   });
 
   it('窗口后半段（t ≥ from.end）照样命中 —— 这是「转场判断必须在 span 过滤之前」的守卫', () => {
@@ -220,9 +220,9 @@ describe('buildStack：转场 op', () => {
     from.opacity = 0.5;
     const op = buildStack(p, 1.6)[0]!;
     if (op.type !== 'transition') throw new Error('应为 transition');
-    expect(op.from.opacity).toBeCloseTo(0.5, 9);
-    expect(op.to.opacity).toBeCloseTo(1, 9);
-    expect(op.from.transform.x).toBe(0.5);
+    expect(op.from!.opacity).toBeCloseTo(0.5, 9);
+    expect(op.to!.opacity).toBeCloseTo(1, 9);
+    expect(op.from!.transform.x).toBe(0.5);
   });
 
   it('合成用的 blend 取入画片段的（窗口结束后下一帧就是它）', () => {
@@ -270,12 +270,18 @@ describe('buildStack：转场 op', () => {
     expect(buildStack(p, 1.6)).toEqual([]);
   });
 
-  it('没有紧邻的下一个片段时不做转场（留缝），退化成普通的两个 op', () => {
+  it('留缝时另一侧按全透明处理（v13）：仍产出一个单侧 transition op', () => {
     const { p, to } = transitionProject();
     to.start = 2.5;
     to.end = 4.5;
-    expect(buildStack(p, 1.6).map((o) => o.type)).toEqual(['source']);
-    expect(buildStack(p, 2.2).map((o) => o.type)).toEqual([]); // 缝隙里什么都没有
+    const op = buildStack(p, 1.6)[0]!;
+    expect(op.type).toBe('transition');
+    if (op.type !== 'transition') return;
+    expect(op.to).toBeNull();
+    expect(op.single).toBe('from');
+    expect(op.from!.clip.label).toBe('#ff0000');
+    // 窗口后半段（已越过 from.end）照样在画：那一侧是透明的。
+    expect(buildStack(p, 2.2).map((o) => o.type)).toEqual(['transition']);
   });
 });
 
@@ -329,7 +335,7 @@ function depthProject(spec: { name: string; clips: (SourceClip | EffectClip)[]; 
 /** op 的身份：片段 label（特效加 `fx:` 前缀，便于和源区分）。 */
 function opLabel(op: RenderOp): string {
   if (op.type === 'effect') return `fx:${op.clip.label}`;
-  if (op.type === 'transition') return `tr:${op.from.clip.label}`;
+  if (op.type === 'transition') return `tr:${op.from!.clip.label}`;
   return op.source.clip.label;
 }
 
@@ -494,9 +500,9 @@ describe('buildStack：key / quad 求值', () => {
     to.quad = { tl: [0.1, 0], tr: [0.9, 0], br: [1, 1], bl: [0, 1] };
     const op = buildStack(p, 1.6)[0]!;
     if (op.type !== 'transition') throw new Error('应为 transition');
-    expect(op.from.key).toBe(from.key);
-    expect(op.from.quadInverse).toBeUndefined();
-    expect(op.to.key).toBeUndefined();
-    expect(op.to.quadInverse).toHaveLength(9);
+    expect(op.from!.key).toBe(from.key);
+    expect(op.from!.quadInverse).toBeUndefined();
+    expect(op.to!.key).toBeUndefined();
+    expect(op.to!.quadInverse).toHaveLength(9);
   });
 });

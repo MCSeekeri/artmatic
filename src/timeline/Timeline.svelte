@@ -164,34 +164,47 @@
   const totalWidth = $derived(Math.ceil(xOfTime(duration, appState.pxPerBeat, grid)) + 2);
 
   /**
-   * 每条视觉轨上**能生效**的出画转场窗口（按 trackId 分组）。
+   * 每条视觉轨上**能生效**的转场窗口（v13：入场 / 出场各一条，按 trackId 分组）。
    *
    * 只在时间轴上画出来是不够的：「窗口以剪切点为中心、两侧各让 d/2」这件事
    * 必须让人**看见**，否则「转场为什么吃掉了隔壁半秒」永远是个谜。
    * 窗口由 `core/transitions.ts` 算（与渲染同一份钳制），这里只做像素换算。
    */
+  type TransitionMark = {
+    id: string;
+    clipId: string;
+    side: 'in' | 'out';
+    left: number;
+    width: number;
+    title: string;
+  };
   const transitionMarks = $derived.by(() => {
     void appState.version;
-    const map = new Map<string, { id: string; clipId: string; left: number; width: number; title: string }[]>();
+    const map = new Map<string, TransitionMark[]>();
     const px = appState.pxPerBeat;
     const g = appState.store.project.beatGrid;
     for (const track of appState.store.project.tracks) {
       if (track.kind !== 'visual') continue;
-      const marks: { id: string; clipId: string; left: number; width: number; title: string }[] = [];
+      const marks: TransitionMark[] = [];
       for (let i = 0; i < track.clips.length; i += 1) {
         const clip = track.clips[i]!;
-        if (clip.kind !== 'source' || !clip.transitionOut) continue;
-        const r = resolveTransition(track, i);
-        if (!r) continue;
-        const start = r.from.end - r.duration / 2;
-        const end = r.from.end + r.duration / 2;
-        marks.push({
-          id: clip.id,
-          clipId: clip.id,
-          left: xOfTime(start, px, g),
-          width: Math.max(6, xOfTime(end, px, g) - xOfTime(start, px, g)),
-          title: `${clip.transitionOut.defId} · ${r.duration.toFixed(2)}s`,
-        });
+        if (clip.kind !== 'source') continue;
+        for (const side of ['in', 'out'] as const) {
+          const ref = side === 'out' ? clip.transitionOut : clip.transitionIn;
+          if (!ref) continue;
+          const r = resolveTransition(track, i, side);
+          if (!r) continue;
+          const start = r.cut - r.duration / 2;
+          const end = r.cut + r.duration / 2;
+          marks.push({
+            id: `${clip.id}:${side}`,
+            clipId: clip.id,
+            side,
+            left: xOfTime(start, px, g),
+            width: Math.max(6, xOfTime(end, px, g) - xOfTime(start, px, g)),
+            title: `${ref.defId} · ${r.duration.toFixed(2)}s`,
+          });
+        }
       }
       if (marks.length) map.set(track.id, marks);
     }
@@ -956,6 +969,30 @@
      * 「改这一个」而不是「在这里再加一个」。曲线入口不看有没有关键帧 ——
      * 没有时编辑器会显示空白参数表，点一下就能建，比禁用一个菜单项好懂。
      */
+    const audioActions: MenuItem[] = [];
+    if (found.clip.kind === 'source' && found.clip.source.type === 'video' && !found.clip.linkedAudioId) {
+      audioActions.push({
+        id: 'ctx-detach-audio',
+        label: tr('tl.detachAudio'),
+        icon: 'audio-lines',
+        testid: 'ctx-detach-audio',
+        onselect: () => {
+          const id = appState.store.detachVideoAudio(found.clip.id);
+          if (id) appState.selectClip(id);
+        },
+      });
+    }
+    if (found.clip.kind === 'audio' && found.clip.linkedVideoId) {
+      const locked = Boolean(found.clip.lockedTo);
+      audioActions.push({
+        id: 'ctx-audio-lock',
+        label: tr(locked ? 'tl.audioUnlock' : 'tl.audioLock'),
+        icon: 'link',
+        testid: 'ctx-audio-lock',
+        onselect: () => appState.store.setAudioLocked(found.clip.id, !locked),
+      });
+    }
+
     return [
       {
         id: 'ctx-edit-curves',
@@ -967,6 +1004,7 @@
           openCurveEditor(found.clip.id);
         },
       },
+      ...(audioActions.length ? [separator('ctx-audio-sep'), ...audioActions] : []),
       separator('ctx-clip-sep'),
       ...base,
     ];
@@ -1448,10 +1486,13 @@
               -->
               <div
                 class="tl-transition"
+                class:in={m.side === 'in'}
+                class:out={m.side === 'out'}
                 style:left={`${m.left}px`}
                 style:width={`${m.width}px`}
                 title={m.title}
                 data-testid="transition-marker"
+                data-side={m.side}
                 role="presentation"
                 onpointerdown={(e) => {
                   e.stopPropagation();

@@ -55,8 +55,9 @@ import type { ProjectStore } from '../core/project-store';
 import type { Renderer } from '../engine/renderer';
 import { frameOf, timeOf } from '../engine/clock';
 import { timeAtBeat } from '../core/time';
-import { buildStack, walkOps } from '../engine/stack';
-import { transitionCut } from '../core/transitions';
+import { buildStack, transitionSources, walkOps } from '../engine/stack';
+import { transitionCut, type TransitionSide } from '../core/transitions';
+import { activeRangeOf, newRange, nextRangeName, normalizeRange, rangeFrames } from '../core/preclip';
 import { defaultValues, type ParamDef } from '../effects/types';
 import { defaultEffectValues, getEffect } from '../effects/registry';
 import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
@@ -91,6 +92,7 @@ import {
   ControlFailure,
   fail,
   ok,
+  type AssetRangesView,
   type Capabilities,
   type CapabilityDetail,
   type ClipView,
@@ -129,6 +131,27 @@ import {
 /* --------------------------------------------------------------- 小工具 */
 
 const label = (tool: string) => `agent:${tool}`;
+
+/** 素材的预剪辑范围 → 控制平面的读回形状（帧数与秒都给，调用方不必自己算）。 */
+function rangesView(store: ProjectStore, assetId: string): AssetRangesView {
+  const asset = store.project.assets[assetId];
+  if (!asset) throw new ControlFailure('not-found', tr('agent.args.unknownAsset', { id: assetId }));
+  const fps = store.project.fps;
+  const ranges = (asset.ranges ?? []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    inSec: r.inSec,
+    outSec: r.outSec,
+    frames: rangeFrames(r, fps),
+  }));
+  return {
+    assetId,
+    durationSec: asset.durationSec ?? null,
+    fps,
+    ranges,
+    activeRangeId: activeRangeOf(asset)?.id ?? null,
+  };
+}
 
 /** 与导出面板同档位（`ui/export.ts` 的 GIF_DEFAULT_*）。agent 也可以直接给 size。 */
 const GIF_FALLBACK_WIDTH = 480;
@@ -351,8 +374,35 @@ export interface AgentControlPlane {
   ): Promise<ControlResult<{ instanceId: string; chainIndex: number; keyPrefix: string; enabled: boolean }>>;
   removeEffect(clipId: string, chainIndex: number): Promise<ControlResult<{ changed: boolean }>>;
   reorderEffect(clipId: string, from: number, to: number): Promise<ControlResult<{ changed: boolean }>>;
-  setTransition(clipId: string, defId: string, duration: number, values?: Record<string, number>): Promise<ControlResult<{ changed: boolean }>>;
-  clearTransition(clipId: string): Promise<ControlResult<{ changed: boolean }>>;
+  /**
+   * 设一段转场。`side` 缺省 `'out'`（出画）；`'in'` = 入场。
+   * 无邻片段时另一侧是全透明，仍然可以设。
+   */
+  setTransition(
+    clipId: string,
+    defId: string,
+    duration: number,
+    values?: Record<string, number>,
+    side?: 'in' | 'out',
+  ): Promise<ControlResult<{ changed: boolean; side: 'in' | 'out' }>>;
+  clearTransition(clipId: string, side?: 'in' | 'out'): Promise<ControlResult<{ changed: boolean }>>;
+
+  /* 视频预剪辑（v13） */
+  getAssetRanges(assetId: string): Promise<ControlResult<AssetRangesView>>;
+  setAssetRange(
+    assetId: string,
+    range: { id?: string; name?: string; inSec: number; outSec: number },
+  ): Promise<ControlResult<AssetRangesView & { rangeId: string }>>;
+  removeAssetRange(assetId: string, rangeId: string): Promise<ControlResult<AssetRangesView>>;
+  setActiveRange(assetId: string, rangeId: string | null): Promise<ControlResult<AssetRangesView>>;
+
+  /* 视频音频（v13） */
+  detachVideoAudio(clipId: string): Promise<ControlResult<{ audioClipId: string | null; trackId: string | null }>>;
+  setAudioLock(clipId: string, locked: boolean): Promise<ControlResult<{ changed: boolean; lockedTo: string | null }>>;
+  setClipAudio(
+    clipId: string,
+    patch: { gainDb?: number; fadeIn?: number; fadeOut?: number; muted?: boolean },
+  ): Promise<ControlResult<{ changed: boolean }>>;
   setProject(patch: {
     name?: string;
     fps?: number;
@@ -773,6 +823,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'getClip'
     | 'listProjects'
     | 'listMediaPool'
+    | 'getAssetRanges'
     | 'undoState'
     | 'sceneVersion'
     | 'help'
@@ -847,6 +898,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         }
         return ctx.mediaPool.list();
       });
+    },
+
+    async getAssetRanges(assetId) {
+      return run(() => rangesView(needStore(), assetId));
     },
 
     async undoState() {
@@ -969,6 +1024,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'reorderEffect'
     | 'setTransition'
     | 'clearTransition'
+    | 'setAssetRange'
+    | 'removeAssetRange'
+    | 'setActiveRange'
+    | 'detachVideoAudio'
+    | 'setAudioLock'
+    | 'setClipAudio'
     | 'setProject'
     | 'editSections'
     | 'estimateBeatGrid'
@@ -1616,7 +1677,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
 
     /* ---- 转场 ---- */
 
-    async setTransition(clipId, defId, duration, values) {
+    async setTransition(clipId, defId, duration, values, side = 'out') {
       return run(() => {
         const store = beforeWrite();
         if (!getTransition(defId)) {
@@ -1630,25 +1691,108 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         }
         // 先用 core 的同一个函数问一次「这个剪切点能不能落」——store 那边对落不了
         // 地的情况是**静默不动**的，那种「什么都没发生」对 agent 不可接受。
-        const cut = transitionCut(host.track, host.index);
+        const cut = transitionCut(host.track, host.index, side as TransitionSide);
         if (!cut.ok) {
           throw new ControlFailure('unsupported', tr('agent.transition.cut', { reason: cut.reason }), {
             reason: cut.reason,
+            side,
           });
         }
         const merged = { ...defaultTransitionValues(defId), ...(values ?? {}) };
         const before = store.version;
-        store.setTransitionOut(clipId, defId, duration, merged);
-        return { changed: store.version !== before };
+        store.setTransition(clipId, side as TransitionSide, defId, duration, merged);
+        return { changed: store.version !== before, side };
       });
     },
 
-    async clearTransition(clipId) {
+    async clearTransition(clipId, side = 'out') {
       return run(() => {
         const store = beforeWrite();
         needClip(store, clipId);
         const before = store.version;
-        store.clearTransitionOut(clipId);
+        store.setTransition(clipId, side as TransitionSide, '', 0, {});
+        return { changed: store.version !== before };
+      });
+    },
+
+    /* ---- 视频预剪辑（v13） ---- */
+
+    async setAssetRange(assetId, input) {
+      return run(() => {
+        const store = beforeWrite();
+        const view = rangesView(store, assetId);
+        if (view.durationSec === null) {
+          throw new ControlFailure('unsupported', tr('agent.args.unknownAsset', { id: assetId }));
+        }
+        const norm = normalizeRange(input, view.durationSec, view.fps);
+        if (!norm) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.badRange'), { input });
+        }
+        const existing = input.id ? store.project.assets[assetId]?.ranges?.find((r) => r.id === input.id) : undefined;
+        const range =
+          existing !== undefined
+            ? { ...existing, ...norm, ...(input.name ? { name: input.name } : {}) }
+            : {
+                ...newRange(
+                  norm.inSec,
+                  norm.outSec,
+                  input.name ?? nextRangeName(view.ranges, (n) => tr('preclip.rangeDefault', { n })),
+                ),
+              };
+        store.setAssetRange(assetId, range);
+        return { ...rangesView(store, assetId), rangeId: range.id };
+      });
+    },
+
+    async removeAssetRange(assetId, rangeId) {
+      return run(() => {
+        const store = beforeWrite();
+        store.removeAssetRange(assetId, rangeId);
+        return rangesView(store, assetId);
+      });
+    },
+
+    async setActiveRange(assetId, rangeId) {
+      return run(() => {
+        const store = beforeWrite();
+        store.setActiveRange(assetId, rangeId);
+        return rangesView(store, assetId);
+      });
+    },
+
+    /* ---- 视频音频（v13） ---- */
+
+    async detachVideoAudio(clipId) {
+      return run(() => {
+        const store = beforeWrite();
+        const audioClipId = store.detachVideoAudio(clipId);
+        const audio = audioClipId ? store.findClip(audioClipId) : null;
+        return { audioClipId, trackId: audio?.track.id ?? null };
+      });
+    },
+
+    async setAudioLock(clipId, locked) {
+      return run(() => {
+        const store = beforeWrite();
+        const before = store.version;
+        store.setAudioLocked(clipId, locked);
+        const clip = store.findClip(clipId)?.clip;
+        return {
+          changed: store.version !== before,
+          lockedTo: clip?.kind === 'audio' ? (clip.lockedTo ?? null) : null,
+        };
+      });
+    },
+
+    async setClipAudio(clipId, patch) {
+      return run(() => {
+        const store = beforeWrite();
+        needClip(store, clipId);
+        const before = store.version;
+        if (patch.gainDb !== undefined) store.setClipGainDb(clipId, patch.gainDb);
+        if (patch.fadeIn !== undefined) store.setClipAudioFade(clipId, 'in', patch.fadeIn);
+        if (patch.fadeOut !== undefined) store.setClipAudioFade(clipId, 'out', patch.fadeOut);
+        if (patch.muted !== undefined) store.setVideoAudioMuted(clipId, patch.muted);
         return { changed: store.version !== before };
       });
     },
@@ -2331,8 +2475,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     walkOps(ops, (op) => {
       if (op.type === 'source') active.add(op.source.clip.id);
       else if (op.type === 'transition') {
-        active.add(op.from.clip.id);
-        active.add(op.to.clip.id);
+        for (const side of transitionSources(op)) active.add(side.clip.id);
       } else active.add(op.clip.id);
     });
     const out: { trackId: string; name: string; clips: { id: string; kind: string }[] }[] = [];
@@ -2525,6 +2668,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       const exportSize = size ?? project.resolution;
       const choice = await probeMp4Codec({ w: exportSize.w, h: exportSize.h, fps: project.fps });
       if (!choice) throw new ControlFailure('unsupported', tr('err.export.noH264'));
+      // 视频内嵌音轨是异步解码的；`mixdown` 同步取 buffer，所以先预热。
+      await ctx.prepareAudio?.(project);
       const audio = mixdown(project, (id) => ctx.getAudioBuffer(id));
       sink = new Mp4Sink({ audio });
       codec = choice.codec;

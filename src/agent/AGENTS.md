@@ -114,6 +114,21 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 （实例 id 是完整 `newId()`，不再截短 —— 两种 id 形态并存是这条反馈的根因）。
 曲线对象缺 `interp` 时按 `smooth` 落库，不要再用报错逼模型学这个字段。
 
+## v13 新增的能力面（别漏了其中任何一处）
+
+| 功能 | 控制平面 | 工具 |
+|---|---|---|
+| 转场两端 | `setTransition(..., side)` / `clearTransition(clipId, side)` | `set_transition.side` / `clear_transition.side` |
+| 预剪辑范围 | `getAssetRanges` / `setAssetRange` / `removeAssetRange` / `setActiveRange` | 同名四个工具 |
+| 视频音频 | `detachVideoAudio` / `setAudioLock` / `setClipAudio` | 同名三个工具 |
+
+- `getCapabilities().features` 是模型唯一能看到「转场有 in/out、视频自带声音、增益单位是
+  dB、-60 是静音」的地方。新增跨子系统语义时先加这一块，再加工具描述。
+- 转场 `transitionCut` **不要求转场已存在**：控制平面靠它判断「首次设置放不放得下」。
+  别在那里加 `if (!clip.transitionOut) return no-transition` —— 首次设置会永远被拒。
+- `detail:'full'` 的片段读回包含 `transitionIn` / `transitionOut` / `audio` /
+  `linkedAudioId` / `gainDb` / `linkedVideoId` / `lockedTo`，写回端必须能原样吃回。
+
 ## 能力清单（`getCapabilities`）
 
 - `detail:'ids'` 只给 id；`params` 给完整参数表（键 / 类型 / 区间 / 选项 / 默认值 /

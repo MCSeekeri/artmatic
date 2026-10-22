@@ -167,6 +167,7 @@ export async function importVideoFile(
           name: file.name,
           durationSec: meta.duration,
           size: { w: meta.width, h: meta.height },
+          hasAudio: meta.hasAudio,
         };
       });
     }
@@ -219,6 +220,7 @@ export async function importVideoFile(
       name: file.name,
       durationSec: meta.duration,
       size: { w: meta.width, h: meta.height },
+      hasAudio: meta.hasAudio,
     };
   });
   return finish(

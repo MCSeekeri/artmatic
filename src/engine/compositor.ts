@@ -361,7 +361,8 @@ export class Compositor {
         .tex('u_texture', acc.tex)
         .tex('u_texture2', src.tex)
         .u1i('u_blendMode', BLEND_MODE_INDEX[bottomScopeBlend(op.scope)])
-        .u('u_opacity', 1);
+        .u('u_opacity', 1)
+        .u1i('u_unpremult', 0);
       this.kit.pass(this.blendProg, buf);
       const tmp = acc;
       acc = buf;
@@ -539,7 +540,8 @@ export class Compositor {
       .tex('u_texture', acc.tex)
       .tex('u_texture2', this.placedA!.tex)
       .u1i('u_blendMode', BLEND_MODE_INDEX[source.blend])
-      .u('u_opacity', source.opacity);
+      .u('u_opacity', source.opacity)
+      .u1i('u_unpremult', 0);
     this.kit.pass(this.blendProg, buf);
   }
 
@@ -556,14 +558,27 @@ export class Compositor {
   private drawTransition(op: TransitionOp, acc: Target, buf: Target, c: FrameCtx): void {
     const placedA = this.placedA!;
     const placedB = this.placedB!;
-    const hasFrom = this.placeLayer(op.from, placedA, c, op.from.opacity);
-    const hasTo = this.placeLayer(op.to, placedB, c, op.to.opacity);
+    /*
+     * `null` 侧 = 工程里那一侧本来就没有画面（不是「这一帧没准备好」）：
+     * 清成透明后**照常跑转场着色器**，于是 slide / zoom 这类效果作用在
+     * 「透明的一侧」上，而不是退化成一次淡出。
+     */
+    const hasFrom = op.from
+      ? this.placeLayer(op.from, placedA, c, op.from.opacity)
+      : this.clearLayer(placedA);
+    const hasTo = op.to
+      ? this.placeLayer(op.to, placedB, c, op.to.opacity)
+      : this.clearLayer(placedB);
 
     let layer: Target;
+    /** 走透明侧时着色器输出已经乘过 alpha，blend 前要除回去（见 BLEND_FRAG）。 */
+    let unpremult = 0;
     if (hasFrom && hasTo) {
       this.runTransition(op.defId, op.values, placedA, placedB, op.progress, c.w / c.h, this.trTmp!);
       layer = this.trTmp!;
+      if (op.single) unpremult = 1;
     } else if (hasFrom) {
+      // 「有 from、to 这帧没准备好」与「to 本来就是透明」是两回事：前者是直通色。
       layer = placedA;
     } else if (hasTo) {
       layer = placedB;
@@ -578,8 +593,18 @@ export class Compositor {
       .tex('u_texture2', layer.tex)
       .u1i('u_blendMode', BLEND_MODE_INDEX[op.blend])
       // 两侧的 opacity 已经烘进各自 alpha（转场通路），这里不能再乘一次。
-      .u('u_opacity', 1);
+      .u('u_opacity', 1)
+      // 这是 **int** uniform：用 `u()` 会走 uniform1f，在 int location 上是
+      // INVALID_OPERATION（值保持 0，画面偏黑且不报错）。E2E 用 63 vs 127 抓到的。
+      .u1i('u_unpremult', unpremult);
     this.kit.pass(this.blendProg, buf);
+  }
+
+  /** 把目标清成透明，并当作「这一层可用」。单侧转场的透明侧用它。 */
+  private clearLayer(dst: Target): true {
+    dst.bind();
+    this.kit.clear();
+    return true;
   }
 
   /* ------------------------------------------------------- 反馈池 */

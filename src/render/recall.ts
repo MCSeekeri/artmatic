@@ -55,7 +55,7 @@ import type { GlyphAtlases } from '../engine/glyph-atlas';
 import type { Kit, Target } from '../engine/kit';
 import type { SourceManager } from '../engine/sources';
 import type { SpectrumTextures } from '../engine/spectrum-texture';
-import { buildStack, walkOps } from '../engine/stack';
+import { buildStack, transitionSources, walkOps } from '../engine/stack';
 import type { VideoSourceManager } from '../engine/video-source';
 
 /**
@@ -217,7 +217,7 @@ export function createRecallService(a: RecallArgs): RecallService {
           op.type === 'source'
             ? [op.source.clip]
             : op.type === 'transition'
-              ? [op.from.clip, op.to.clip]
+              ? transitionSources(op).map((side) => side.clip)
               : [];
         for (const clip of clips) {
           if (clip.source.type !== 'algo' || seen.has(clip.id)) continue;

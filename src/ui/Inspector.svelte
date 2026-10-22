@@ -66,7 +66,7 @@
   const DEFAULT_TRANSITION_SEC = 0.5;
 
   let pickerOpen = $state(false);
-  let transitionPickerOpen = $state(false);
+  let transitionPickerSide = $state<'in' | 'out' | null>(null);
   let algoPickerOpen = $state(false);
 
   /**
@@ -370,16 +370,18 @@
 
   /* ---------------------------------------------------------------- 转场 */
 
-  /** 落不了地的原因 → 文案键。`cut.reason` 是闭联合，索引结果仍是字面量键。 */
+  /**
+   * 落不了地的原因 → 文案键。v13 起只有三种：
+   * `shadowed` = 同一边界的前一段出场转场接管；`too-short` = 两边长度不够。
+   * `no-transition` 不会出现在这里（那是「还没设」）。
+   */
   const REASON_KEYS = {
-    'no-next': 'insp.transitionNoNext',
-    'next-not-source': 'insp.transitionNextNotSource',
-    'not-adjacent': 'insp.transitionNotAdjacent',
+    shadowed: 'insp.transitionShadowed',
     'too-short': 'insp.transitionTooShort',
   } as const;
 
   /**
-   * 剪切点几何。
+   * 两端剪切点几何（v13）。
    *
    * 注意这里**只做展示**：相邻判定与时长钳制只有 `core/transitions.ts` 一处实现，
    * 检查器不重算一遍（两边各写一套的话，"UI 上看着没问题、渲染时没生效" 就会
@@ -393,7 +395,10 @@
     if (!f || f.track.kind !== 'visual') return null;
     const index = (f.track.clips as AnyClip[]).findIndex((c) => c.id === id);
     if (index < 0) return null;
-    return transitionCut(f.track, index);
+    return {
+      in: transitionCut(f.track, index, 'in'),
+      out: transitionCut(f.track, index, 'out'),
+    };
   });
 
   /**
@@ -440,25 +445,45 @@
     return out;
   });
 
-  function setTransition(clip: AnyClip, defId: string): void {
+  function setTransition(clip: AnyClip, side: 'in' | 'out', defId: string): void {
     if (!defId) {
-      appState.store.clearTransitionOut(clip.id);
+      appState.store.setTransition(clip.id, side, '', 0, {});
       return;
     }
     // 换一条转场时**保住已有时长**：用户调好的节拍不该因为换了个效果被重置。
-    const keep = clip.kind === 'source' ? clip.transitionOut?.duration : undefined;
-    appState.store.setTransitionOut(
+    const ref = clip.kind === 'source' ? (side === 'out' ? clip.transitionOut : clip.transitionIn) : undefined;
+    appState.store.setTransition(
       clip.id,
+      side,
       defId,
-      keep ?? DEFAULT_TRANSITION_SEC,
+      ref?.duration ?? DEFAULT_TRANSITION_SEC,
       defaultTransitionValues(defId),
     );
   }
 
-  function setTransitionParam(clip: AnyClip, key: string, v: number): void {
-    appState.store.updateTransition(clip.id, tr('insp.editTransitionParam'), (t) => {
-      t.values[key] = v;
-    });
+  function setTransitionParam(clip: AnyClip, side: 'in' | 'out', key: string, v: number): void {
+    appState.store.updateTransition(
+      clip.id,
+      tr('insp.editTransitionParam'),
+      (t) => {
+        t.values[key] = v;
+      },
+      side,
+    );
+  }
+
+  /* ------------------------------------------------------------ 片段音频 */
+
+  /** 分离视频音频：建轨 + 建片段 + 静音原轨，一笔撤销；随后选中新音频片段。 */
+  function detachAudio(clip: AnyClip): void {
+    const id = appState.store.detachVideoAudio(clip.id);
+    if (id) appState.selectClip(id);
+  }
+
+  /** 分离出来的音频在哪条轨上（检查器里的「已分离到 A2」）。 */
+  function audioTrackName(audioClipId: string): string | null {
+    const f = appState.store.findClip(audioClipId);
+    return f ? f.track.name : null;
   }
 </script>
 
@@ -531,6 +556,36 @@
           onchange={(v) => appState.store.setFade(clip.id, 'out', v)}
         />
       </Field>
+
+      <!-- 静态音量（dB）。与关键帧曲线相乘，求值在 core/audio-envelope（唯一真源）。 -->
+      <NumericField
+        label={tr('insp.audioGain')}
+        min={-60}
+        max={12}
+        step={0.5}
+        value={clip.gainDb ?? 0}
+        sliderTestid="insp-audio-gain"
+        numberTestid="insp-audio-gain-num"
+        oninput={(v) => appState.store.setClipGainDb(clip.id, v)}
+      />
+
+      {#if clip.linkedVideoId}
+        {@const video = appState.store.findClip(clip.linkedVideoId)?.clip}
+        <Field label={tr('insp.audioLock')}>
+          <Button
+            label={clip.lockedTo ? tr('insp.audioUnlock') : tr('insp.audioLock')}
+            icon="link"
+            variant={clip.lockedTo ? 'accent' : 'outline'}
+            testid="insp-audio-lock"
+            onclick={() => appState.store.setAudioLocked(clip.id, !clip.lockedTo)}
+          />
+          <span class="dim">
+            {clip.lockedTo
+              ? tr('insp.audioLockedTo', { name: video?.label ?? clip.linkedVideoId })
+              : tr('insp.audioUnlinked')}
+          </span>
+        </Field>
+      {/if}
     {:else}
       <Field label={tr('insp.fade')}>
         <NumberInput
@@ -543,6 +598,64 @@
           onchange={(v) => upd(clip, tr('insp.changeFade'), (c) => (c.fadeSec = Math.max(0, v)))}
         />
       </Field>
+    {/if}
+
+    {#if clip.kind === 'source' && clip.source.type === 'video'}
+      <!--
+        视频内嵌音轨（v13）：默认就参与混流（预览与导出同源）。「分离音频」只是
+        把这条声音搬到独立音频轨上以便单独编排；分离后原音轨自动静音，按钮变成
+        一条「已分离到 Ax」的状态行。
+      -->
+      {@const audioTrack = clip.linkedAudioId ? audioTrackName(clip.linkedAudioId) : null}
+      <div class="section" data-testid="clip-audio-section">
+        <div class="section-head">
+          <span class="section-title">{tr('insp.audio')}</span>
+        </div>
+        <NumericField
+          label={tr('insp.audioGain')}
+          min={-60}
+          max={12}
+          step={0.5}
+          value={clip.audio?.gainDb ?? 0}
+          sliderTestid="insp-video-gain"
+          numberTestid="insp-video-gain-num"
+          oninput={(v) => appState.store.setClipGainDb(clip.id, v)}
+        />
+        <Field label={tr('insp.audioFadeIn')}>
+          <NumberInput
+            value={clip.audio?.fadeIn ?? 0}
+            min={0}
+            step={0.05}
+            width={64}
+            suffix="s"
+            testid="insp-video-fade-in"
+            onchange={(v) => appState.store.setClipAudioFade(clip.id, 'in', v)}
+          />
+          <span class="dim">{tr('insp.audioFadeOut')}</span>
+          <NumberInput
+            value={clip.audio?.fadeOut ?? 0}
+            min={0}
+            step={0.05}
+            width={64}
+            suffix="s"
+            testid="insp-video-fade-out"
+            onchange={(v) => appState.store.setClipAudioFade(clip.id, 'out', v)}
+          />
+        </Field>
+        {#if clip.linkedAudioId}
+          <p class="note" data-testid="video-audio-detached">
+            {tr('insp.audioDetached', { track: audioTrack ?? clip.linkedAudioId })}
+          </p>
+        {:else}
+          <Button
+            label={tr('insp.audioDetach')}
+            icon="audio-lines"
+            variant="outline"
+            testid="detach-video-audio"
+            onclick={() => detachAudio(clip)}
+          />
+        {/if}
+      </div>
     {/if}
 
     {#if clip.kind === 'source'}
@@ -969,128 +1082,148 @@
       {/if}
 
       <!--
-        出画转场：挂在片段上，窗口以 end 为中心吃两侧各一半。
+        两端转场（v13）：入场挂 start、出场挂 end。与片段自身属性不同，它们发生在
+        **剪切点**上；另一侧没有片段时那一侧是全透明，所以首尾片段也能做。
 
-        它和上面那些「片段自身的属性」（混合 / 适配 / 变换）**不是一回事**：转场发生在
-        **剪切点**上，要同轨两个紧邻片段才成立。所以用一个带分隔线的区块把它隔开 ——
-        直接跟在「旋转」后面会让人以为它是又一个片段属性。
+        每一端是一个独立区块：同一片段可以同时有入场与出场，混在一个区块里会让人
+        以为它们是同一条转场的两个字段。
       -->
-      {@const trRef = clip.transitionOut}
-      {@const trEntry = trRef ? getTransition(trRef.defId) : null}
-      {@const trMax = transitionInfo?.ok ? transitionInfo.max : 0}
-      {@const trThumb = trRef ? transitionThumbUrl(trRef.defId) : null}
-      {@const trInfo = trRef ? transitionCatalogInfo(trRef.defId) : null}
-      <!-- 目录里没有（工程来自更新的版本）→ 退回显示 id，而不是留一行空白 -->
-      {@const trName = trRef ? (trInfo ? tr(trInfo.nameKey) : trRef.defId) : ''}
-      <div class="section" data-testid="transition-section">
-        <div class="section-head">
-          <span class="section-title">{tr('insp.transition')}</span>
-          {#if trRef}
-            <IconButton
-              icon="x"
-              label={tr('insp.transitionClear')}
-              size="sm"
-              variant="danger"
-              testid="transition-clear"
-              onclick={() => setTransition(clip, '')}
-            />
-          {/if}
-        </div>
-
-        {#if trRef && trEntry}
-          <!-- 当前转场：50% 进度缩略图 + 署名（MIT / BSD 要求保留作者，也方便回上游查） -->
-          <div class="tr-current">
-            {#if trThumb}
-              <img
-                class="tr-thumb"
-                src={trThumb}
-                alt=""
-                draggable="false"
-                loading="lazy"
-                decoding="async"
-                data-testid="transition-preview"
+      {#each [{ side: 'in' as const }, { side: 'out' as const }] as trSide (trSide.side)}
+        {@const side = trSide.side}
+        {@const trRef = side === 'out' ? clip.transitionOut : clip.transitionIn}
+        {@const trEntry = trRef ? getTransition(trRef.defId) : null}
+        {@const cut = transitionInfo ? transitionInfo[side] : null}
+        {@const trMax = cut?.ok ? cut.max : 0}
+        {@const trThumb = trRef ? transitionThumbUrl(trRef.defId) : null}
+        {@const trInfo = trRef ? transitionCatalogInfo(trRef.defId) : null}
+        <!-- 目录里没有（工程来自更新的版本）→ 退回显示 id，而不是留一行空白 -->
+        {@const trName = trRef ? (trInfo ? tr(trInfo.nameKey) : trRef.defId) : ''}
+        {@const transparent = cut?.ok ? (side === 'out' ? cut.to === null : cut.from === null) : false}
+        <!-- 出画那块的 testid 保持 v12 的名字：既有 E2E 用它定位。 -->
+        <div class="section" data-testid={side === 'out' ? 'transition-section' : 'transition-section-in'}>
+          <div class="section-head">
+            <span class="section-title">{tr(side === 'out' ? 'insp.transitionOut' : 'insp.transitionIn')}</span>
+            {#if trRef}
+              <IconButton
+                icon="x"
+                label={tr('insp.transitionClear')}
+                size="sm"
+                variant="danger"
+                testid={side === 'out' ? 'transition-clear' : 'transition-clear-in'}
+                onclick={() => setTransition(clip, side, '')}
               />
-            {:else}
-              <span class="tr-thumb tr-thumb-none" aria-hidden="true"></span>
             {/if}
-            <span class="tr-current-meta">
-              <span class="tr-name" data-testid="transition-current-name">{trName}</span>
-              <!-- 中文名之外**始终留着上游 id**：参数名不翻译，靠它回文档查这条转场 -->
-              <span class="tr-sub">
-                <span class="tr-id" data-testid="transition-current-id">{trRef.defId}</span>
-                <span class="tr-author">{trEntry.author} · {trEntry.license}</span>
-              </span>
-            </span>
           </div>
-        {/if}
 
-        <Field label={trRef ? tr('insp.transitionChange') : tr('insp.transitionPick')}>
-          <Button
-            label={trRef ? tr('insp.transitionChange') : tr('insp.transitionPick')}
-            icon="blend"
-            variant={trRef ? 'outline' : 'accent'}
-            testid="open-transition-picker"
-            onclick={() => (transitionPickerOpen = true)}
-          />
-        </Field>
+          {#if trRef && trEntry}
+            <div class="tr-current">
+              {#if trThumb}
+                <img
+                  class="tr-thumb"
+                  src={trThumb}
+                  alt=""
+                  draggable="false"
+                  loading="lazy"
+                  decoding="async"
+                  data-testid={side === 'out' ? 'transition-preview' : 'transition-preview-in'}
+                />
+              {:else}
+                <span class="tr-thumb tr-thumb-none" aria-hidden="true"></span>
+              {/if}
+              <span class="tr-current-meta">
+                <span
+                  class="tr-name"
+                  data-testid={side === 'out' ? 'transition-current-name' : 'transition-current-name-in'}
+                >{trName}</span>
+                <!-- 中文名之外**始终留着上游 id**：参数名不翻译，靠它回文档查这条转场 -->
+                <span class="tr-sub">
+                  <span
+                    class="tr-id"
+                    data-testid={side === 'out' ? 'transition-current-id' : 'transition-current-id-in'}
+                  >{trRef.defId}</span>
+                  <span class="tr-author">{trEntry.author} · {trEntry.license}</span>
+                </span>
+              </span>
+            </div>
+          {/if}
 
-        {#if trRef && trEntry}
-          <Field label={tr('insp.transitionDuration')}>
-            <NumberInput
-              value={trRef.duration}
-              min={0.05}
-              max={trMax > 0 ? trMax : undefined}
-              step={0.05}
-              width={64}
-              suffix="s"
-              testid="transition-duration"
-              onchange={(v) => appState.store.setTransitionDuration(clip.id, v)}
+          <Field label={trRef ? tr('insp.transitionChange') : tr('insp.transitionPick')}>
+            <Button
+              label={trRef ? tr('insp.transitionChange') : tr('insp.transitionPick')}
+              icon="blend"
+              variant={trRef ? 'outline' : 'accent'}
+              testid={side === 'out' ? 'open-transition-picker' : 'open-transition-picker-in'}
+              onclick={() => (transitionPickerSide = side)}
             />
           </Field>
 
-          {#each trEntry.params as p (p.key)}
-            {#if p.type === 'checkbox'}
-              <Field label={p.label}>
-                <Checkbox
-                  checked={Number(trRef.values[p.key] ?? p.defaultValue) !== 0}
-                  testid={`transition-param-${p.key}`}
-                  onchange={(v) => setTransitionParam(clip, p.key, v ? 1 : 0)}
-                />
-              </Field>
-            {:else}
-              <NumericField
-                label={p.label}
-                min={p.min ?? 0}
-                max={p.max ?? 1}
-                step={p.step ?? 0.01}
-                value={Number(trRef.values[p.key] ?? p.defaultValue)}
-                sliderTestid={`transition-param-${p.key}`}
-                numberTestid={`transition-param-num-${p.key}`}
-                oninput={(v) => setTransitionParam(clip, p.key, v)}
+          {#if trRef && trEntry}
+            <Field label={tr('insp.transitionDuration')}>
+              <NumberInput
+                value={trRef.duration}
+                min={0.05}
+                max={trMax > 0 ? trMax : undefined}
+                step={0.05}
+                width={64}
+                suffix="s"
+                testid={side === 'out' ? 'transition-duration' : 'transition-duration-in'}
+                onchange={(v) => appState.store.setTransitionDuration(clip.id, v, side)}
               />
+            </Field>
+
+            {#each trEntry.params as p (p.key)}
+              {#if p.type === 'checkbox'}
+                <Field label={p.label}>
+                  <Checkbox
+                    checked={Number(trRef.values[p.key] ?? p.defaultValue) !== 0}
+                    testid={`${side === 'out' ? 'transition-param' : 'transition-param-in'}-${p.key}`}
+                    onchange={(v) => setTransitionParam(clip, side, p.key, v ? 1 : 0)}
+                  />
+                </Field>
+              {:else}
+                <NumericField
+                  label={p.label}
+                  min={p.min ?? 0}
+                  max={p.max ?? 1}
+                  step={p.step ?? 0.01}
+                  value={Number(trRef.values[p.key] ?? p.defaultValue)}
+                  sliderTestid={`${side === 'out' ? 'transition-param' : 'transition-param-in'}-${p.key}`}
+                  numberTestid={`${side === 'out' ? 'transition-param-num' : 'transition-param-num-in'}-${p.key}`}
+                  oninput={(v) => setTransitionParam(clip, side, p.key, v)}
+                />
+              {/if}
+            {/each}
+
+            {#if transparent}
+              <p class="note" data-testid={side === 'out' ? 'transition-transparent' : 'transition-transparent-in'}>
+                {tr(side === 'out' ? 'insp.transitionToTransparent' : 'insp.transitionFromTransparent')}
+              </p>
             {/if}
-          {/each}
-
-          {#if transitionInfo && !transitionInfo.ok}
-            <p class="note insp-warn">{tr('insp.transitionInactive')}：{tr(REASON_KEYS[transitionInfo.reason])}</p>
-          {:else if trMax > 0 && trRef.duration > trMax + 1e-9}
-            <p class="note insp-warn">
-              {tr('insp.transitionClamped', { max: trMax.toFixed(2) })}
-            </p>
+            {#if cut && !cut.ok && cut.reason !== 'no-transition'}
+              <p class="note insp-warn">
+                {tr('insp.transitionInactive')}：{tr(REASON_KEYS[cut.reason as 'shadowed' | 'too-short'])}
+              </p>
+            {:else if trMax > 0 && trRef.duration > trMax + 1e-9}
+              <p class="note insp-warn">
+                {tr('insp.transitionClamped', { max: trMax.toFixed(2) })}
+              </p>
+            {/if}
+            {#if clip.fadeSec > 0}
+              <p class="note insp-warn">{tr('insp.transitionFadeTip')}</p>
+            {/if}
           {/if}
-          {#if clip.fadeSec > 0}
-            <p class="note insp-warn">{tr('insp.transitionFadeTip')}</p>
-          {/if}
-        {/if}
-      </div>
+        </div>
+      {/each}
 
-      {#if transitionPickerOpen}
+      {#if transitionPickerSide}
         <TransitionPickerModal
-          current={trRef?.defId ?? null}
-          onclose={() => (transitionPickerOpen = false)}
+          current={
+            (transitionPickerSide === 'out' ? clip.transitionOut : clip.transitionIn)?.defId ?? null
+          }
+          onclose={() => (transitionPickerSide = null)}
           onapply={(id) => {
-            setTransition(clip, id);
-            transitionPickerOpen = false;
+            if (transitionPickerSide) setTransition(clip, transitionPickerSide, id);
+            transitionPickerSide = null;
           }}
         />
       {/if}

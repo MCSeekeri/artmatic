@@ -384,12 +384,48 @@ async function dispatch(name, args, extra) {
       const bad = await requireId(args.defId, 'transitions', '转场');
       if (bad) return bad;
       return unwrap(
-        await bridge.call('setTransition', [args.clipId, args.defId, args.duration, args.values]),
+        await bridge.call('setTransition', [args.clipId, args.defId, args.duration, args.values, args.side]),
       );
     }
 
     case 'artmatic_clear_transition':
-      return unwrap(await bridge.call('clearTransition', [args.clipId]));
+      return unwrap(await bridge.call('clearTransition', [args.clipId, args.side]));
+
+    case 'artmatic_get_asset_ranges':
+      return unwrap(await bridge.call('getAssetRanges', [args.assetId]));
+
+    case 'artmatic_set_asset_range':
+      return unwrap(
+        await bridge.call('setAssetRange', [
+          args.assetId,
+          { inSec: args.inSec, outSec: args.outSec, name: args.name, id: args.rangeId },
+        ]),
+      );
+
+    case 'artmatic_remove_asset_range':
+      return unwrap(await bridge.call('removeAssetRange', [args.assetId, args.rangeId]));
+
+    case 'artmatic_set_active_range':
+      return unwrap(await bridge.call('setActiveRange', [args.assetId, args.rangeId ?? null]));
+
+    case 'artmatic_detach_video_audio':
+      return unwrap(await bridge.call('detachVideoAudio', [args.clipId]));
+
+    case 'artmatic_set_audio_lock':
+      return unwrap(await bridge.call('setAudioLock', [args.clipId, args.locked]));
+
+    case 'artmatic_set_clip_audio':
+      return unwrap(
+        await bridge.call('setClipAudio', [
+          args.clipId,
+          {
+            gainDb: args.gainDb,
+            fadeIn: args.fadeIn,
+            fadeOut: args.fadeOut,
+            muted: args.muted,
+          },
+        ]),
+      );
 
     case 'artmatic_set_project':
       return unwrap(await bridge.call('setProject', [args]));

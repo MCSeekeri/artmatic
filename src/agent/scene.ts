@@ -66,10 +66,15 @@ function activeFlags(track: VisualTrack, t: number): boolean[] {
     if (t >= clip.start && t < clip.end) return true;
     if (clip.kind !== 'source') return false;
     // 作为出画片段：窗口后半段在自己的 end 之外，仍然在画。
-    if (clip.transitionOut && transitionAt(track, i, t)) return true;
+    if (clip.transitionOut && transitionAt(track, i, 'out', t)) return true;
     // 作为入画片段：窗口前半段在自己的 start 之前，先就位了。
+    if (clip.transitionIn && transitionAt(track, i, 'in', t)) return true;
     const prev = clips[i - 1];
-    if (prev && prev.kind === 'source' && prev.transitionOut && transitionAt(track, i - 1, t)) {
+    if (prev?.kind === 'source' && prev.transitionOut && transitionAt(track, i - 1, 'out', t)?.to) {
+      return true;
+    }
+    const next = clips[i + 1];
+    if (next?.kind === 'source' && next.transitionIn && transitionAt(track, i + 1, 'in', t)?.from) {
       return true;
     }
     return false;
@@ -159,6 +164,9 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
       // 0 = 不淡（缺省），不铺开：agent 读到的键越少越省上下文。
       ...(clip.fadeIn ? { fadeIn: clip.fadeIn } : {}),
       ...(clip.fadeOut ? { fadeOut: clip.fadeOut } : {}),
+      ...(clip.gainDb ? { gainDb: clip.gainDb } : {}),
+      ...(clip.linkedVideoId ? { linkedVideoId: clip.linkedVideoId } : {}),
+      ...(clip.lockedTo ? { lockedTo: clip.lockedTo } : {}),
       ...(curves ? { curves } : {}),
     };
   }
@@ -169,6 +177,15 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
     opacity: clip.opacity,
     transform: { ...clip.transform },
     fit: clip.fit,
+    ...(clip.transitionIn
+      ? {
+          transitionIn: {
+            defId: clip.transitionIn.defId,
+            duration: clip.transitionIn.duration,
+            values: { ...clip.transitionIn.values },
+          },
+        }
+      : {}),
     ...(clip.transitionOut
       ? {
           transitionOut: {
@@ -178,6 +195,8 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
           },
         }
       : {}),
+    ...(clip.audio ? { audio: { ...clip.audio } } : {}),
+    ...(clip.linkedAudioId ? { linkedAudioId: clip.linkedAudioId } : {}),
     ...(curves ? { curves } : {}),
   };
 }

@@ -13,6 +13,7 @@
   import IconButton from './controls/IconButton.svelte';
   import Menu from './controls/Menu.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
+  import PreClipModal from './preclip/PreClipModal.svelte';
   import { appState } from './app-state.svelte';
   import { collectAsset, relinkAsset } from './project-actions';
   import {
@@ -29,6 +30,7 @@
   import { fmtSize } from './export';
   import { snapTime } from '../core/time';
   import type { IconName } from './icons';
+  import type { AssetTrimRange } from '../core/schema';
   import type { MessageKey } from '../i18n/locales';
   import { tr } from '../i18n/index.svelte';
 
@@ -91,7 +93,11 @@
     return parts.join(' · ');
   }
 
-  function insert(it: PoolItem): void {
+  /**
+   * 插入时间轴。`range === undefined` = 用条目的激活范围（双击 / + 的行为）；
+   * 显式给 `null` 才插整段（预剪辑弹窗里没选范围时的那条路）。
+   */
+  function insert(it: PoolItem, range?: AssetTrimRange | null): void {
     // 宿主接管了落点（排版页）：交给它，这一层不认识那种落点的规则。
     if (oninsert) {
       oninsert(it);
@@ -103,6 +109,7 @@
       at: snapTime(appState.playT, appState.snap, grid),
       grid,
       preferredTrackId: selected ? (appState.store.findClip(selected)?.track.id ?? null) : null,
+      ...(range === undefined ? {} : { range }),
     });
     // 缺字节的条目按钮是禁用的，正常走不到这里；真到了也不该静默。
     if (!clipId) {
@@ -118,7 +125,44 @@
    * 只带 **id**：拖拽期间工程可能被改（撤销、删除），落地时按 id 重新解析成
    * `PoolItem`，拿到的一定是当下的事实。
    */
+  /**
+   * 正在预剪辑的条目（v13）。
+   *
+   * 单击视频打开它；排版页（`oninsert` 有值）不打开 —— 那里没有时间线可插入，
+   * 弹窗唯一的主按钮在那边没有意义。
+   */
+  let preclipItem = $state<PoolItem | null>(null);
+  /** 拖拽开始时刻：拖完浏览器可能补发一次 click，用时间窗把它吃掉。 */
+  let dragAt = 0;
+  /**
+   * 单击延迟。视频条目的单击 = 开预剪辑，双击 = 插入；不区分的话双击会先
+   * 打开弹窗再插入（两次 click + 一次 dblclick）。延迟 220ms 是常见双击阈值。
+   */
+  let clickTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function rowClick(it: PoolItem): void {
+    if (Date.now() - dragAt < 300) return;
+    if (it.kind !== 'video' || it.missing || oninsert) return;
+    if (clickTimer) clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => {
+      clickTimer = null;
+      // 主时间线在播时开预剪辑 = 两块画面同时动、两份声音同时响。
+      // 弹窗是模态的，进来先停主传输。
+      appState.pause();
+      preclipItem = it;
+    }, 220);
+  }
+
+  function rowDblClick(it: PoolItem): void {
+    if (clickTimer) {
+      clearTimeout(clickTimer);
+      clickTimer = null;
+    }
+    insert(it);
+  }
+
   function dragStart(e: DragEvent, it: PoolItem): void {
+    dragAt = Date.now();
     const dt = e.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = 'copy';
@@ -204,7 +248,9 @@
             data-asset-id={it.id}
             data-kind={it.kind}
             ondragstart={(e) => dragStart(e, it)}
-            ondblclick={() => insert(it)}
+            ondblclick={() => rowDblClick(it)}
+            onclick={() => rowClick(it)}
+            title={it.kind === 'video' ? tr('pool.preclipTip') : undefined}
           >
             <span class="thumb">
               {#if thumb}
@@ -240,7 +286,11 @@
               size="sm"
               testid="pool-insert"
               disabled={it.missing}
-              onclick={() => insert(it)}
+              onclick={(e) => {
+                // 别让 + 的 click 冒泡到行上（否则插入的同时又开了预剪辑）。
+                e.stopPropagation();
+                insert(it);
+              }}
             />
 
             <!--
@@ -253,6 +303,7 @@
               size="sm"
               testid="pool-menu"
               onclick={(e) => {
+                e.stopPropagation();
                 menuTarget = it;
                 menuFor = { item: it, anchor: e.currentTarget as HTMLElement };
               }}
@@ -269,6 +320,19 @@
 {#if menuFor}
   <Menu
     items={[
+      ...(menuTarget?.kind === 'video' && !menuTarget.missing && !oninsert
+        ? [
+            {
+              id: 'preclip',
+              label: tr('pool.preclip'),
+              icon: 'scissors' as const,
+              testid: 'pool-menu-preclip',
+              onselect: () => {
+                if (menuTarget) preclipItem = menuTarget;
+              },
+            },
+          ]
+        : []),
       ...(menuTarget?.linked
         ? [
             {
@@ -304,6 +368,18 @@
     anchorEl={menuFor.anchor}
     onclose={() => (menuFor = null)}
     testid="pool-menu-panel"
+  />
+{/if}
+
+{#if preclipItem}
+  <PreClipModal
+    item={preclipItem}
+    onclose={() => (preclipItem = null)}
+    oninsert={(range) => {
+      const it = preclipItem;
+      preclipItem = null;
+      if (it) insert(it, range);
+    }}
   />
 {/if}
 

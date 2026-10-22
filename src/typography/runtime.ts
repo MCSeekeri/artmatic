@@ -25,7 +25,7 @@
  */
 
 import { drawSizeFor } from '../engine/placement.frag';
-import { buildStack, walkOps } from '../engine/stack';
+import { buildStack, transitionSources, walkOps } from '../engine/stack';
 import { getLimits, mbToBytes } from '../core/capacity';
 import type { SourceTexture } from '../engine/compositor';
 import type { Kit } from '../engine/kit';
@@ -291,8 +291,7 @@ export class TypographyRuntime {
     walkOps(buildStack(project, t), (op) => {
       if (op.type === 'source') bake(op.source.clip);
       else if (op.type === 'transition') {
-        bake(op.from.clip);
-        bake(op.to.clip);
+        for (const side of transitionSources(op)) bake(side.clip);
       }
     });
     // 上限必须罩得住这一帧的全部排版层（见 EXPORT_ENTRIES 的注释）。

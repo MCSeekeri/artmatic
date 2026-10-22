@@ -71,6 +71,14 @@ export interface CapacityLimits {
   videoPerAssetMB: number;
   /** 视频上传纹理的最大宽度（像素）。超过渲染宽度的像素是纯浪费。 */
   maxUploadWidth: number;
+  /**
+   * 视频音轨解码缓存（MB，**JS 堆**，v13）。
+   *
+   * 与 `videoTextureMB` 不同侧：那条是显存里的画面帧，这条是把内嵌音轨解成
+   * `AudioBuffer` 占的堆。超出时不解码新的素材（播放静音 / 导出不带这条），
+   * 而不是把已经在用的那条扔掉 —— 声音中途消失比一开始就没有更难查。
+   */
+  videoAudioMB: number;
   /** 排版位图预算（MB）：**兜底**，真正的不变量是「不许淘汰这一帧在屏的层」。 */
   textRasterMB: number;
   /** 排版位图最大边长（像素）。4K 文本层 + 放大动画的上限。 */
@@ -112,6 +120,8 @@ export const DEFAULT_LIMITS: CapacityLimits = {
   videoTextureMB: 512,
   videoPerAssetMB: 192,
   maxUploadWidth: 3840,
+  // 256 MB ≈ 12 分钟立体声 48 kHz float32。按「只解使用区间」算，绝大多数工程够用。
+  videoAudioMB: 256,
   textRasterMB: 48,
   rasterEdge: 4096,
   effectPoolMB: 256,
@@ -158,6 +168,7 @@ export function deriveLimits(machine: MachineCapacity): CapacityLimits {
   const ramBudget = budget(freeRam * RAM_SHARE, 256, 4096);
   const ramSide = {
     exportMemoryMB: budget(ramBudget, 128, 2048),
+    videoAudioMB: budget(ramBudget * 0.5, 128, 1024),
     undoSteps: Math.round(clamp(ramBudget / 4 / 2, 40, 200)),
   };
 
@@ -257,6 +268,7 @@ export const RANGE: Record<keyof CapacityLimits, [number, number]> = {
   videoTextureMB: [16, 65536],
   videoPerAssetMB: [8, 32768],
   maxUploadWidth: [256, 16384],
+  videoAudioMB: [16, 8192],
   textRasterMB: [8, 8192],
   rasterEdge: [256, 16384],
   effectPoolMB: [8, 8192],

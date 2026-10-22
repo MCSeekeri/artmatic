@@ -111,11 +111,11 @@ describe('active —— t 时刻是否命中（含出画转场窗口的两侧）
     expect(fullActive(buildSceneSnapshot(p, 2.5))).toEqual({ from: false, to: true });
   });
 
-  it('落不了地的转场（留缝）不制造 active —— 与 buildStack 的「静默失效」一致', () => {
+  it('留缝时转场退化为「淡到透明」：出画片段仍在窗口里（另一侧不 active）', () => {
     const p = transitionProject();
     (p.tracks[0] as VisualTrack).clips[1]!.start = 2.5;
     (p.tracks[0] as VisualTrack).clips[1]!.end = 4.5;
-    expect(fullActive(buildSceneSnapshot(p, 2.2))).toEqual({ from: false, to: false });
+    expect(fullActive(buildSceneSnapshot(p, 2.2))).toEqual({ from: true, to: false });
   });
 
   it('音频片段按 span 命中（没有转场）', () => {
