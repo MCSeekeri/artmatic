@@ -23,7 +23,7 @@ import { listTransitions } from '../effects/transitions/registry';
 import type { ParamDef } from '../effects/types';
 import { resolveLabel } from '../i18n/label';
 import { tr } from '../i18n/index.svelte';
-import { BUILTIN_THEMES, themeDisplayName, themeIds, type TypographyTheme } from '../typography/theme';
+import { BUILTIN_THEMES, THEME_SLOTS, themeDisplayName, themeIds, type TypographyTheme } from '../typography/theme';
 import { ANIM_PRESETS } from '../typography/animation';
 import { SVG_GENERATORS, defaultsOf } from '../typography/svg-gen/registry';
 import { shapeParamSupport } from '../typography/shapes';
@@ -232,6 +232,16 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
       frame:
         'x / y / w / h are document pixels (top-left origin). rot is RADIANS, ' +
         'rotated around the box centre. w / h are the unrotated box.',
+      canvas:
+        '`typo_set_canvas_size({ size })` is `doc.size` in pixels (the design resolution, >= 2). ' +
+        '`scaleContent:true` also rescales every element (frame / font size / letter spacing / ' +
+        'stroke width / shadow / blur / 3D px) by w-ratio and h-ratio — that is "change the ' +
+        'format". `scaleContent:false` only changes the canvas: elements keep their pixel ' +
+        'positions, so the composition shifts and anything outside is cropped.',
+      groupBox:
+        'A typography group owns one backing box: fill (Paint), stroke (Stroke or null), radius ' +
+        '(px) and padding (px, the shell is this much larger than the members). `typo_update_group` ' +
+        'takes `{ name, fill, stroke, radius, padding }`; `stroke:null` removes the border.',
       shapeRadius: 'corner / vertex radius in document px (not a ratio).',
       shapeInner:
         'wall thickness in document px (not a ratio). Default = short side × 0.1 for ' +
@@ -295,6 +305,7 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
       const theme = builtin ?? c;
       return { id, name: theme ? themeDisplayName(theme) : id, builtin: Boolean(builtin) };
     }),
+    themeSlots: [...THEME_SLOTS],
     defaultFontFamily: DEFAULT_FONT_FAMILY,
     paintKinds: ['none', 'solid', 'linear', 'radial', 'texture'],
     texturePatterns: TEXTURE_PATTERNS.map((p) => p.id),

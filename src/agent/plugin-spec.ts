@@ -109,6 +109,10 @@ Beyond \`label / fadeSec / blend / opacity / transform / fit / affectDepth / bou
 | \`quad\` | source clips | \`{ tl, tr, br, bl }\`, each \`[x, y]\` in layer space. Degenerate (zero-area) quads are rejected — they render as nothing |
 | \`key\` | image / video | \`{ color: "#rrggbb", tolerance?, softness?, spill? }\` (0..1). Omitted fields keep their value |
 
+Typography image elements accept the same \`key\` / \`quad\` fields through
+\`typo_update_element\` (they are validated by the same code): \`null\` turns them
+off, and a degenerate (zero-area) quad is rejected because it renders as nothing.
+
 Passing \`null\` turns that effect OFF (field removed). All of these come back in
 \`applied\` as the stored value. \`fadeSec\` is the VISUAL clip's cut fade — a
 different thing from the audio fades.
@@ -277,6 +281,26 @@ one undo entry. Three forms:
   are real in exports, not a preview-only effect. \`typo_add_element\` accepts the
   same field (\`animation\` / \`animations\`) so a new element can arrive animated
   in one call.
+
+## Canvas, group boxes, themes
+
+- \`typo_set_canvas_size({ size, scaleContent })\` changes \`doc.size\`. \`scaleContent:true\`
+  rescales every element (frame / font size / letter spacing / stroke width /
+  shadow / blur / 3D px), so the composition is preserved — that is "change the
+  format". \`false\` only changes the canvas: elements keep their pixel positions,
+  so the composition shifts and anything outside is cropped.
+- \`typo_group\` only creates the backing box; without \`typo_update_group\` the box
+  stays invisible (\`fill:none\`, no stroke, padding 8). Patch
+  \`{ name, fill, stroke, radius, padding }\` — \`stroke:null\` removes the border.
+  Both \`typo_group\` and \`typo_update_group\` return the group (\`groupId\` /
+  stored box) so you never need to re-read the document.
+- Themes: \`typo_set_theme({ theme, scope })\` switches; \`scope:'project'\` writes
+  the project default and EVERY text document in one undo entry. Only colors
+  written as theme refs (\`@accent1\`, \`@dk1.l80\`) follow — raw hex stays.
+  \`typo_save_theme({ base, name, colors })\` creates a custom theme from \`base\`
+  (or the current one) with a PARTIAL slot patch; slot keys are
+  \`get_typography_capabilities().themeSlots\`. \`typo_remove_theme\` deletes a
+  custom theme and cleans every reference to it.
 
 Bulk work: \`typo_add_elements\` / \`typo_update_elements\` take arrays and
 commit ONE undo entry (array order = z order for adds). Every write returns

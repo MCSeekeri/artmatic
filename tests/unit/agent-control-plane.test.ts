@@ -15,6 +15,7 @@ import { CONTROL_API_VERSION } from '../../src/agent/types';
 import type { ControlContext, ControlResult } from '../../src/agent/types';
 import { ProjectStore } from '../../src/core/project-store';
 import { createBlankProject } from '../../src/core/demo-project';
+import { createTypographyDocument } from '../../src/typography/document';
 import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
 
 /* --------------------------------------------------------------- 测试台 */
@@ -789,5 +790,299 @@ describe('换算法生成器（set_generator）', () => {
     expect(await code(h.cp.setGenerator(solid.clipId, 'mandelbrot'))).toBe('unsupported');
     const algo = await ok(h.cp.addClip(track, { kind: 'algo', generator: 'mandelbrot', start: 1, end: 2 }));
     expect(await code(h.cp.setGenerator(algo.clipId, 'definitely-not-a-generator'))).toBe('not-found');
+  });
+});
+
+/* ------------------------------------------------ P2：画幅 / 组框 / 主题 / 排序 */
+
+/** 造一个带一份 800×600 空文档的文本片段。 */
+async function textClip(h: Harness): Promise<string> {
+  const clip = await ok(
+    h.cp.addClip(visualTrackId(h), {
+      kind: 'text',
+      start: 0,
+      end: 2,
+      doc: createTypographyDocument({ w: 800, h: 600 }),
+    }),
+  );
+  return clip.clipId;
+}
+
+describe('画幅（typo_set_canvas_size）', () => {
+  it('不缩放 = 只改画布；缩放 = 元素框跟着比例走', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [
+        { kind: 'shape', shape: 'rect', frame: { x: 100, y: 50, w: 200, h: 100 } },
+      ]),
+    );
+    const elementId = added.elementIds[0]!;
+
+    // 只改画布：元素留在原像素位置
+    const plain = await ok(h.cp.setTypographyCanvasSize(clipId, { w: 400, h: 300 }, false));
+    expect(plain.size).toEqual({ w: 400, h: 300 });
+    let frame = (await ok(h.cp.getTypographyDoc(clipId, 'full')) as unknown as {
+      elements: { frame: { x: number; w: number } }[];
+    }).elements[0]!.frame;
+    expect(frame).toMatchObject({ x: 100, y: 50, w: 200, h: 100 });
+    void elementId;
+
+    // 4:3 → 8:6：宽高各 ×2，元素一起放大（这才叫换画幅）
+    const scaled = await ok(h.cp.setTypographyCanvasSize(clipId, { w: 800, h: 600 }, true));
+    expect(scaled.size).toEqual({ w: 800, h: 600 });
+    frame = (await ok(h.cp.getTypographyDoc(clipId, 'full')) as unknown as {
+      elements: { frame: { x: number; w: number } }[];
+    }).elements[0]!.frame;
+    expect(frame).toMatchObject({ x: 200, y: 100, w: 400, h: 200 });
+  });
+
+  it('非法尺寸在改动之前报错', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const before = JSON.stringify(h.store.project);
+    expect(await code(h.cp.setTypographyCanvasSize(clipId, { w: 1, h: 300 }, false))).toBe('invalid-argument');
+    expect(await code(h.cp.setTypographyCanvasSize(clipId, { w: Number.NaN, h: 300 }, false))).toBe(
+      'invalid-argument',
+    );
+    expect(JSON.stringify(h.store.project)).toBe(before);
+  });
+});
+
+describe('分组底板（typo_update_group）', () => {
+  it('成组后能改名字 / 填充 / 边框 / 圆角 / 内边距，并读得回来', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [
+        { kind: 'shape', shape: 'rect', frame: { x: 10, y: 10, w: 100, h: 50 } },
+        { kind: 'shape', shape: 'rect', frame: { x: 130, y: 10, w: 100, h: 50 } },
+      ]),
+    );
+    const grouped = await ok(h.cp.groupTypographyElements(clipId, added.elementIds, 'G'));
+    const groupId = grouped.groupId!;
+
+    const r = await ok(
+      h.cp.updateTypographyGroup(clipId, groupId, {
+        name: '卡片',
+        fill: { kind: 'solid', color: '#123456' },
+        stroke: { color: '#ffffff', width: 2, style: 'solid' },
+        radius: 8,
+        padding: 12,
+      }),
+    );
+    expect(r.changed).toBe(true);
+    expect(r.group).toMatchObject({ name: '卡片', radius: 8, padding: 12 });
+
+    const view = (await ok(h.cp.getTypographyDoc(clipId, 'full')) as unknown as {
+      groups: { id: string; name: string; fill: { kind: string; color?: string }; stroke: unknown }[];
+    }).groups;
+    const g = view.find((x) => x.id === groupId)!;
+    expect(g.name).toBe('卡片');
+    expect(g.fill).toMatchObject({ kind: 'solid', color: '#123456' });
+    expect(g.stroke).toMatchObject({ color: '#ffffff', width: 2 });
+
+    // null = 去掉边框
+    const cleared = await ok(h.cp.updateTypographyGroup(clipId, groupId, { stroke: null }));
+    expect(cleared.group.stroke).toBeNull();
+  });
+
+  it('坏填充 / 不存在的组合都是可判别错误，且不改工程', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [
+        { kind: 'shape', shape: 'rect', frame: { x: 10, y: 10, w: 50, h: 50 } },
+        { kind: 'shape', shape: 'rect', frame: { x: 80, y: 10, w: 50, h: 50 } },
+      ]),
+    );
+    const grouped = await ok(h.cp.groupTypographyElements(clipId, added.elementIds, 'G'));
+    const before = JSON.stringify(h.store.project);
+    expect(
+      await code(h.cp.updateTypographyGroup(clipId, grouped.groupId!, { fill: { kind: 'wat' } })),
+    ).toBe('invalid-argument');
+    expect(await code(h.cp.updateTypographyGroup(clipId, 'nope', { radius: 4 }))).toBe('not-found');
+    expect(JSON.stringify(h.store.project)).toBe(before);
+  });
+});
+
+describe('自定义配色方案（typo_save_theme / remove / set scope）', () => {
+  it('以 base 为底局部改槽 → 新方案立即生效；可再按 id 更新', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const saved = await ok(
+      h.cp.saveTypographyTheme(clipId, {
+        base: 'office',
+        name: '暗色',
+        colors: { dk1: '#0b0b0f', accent1: '#ff8a00' },
+      }),
+    );
+    expect(saved.theme.name).toBe('暗色');
+    expect(saved.theme.colors.dk1).toBe('#0b0b0f');
+    expect(saved.theme.colors.accent1).toBe('#ff8a00');
+    // 没给的槽沿用 base
+    expect(saved.theme.colors.accent2).toBeTruthy();
+    expect(h.store.project.customThemes?.length).toBe(1);
+    expect((h.store.project.tracks[0]!.clips[0] as never as { source: { doc: { theme?: string } } }).source.doc.theme).toBe(
+      saved.theme.id,
+    );
+
+    // 按 id 再改一个槽：其余槽保留
+    const updated = await ok(
+      h.cp.saveTypographyTheme(clipId, { id: saved.theme.id, colors: { accent1: '#00ff00' } }),
+    );
+    expect(updated.theme.id).toBe(saved.theme.id);
+    expect(updated.theme.name).toBe('暗色');
+    expect(updated.theme.colors.accent1).toBe('#00ff00');
+    expect(updated.theme.colors.dk1).toBe('#0b0b0f');
+    expect(h.store.project.customThemes?.length).toBe(1);
+  });
+
+  it('scope:project 一次写到全工程；删除方案会抹掉所有引用', async () => {
+    const h = harness();
+    const clipA = await textClip(h);
+    // 第二条文本文档（同一轨，时间上不重叠）
+    const clipB = await ok(
+      h.cp.addClip(visualTrackId(h), {
+        kind: 'text',
+        start: 3,
+        end: 5,
+        doc: createTypographyDocument({ w: 800, h: 600 }),
+      }),
+    );
+    const saved = await ok(h.cp.saveTypographyTheme(clipA, { base: 'office', name: 'X', colors: {} }));
+    const applied = await ok(h.cp.setTypographyTheme(clipA, saved.theme.id, 'project'));
+    expect(applied.scope).toBe('project');
+    expect(h.store.project.typographyTheme).toBe(saved.theme.id);
+
+    const docs = (): (string | undefined)[] => {
+      const out: (string | undefined)[] = [];
+      for (const track of h.store.project.tracks) {
+        for (const c of track.clips) {
+          if (c.kind === 'source' && c.source.type === 'text') out.push(c.source.doc.theme);
+        }
+      }
+      return out;
+    };
+    expect(docs()).toEqual([saved.theme.id, saved.theme.id]);
+    void clipB;
+
+    const removed = await ok(h.cp.removeTypographyTheme(saved.theme.id));
+    expect(removed.clearedDocs).toBe(2);
+    expect(h.store.project.customThemes ?? []).toEqual([]);
+    expect(h.store.project.typographyTheme).toBeUndefined();
+    expect(docs()).toEqual([undefined, undefined]);
+  });
+
+  it('未知方案 / 非法色值 / 删内置方案都是可判别错误', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    expect(await code(h.cp.setTypographyTheme(clipId, 'nope'))).toBe('not-found');
+    expect(
+      await code(h.cp.saveTypographyTheme(clipId, { base: 'office', colors: { accent1: 'red-ish' } })),
+    ).toBe('invalid-argument');
+    expect(
+      await code(h.cp.saveTypographyTheme(clipId, { base: 'office', colors: { primary: '#ff0000' } })),
+    ).toBe('invalid-argument');
+    expect(await code(h.cp.removeTypographyTheme('office'))).toBe('not-found');
+  });
+});
+
+describe('排版图片的抠图 / 四角', () => {
+  it('key / quad 可写可清，整份替换也能搬过去', async () => {
+    const h = harness();
+    h.store.commit('登记图片', (p) => {
+      p.assets['img1'] = { id: 'img1', kind: 'image', name: 'i' };
+    });
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [
+        { kind: 'image', assetId: 'img1', frame: { x: 10, y: 10, w: 200, h: 100 } },
+      ]),
+    );
+    const elementId = added.elementIds[0]!;
+
+    const r = await ok(
+      h.cp.updateTypographyElement(clipId, elementId, {
+        key: { color: '#00ff00', tolerance: 0.3 },
+        quad: { tl: [0, 0], tr: [1, 0], br: [1, 1], bl: [0, 1] },
+      }),
+    );
+    expect(r.element.key).toMatchObject({ color: '#00ff00' });
+    expect(r.element.quad).toMatchObject({ tl: [0, 0] });
+
+    // 读回来的文档整份写回：key / quad 不能丢（droppedKeys 也不该报它们）
+    const before = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as never as Record<string, unknown>;
+    const replaced = await ok(h.cp.replaceTypographyDoc(clipId, before));
+    expect(replaced.droppedKeys).toEqual([]);
+    const after = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as unknown as {
+      elements: { key?: { color: string }; quad?: unknown }[];
+    };
+    expect(after.elements[0]!.key?.color).toBe('#00ff00');
+    expect(after.elements[0]!.quad).toBeTruthy();
+
+    const cleared = await ok(h.cp.updateTypographyElement(clipId, elementId, { key: null, quad: null }));
+    expect(cleared.element.key).toBeUndefined();
+    expect(cleared.element.quad).toBeUndefined();
+  });
+
+  it('退化四角被拒绝（渲染出来什么都没有）', async () => {
+    const h = harness();
+    h.store.commit('登记图片', (p) => {
+      p.assets['img1'] = { id: 'img1', kind: 'image', name: 'i' };
+    });
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [
+        { kind: 'image', assetId: 'img1', frame: { x: 10, y: 10, w: 200, h: 100 } },
+      ]),
+    );
+    expect(
+      await code(
+        h.cp.updateTypographyElement(clipId, added.elementIds[0]!, {
+          quad: { tl: [0, 0], tr: [1, 1], br: [0, 0], bl: [1, 1] },
+        }),
+      ),
+    ).toBe('invalid-argument');
+  });
+});
+
+describe('图层移到指定下标 / 工程名 / 估 BPM', () => {
+  it('op:"index" 精确插队，越界夹到两端', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [
+        { kind: 'shape', shape: 'rect', frame: { x: 0, y: 0, w: 10, h: 10 }, name: 'a' },
+        { kind: 'shape', shape: 'rect', frame: { x: 20, y: 0, w: 10, h: 10 }, name: 'b' },
+        { kind: 'shape', shape: 'rect', frame: { x: 40, y: 0, w: 10, h: 10 }, name: 'c' },
+      ]),
+    );
+    const [a, b, c] = added.elementIds as [string, string, string];
+    await ok(h.cp.reorderTypographyElement(clipId, a, 'index', 2));
+    const order = (): string[] =>
+      (h.store.project.tracks[0]!.clips[0] as never as { source: { doc: { elements: { id: string }[] } } }).source.doc.elements.map(
+        (el) => el.id,
+      );
+    expect(order()).toEqual([b, c, a]);
+    // 越界 = 夹到最前
+    await ok(h.cp.reorderTypographyElement(clipId, b, 'index', 99));
+    expect(order()).toEqual([c, a, b]);
+    expect(await code(h.cp.reorderTypographyElement(clipId, a, 'index', undefined as never))).toBe(
+      'invalid-argument',
+    );
+  });
+
+  it('set_project 能改工程名', async () => {
+    const h = harness();
+    const r = await ok(h.cp.setProject({ name: '新名字' }));
+    expect(r.changed).toContain('name');
+    expect(h.store.project.name).toBe('新名字');
+    expect(await code(h.cp.setProject({ name: '   ' }))).toBe('invalid-argument');
+  });
+
+  it('没有音频时估 BPM 是 unsupported（不静默写默认值）', async () => {
+    const h = harness();
+    expect(await code(h.cp.estimateBeatGrid())).toBe('unsupported');
   });
 });

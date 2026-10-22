@@ -492,8 +492,9 @@ export const AGENT_TOOLS: ToolSpec[] = [
   },
   {
     name: 'set_project',
-    description: 'Change fps / resolution / duration / beatGrid / overlapBehavior. Each field is one undo entry.',
+    description: 'Change name / fps / resolution / duration / beatGrid / overlapBehavior. Each field is one undo entry.',
     params: [
+      p('name', 'string', 'Project name (shown in the tab bar).'),
       p('fps', 'number', 'Frame rate.'),
       p('resolution', 'size', 'Canvas size.'),
       p('duration', 'number', 'Duration in seconds.'),
@@ -501,6 +502,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
       p('overlapBehavior', 'string', 'push | reject | trim', { enum: ['push', 'reject', 'trim'] }),
     ],
     writes: true,
+  },
+  {
+    name: 'estimate_beat_grid',
+    description:
+      'Estimate BPM + offset from the EARLIEST audio clip and write them into beatGrid (same ' +
+      'implementation as the toolbar button). Use it once after the user imported music, before ' +
+      'placing anything on beats — a beat grid that is off by a few percent makes every accent ' +
+      'land late. Fails loudly (no audio / silent / no clear pulse) instead of writing a guess; ' +
+      'in that case set beatGrid by hand.',
+    params: [],
+    writes: true,
+    slow: true,
   },
   {
     name: 'edit_sections',
@@ -705,13 +718,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
   },
   {
     name: 'typo_reorder_element',
-    description: 'Change z order: front | back | forward | backward (array index = z order).',
+    description:
+      'Change z order. Array index = z order (later = in front).\n' +
+      'op: front | back | forward | backward, or `index` to move to an absolute position ' +
+      '(0 = furthest back, elements.length-1 = frontmost) — use it to slot an element between two ' +
+      'specific ones, which the four relative ops cannot express.',
     params: [
       OPT_CLIP_ID,
       ELEMENT_ID,
-      req('op', 'string', 'front | back | forward | backward', {
-        enum: ['front', 'back', 'forward', 'backward'],
+      req('op', 'string', 'front | back | forward | backward | index', {
+        enum: ['front', 'back', 'forward', 'backward', 'index'],
       }),
+      p('index', 'integer', 'Target array index (op:"index"). Clamped to the element count.'),
     ],
     writes: true,
   },
@@ -729,6 +747,36 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'typo_ungroup',
     description: 'Ungroup the groups that these elements belong to.',
     params: [OPT_CLIP_ID, req('elementIds', 'stringArray', 'Element ids.')],
+    writes: true,
+  },
+  {
+    name: 'typo_update_group',
+    description:
+      "Style a group's backing box (the shell behind its members). `typo_group` only creates it — " +
+      'without this call the shell stays invisible (fill:none, no stroke).\n' +
+      'patch: { name?, fill?, stroke?, radius?, padding? }.\n' +
+      'fill is a Paint (kind none | solid | linear | radial | texture). stroke is a Stroke ' +
+      '({ color, width, style, paint? }) or null (null removes the border). radius / padding are ' +
+      'document px; padding is how far the shell extends beyond the members. ' +
+      'Returns the stored group.',
+    params: [OPT_CLIP_ID, req('groupId', 'string', 'Group id (from typo_group / get_typography_doc).'), req('patch', 'json', 'Whitelisted fields only.')],
+    writes: true,
+  },
+  {
+    name: 'typo_set_canvas_size',
+    description:
+      'Change the document canvas (design resolution). Two real intents, so it is a switch:\n' +
+      '- scaleContent:true  = "change the format": every element frame, font size, letter spacing, ' +
+      'stroke width, shadow / blur and 3D px value is rescaled by the w-ratio and h-ratio, so the ' +
+      'composition is preserved (a 16:9 title card becomes the same card in 9:16, stretched per axis).\n' +
+      '- scaleContent:false = only the canvas changes: elements keep their pixel positions, so the ' +
+      'composition shifts and anything outside the new canvas is cropped.\n' +
+      'Returns the stored size. Text clips fit their own document, so this is per-clip.',
+    params: [
+      OPT_CLIP_ID,
+      req('size', 'size', 'New canvas size in px (both >= 2).'),
+      p('scaleContent', 'boolean', 'Rescale elements / type with the canvas (default false).'),
+    ],
     writes: true,
   },
   {
@@ -760,8 +808,50 @@ export const AGENT_TOOLS: ToolSpec[] = [
   },
   {
     name: 'typo_set_theme',
-    description: 'Switch the document theme (null = default). Elements using @slot references recolor.',
-    params: [OPT_CLIP_ID, p('theme', 'string', 'Theme id, or null for the default.')],
+    description:
+      'Switch the color theme (null = default). Only elements whose colors are theme REFERENCES ' +
+      '(`@accent1`, `@dk1.l80` …) recolor — raw hex stays as authored.\n' +
+      'scope:"clip" (default) changes this document; scope:"project" also writes the project ' +
+      'default and every text document in ONE undo entry (the "recolor the whole film" move). ' +
+      'Theme ids come from get_typography_capabilities().themes; unknown ids are rejected instead ' +
+      'of silently falling back to the default.',
+    params: [
+      OPT_CLIP_ID,
+      p('theme', 'string', 'Theme id, or null for the default.'),
+      p('scope', 'string', 'clip (default) | project', { enum: ['clip', 'project'] }),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_save_theme',
+    description:
+      'Create or update a CUSTOM color theme, and immediately make it the current one (same as the ' +
+      'editor). Custom themes live in the project (`customThemes`), built-ins are read-only.\n' +
+      'Fields: { id?, base?, name?, colors?, scope? }.\n' +
+      '- id: update that existing custom theme (must exist). Omit to create a new one.\n' +
+      '- base: clone this theme (built-in or custom) as the starting point. Omit = the theme the ' +
+      'document uses now.\n' +
+      '- colors: PARTIAL patch, e.g. { "dk1": "#0b0b0f", "accent1": "#ff8a00" }. Keys must be real ' +
+      'slots (get_typography_capabilities().themeSlots); values must be hex. Omitted slots keep ' +
+      'the base value, so you never have to read the whole palette back.\n' +
+      '- scope: clip (default) | project (apply to every text document too).\n' +
+      'Returns the stored theme (id / name / full colors) — reuse `theme.id` with typo_set_theme.',
+    params: [
+      OPT_CLIP_ID,
+      p('id', 'string', 'Existing custom theme id (update instead of create).'),
+      p('base', 'string', 'Theme id to clone as the base (built-in or custom).'),
+      p('name', 'string', 'Display name.'),
+      p('colors', 'json', 'Partial slot → hex patch.'),
+      p('scope', 'string', 'clip (default) | project', { enum: ['clip', 'project'] }),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_remove_theme',
+    description:
+      'Delete a CUSTOM theme and clean every reference to it (`project.typographyTheme` + per-document ' +
+      'themes), so no dangling ids are left behind. Built-in themes cannot be removed.',
+    params: [req('themeId', 'string', 'Custom theme id (from get_typography_capabilities().themes).')],
     writes: true,
   },
   {

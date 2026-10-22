@@ -28,20 +28,19 @@
 - 文档：`docs/agent-control-plane.md` §12.6；help 文本 `plugin-spec.ts` 新增
   「Sections」「Clip look」两节。
 
-## P2（下一轮）
+## P2（本轮）✔ 已完成 2026-10-22
 
-- [ ] 排版画幅尺寸：`doc.size` + 可选的 `resizeDocument` 按比例重排
-      （UI `TypographyEditor.svelte:201`，核心 `document.ts:1339`）。做竖版 / 方图必需。
-- [ ] 分组底板样式：`TypographyGroup.fill / stroke / radius / padding`
-      （`document.ts:509-518`；UI `actions.ts:1852-1882`）。
-- [ ] 排版图片 `key`（抠图）/ `quad`（四角）：`patchElement` 的 image 分支只有 fit/radius/crop。
-- [ ] 自定义配色方案：新建 / 改槽 / 删除 / 应用到整个工程
-      （`Project.customThemes` + `Project.typographyTheme`；UI `actions.ts:1420-1500`）。
-      注意 `typo_set_theme` 已经能**引用**已有的自定义方案，缺的是增删改。
-- [ ] 工程名 `p.name`（`set_project` 白名单少一项）。
-- [ ] 一键估 BPM/offset（`app-state.svelte.ts:2322 estimateBeatGrid`）：Agent 只能写值，算不出来。
-- [ ] 组名修改（`editor-state.svelte.ts:505`）。
-- [ ] 图层移动到指定下标（`typo_reorder_element` 只有四档 z 操作）。
+- [x] 画幅：`typo_set_canvas_size({ size, scaleContent })`（`resizeDocument` 那条路可选）。
+- [x] 分组底板：`typo_update_group({ groupId, patch })`（name / fill / stroke / radius / padding）。
+- [x] 排版图片 `key` / `quad`：`typo_update_element` 的 patch + 新建入参 + 整份替换都支持；
+      校验与片段共用 `core/image-fx.ts` 的新 `coerce*`（退化四边形在写入前拒绝）。
+- [x] 自定义配色：`typo_save_theme`（局部色槽补丁）/ `typo_remove_theme` /
+      `typo_set_theme({ scope:'project' })`；能力清单加 `themeSlots`。
+- [x] 工程名：`set_project({ name })` + `store.setProjectName`。
+- [x] 一键估 BPM：`estimate_beat_grid`（与工具栏同一实现；没音频 → unsupported）。
+- [x] 组名：随 `typo_update_group`。
+- [x] 图层下标：`typo_reorder_element({ op:'index', index })`。
+- 文档：`docs/agent-control-plane.md` §12.7；help 新增「Canvas, group boxes, themes」。
 
 ## P3（需要先定工具形态）
 

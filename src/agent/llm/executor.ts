@@ -366,9 +366,13 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
         case 'clear_transition':
           return unwrap(await control.clearTransition(String(args.clipId ?? '')));
 
+        case 'estimate_beat_grid':
+          return unwrap(await control.estimateBeatGrid());
+
         case 'set_project':
           return unwrap(
             await control.setProject({
+              ...(typeof args.name === 'string' ? { name: args.name } : {}),
               ...(typeof args.fps === 'number' ? { fps: args.fps } : {}),
               ...(args.resolution ? { resolution: asRecord(args.resolution) as { w: number; h: number } } : {}),
               ...(typeof args.duration === 'number' ? { duration: args.duration } : {}),
@@ -516,6 +520,25 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               typeof args.clipId === 'string' ? args.clipId : undefined,
               String(args.elementId ?? ''),
               (args.op as never) ?? 'front',
+              typeof args.index === 'number' ? args.index : undefined,
+            ),
+          );
+
+        case 'typo_update_group':
+          return unwrap(
+            await control.updateTypographyGroup(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              String(args.groupId ?? ''),
+              asRecord(args.patch),
+            ),
+          );
+
+        case 'typo_set_canvas_size':
+          return unwrap(
+            await control.setTypographyCanvasSize(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              asRecord(args.size) as { w: number; h: number },
+              args.scaleContent === true,
             ),
           );
 
@@ -563,8 +586,23 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             await control.setTypographyTheme(
               typeof args.clipId === 'string' ? args.clipId : undefined,
               typeof args.theme === 'string' ? args.theme : null,
+              args.scope === 'project' ? 'project' : 'clip',
             ),
           );
+
+        case 'typo_save_theme':
+          return unwrap(
+            await control.saveTypographyTheme(typeof args.clipId === 'string' ? args.clipId : undefined, {
+              ...(typeof args.id === 'string' ? { id: args.id } : {}),
+              ...(typeof args.base === 'string' ? { base: args.base } : {}),
+              ...(typeof args.name === 'string' ? { name: args.name } : {}),
+              ...(args.colors === undefined ? {} : { colors: args.colors }),
+              scope: args.scope === 'project' ? 'project' : 'clip',
+            }),
+          );
+
+        case 'typo_remove_theme':
+          return unwrap(await control.removeTypographyTheme(String(args.themeId ?? '')));
 
         case 'typo_replace_doc':
           return unwrap(

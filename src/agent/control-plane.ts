@@ -60,15 +60,7 @@ import { transitionCut } from '../core/transitions';
 import { defaultValues, type ParamDef } from '../effects/types';
 import { defaultEffectValues, getEffect } from '../effects/registry';
 import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
-import {
-  defaultKeySettings,
-  identityCrop,
-  isIdentityCrop,
-  withCropEdge,
-  type CropSettings,
-  type KeySettings,
-  type QuadCorners,
-} from '../core/image-fx';
+import { coerceCropEdges, coerceKeySettings, coerceQuadCorners, identityCrop, isIdentityCrop } from '../core/image-fx';
 import { defaultTransitionValues, getTransition } from '../effects/transitions/registry';
 import { Mp4Sink, probeMp4Codec } from '../exporters/mp4-sink';
 import { PngSequenceSink } from '../exporters/png-sequence';
@@ -77,6 +69,7 @@ import { planGif } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
 import { ExportCancelled, runExport, type ExportOptions } from '../exporters/export-runner';
 import { compileAll, type CompileResult } from '../effects/compile-all';
+import { estimateTempo } from '../audio/tempo';
 import { createTypographyDocument } from '../typography/document';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
 import { getCapabilities, getTypographyCapabilities } from './capabilities';
@@ -225,83 +218,10 @@ function paramKeys(params: ParamDef[] | undefined): string[] {
   return (params ?? []).map((p) => p.key);
 }
 
-/* ------------------------------------------- 片段视觉字段（key / quad / crop） */
-
-const HEX_COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
-
-/** 有限数并夹进 `[min, max]`；不是数就返回 null（调用方报错）。 */
-function numIn(v: unknown, min: number, max: number): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : null;
-}
-
-/**
- * 色键参数：只认白名单四个键，缺省从 `base`（现有值 / 出厂值）继承。
+/* ------------------------------------------- 片段视觉字段（key / quad / crop）
  *
- * 局部对象是有意支持的：调容差时不该被迫把颜色一起传回来。形状不对返回 null
- * —— 由调用方在改动**之前**报错，绝不半途写一半。
+ * 校验在 `core/image-fx.ts`：排版图片元素与片段共用同一组字段，两份校验必然分叉。
  */
-function coerceKeySettings(raw: unknown, base: KeySettings | undefined): KeySettings | null {
-  if (!isRecord(raw)) return null;
-  const start = base ?? defaultKeySettings();
-  let color = start.color;
-  if (raw.color !== undefined) {
-    if (typeof raw.color !== 'string' || !HEX_COLOR_RE.test(raw.color)) return null;
-    color = raw.color;
-  }
-  const tolerance = raw.tolerance === undefined ? start.tolerance : numIn(raw.tolerance, 0, 1);
-  const softness = raw.softness === undefined ? start.softness : numIn(raw.softness, 0, 1);
-  const spill = raw.spill === undefined ? start.spill : numIn(raw.spill, 0, 1);
-  if (tolerance === null || softness === null || spill === null) return null;
-  return { color, tolerance, softness, spill };
-}
-
-/**
- * 四角：每个是 `[x, y]` 两个有限数，且**面积不为 0**。
- *
- * 退化四边形（四点共线 / 重合）算不出透视矩阵，渲染结果是整层消失 —— 那是最难
- * 归因的一类「静默无效」，所以在写入处就拒绝。
- */
-function coerceQuad(raw: unknown): QuadCorners | null {
-  if (!isRecord(raw)) return null;
-  const corner = (v: unknown): [number, number] | null => {
-    if (!Array.isArray(v) || v.length !== 2) return null;
-    const x = Number(v[0]);
-    const y = Number(v[1]);
-    return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
-  };
-  const tl = corner(raw.tl);
-  const tr = corner(raw.tr);
-  const br = corner(raw.br);
-  const bl = corner(raw.bl);
-  if (!tl || !tr || !br || !bl) return null;
-  const area =
-    Math.abs(
-      tl[0] * tr[1] - tr[0] * tl[1] +
-        tr[0] * br[1] - br[0] * tr[1] +
-        br[0] * bl[1] - bl[0] * br[1] +
-        bl[0] * tl[1] - tl[0] * bl[1],
-    ) / 2;
-  return area > 1e-6 ? { tl, tr, br, bl } : null;
-}
-
-/**
- * 裁剪：四条边各自 0..1，走 `withCropEdge` 的**对边互斥**钳制（与 UI 同一份）。
- *
- * 局部对象合法（只改一条边）；全零的恒等值由调用方删字段（与 UI 同纪律：
- * 全零 ≠「裁剪字段存在但全 0」，后者会让 `u_cropOn` 多开一条路径）。
- */
-function coerceCropPatch(raw: unknown, base: CropSettings): CropSettings | null {
-  if (!isRecord(raw)) return null;
-  let next = { ...base };
-  for (const edge of ['left', 'top', 'right', 'bottom'] as const) {
-    if (raw[edge] === undefined) continue;
-    const v = numIn(raw[edge], 0, 1);
-    if (v === null) return null;
-    next = withCropEdge(next, edge, v);
-  }
-  return next;
-}
 
 async function bytesToBase64(buf: Uint8Array): Promise<string> {
   let latin = '';
@@ -408,6 +328,7 @@ export interface AgentControlPlane {
   setTransition(clipId: string, defId: string, duration: number, values?: Record<string, number>): Promise<ControlResult<{ changed: boolean }>>;
   clearTransition(clipId: string): Promise<ControlResult<{ changed: boolean }>>;
   setProject(patch: {
+    name?: string;
     fps?: number;
     resolution?: { w: number; h: number };
     duration?: number;
@@ -416,6 +337,15 @@ export interface AgentControlPlane {
   }): Promise<ControlResult<{ changed: string[] }>>;
   /** 段落标记的增 / 切 / 改名 / 删 / 移动。返回改后的完整列表（已按 start 排序）。 */
   editSections(req: SectionOp): Promise<ControlResult<{ changed: boolean; sections: SceneSectionView[] }>>;
+  /**
+   * 从工程里最早的那条音频片段估 BPM / offset，并写进 `beatGrid`。
+   *
+   * 与时间轴的「一键估计」同一条实现（`audio/tempo.ts`）。没有音频 / 估不出来
+   * 时是 `unsupported` 而不是静默写一个默认值 —— 拍网错位会让所有卡点都偏。
+   */
+  estimateBeatGrid(): Promise<
+    ControlResult<{ bpm: number; offset: number; confidence: number; sourceClipId: string }>
+  >;
   loadScene(project: unknown): Promise<ControlResult<{ tracks: number; clips: number }>>;
   beginTx(): Promise<ControlResult<{ open: boolean }>>;
   endTx(label: string): Promise<ControlResult<{ changed: boolean }>>;
@@ -529,7 +459,9 @@ export interface AgentControlPlane {
   reorderTypographyElement(
     clipId: string | undefined,
     elementId: string,
-    op: 'front' | 'back' | 'forward' | 'backward',
+    op: 'front' | 'back' | 'forward' | 'backward' | 'index',
+    /** `op:'index'` 时的目标下标（0 = 最后面；末尾 = 最前）。 */
+    index?: number,
   ): Promise<ControlResult<{ changed: boolean; z: number }>>;
   groupTypographyElements(
     clipId: string | undefined,
@@ -561,10 +493,42 @@ export interface AgentControlPlane {
     clipId: string | undefined,
     paint: unknown,
   ): Promise<ControlResult<{ changed: boolean }>>;
+  /**
+   * 换配色方案。`scope:'project'` = 写 `Project.typographyTheme` + 所有文本文档
+   * （「一键全工程换色」，一笔撤销）；`null` = 回到默认方案。
+   */
   setTypographyTheme(
     clipId: string | undefined,
     theme: string | null,
-  ): Promise<ControlResult<{ changed: boolean }>>;
+    scope?: 'clip' | 'project',
+  ): Promise<ControlResult<{ changed: boolean; scope: 'clip' | 'project' }>>;
+  /** 新建 / 更新一份自定义方案（局部色槽合并），并立即设为当前方案。 */
+  saveTypographyTheme(
+    clipId: string | undefined,
+    input: {
+      id?: string;
+      base?: string;
+      name?: string;
+      colors?: unknown;
+      scope?: 'clip' | 'project';
+    },
+  ): Promise<ControlResult<{ theme: { id: string; name?: string; colors: Record<string, string> }; scope: 'clip' | 'project'; appliedTo: string | null }>>;
+  /** 删除一份自定义方案，并抹掉工程里对它的引用（`typographyTheme` + 各文档）。 */
+  removeTypographyTheme(
+    themeId: string,
+  ): Promise<ControlResult<{ removed: string; clearedDocs: number }>>;
+  /** 改画幅：`scaleContent` = 过 `resizeDocument`（元素 / 字号 / 描边一起缩放）。 */
+  setTypographyCanvasSize(
+    clipId: string | undefined,
+    size: { w: number; h: number },
+    scaleContent: boolean,
+  ): Promise<ControlResult<{ changed: boolean; size: { w: number; h: number } }>>;
+  /** 改分组底板：`{ name?, fill?, stroke?, radius?, padding? }`（`stroke:null` = 去边框）。 */
+  updateTypographyGroup(
+    clipId: string | undefined,
+    groupId: string,
+    patch: Record<string, unknown>,
+  ): Promise<ControlResult<{ changed: boolean; group: Record<string, unknown> }>>;
   /**
    * 整体替换文档。坏元素丢弃（`dropped`），**未知键逐条报出来**（`droppedKeys`）：
    * 静默归一化会让模型照着一份自己以为对的文档继续往下做。
@@ -678,6 +642,16 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     }
     return id;
+  }
+
+  /**
+   * 同上的「宽松版」：没有文档也返回 null。
+   *
+   * 工程级的配色操作（`scope:'project'`、删除方案）本来就不需要某一份文档 ——
+   * 要求先打开排版页才能全工程换色是多余的门槛。
+   */
+  function optionalTypoClipId(clipId: string | undefined): string | null {
+    return clipId || ctx.getActiveTypoClipId?.() || null;
   }
 
   function trackIdOf(store: ProjectStore, clipId: string): string {
@@ -938,6 +912,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'clearTransition'
     | 'setProject'
     | 'editSections'
+    | 'estimateBeatGrid'
     | 'loadScene'
     | 'beginTx'
     | 'endTx'
@@ -1250,7 +1225,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           throw new ControlFailure('invalid-argument', tr('agent.clip.badKey'), { key: patch.key });
         }
         const quadNext =
-          patch.quad === undefined ? undefined : patch.quad === null ? null : coerceQuad(patch.quad);
+          patch.quad === undefined ? undefined : patch.quad === null ? null : coerceQuadCorners(patch.quad);
         if (quadNext === null && patch.quad !== null) {
           throw new ControlFailure('invalid-argument', tr('agent.clip.badQuad'), { quad: patch.quad });
         }
@@ -1259,7 +1234,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             ? undefined
             : patch.crop === null
               ? null
-              : coerceCropPatch(patch.crop, (isSource ? clip.crop : undefined) ?? identityCrop());
+              : coerceCropEdges(patch.crop, (isSource ? clip.crop : undefined) ?? identityCrop());
         if (cropNext === null && patch.crop !== null) {
           throw new ControlFailure('invalid-argument', tr('agent.clip.badCrop'), { crop: patch.crop });
         }
@@ -1631,7 +1606,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         if (!isRecord(patch) || Object.keys(patch).length === 0) {
           throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'patch' }));
         }
-        const allowed = ['fps', 'resolution', 'duration', 'beatGrid', 'overlapBehavior'];
+        const allowed = ['name', 'fps', 'resolution', 'duration', 'beatGrid', 'overlapBehavior'];
         const bad = Object.keys(patch).filter((k) => !allowed.includes(k));
         if (bad.length > 0) {
           throw new ControlFailure('invalid-argument', tr('agent.args.notWritable', { keys: bad.join(', ') }), {
@@ -1644,6 +1619,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           fn();
           if (store.version !== v0) changed.push(name);
         };
+        if (patch.name !== undefined) {
+          if (typeof patch.name !== 'string' || !patch.name.trim()) {
+            throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'name' }));
+          }
+          step('name', () => store.setProjectName(String(patch.name)));
+        }
         if (patch.fps !== undefined) step('fps', () => store.setFps(Number(patch.fps)));
         if (patch.resolution !== undefined) {
           const res = patch.resolution;
@@ -1746,6 +1727,45 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             });
         }
         return { changed: JSON.stringify(store.project.sections) !== before, sections: sectionsOf() };
+      });
+    },
+
+    async estimateBeatGrid() {
+      return run(async () => {
+        const store = beforeWrite();
+        /*
+         * 与时间轴的「一键估计」同一条判据：找**最早开始**的、且拿得到解码缓冲的
+         * 音频片段。混流（mixdown）估不出拍 —— 鼓点会被别的轨糊掉。
+         */
+        let best: { id: string; start: number; srcIn: number; buffer: AudioBuffer } | null = null;
+        for (const track of store.project.tracks) {
+          if (track.kind !== 'audio') continue;
+          for (const clip of track.clips) {
+            if (clip.kind !== 'audio') continue;
+            const buffer = ctx.getAudioBuffer(clip.assetId);
+            if (!buffer) continue;
+            if (!best || clip.start < best.start) {
+              best = { id: clip.id, start: clip.start, srcIn: clip.srcIn, buffer };
+            }
+          }
+        }
+        if (!best) {
+          throw new ControlFailure('unsupported', tr('agent.beat.noAudio'), {
+            hint: 'audio clips are imported by the user; this needs one that is decoded',
+          });
+        }
+        const estimate = await estimateTempo(best.buffer);
+        if (!estimate || estimate.silent || !(estimate.confidence > 0)) {
+          throw new ControlFailure('unsupported', tr('agent.beat.failed'));
+        }
+        const bpm = Math.max(20, Math.min(300, Math.round(estimate.bpm * 100) / 100));
+        if (!Number.isFinite(bpm) || bpm <= 0) {
+          throw new ControlFailure('unsupported', tr('agent.beat.failed'));
+        }
+        // offset 是「第 0 拍的秒数」：估计给的是相对音频起点的相位，片段可能被挪过 / 裁过。
+        const offset = Math.round((estimate.offset + best.start - best.srcIn) * 10000) / 10000;
+        store.setBeatGrid({ bpm, offset });
+        return { bpm, offset, confidence: estimate.confidence, sourceClipId: best.id };
       });
     },
 
@@ -2548,6 +2568,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'measureTypography'
     | 'setTypographyBackground'
     | 'setTypographyTheme'
+    | 'saveTypographyTheme'
+    | 'removeTypographyTheme'
+    | 'setTypographyCanvasSize'
+    | 'updateTypographyGroup'
     | 'replaceTypographyDoc'
   > = {
     /**
@@ -2628,13 +2652,18 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
-    async reorderTypographyElement(clipId, elementId, op) {
+    async reorderTypographyElement(clipId, elementId, op, index) {
       return run(() => {
         const store = beforeWrite();
-        if (!['front', 'back', 'forward', 'backward'].includes(op)) {
-          throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: `op=${String(op)}` }));
+        if (!['front', 'back', 'forward', 'backward', 'index'].includes(op)) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: `op=${String(op)}` }), {
+            validIds: ['front', 'back', 'forward', 'backward', 'index'],
+          });
         }
-        return typo.reorderElement(store, typoClipId(clipId), elementId, op);
+        if (op === 'index' && !Number.isFinite(Number(index))) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.notFinite', { what: 'index', key: 'index' }));
+        }
+        return typo.reorderElement(store, typoClipId(clipId), elementId, op, index);
       });
     },
 
@@ -2685,10 +2714,59 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
-    async setTypographyTheme(clipId, theme) {
+    async setTypographyTheme(clipId, theme, scope) {
       return run(() => {
         const store = beforeWrite();
-        return { changed: typo.setTheme(store, typoClipId(clipId), theme) };
+        const resolvedScope = scope === 'project' ? 'project' : 'clip';
+        const id = resolvedScope === 'project' ? optionalTypoClipId(clipId) : typoClipId(clipId);
+        return { changed: typo.setTheme(store, id, theme, resolvedScope), scope: resolvedScope };
+      });
+    },
+
+    async saveTypographyTheme(clipId, input) {
+      return run(() => {
+        const store = beforeWrite();
+        const scope = input?.scope === 'project' ? 'project' : 'clip';
+        const id = scope === 'project' ? optionalTypoClipId(clipId) : typoClipId(clipId);
+        return typo.saveTheme(store, id, {
+          ...(typeof input.id === 'string' ? { id: input.id } : {}),
+          ...(typeof input.base === 'string' ? { base: input.base } : {}),
+          ...(typeof input.name === 'string' ? { name: input.name } : {}),
+          ...(input.colors === undefined ? {} : { colors: input.colors }),
+          scope,
+        });
+      });
+    },
+
+    async removeTypographyTheme(themeId) {
+      return run(() => {
+        const store = beforeWrite();
+        return typo.removeTheme(store, String(themeId ?? ''));
+      });
+    },
+
+    async setTypographyCanvasSize(clipId, size, scaleContent) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!isRecord(size)) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badCanvas'), { size });
+        }
+        return typo.setCanvasSize(
+          store,
+          typoClipId(clipId),
+          { w: Number(size.w), h: Number(size.h) },
+          Boolean(scaleContent),
+        );
+      });
+    },
+
+    async updateTypographyGroup(clipId, groupId, patch) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!isRecord(patch)) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'patch' }), { patch });
+        }
+        return typo.updateGroupBox(store, typoClipId(clipId), String(groupId ?? ''), patch);
       });
     },
 

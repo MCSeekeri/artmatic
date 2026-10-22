@@ -15,9 +15,19 @@
  *    —— 否则正在打的字会在下一次编辑器提交时把 agent 的改动覆盖掉。
  */
 
+import { newId } from '../core/schema';
+import { coerceKeySettings, coerceQuadCorners } from '../core/image-fx';
 import type { ProjectStore } from '../core/project-store';
 import { SHAPE_KINDS, coerceTransform3DPatch, type TypographyDocument, type TypographyElement } from '../typography/document';
 import { CUSTOM_CSS_ERROR_KEYS } from '../typography/animation';
+import {
+  isKnownTheme,
+  mergeThemeColors,
+  themeById,
+  themeDisplayName,
+  themeIds,
+  type TypographyTheme,
+} from '../typography/theme';
 import {
   addGeneratedShape,
   addImageElement,
@@ -29,16 +39,21 @@ import {
   elementViewById,
   findTextDoc,
   groupSelection,
+  groupView,
   isShapeKind,
+  moveElementTo,
   normalizeAfterWrite,
+  PAINT_KINDS,
   parseAnimationInput,
   patchElement,
   removeElement as removeOp,
   reorderElement as reorderOp,
   setAnimation as setAnimOp,
   setBackground as setBgOp,
+  setDocSize,
   setTheme as setThemeOp,
   ungroupSelection,
+  updateGroup as updateGroupOp,
   type CoerceReport,
   type LayoutRequest,
 } from '../typography/agent-ops';
@@ -80,6 +95,11 @@ export function getDoc(
 }
 
 /* --------------------------------------------------------------- 写入 */
+
+/** 对象判据（与 agent-ops 里的同名工具同义；那边不可导出内部小工具）。 */
+function isRecordLike(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
 
 /**
  * 在 `store.commit` 里拿**当前**文档（撤销 / 重做会换掉整个 project 对象，
@@ -143,6 +163,12 @@ function validateNewInput(store: ProjectStore, input: TypographyElementInput): v
       throw new ControlFailure('not-found', tr('agent.asset.notFound', { id: input.assetId }), {
         validIds: Object.keys(store.project.assets),
       });
+    }
+    if (input.key !== undefined && input.key !== null && !coerceKeySettings(input.key)) {
+      throw new ControlFailure('invalid-argument', tr('agent.clip.badKey'), { key: input.key });
+    }
+    if (input.quad !== undefined && input.quad !== null && !coerceQuadCorners(input.quad)) {
+      throw new ControlFailure('invalid-argument', tr('agent.clip.badQuad'), { quad: input.quad });
     }
   } else {
     throw new ControlFailure(
@@ -208,6 +234,18 @@ function validatePatch(el: TypographyElement, patch: Record<string, unknown>, el
   }
   if (patch.autoHeight !== undefined && el.kind !== 'text') {
     throw new ControlFailure('invalid-argument', tr('agent.typo.autoHeightNotText', { id: elementId }));
+  }
+  // 抠图 / 四角只存在于图片元素：形状不对时要报错，不能靠 patchElement 静默忽略。
+  if ((patch.key !== undefined || patch.quad !== undefined) && el.kind !== 'image') {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.keyNotImage', { id: elementId }));
+  }
+  if (patch.key !== undefined && patch.key !== null) {
+    if (!coerceKeySettings(patch.key, el.kind === 'image' ? el.key : undefined)) {
+      throw new ControlFailure('invalid-argument', tr('agent.clip.badKey'), { key: patch.key });
+    }
+  }
+  if (patch.quad !== undefined && patch.quad !== null && !coerceQuadCorners(patch.quad)) {
+    throw new ControlFailure('invalid-argument', tr('agent.clip.badQuad'), { quad: patch.quad });
   }
   // 路径三件套只对 svg 生效：写在别的图形上是静默无效（渲染侧根本不读）。
   if (patch.path !== undefined || patch.pathUnit !== undefined || patch.clipFrame !== undefined) {
@@ -401,11 +439,16 @@ export function reorderElement(
   store: ProjectStore,
   clipId: string,
   elementId: string,
-  op: 'front' | 'back' | 'forward' | 'backward',
+  op: 'front' | 'back' | 'forward' | 'backward' | 'index',
+  index?: number,
 ): { changed: boolean; z: number } {
   requireElement(store, clipId, elementId);
+  if (op === 'index' && !Number.isFinite(Number(index))) {
+    throw new ControlFailure('invalid-argument', tr('agent.args.notFinite', { what: 'index', key: 'index' }));
+  }
   const changed = withDoc(store, clipId, 'agent:typo_reorder', (d) => {
-    reorderOp(d, elementId, op);
+    if (op === 'index') moveElementTo(d, elementId, Number(index));
+    else reorderOp(d, elementId, op);
   });
   const doc = requireDoc(store, clipId);
   return { changed, z: doc.elements.findIndex((e) => e.id === elementId) };
@@ -430,6 +473,72 @@ export function ungroupElements(store: ProjectStore, clipId: string, elementIds:
   return withDoc(store, clipId, 'agent:typo_ungroup', (d) => {
     ungroupSelection(d, elementIds);
   });
+}
+
+/**
+ * 改分组底板（组名 / 填充 / 边框 / 圆角 / 内边距）。
+ *
+ * 分组自带一块外壳，但「成组」只是把它建出来；不把这块壳暴露出去的话，agent 造
+ * 出来的组永远是「什么都没有」的一层（`fill:none` + `stroke:null` + `padding:8`）。
+ */
+export function updateGroupBox(
+  store: ProjectStore,
+  clipId: string,
+  groupId: string,
+  patch: Record<string, unknown>,
+): { changed: boolean; group: Record<string, unknown> } {
+  const doc = requireDoc(store, clipId);
+  const group = (doc.groups ?? []).find((g) => g.id === groupId);
+  if (!group) {
+    throw new ControlFailure('not-found', tr('agent.typo.groupNotFound', { id: groupId }), {
+      validIds: (doc.groups ?? []).map((g) => g.id),
+    });
+  }
+  if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
+    throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'patch' }));
+  }
+  if (patch.name !== undefined && (typeof patch.name !== 'string' || !patch.name.trim())) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.badText', { what: 'name' }));
+  }
+  if (patch.fill !== undefined) {
+    const kind = (patch.fill as { kind?: unknown } | null)?.kind;
+    if (!isRecordLike(patch.fill) || typeof kind !== 'string' || !PAINT_KINDS.has(kind)) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badPaint'), { fill: patch.fill });
+    }
+  }
+  if (patch.stroke !== undefined && patch.stroke !== null && !isRecordLike(patch.stroke)) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.badStroke'), { stroke: patch.stroke });
+  }
+  for (const key of ['radius', 'padding'] as const) {
+    if (patch[key] !== undefined && !(Number(patch[key]) >= 0)) {
+      throw new ControlFailure('invalid-argument', tr('agent.args.notFinite', { what: 'patch', key }));
+    }
+  }
+  const changed = withDoc(store, clipId, 'agent:typo_group_box', (d) => {
+    updateGroupOp(d, groupId, patch);
+  });
+  const after = (requireDoc(store, clipId).groups ?? []).find((g) => g.id === groupId);
+  return { changed, group: after ? groupView(after) : {} };
+}
+
+/** 改画幅（`scaleContent` = 过 `resizeDocument`，元素 / 字号 / 描边一起缩放）。 */
+export function setCanvasSize(
+  store: ProjectStore,
+  clipId: string,
+  size: { w: number; h: number },
+  scaleContent: boolean,
+): { changed: boolean; size: { w: number; h: number } } {
+  requireDoc(store, clipId);
+  const w = Math.round(Number(size?.w));
+  const h = Math.round(Number(size?.h));
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.badCanvas'), { size });
+  }
+  const changed = withDoc(store, clipId, 'agent:typo_canvas', (d) => {
+    setDocSize(d, { w, h }, scaleContent);
+  });
+  const after = requireDoc(store, clipId);
+  return { changed, size: { ...after.size } };
 }
 
 /** 对齐 / 分布 / 网格 / 行列。 */
@@ -494,11 +603,152 @@ export function setBackground(store: ProjectStore, clipId: string, paint: unknow
   });
 }
 
-export function setTheme(store: ProjectStore, clipId: string, theme: string | null): boolean {
+/** `null` = 回到默认方案。 */
+export function setTheme(
+  store: ProjectStore,
+  clipId: string | null,
+  theme: string | null,
+  scope: 'clip' | 'project' = 'clip',
+): boolean {
+  const custom = store.project.customThemes ?? [];
+  if (theme !== null && !isKnownTheme(theme, custom)) {
+    // 未知 id 会被渲染静默回落默认方案 —— 那看起来就是「换了没反应」。
+    throw new ControlFailure('not-found', tr('agent.typo.themeNotFound', { id: theme }), {
+      validIds: themeIds(custom),
+    });
+  }
+  if (scope === 'project') {
+    return store.commit('agent:typo_theme', (p) => {
+      if (theme) p.typographyTheme = theme;
+      else delete p.typographyTheme;
+      for (const track of p.tracks) {
+        for (const clip of track.clips) {
+          if (clip.kind !== 'source' || clip.source.type !== 'text') continue;
+          if (theme) clip.source.doc.theme = theme;
+          else delete clip.source.doc.theme;
+        }
+      }
+    });
+  }
+  if (!clipId) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.noDoc', { id: '(none)' }), {
+      hint: 'pass clipId, or use scope:"project"',
+    });
+  }
   requireDoc(store, clipId);
   return withDoc(store, clipId, 'agent:typo_theme', (d) => {
     setThemeOp(d, theme);
   });
+}
+
+export interface ThemeSaveInput {
+  /** 更新已有的自定义方案（必须存在）。省略 = 新建。 */
+  id?: string;
+  /** 复制基准：内置或工程自定义方案的 id。省略 = 当前文档用的那套。 */
+  base?: string;
+  /** 显示名。更新时省略 = 保留原名。 */
+  name?: string;
+  /** 局部色槽：`{ accent1: '#ff8a00', dk1: '#0b0b0f' }`（合并到基准上）。 */
+  colors?: unknown;
+  scope?: 'clip' | 'project';
+}
+
+/**
+ * 新建 / 更新一份自定义配色方案，并**立即设成当前方案**（与 UI 的保存行为一致）。
+ *
+ * 为什么 `colors` 是局部补丁而不是整份：模型不需要先读回整套颜色才能改一个槽，
+ * 而「照着一份自己以为对的色表继续做」正是最容易偏的地方。基准优先级
+ * 「id 指的那份 → `base` 指的 → 当前文档的方案 → 默认方案」。
+ */
+export function saveTheme(
+  store: ProjectStore,
+  clipId: string | null,
+  input: ThemeSaveInput,
+): { theme: TypographyTheme; scope: 'clip' | 'project'; appliedTo: string | null } {
+  const custom = store.project.customThemes ?? [];
+  const scope = input.scope === 'project' ? 'project' : 'clip';
+  const doc = clipId ? requireDoc(store, clipId) : null;
+  if (scope === 'clip' && !doc) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.noDoc', { id: '(none)' }), {
+      hint: 'pass clipId, or use scope:"project"',
+    });
+  }
+
+  const existing = typeof input.id === 'string' ? custom.find((t) => t.id === input.id) : null;
+  if (typeof input.id === 'string' && !existing) {
+    throw new ControlFailure('not-found', tr('agent.typo.themeNotFound', { id: input.id }), {
+      validIds: custom.map((t) => t.id),
+    });
+  }
+  if (input.base !== undefined && !isKnownTheme(String(input.base), custom)) {
+    throw new ControlFailure('not-found', tr('agent.typo.themeNotFound', { id: String(input.base) }), {
+      validIds: themeIds(custom),
+    });
+  }
+  const base = existing ?? themeById(input.base ?? doc?.theme ?? null, custom);
+  const colors = input.colors === undefined ? { ...base.colors } : mergeThemeColors(base.colors, input.colors);
+  if (!colors) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.badThemeColors'), {
+      slots: Object.keys(base.colors),
+    });
+  }
+  const name =
+    (typeof input.name === 'string' && input.name.trim()) || existing?.name || themeDisplayName(base);
+  const theme: TypographyTheme = { id: existing?.id ?? newId(), name, colors };
+
+  store.commit('agent:typo_theme_save', (p) => {
+    const list = Array.isArray(p.customThemes) ? [...p.customThemes] : [];
+    const i = list.findIndex((t) => t.id === theme.id);
+    if (i >= 0) list[i] = theme;
+    else list.push(theme);
+    p.customThemes = list;
+    if (scope === 'project') {
+      p.typographyTheme = theme.id;
+      for (const track of p.tracks) {
+        for (const c of track.clips) {
+          if (c.kind === 'source' && c.source.type === 'text') c.source.doc.theme = theme.id;
+        }
+      }
+    } else if (clipId) {
+      const target = findTextDoc(p, clipId);
+      if (target) target.theme = theme.id;
+    }
+  });
+  return { theme, scope, appliedTo: scope === 'project' ? null : clipId };
+}
+
+/**
+ * 删除一份自定义方案，并把引用它的地方抹干净（`Project.typographyTheme` + 各文档）。
+ *
+ * 不抹的话工程里会留一堆悬空 id：渲染回落默认方案（不报错），但图库/检查器显示
+ * 「本版本没有的方案」，下次保存也照样带着它。
+ */
+export function removeTheme(store: ProjectStore, themeId: string): { removed: string; clearedDocs: number } {
+  const custom = store.project.customThemes ?? [];
+  const target = custom.find((t) => t.id === themeId);
+  if (!target) {
+    throw new ControlFailure('not-found', tr('agent.typo.themeNotFound', { id: themeId }), {
+      // 内置方案是只读数据表，删不掉 —— validIds 因此只列自定义的。
+      validIds: custom.map((t) => t.id),
+      hint: 'built-in themes cannot be removed',
+    });
+  }
+  let cleared = 0;
+  store.commit('agent:typo_theme_remove', (p) => {
+    const list = (p.customThemes ?? []).filter((t) => t.id !== themeId);
+    if (list.length) p.customThemes = list;
+    else delete p.customThemes;
+    if (p.typographyTheme === themeId) delete p.typographyTheme;
+    for (const track of p.tracks) {
+      for (const clip of track.clips) {
+        if (clip.kind !== 'source' || clip.source.type !== 'text') continue;
+        if (clip.source.doc.theme !== themeId) continue;
+        delete clip.source.doc.theme;
+        cleared += 1;
+      }
+    }
+  });
+  return { removed: themeId, clearedDocs: cleared };
 }
 
 /**

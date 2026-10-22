@@ -100,6 +100,88 @@ export function isIdentityCrop(c: CropSettings): boolean {
   return c.left === 0 && c.top === 0 && c.right === 0 && c.bottom === 0;
 }
 
+/* --------------------------------------------------- 外部输入的校验 / 归一化
+ *
+ * 片段（`SourceClip`）与排版图片元素（`ImageElement`）共用同一组字段，写入端
+ * 也因此共用同一份校验 —— 两处各写一遍的形态是「同一个 `{tol: 0.3}` 在时间轴上
+ * 有效、在排版里被静默丢掉」。**整条返回 null = 形状不对**，由调用方在改动之前
+ * 报错（这一层不抛）。
+ */
+
+const HEX_COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+function isRec(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function numIn(v: unknown, min: number, max: number): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : null;
+}
+
+/**
+ * 色键参数：缺省字段从 `base` 继承（局部改）。`color` 必须是 `#rgb` / `#rrggbb`。
+ */
+export function coerceKeySettings(raw: unknown, base?: KeySettings): KeySettings | null {
+  if (!isRec(raw)) return null;
+  const start = base ?? defaultKeySettings();
+  let color = start.color;
+  if (raw.color !== undefined) {
+    if (typeof raw.color !== 'string' || !HEX_COLOR_RE.test(raw.color)) return null;
+    color = raw.color;
+  }
+  const tolerance = raw.tolerance === undefined ? start.tolerance : numIn(raw.tolerance, 0, 1);
+  const softness = raw.softness === undefined ? start.softness : numIn(raw.softness, 0, 1);
+  const spill = raw.spill === undefined ? start.spill : numIn(raw.spill, 0, 1);
+  if (tolerance === null || softness === null || spill === null) return null;
+  return { color, tolerance, softness, spill };
+}
+
+/**
+ * 四角：每个是 `[x, y]` 两个有限数，且**面积不为 0**。
+ *
+ * 退化四边形算不出透视矩阵，渲染结果是整层消失 —— 最难归因的一类「静默无效」。
+ */
+export function coerceQuadCorners(raw: unknown): QuadCorners | null {
+  if (!isRec(raw)) return null;
+  const corner = (v: unknown): [number, number] | null => {
+    if (!Array.isArray(v) || v.length !== 2) return null;
+    const x = Number(v[0]);
+    const y = Number(v[1]);
+    return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+  };
+  const tl = corner(raw.tl);
+  const tr = corner(raw.tr);
+  const br = corner(raw.br);
+  const bl = corner(raw.bl);
+  if (!tl || !tr || !br || !bl) return null;
+  const area =
+    Math.abs(
+      tl[0] * tr[1] - tr[0] * tl[1] +
+        tr[0] * br[1] - br[0] * tr[1] +
+        br[0] * bl[1] - bl[0] * br[1] +
+        bl[0] * tl[1] - tl[0] * bl[1],
+    ) / 2;
+  return area > 1e-6 ? { tl, tr, br, bl } : null;
+}
+
+/**
+ * 裁剪：四条边各自 0..1，走 `withCropEdge` 的**对边互斥**钳制。
+ *
+ * 局部对象合法（只改一条边）；是否该删字段（全零）由调用方判断。
+ */
+export function coerceCropEdges(raw: unknown, base: CropSettings): CropSettings | null {
+  if (!isRec(raw)) return null;
+  let next = { ...base };
+  for (const edge of ['left', 'top', 'right', 'bottom'] as const) {
+    if (raw[edge] === undefined) continue;
+    const v = numIn(raw[edge], 0, 1);
+    if (v === null) return null;
+    next = withCropEdge(next, edge, v);
+  }
+  return next;
+}
+
 /**
  * 改一条边的裁剪量，并把结果钳在合法范围内（返回新对象）。
  *

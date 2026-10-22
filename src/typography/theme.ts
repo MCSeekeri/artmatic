@@ -308,6 +308,28 @@ export function withSlotColor(theme: TypographyTheme, slot: ThemeSlot, hex: stri
 }
 
 /**
+ * 局部色槽补丁 → 完整 colors（**agent 写自定义方案的唯一入口**）。
+ *
+ * 键必须是真槽位、值必须是 hex，否则返回 null（由调用方在改动之前报错）。允许
+ * 改 `lt1` / `dk1`：UI 从内置方案复制时把这两个端点钉成纯白 / 纯黑（Office 的
+ * 约定），但「暗色方案」本来就要把它们换过来 —— agent 造的是新方案，不是 Office
+ * 的副本。`sanitizeCustomThemes` 只要求它们是合法 hex，所以这条不破坏工程校验。
+ */
+export function mergeThemeColors(
+  base: Record<ThemeSlot, string>,
+  patch: unknown,
+): Record<ThemeSlot, string> | null {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return null;
+  const next: Record<ThemeSlot, string> = { ...base };
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (!(THEME_SLOTS as readonly string[]).includes(key)) return null;
+    if (typeof value !== 'string' || hexToRgb(value) === null) return null;
+    next[key as ThemeSlot] = value;
+  }
+  return next;
+}
+
+/**
  * 校验 / 归一化一份**来历不明**的自定义方案数组（`validateProject` 用）。
  *
  * 坏条目**整条丢掉**而不是修：颜色字段缺一个槽的方案的渲染行为没人定义得清，

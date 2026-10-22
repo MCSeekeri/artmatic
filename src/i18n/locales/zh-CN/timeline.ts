@@ -94,6 +94,7 @@ export const timeline = {
   'tl.moveTrackUp': '上移一轨',
   'tl.moveTrackDown': '下移一轨',
   'tl.setDuration': '修改时长',
+  'tl.renameProject': '重命名工程',
   'tl.fitDuration': '时长贴合内容',
   'tl.setResolution': '修改分辨率',
   'tl.splitClip': '切分片段',

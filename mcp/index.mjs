@@ -165,7 +165,9 @@ async function dispatch(name, args, extra) {
       return unwrap(await bridge.call('removeTypographyElement', [args.clipId, args.elementId]));
 
     case 'artmatic_typo_reorder_element':
-      return unwrap(await bridge.call('reorderTypographyElement', [args.clipId, args.elementId, args.op]));
+      return unwrap(
+        await bridge.call('reorderTypographyElement', [args.clipId, args.elementId, args.op, args.index]),
+      );
 
     case 'artmatic_typo_group':
       return unwrap(
@@ -196,7 +198,36 @@ async function dispatch(name, args, extra) {
       return unwrap(await bridge.call('setTypographyBackground', [args.clipId, args.paint]));
 
     case 'artmatic_typo_set_theme':
-      return unwrap(await bridge.call('setTypographyTheme', [args.clipId, args.theme ?? null]));
+      return unwrap(
+        await bridge.call('setTypographyTheme', [args.clipId, args.theme ?? null, args.scope]),
+      );
+
+    case 'artmatic_typo_save_theme':
+      return unwrap(
+        await bridge.call('saveTypographyTheme', [
+          args.clipId,
+          {
+            id: args.id,
+            base: args.base,
+            name: args.name,
+            colors: args.colors,
+            scope: args.scope,
+          },
+        ]),
+      );
+
+    case 'artmatic_typo_remove_theme':
+      return unwrap(await bridge.call('removeTypographyTheme', [args.themeId]));
+
+    case 'artmatic_typo_update_group':
+      return unwrap(
+        await bridge.call('updateTypographyGroup', [args.clipId, args.groupId, args.patch]),
+      );
+
+    case 'artmatic_typo_set_canvas_size':
+      return unwrap(
+        await bridge.call('setTypographyCanvasSize', [args.clipId, args.size, args.scaleContent === true]),
+      );
 
     case 'artmatic_typo_replace_doc':
       return unwrap(await bridge.call('replaceTypographyDoc', [args.clipId, args.doc]));
@@ -351,6 +382,9 @@ async function dispatch(name, args, extra) {
 
     case 'artmatic_set_project':
       return unwrap(await bridge.call('setProject', [args]));
+
+    case 'artmatic_estimate_beat_grid':
+      return unwrap(await bridge.call('estimateBeatGrid'));
 
     case 'artmatic_edit_sections': {
       const op = args.op;

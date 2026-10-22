@@ -24,6 +24,7 @@
  */
 
 import { newId, type Project } from '../core/schema';
+import { coerceKeySettings, coerceQuadCorners } from '../core/image-fx';
 import {
   SHAPE_KINDS,
   applyPaintPatch,
@@ -36,6 +37,7 @@ import {
   elementById,
   mergeTransform3D,
   reorderElements,
+  resizeDocument,
   type ImageElement,
   type Paint,
   type ShapeElement,
@@ -47,6 +49,7 @@ import {
   type TextureFrame,
   type TypographyDocument,
   type TypographyElement,
+  type TypographyGroup,
 } from './document';
 import { plainTextOf, runsFromText } from './rich-text';
 import {
@@ -125,7 +128,8 @@ export function applyFramePatch(frame: TextureFrame, patch: FramePatch): void {
 
 /* --------------------------------------------------------------- 颜色 / 填充 */
 
-const PAINT_KINDS = new Set(['none', 'solid', 'linear', 'radial', 'texture']);
+/** 颜料种类的白名单（`typo_update_group` 这类「整份 Paint」的入口要用它校验）。 */
+export const PAINT_KINDS = new Set(['none', 'solid', 'linear', 'radial', 'texture']);
 const TEXTURE_IDS = new Set(['dots', 'grid', 'diagonal', 'cross', 'checker', 'wave']);
 
 function colorString(v: unknown, fallback: string): string {
@@ -466,6 +470,9 @@ export interface NewImageInput extends AnimationCarrier, ElementExtras {
   fit?: string;
   radius?: number;
   crop?: { x: number; y: number; w: number; h: number };
+  /** 抠像 / 四角（与片段同名字段，见 `core/image-fx.ts`）。 */
+  key?: unknown;
+  quad?: unknown;
   name?: string;
   opacity?: number;
   blend?: string;
@@ -624,6 +631,10 @@ export function addImageElement(
       h: Math.max(0.01, Math.min(1, finite(input.crop.h, 1))),
     };
   }
+  const key = input.key === undefined ? null : coerceKeySettings(input.key);
+  if (key) el.key = key;
+  const quad = input.quad === undefined ? null : coerceQuadCorners(input.quad);
+  if (quad) el.quad = quad;
   applyCommon(el, input);
   doc.elements = [...doc.elements, el];
   return el;
@@ -827,6 +838,17 @@ export function patchElement(
         h: Math.max(0.01, Math.min(1, finite(raw.crop.h, 1))),
       };
     }
+    // 抠图 / 四角：`null` = 关掉；形状不对时**整条不写**（调用方负责前置校验）。
+    if (raw.key === null) delete el.key;
+    else if (raw.key !== undefined) {
+      const key = coerceKeySettings(raw.key, el.key);
+      if (key) el.key = key;
+    }
+    if (raw.quad === null) delete el.quad;
+    else if (raw.quad !== undefined) {
+      const quad = coerceQuadCorners(raw.quad);
+      if (quad) el.quad = quad;
+    }
   }
 
   changed = JSON.stringify(el) !== before;
@@ -856,6 +878,24 @@ export function reorderElement(
   return true;
 }
 
+/**
+ * 移动到指定下标（数组顺序 = z 序，**末尾 = 最前**）。
+ *
+ * `reorderElement` 的四档只能「相对」移动；把元素精确放到某一层（比如「插在标题
+ * 与副标题之间」）需要绝对值。越界值夹进 `[0, n-1]`。
+ */
+export function moveElementTo(doc: TypographyDocument, id: string, index: number): boolean {
+  const from = doc.elements.findIndex((e) => e.id === id);
+  if (from < 0) return false;
+  const at = Math.max(0, Math.min(doc.elements.length - 1, Math.round(index)));
+  if (at === from) return false;
+  const next = [...doc.elements];
+  const [moved] = next.splice(from, 1);
+  next.splice(at, 0, moved!);
+  doc.elements = next;
+  return true;
+}
+
 /* --------------------------------------------------------------- 组合 */
 
 export function groupSelection(doc: TypographyDocument, ids: string[], name: string): string | null {
@@ -872,6 +912,62 @@ export function ungroupSelection(doc: TypographyDocument, ids: string[]): boolea
   if (next === doc) return false;
   doc.elements = next.elements;
   doc.groups = next.groups;
+  return true;
+}
+
+/**
+ * 改分组的底板（组名 / 填充 / 边框 / 圆角 / 内边距）。
+ *
+ * 分组不只是「几个元素一起选中」：它自带一块底板外壳（`TypographyGroup`），
+ * 所以「成组」之后还要能把这层壳调成想要的卡片样式 —— 否则 agent 造出来的组
+ * 永远是一块没有任何外观的空壳。
+ *
+ * 就地改同一个 group 对象（`store.commit` 里的引用必须保持有效）。
+ */
+export function updateGroup(doc: TypographyDocument, groupId: string, raw: Record<string, unknown>): boolean {
+  const group = (doc.groups ?? []).find((g) => g.id === groupId);
+  if (!group) return false;
+  const before = JSON.stringify(group);
+  if (typeof raw.name === 'string' && raw.name.trim()) group.name = raw.name.trim();
+  if (raw.fill !== undefined) group.fill = coercePaint(raw.fill, group.fill);
+  // `stroke: null` = 去掉边框（组模型里就是 null，不是「宽度 0」）。
+  if (raw.stroke !== undefined) {
+    group.stroke = raw.stroke === null ? null : coerceStroke(raw.stroke, group.stroke);
+  }
+  if (Number.isFinite(Number(raw.radius))) group.radius = Math.max(0, Number(raw.radius));
+  if (Number.isFinite(Number(raw.padding))) group.padding = Math.max(0, Number(raw.padding));
+  return JSON.stringify(group) !== before;
+}
+
+/** 组视图（写操作回显用：改完的底板直接给回去，不必再读整份文档）。 */
+export function groupView(group: TypographyGroup): Record<string, unknown> {
+  return { ...group, fill: { ...group.fill }, stroke: group.stroke ? { ...group.stroke } : null };
+}
+
+/**
+ * 改画幅。
+ *
+ * `scaleContent` 关 = 只改 `doc.size`：元素留在原像素位置，视口变了、构图跟着挪，
+ * 超出的部分被画布边缘裁掉。开 = 过 `resizeDocument`（frame / 字号 / 字距 / 描边宽度 /
+ * 阴影 / 虚线 / 3D 的 px 参数一起按比例重排）—— 那才是「换画幅」。
+ * 两种都是真实需求，所以给开关而不是替调用方选（与排版页的画幅弹层同一语义）。
+ */
+export function setDocSize(
+  doc: TypographyDocument,
+  size: { w: number; h: number },
+  scaleContent: boolean,
+): boolean {
+  const w = Math.max(2, Math.round(Number(size.w)));
+  const h = Math.max(2, Math.round(Number(size.h)));
+  if (!Number.isFinite(w) || !Number.isFinite(h)) return false;
+  if (doc.size.w === w && doc.size.h === h) return false;
+  if (!scaleContent) {
+    doc.size = { w, h };
+    return true;
+  }
+  const next = resizeDocument(doc, { w, h });
+  doc.size = next.size;
+  doc.elements = next.elements;
   return true;
 }
 
@@ -1267,6 +1363,9 @@ function elementView(el: TypographyElement): Record<string, unknown> {
     assetId: el.assetId,
     fit: el.fit,
     ...(el.crop ? { crop: el.crop } : {}),
+    // 抠图 / 四角：与片段同名字段、同一套语义（缺省 = 没开）。
+    ...(el.key ? { key: el.key } : {}),
+    ...(el.quad ? { quad: el.quad } : {}),
     ...(el.radius !== undefined ? { radius: el.radius } : {}),
   };
 }
@@ -1377,7 +1476,7 @@ const ELEMENT_KEYS = new Set([
 const KIND_KEYS: Record<string, string[]> = {
   text: ['text', 'style', 'fill', 'boxFill', 'boxStroke', 'glyphStroke', 'autoHeight'],
   shape: ['shape', 'path', 'pathUnit', 'clipFrame', 'fill', 'stroke', 'radius', 'sides', 'waist', 'inner', 'angle', 'evenOdd', 'gen'],
-  image: ['assetId', 'fit', 'crop', 'radius'],
+  image: ['assetId', 'fit', 'crop', 'radius', 'key', 'quad'],
 };
 
 /** 把一个元素输入里「不认识的键」记进 report（按 kind 的白名单）。 */
@@ -1496,6 +1595,11 @@ export function coerceDocument(
           h: Math.max(0.01, Math.min(1, finite(item.crop.h, 1))),
         };
       }
+      // 抠图 / 四角与片段同名字段：整份替换时一起搬，否则「读一次再写回」会丢。
+      const key = item.key === undefined ? null : coerceKeySettings(item.key);
+      if (key) el.key = key;
+      const quad = item.quad === undefined ? null : coerceQuadCorners(item.quad);
+      if (quad) el.quad = quad;
       doc.elements.push(el);
     }
   }

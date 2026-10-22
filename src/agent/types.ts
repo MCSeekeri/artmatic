@@ -414,6 +414,10 @@ export interface TypographyCapabilities {
    */
   units: {
     frame: string;
+    /** 画幅（`doc.size`）与 `typo_set_canvas_size` 的 `scaleContent` 语义。 */
+    canvas: string;
+    /** 分组底板：`padding` / `radius` 是 px，填充与边框是 Paint / Stroke。 */
+    groupBox: string;
     shapeRadius: string;
     shapeInner: string;
     shapeSides: string;
@@ -466,6 +470,12 @@ export interface TypographyCapabilities {
   /** 程序化 SVG 生成器（22 个）。 */
   generators: TypographyGeneratorCapability[];
   themes: { id: string; name: string; builtin: boolean }[];
+  /**
+   * 配色方案的**槽位键**（`lt1` / `dk1` / `lt2` / `dk2` / `accent1..6`，顺序即
+   * 取色卡列序）。`typo_save_theme({ colors })` 只认这些键 —— 少了它模型只能
+   * 猜 `accent1` 还是 `primary`。
+   */
+  themeSlots: string[];
   defaultFontFamily: string;
   paintKinds: ('none' | 'solid' | 'linear' | 'radial' | 'texture')[];
   texturePatterns: string[];
@@ -521,6 +531,9 @@ export interface TypographyElementView {
   assetId?: string;
   fit?: string;
   crop?: unknown;
+  /** 抠像（`{ color, tolerance, softness, spill }`）与四角（`{ tl,tr,br,bl }`）。 */
+  key?: unknown;
+  quad?: unknown;
   /** 入场动画的完整描述（预设 / 关键帧 / 自定义 CSS + 时序）。 */
   animations?: Record<string, unknown>[];
 }
@@ -908,6 +921,9 @@ export type TypographyElementInput = (
       fit?: 'fill' | 'contain' | 'cover' | 'none';
       radius?: number;
       crop?: { x: number; y: number; w: number; h: number };
+      /** 抠像（局部对象可）与四角（`{ tl, tr, br, bl }`）。 */
+      key?: unknown;
+      quad?: unknown;
       name?: string;
       opacity?: number;
       blend?: string;
@@ -984,6 +1000,10 @@ export interface TypographyElementPatch {
   /** image */
   fit?: 'fill' | 'contain' | 'cover' | 'none';
   crop?: { x: number; y: number; w: number; h: number };
+  /** 抠像参数（局部对象 = 只改给的键）；`null` = 关闭。只用于图片元素。 */
+  key?: unknown;
+  /** 四角透视（`{ tl,tr,br,bl }`，每个 `[x,y]`）；`null` = 关闭。退化四边形会被拒绝。 */
+  quad?: unknown;
   /** 动画：`animations` / `animation` 替换，`addAnimation` 追加，`removeAnimations` 清空。 */
   animations?: unknown[];
   animation?: unknown;

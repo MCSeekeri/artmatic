@@ -1006,3 +1006,24 @@ executor.ts   工具名 → 控制平面调用（唯一的应用内映射表）
 - **`add_clip` 仍然不产 audio 片段**：素材导入不在 Agent 职责内（用户 2026-10-22
   判定），所以音频内容只能由用户导入；agent 能做的是读它、给 BPM、以及（在有音频
   片段时）写淡变与 `srcIn`。
+
+### 12.7 画幅 / 组框 / 自定义配色 / 估 BPM / 图层插队（2026-10-22 P2）
+
+| 新增 | 为什么 | 取舍 |
+|---|---|---|
+| `typo_set_canvas_size({ size, scaleContent })` | 竖版 / 方图是真实需求；原先只能整份 `typo_replace_doc`（换 id、丢撤销粒度） | 两种意图都保留：`scaleContent` 开 = 过 `resizeDocument`（字号 / 描边 / 阴影 / 3D 的 px 一起缩），关 = 只改画布 |
+| `typo_update_group({ groupId, patch })` | `typo_group` 只建壳；不暴露壳的样式，agent 造出来的组永远是「什么都没有」的一层 | `fill` 必须是完整 Paint（带 kind）、`stroke:null` = 去边框；写后回显整份 group |
+| `typo_save_theme` / `typo_remove_theme` + `typo_set_theme({ scope })` | 原先只能选内置方案；自定义方案的增删改与「一键全工程换色」都够不着 | `colors` 是**局部补丁**（键见 `themeSlots`），基准优先级 id → base → 当前文档；删方案时同步抹掉 `typographyTheme` 与各 `doc.theme` |
+| `estimate_beat_grid()` | 拍网错了所有卡点都偏；agent 原先只能写值、算不出来 | 与工具栏同一条 `audio/tempo.ts`；没音频 / 静音 / 拍点不明显 = `unsupported`，**不写猜测值** |
+| `typo_reorder_element({ op:'index', index })` | 四档相对操作表达不了「插在标题与副标题之间」 | 越界夹到 `[0, n-1]`；返回落库后的 `z` |
+| `set_project({ name })` | 工程名是工程内容，不是落盘路径 | 白名单加一项，走新 `store.setProjectName` |
+| 排版图片 `key` / `quad` | 片段有、元素没有：同一个 `{tolerance:0.3}` 在时间轴上有效、在排版里被静默丢掉 | 校验抽到 `core/image-fx.ts`（两处共用），退化四边形在写入前拒绝 |
+
+两个实现细节：
+
+- **`set_theme` 开始校验 id**：未知 id 以前会被渲染静默回落默认方案（看起来就是
+  「换了没反应」）。现在 `not-found` + `validIds`。`typo_replace_doc` 仍然宽松
+  （它承诺永不抛）。
+- **`save_theme` 不要求先读回整套色表**：局部色槽补丁让它能「只把 accent1 调成
+  橙」，而基准从 `base` / 当前文档推出 —— 「照着一份自己以为对的色表继续做」是
+  模型最容易偏的一类。

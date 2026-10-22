@@ -148,6 +148,13 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - **生成器用 `fill` 画**：`barcode` / `hudticks` 这类是密集的闭合矩形，`stroke`
   会描每一根的轮廓，宽度一过就煳成实心板。这条写进了各自 spec 的 `notes`。
 - 布局优先走 `typo_layout`，别让模型手算坐标。布局结果回显每个元素的新 frame。
+- **画幅 / 组框 / 配色 / 图层下标**（2026-10-22 P2）：`typo_set_canvas_size`
+  （`scaleContent` 决定要不要过 `resizeDocument`）、`typo_update_group`（成组只建壳，
+  不给样式壳不可见）、`typo_save_theme` / `typo_remove_theme` + `typo_set_theme({scope})`、
+  `typo_reorder_element({op:'index'})`。配色的 `colors` 是**局部补丁**，槽位键从
+  `get_typography_capabilities().themeSlots` 取；删方案要连引用一起抹。
+- 图片元素的 `key` / `quad` 与片段共用 `core/image-fx.ts` 的 `coerce*`：两处各写一份
+  的形态是「同一个 `{tolerance}` 在时间轴有效、在排版里被静默丢掉」。
 - **动画是文档的一部分**：`typo_set_animation` / `typo_add_element.animation` 写的是
   `typography/animation.ts` 的 CSS 动画（预览与导出同一条求值路径）。
   `keys[].at` 收 0..1 或 `{ beat: n }`（换算在 `control-plane.ts`，文档模型只收 0..1）；

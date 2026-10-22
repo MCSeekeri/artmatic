@@ -48,6 +48,10 @@ export const agent = {
   'agent.algo.notAlgo': '片段 {id} 的源是 {type}，不是算法片段',
   'agent.algo.notFound': '没有生成器 {id}',
 
+  /* ------------------------------------------------------------ 拍网格 */
+  'agent.beat.noAudio': '工程里没有可解码的音频片段，估不出 BPM（音频由用户导入）',
+  'agent.beat.failed': '估不出稳定的 BPM（静音 / 太短 / 拍点不明显）；可以手动写 beatGrid',
+
   /* ------------------------------------------------------------ 段落 */
   'agent.section.notFound': '没有段落 {id}',
   'agent.section.tooNarrow': '在 {at}s 处切不动：离段落两端太近（两侧都要留出最小间隔）',
@@ -142,6 +146,7 @@ export const agent = {
   'agent.typo.badAnimationCss': '自定义 CSS 动画被拒绝：{reason}',
   'agent.typo.badTransform3d': 'transform3d 必须是对象（可只给要改的子项）或 null',
   'agent.typo.autoHeightNotText': '元素 {id} 不是文本元素，没有 autoHeight',
+  'agent.typo.keyNotImage': '元素 {id} 不是图片元素：key / quad 只用于图片',
   'agent.typo.pathNotSvg': '元素 {id} 不是 svg 图形：path / pathUnit / clipFrame 只在 shape:"svg" 上生效',
   'agent.typo.badElementKind': '未知元素类型 {kind}（只能是 text / shape / image）',
   'agent.typo.badGen': '没有程序化图形生成器 {id}',
@@ -151,6 +156,12 @@ export const agent = {
   'agent.typo.batchTooLarge': '一次最多 {max} 项',
   'agent.typo.badUpdate': 'updates[{index}] 必须形如 { elementId, patch }',
   'agent.typo.badLayout': '布局参数不合法：{detail}',
+  'agent.typo.badCanvas': '画幅尺寸必须是 { w, h }，两个都 ≥ 2 的整数像素',
+  'agent.typo.groupNotFound': '文档里没有分组 {id}',
+  'agent.typo.badPaint': '填充必须是 Paint 对象（kind: none / solid / linear / radial / texture）',
+  'agent.typo.badStroke': '边框必须是 Stroke 对象或 null',
+  'agent.typo.themeNotFound': '没有配色方案 {id}',
+  'agent.typo.badThemeColors': '配色槽位不合法：键必须是 lt1 / dk1 / lt2 / dk2 / accent1..6，值是 hex',
   'agent.typo.noElements': '排版文档里没有元素',
   'agent.typo.docNotObject': 'doc 必须是对象',
   'agent.typo.widthTooLarge': '排版画布过大（{w}×{h}，上限 {max} 边长）',

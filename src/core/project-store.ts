@@ -548,6 +548,15 @@ export class ProjectStore {
     });
   }
 
+  /** 改工程名（工程内容；不是文件路径 —— 落盘目录由宿主管）。 */
+  setProjectName(name: string): void {
+    const next = name.trim().slice(0, 120);
+    if (!next || next === this.project.name) return;
+    this.commit(tr('tl.renameProject'), (p) => {
+      p.name = next;
+    });
+  }
+
   /** 时长收齐到内容末尾（只收不放：内容为空时保留 1 秒）。 */
   fitDurationToContent(): void {
     this.commit(tr('tl.fitDuration'), (p) => {

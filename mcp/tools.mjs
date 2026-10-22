@@ -542,14 +542,23 @@ export const TOOLS = [
   {
     name: 'artmatic_set_project',
     kind: 'write',
-    description: '改工程级参数（fps / resolution / duration / beatGrid / overlapBehavior）。',
+    description: '改工程级参数（name / fps / resolution / duration / beatGrid / overlapBehavior）。',
     args: {
+      name: F.string({ description: '工程名（选项卡上显示的那个）。' }),
       fps: F.number(),
       resolution: F.size(),
       duration: F.number({ minimum: 0.1 }),
       beatGrid: F.any({ description: '{ bpm?, offset?, beatsPerBar? }' }),
       overlapBehavior: F.string({ enum: ['push', 'reject', 'trim'] }),
     },
+  },
+  {
+    name: 'artmatic_estimate_beat_grid',
+    kind: 'write',
+    description:
+      '从最早那条音频片段估 BPM / offset 并写进 beatGrid（与工具栏「一键估计」同一条实现）。' +
+      '没有音频 / 静音 / 拍点不明显时直接失败（不写猜测值）。',
+    args: {},
   },
   {
     name: 'artmatic_edit_sections',
@@ -824,11 +833,14 @@ export const TOOLS = [
   {
     name: 'artmatic_typo_reorder_element',
     kind: 'write',
-    description: '调层级：front | back | forward | backward（数组下标即 z 序）。',
+    description:
+      '调层级（数组下标即 z 序，越靠后越前）：front | back | forward | backward，' +
+      '或 op:"index" + index 移到绝对位置（0 = 最后面）。',
     args: {
       clipId: F.string(),
       elementId: F.string({ required: true }),
-      op: F.string({ required: true, enum: ['front', 'back', 'forward', 'backward'] }),
+      op: F.string({ required: true, enum: ['front', 'back', 'forward', 'backward', 'index'] }),
+      index: F.integer({ minimum: 0, description: 'op:"index" 时的目标下标。' }),
     },
   },
   {
@@ -846,6 +858,30 @@ export const TOOLS = [
     kind: 'write',
     description: '解组（只影响这些元素所在的组）。',
     args: { clipId: F.string(), elementIds: F.stringArray({ required: true }) },
+  },
+  {
+    name: 'artmatic_typo_update_group',
+    kind: 'write',
+    description:
+      '改分组底板（成组只建壳，不给样式的话壳是不可见的）。' +
+      'patch: { name?, fill?（Paint）, stroke?（Stroke 或 null）, radius?（px）, padding?（px，外壳比成员大出多少）}。',
+    args: {
+      clipId: F.string(),
+      groupId: F.string({ required: true }),
+      patch: F.any({ required: true, description: '{ name?, fill?, stroke?, radius?, padding? }' }),
+    },
+  },
+  {
+    name: 'artmatic_typo_set_canvas_size',
+    kind: 'write',
+    description:
+      '改画幅（文档设计分辨率）。scaleContent:true = 元素 / 字号 / 描边 / 阴影 / 3D 的 px 一起按比例重排' +
+      '（真正的「换画幅」）；false = 只改画布，元素留在原像素位置（构图会挪、超出被裁）。',
+    args: {
+      clipId: F.string(),
+      size: F.size({ required: true }),
+      scaleContent: F.boolean({ description: '默认 false。' }),
+    },
   },
   {
     name: 'artmatic_typo_layout',
@@ -874,8 +910,36 @@ export const TOOLS = [
   {
     name: 'artmatic_typo_set_theme',
     kind: 'write',
-    description: '切配色方案；用 @slot 引用的元素会自动换色。theme 传 null = 默认方案。',
-    args: { clipId: F.string(), theme: F.string() },
+    description:
+      '切配色方案；只有用 @slot 引用的元素会换色（裸 hex 不跟）。theme 传 null = 默认方案。' +
+      'scope:"project" = 同时写工程默认方案 + 所有文本文档（一笔撤销）。未知 id 会被拒绝，不静默回落。',
+    args: {
+      clipId: F.string(),
+      theme: F.string(),
+      scope: F.string({ enum: ['clip', 'project'] }),
+    },
+  },
+  {
+    name: 'artmatic_typo_save_theme',
+    kind: 'write',
+    description:
+      '新建 / 更新一份自定义配色方案，并立即设为当前方案。colors 是**局部补丁**' +
+      '（键见 get_typography_capabilities().themeSlots），省略的槽沿用 base 的值。' +
+      'base = 复制基准（内置或自定义 id）；id = 更新已有的自定义方案。',
+    args: {
+      clipId: F.string(),
+      id: F.string(),
+      base: F.string(),
+      name: F.string(),
+      colors: F.any({ description: '局部色槽 → hex。' }),
+      scope: F.string({ enum: ['clip', 'project'] }),
+    },
+  },
+  {
+    name: 'artmatic_typo_remove_theme',
+    kind: 'write',
+    description: '删除一份自定义配色方案，并抹掉工程里对它的引用（typographyTheme + 各文档）。内置方案删不掉。',
+    args: { themeId: F.string({ required: true }) },
   },
   {
     name: 'artmatic_typo_replace_doc',
