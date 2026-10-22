@@ -23,6 +23,7 @@ import {
   LAB_BEAT_GRID,
   LAB_DURATION,
   LAB_FPS,
+  LAB_RECALL_START,
   LAB_SEED,
   type LabSelection,
 } from './build-project';
@@ -371,6 +372,14 @@ class LabState {
   selectSource(id: string): void {
     this.sourceId = id;
     this.sourceParams = defaultsFor('source', id);
+    /*
+     * 回放型（闪回）的片段头在 `LAB_RECALL_START` 之后（见 build-project.ts），
+     * 播放头停在它前面时整屏是空的 —— 那不是「坏了」，但看起来一模一样。
+     * 只在还没走进片段时推一把；用户自己停在哪儿不会被抢回来。
+     */
+    if (getGenerator(id)?.kind === 'recall' && this.t < LAB_RECALL_START + 1) {
+      this.t = LAB_RECALL_START + 2;
+    }
     this.afterSelectionChange();
   }
 

@@ -23,7 +23,10 @@
  * 3. **产物目录与 `src/ui/algo-thumb-assets.ts` 的 glob 是一对**，
  *    覆盖 / 孤儿由 `tests/unit/algo-thumb-assets.test.ts` 挡。
  *
- * 用法：`node scripts/gen-algo-thumbs.mjs`（可选 `--height=360`）。
+ * 用法：`node scripts/gen-algo-thumbs.mjs`（可选 `--height=360` / `--only=id,id`）。
+ *
+ * `--only` 只重渲列出的那几个，**但仍按全量判断孤儿** —— 否则「只补一张」
+ * 会把其它二十几张当成孤儿删掉。
  */
 import { spawn } from 'node:child_process';
 import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises';
@@ -37,6 +40,18 @@ const node = process.execPath;
 
 const heightArg = process.argv.find((a) => a.startsWith('--height='));
 const HEIGHT = heightArg ? Number(heightArg.slice('--height='.length)) : 360;
+
+/** `--only=id,id`：只重渲这几张（不传 = 全量）。 */
+const onlyArg = process.argv.find((a) => a.startsWith('--only='));
+const ONLY = onlyArg
+  ? new Set(
+      onlyArg
+        .slice('--only='.length)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    )
+  : null;
 
 /**
  * 单个生成器最多重试多少次（每次间隔 `RETRY_MS`）。
@@ -104,11 +119,17 @@ try {
   }
 
   const jobs = await page.evaluate(() => window.__lab.thumbJobs());
-  console.log(`[thumbs] ${jobs.length} 个生成器，高度 ${HEIGHT}`);
+  const known = new Set(jobs.map((j) => j.id));
+  const only = ONLY ? jobs.filter((j) => ONLY.has(j.id)) : jobs;
+  if (ONLY) {
+    const unknown = [...ONLY].filter((id) => !known.has(id));
+    if (unknown.length) throw new Error(`--only 里有未知的生成器：${unknown.join(', ')}`);
+  }
+  console.log(`[thumbs] ${only.length}/${jobs.length} 个生成器，高度 ${HEIGHT}`);
 
   const written = [];
   const failed = [];
-  for (const { id, t } of jobs) {
+  for (const { id, t } of only) {
     let dataUrl = null;
     let lit = 0;
     for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
@@ -142,7 +163,6 @@ try {
   }
 
   // 清掉孤儿：对应的生成器已经不存在了（否则会一直躺在构建产物里）。
-  const known = new Set(jobs.map((j) => j.id));
   const stale = (await readdir(OUT_DIR)).filter((f) => f.endsWith('.webp') && !known.has(f.replace(/\.webp$/, '')));
   for (const f of stale) {
     await unlink(`${OUT_DIR}/${f}`);

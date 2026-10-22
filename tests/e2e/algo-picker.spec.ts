@@ -89,10 +89,43 @@ test('弹层把当前生成器标成 current，且选它时确认按钮不可用
   const current = page.locator('[data-testid="algo-picker-item"][data-algo-id="rule110"]');
   await expect(current.locator('[data-testid="algo-picker-current"]')).toHaveCount(1);
 
+  // 回归：「当前」标记与名称必须在**同一行**。曾把名称写成 `display: block`，
+  // 于是标记独占一行、名字另起一行 —— 卡片高度还随有没有标记跳一格。
+  // 判据用几何：标记的垂直中线落在名称的高度带内，且水平上在名称左侧。
+  const badge = (await current.locator('[data-testid="algo-picker-current"]').boundingBox())!;
+  const name = (await current.locator('.ap-name').boundingBox())!;
+  const badgeMid = badge.y + badge.height / 2;
+  expect(badgeMid, '标记的中线不在名称的行内 → 被换了行').toBeGreaterThan(name.y);
+  expect(badgeMid).toBeLessThan(name.y + name.height);
+  expect(badge.x + badge.width).toBeLessThanOrEqual(name.x + 1);
+
   // 选中当前那份 ⇒ 确认按钮禁用（「已是当前生成器」）
   await current.click();
   await expect(page.getByTestId('algo-picker-confirm')).toBeDisabled();
 
   await page.getByTestId('algo-picker-cancel').click();
   await expect(modal).toHaveCount(0);
+});
+
+test('小标题按浏览分组切：四个分组、顺序固定、卡片一张不少', async ({ page }) => {
+  await boot(page);
+  await buildStage(page, {
+    id: 'algo-groups',
+    source: { type: 'algo', generator: 'rule110', params: { width: 128, height: 64 } },
+    end: 8,
+  });
+  await selectClip(page, 'algo-groups');
+  await page.getByTestId('insp-change-algo').click();
+  await expect(page.getByTestId('modal-algo-picker')).toBeVisible();
+
+  const heads = page.locator('[data-testid^="algo-picker-group-"] .ap-group-name');
+  expect(await heads.allInnerTexts()).toEqual(['数学模拟', '几何图形', '物理模拟', '特殊']);
+  // 分组只是切小标题，不筛东西：卡片总数仍等于命中数
+  const total = Number((await page.getByTestId('algo-picker-hit').innerText()).replace(/[^\d]/g, ''));
+  await expect(page.locator('[data-testid="algo-picker-item"]')).toHaveCount(total);
+
+  // 空组不出现：搜到只剩一条分形时，不该留下另外三个空标题占位置
+  await page.getByTestId('algo-picker-search').fill('mandelbrot');
+  await expect(page.locator('[data-testid^="algo-picker-group-"]')).toHaveCount(1);
+  await expect(page.getByTestId('algo-picker-group-math')).toBeVisible();
 });

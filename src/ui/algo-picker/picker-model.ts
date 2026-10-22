@@ -14,9 +14,10 @@
  * 取舍：**没有的维度不出现**。
  */
 
-import { ALGO_CATALOG } from '../../algos/catalog';
+import { ALGO_CATALOG, ALGO_GROUPS, algoGroupOf, type AlgoGroupId } from '../../algos/catalog';
 import { listGenerators } from '../../algos/registry';
 import { resolveLabel } from '../../i18n/label';
+import { pinyinHaystack } from '../../i18n/pinyin';
 import type { MessageKey } from '../../i18n/locales';
 import type { GeneratorDef } from '../../algos/types';
 
@@ -27,6 +28,14 @@ export type AlgoSort = 'default' | 'name';
 
 export const ALGO_SORTS: AlgoSort[] = ['default', 'name'];
 
+/** 分组小标题的文案键。`AlgoGroupId` 是闭联合，索引结果仍是字面量键。 */
+const GROUP_LABEL_KEY: Record<AlgoGroupId, MessageKey> = {
+  math: 'insp.algoGroupMath',
+  geometry: 'insp.algoGroupGeometry',
+  physics: 'insp.algoGroupPhysics',
+  special: 'insp.algoGroupSpecial',
+};
+
 export interface AlgoItem {
   /** 生成器 id，也是工程里 `SourceClip.source.generator` 与缩略图文件名。 */
   id: string;
@@ -36,9 +45,11 @@ export interface AlgoItem {
   desc: string;
   /** 生成器类型：决定「有没有关键帧」等，列表视图里显示。 */
   kind: GeneratorDef['kind'];
+  /** 浏览分组（小标题）。插件没有目录条目 → `DEFAULT_ALGO_GROUP`。 */
+  group: AlgoGroupId;
   /** 提供者：`null` = 内置，否则是插件 id。 */
   pluginId: string | null;
-  /** 搜索用的**预折叠**小写串：id + 名称 + 说明。 */
+  /** 搜索用的**预折叠**小写串：id + 名称 + 说明 + 拼音。 */
   haystack: string;
 }
 
@@ -55,8 +66,10 @@ export function buildItems(tr: Translate): AlgoItem[] {
       name,
       desc,
       kind: e.kind,
+      group: algoGroupOf(e.id),
       pluginId: e.pluginId,
-      haystack: [e.id, name, desc].join(' ').toLowerCase(),
+      // 拼音只补名字：说明是整句，逐句标拼音没人维护也没人这样搜。
+      haystack: [e.id, name, desc, pinyinHaystack(name)].filter(Boolean).join(' ').toLowerCase(),
     });
   }
   return out;
@@ -87,4 +100,31 @@ export function sortItems(items: readonly AlgoItem[], sort: AlgoSort): AlgoItem[
 /** 已知 id → 显示名；未知 id → null（调用方自行退回显示 id）。 */
 export function labelOf(items: readonly AlgoItem[], id: string): string | null {
   return items.find((it) => it.id === id)?.name ?? null;
+}
+
+/** 一组卡片 + 它的小标题。 */
+export interface AlgoGroup {
+  id: AlgoGroupId;
+  label: string;
+  items: AlgoItem[];
+}
+
+/**
+ * 按浏览分组切小标题。
+ *
+ * 空组不出现（筛到只剩分形时不留三个空标题占位置）；组序恒为 `ALGO_GROUPS`
+ * （数学 → 几何 → 物理 → 特殊），与排序无关 —— 排序只决定组内顺序。
+ */
+export function groupItems(items: readonly AlgoItem[], tr: Translate): AlgoGroup[] {
+  const byId = new Map<AlgoGroupId, AlgoItem[]>();
+  for (const it of items) {
+    const list = byId.get(it.group);
+    if (list) list.push(it);
+    else byId.set(it.group, [it]);
+  }
+  return ALGO_GROUPS.filter((g) => byId.has(g)).map((g) => ({
+    id: g,
+    label: tr(GROUP_LABEL_KEY[g]),
+    items: byId.get(g)!,
+  }));
 }

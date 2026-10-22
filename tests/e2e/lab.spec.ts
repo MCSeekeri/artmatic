@@ -238,6 +238,75 @@ test('时钟特效：按拍对齐真的接管了相位（speed 归零后相位�
   expect(result.px).toBeGreaterThan(0);
 });
 
+test('时域特效：抽帧真的冻住、动态模糊真的糊', async ({ page }) => {
+  await boot(page);
+  const result = await page.evaluate(() => {
+    const L = (window as unknown as LabWindow).__lab!;
+    const shot = (): number[] => L.readPixels().data;
+    const count = (a: number[], b: number[]): number => {
+      let d = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+
+    // 运动底图：静止画面上「冻结」和「糊」都是恒等变换，测不出任何东西。
+    L.selectSource('bars');
+    L.setParam('source', 'scroll', 0.6);
+
+    /*
+     * 抽帧：4fps 在 LAB_FPS=30 下是 7.5 帧一个窗口，所以帧 0..7 同窗、帧 8 换窗。
+     *
+     * 这里敢断言**逐字节相等**（而不是像上面那条用 1% 容差）：冻结那一支的
+     * shader 就是 `texture(u_feedback, vUv)` 的一份拷贝，不是重算 —— 同一份
+     * 浮点历史经同一条 float→8bit 路径落盘，没有「两次渲染两个稳定态」的余地。
+     * 而这条断言正是那个 bug 的唯一自动抓手：权重写成 `mix(1.0, box, shutter)`
+     * 时 shutter=0 换算出来恒为 1，看起来是「关掉模糊」，实际一帧都没冻住，
+     * 画面和没加特效一样 —— 不报错、不崩、参数也照常派发。
+     */
+    L.selectEffect('stutter');
+    L.setParam('effect', 'rate', 4);
+    L.setParam('effect', 'shutter', 0);
+    L.renderAt(0, true);
+    const head = shot();
+    let frozen = 0;
+    for (let i = 1; i <= 7; i += 1) {
+      L.renderAt(i / 30, false);
+      if (count(head, shot()) === 0) frozen += 1;
+    }
+    L.renderAt(8 / 30, false);
+    const acrossBoundary = count(head, shot());
+
+    // 全快门：窗口内应当变成「多帧平均」，与冻结相反 —— 相邻帧必须不同。
+    L.setParam('effect', 'shutter', 1);
+    L.renderAt(0, true);
+    const boxHead = shot();
+    L.renderAt(1 / 30, false);
+    const boxStep = count(boxHead, shot());
+
+    // 动态模糊：length=0 是原样通过（权重 1），length=16 必须真的拖出影子。
+    L.selectEffect(null);
+    L.renderAt(0, true);
+    const plain = shot();
+    L.selectEffect('motion-blur');
+    L.setParam('effect', 'length', 0);
+    L.renderAt(0, true);
+    const lenZero = count(plain, shot());
+    L.setParam('effect', 'length', 16);
+    L.renderAt(0, true);
+    for (let i = 1; i <= 4; i += 1) L.renderAt(i / 30, false);
+    const blurred = count(plain, shot());
+
+    return { frozen, acrossBoundary, boxStep, lenZero, blurred, total: plain.length };
+  });
+
+  expect(result.frozen, '窗口内的帧必须逐字节冻结（否则就是没冻住）').toBe(7);
+  expect(result.acrossBoundary, '跨窗口边界必须换帧').toBeGreaterThan(0);
+  expect(result.boxStep, '全快门时窗口内应当逐帧累积').toBeGreaterThan(0);
+  // 容差 1%：与「同帧两渲的两个稳定态」区分开（那条实测 0.06%）。
+  expect(result.lenZero / result.total, 'length=0 应当等于原样通过').toBeLessThan(0.01);
+  expect(result.blurred / result.total, 'length=16 没有把运动摊开 → 参数没接上').toBeGreaterThan(0.02);
+});
+
 test('pre-pass 的参数真的生效（blur 的 radius 只活在 pre-pass 里）', async ({ page }) => {
   await boot(page);
   const result = await page.evaluate(() => {

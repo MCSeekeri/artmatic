@@ -27,6 +27,7 @@ import {
   type Track,
   type VisualTrack,
 } from '../core/schema';
+import { getGenerator } from '../algos/registry';
 import type { SpectrumSource } from '../engine/spectrum-texture';
 import { SPECTRUM_BINS } from '../audio/spectrum';
 import type { AudioFeatureSource } from '../algos/feature-source';
@@ -105,6 +106,10 @@ function staticFeatures(rms: number): AudioFeatureSource {
  *
  * 不加特效层（缩略图要展示的是生成器本身），所以不涉及 `buildStack` 的
  * adjustment-layer 排序问题。
+ *
+ * 回放型（闪回）是唯一的例外：它的画面来自「片段之前」，单条 0 起的轨上什么
+ * 都没有（缩略图会是一张空图，而空图正是这条素材守卫要挡的东西）。所以给它
+ * 一个靠后的片段头 + 下面垫一条彩条轨，让它有「之前」可倒放。
  */
 function thumbProject(
   defId: string,
@@ -112,11 +117,19 @@ function thumbProject(
   size: ThumbSize,
   duration: number,
 ): Project {
+  const isRecall = getGenerator(defId)?.kind === 'recall';
   const clip: SourceClip = {
     id: 'thumb-src',
     label: 'src',
     kind: 'source',
-    start: 0,
+    /*
+     * 回放型：片段头放在采样点**前一秒左右**。
+     *
+     * 倒放的进度 0 对应「最靠近片段头的过去」，进度 1 对应窗口开头 ——
+     * 所以越靠近片段头截，回放到的画面越靠后、越有内容。放在 40% 处截会
+     * 只看到垫底素材的第 0 秒（几乎什么都没有）。
+     */
+    start: isRecall ? Math.max(0.5, duration - 1.05) : 0,
     end: duration,
     fadeSec: 0,
     curves: {},
@@ -130,6 +143,28 @@ function thumbProject(
   };
   const track: VisualTrack = { kind: 'visual', id: 'thumb-t', name: 'SRC', enabled: true, clips: [clip] };
   const tracks: Track[] = [track];
+  if (isRecall) {
+    tracks.push({
+      kind: 'visual',
+      id: 'thumb-feed',
+      name: 'FEED',
+      enabled: true,
+      clips: [
+        {
+          ...clip,
+          id: 'thumb-feed-clip',
+          label: 'feed',
+          start: 0,
+          /*
+           * 垫底素材要**明显不是另一张缩略图**：彩条与 `bars` 那张一模一样，
+           * 并排看会以为闪回坏了。流场是「一段处理过的影像」的合理替身，
+           * 且在 5 秒处已经有结构（它的采样时刻是 4 秒）。
+           */
+          source: { type: 'algo', generator: 'scene-flow', params: {} },
+        },
+      ],
+    });
+  }
   return {
     schemaVersion: SCHEMA_VERSION,
     name: 'algo-thumb',

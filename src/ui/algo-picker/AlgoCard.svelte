@@ -48,11 +48,17 @@
     <!--
       「当前生效的那条」的标记放在 meta 里、**不依赖缩略图** —— 插件生成器没有
       静态缩略图，放缩略图上等于没有标记（点名不出来的状态）。
+
+      标记与名称同在一个 flex 行里：名称原来是 `display: block`，标记又是它前面的
+      独立块，于是「当前」自己占一行、名字另起一行 —— 卡片高度还会随有没有标记
+      跳一格。行容器用 `baseline` 对齐，中文名与 11px 的小标签才在同一个基线上。
     -->
-    {#if current}
-      <span class="ap-cur" data-testid="algo-picker-current">{tr('insp.algoPickerCurrent')}</span>
-    {/if}
-    <span class="ap-name">{item.name}</span>
+    <span class="ap-title">
+      {#if current}
+        <span class="ap-cur" data-testid="algo-picker-current">{tr('insp.algoPickerCurrent')}</span>
+      {/if}
+      <span class="ap-name">{item.name}</span>
+    </span>
     {#if item.desc}<span class="ap-desc">{item.desc}</span>{/if}
     {#if view === 'list'}
       <span class="ap-sub">
@@ -141,9 +147,15 @@
     text-align: center;
   }
   /* 「当前」小标签：始终可见（不依赖缩略图）。 */
+  .ap-title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    min-width: 0;
+  }
   .ap-cur {
-    display: inline-block;
-    margin-bottom: 3px;
+    /* 名称过长时先压缩名称，标记本身不缩（缩了会看到「当…」）。 */
+    flex-shrink: 0;
     padding: 0 5px;
     border: 1px solid var(--border);
     border-radius: 2px;
@@ -158,6 +170,7 @@
   }
   .ap-name {
     display: block;
+    min-width: 0;
     color: var(--text-primary);
     font-size: var(--fs-sm);
     font-weight: 600;

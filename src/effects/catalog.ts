@@ -69,6 +69,17 @@ export interface EffectCatalogEntry {
   category: EffectCategory;
   /** 叠加型：在输入之上加东西，而不是改写输入。 */
   overlay?: boolean;
+  /**
+   * 缩略图的参数覆盖（与该特效的默认值合并）。
+   *
+   * **「默认参数下这张定格画面看不出特效」的才要写。** 时域特效是典型：`stutter`
+   * 在 12fps 下窗口只有两三帧，缩略图与原始画面几乎逐像素相同 —— 卡片等于没有图。
+   * 与 `algos/catalog.ts` 的同名字段一个用途（那边的理由是「第 0 秒是空屏」）。
+   *
+   * 键必须是该特效真的有的参数：写错的键会被 `?? defaultValue` 静默忽略，
+   * 于是又回到「卡片是空的」而没人报错（`effect-catalog.test.ts` 守这一条）。
+   */
+  previewParams?: Record<string, number | string>;
 }
 
 /**
@@ -116,6 +127,7 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   'liquid-light': { base: 'photo', descKey: 'fx.desc.liquidLight', category: 'blur', overlay: true },
   melt: { base: 'mandel', descKey: 'fx.desc.melt', category: 'glitch' },
   mirror: { base: 'photo', descKey: 'fx.desc.mirror', category: 'geometry' },
+  'motion-blur': { base: 'scroll', descKey: 'fx.desc.motionBlur', category: 'blur' },
   'motion-mask': { base: 'scroll', descKey: 'fx.desc.motionMask', category: 'blur' },
   'neon-edges': { base: 'mandel', descKey: 'fx.desc.neonEdges', category: 'style', overlay: true },
   'optical-flow': { base: 'scroll', descKey: 'fx.desc.opticalFlow', category: 'style' },
@@ -145,6 +157,14 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   solarize: { base: 'ramp', descKey: 'fx.desc.solarize', category: 'color' },
   stereoscopic: { base: 'photo', descKey: 'fx.desc.stereoscopic', category: 'style' },
   strobe: { base: 'mandel', descKey: 'fx.desc.strobe', category: 'glitch' },
+  stutter: {
+    base: 'scroll',
+    descKey: 'fx.desc.stutter',
+    category: 'style',
+    // 2fps + 全快门：定格画面的窗口跨 15 帧，拖影才在这一帧里读得出来。
+    // 默认的 12fps 窗口只有 2.5 帧，缩略图与底图几乎一样。
+    previewParams: { rate: 2, shutter: 1 },
+  },
   'stylize-glitch': { base: 'mandel', descKey: 'fx.desc.stylizeGlitch', category: 'glitch' },
   swirl: { base: 'rings', descKey: 'fx.desc.swirl', category: 'geometry' },
   thermal: { base: 'ramp', descKey: 'fx.desc.thermal', category: 'color' },

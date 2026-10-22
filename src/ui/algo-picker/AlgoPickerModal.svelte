@@ -26,6 +26,7 @@
     ALGO_SORTS,
     buildItems,
     filterItems,
+    groupItems,
     labelOf,
     sortItems,
     type AlgoSort,
@@ -79,7 +80,14 @@
     return buildItems(tr);
   });
   const visible = $derived(sortItems(filterItems(items, { query }), sort));
-  const cards = $derived(visible.map((it) => ({ item: it, thumb: algoThumbUrl(it.id) })));
+  /** 分组后的卡片。筛选与排序先完成，分组只负责切小标题（空组不出现）。 */
+  const groups = $derived(
+    groupItems(visible, tr).map((g) => ({
+      id: g.id,
+      label: g.label,
+      cards: g.items.map((it) => ({ item: it, thumb: algoThumbUrl(it.id) })),
+    })),
+  );
   /** 选中的还是当前那一个 → 没有任何改动，确认无意义。 */
   const unchanged = $derived(selected === current);
   const selectedLabel = $derived(labelOf(items, selected) ?? selected);
@@ -160,25 +168,39 @@
       <p class="ap-warn" data-testid="algo-picker-warn">{tr('insp.algoPickerWarn')}</p>
     {/if}
 
-    <!-- 主体 -->
-    <div class="ap-body" class:ap-grid={view === 'grid'} class:ap-list={view === 'list'}>
-      {#if cards.length === 0}
+    <!-- 主体：小标题 + 分隔线 + 该组自己的卡片网格 -->
+    <div class="ap-body">
+      {#if visible.length === 0}
         <p class="ap-empty" data-testid="algo-picker-empty">
           {tr('insp.algoPickerEmpty')}
           <br /><span class="ap-empty-hint">{tr('insp.pickerEmptyHint')}</span>
         </p>
       {:else}
-        {#each cards as c (c.item.id)}
-          <div class="ap-slot">
-            <AlgoCard
-              item={c.item}
-              {view}
-              thumb={c.thumb}
-              selected={selected === c.item.id}
-              current={current === c.item.id}
-              onpick={(id) => (selected = id)}
-            />
-          </div>
+        {#each groups as g (g.id)}
+          <section class="ap-group" data-testid={`algo-picker-group-${g.id}`}>
+            <h3 class="ap-group-head">
+              <span class="ap-group-name">{g.label}</span>
+              <span class="ap-group-n">{g.cards.length}</span>
+            </h3>
+            <div
+              class="ap-tiles"
+              class:ap-tiles-grid={view === 'grid'}
+              class:ap-tiles-list={view === 'list'}
+            >
+              {#each g.cards as c (c.item.id)}
+                <div class="ap-slot">
+                  <AlgoCard
+                    item={c.item}
+                    {view}
+                    thumb={c.thumb}
+                    selected={selected === c.item.id}
+                    current={current === c.item.id}
+                    onpick={(id) => (selected = id)}
+                  />
+                </div>
+              {/each}
+            </div>
+          </section>
         {/each}
       {/if}
     </div>
@@ -247,33 +269,59 @@
 
   /* ---------------------------------------------------------------- 主体 */
   .ap-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-5);
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: var(--sp-4) var(--sp-5);
   }
-  .ap-body.ap-grid {
+
+  /* 小标题：名称 + 条数 + 一条填满剩余宽度的分隔线。 */
+  .ap-group-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 0 0 var(--sp-3);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .ap-group-head::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .ap-group-n {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 400;
+  }
+
+  .ap-tiles {
     display: grid;
+    align-content: start;
+  }
+  .ap-tiles.ap-tiles-grid {
     grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
     gap: var(--sp-4);
-    align-content: start;
   }
   /*
    * 列表形态：**宽度够就并两列**（与两个既有选择器同一个理由 —— 一排到底在
    * 920px 宽的模态里只用掉左半幅）。`auto-fill` + 最小 340px：窄屏自然退回一列。
    */
-  .ap-body.ap-list {
-    display: grid;
+  .ap-tiles.ap-tiles-list {
     grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
     gap: var(--sp-2) var(--sp-4);
-    align-content: start;
   }
   .ap-slot {
     min-width: 0;
   }
 
   .ap-empty {
-    grid-column: 1 / -1;
     margin: var(--sp-6) 0;
     color: var(--text-muted);
     font-size: var(--fs-sm);

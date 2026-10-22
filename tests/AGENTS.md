@@ -33,6 +33,11 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
     必须有格子在变」（这条直接抓「冻死」）。
   - `tests/e2e/algo-sim.spec.ts` —— sim 的渲染断言。**sim 一律用 `settle`，
     不要用 `waitForSourceReady`**（后者的 minMean 判据是给整幅非黑准备的）。
+  - `tests/unit/flashback.test.ts` + `tests/e2e/algo-flashback.spec.ts` —— 闪回
+    （`recall` 型）。单测钉窗口与时间映射（**窗口永不越过片段头**是递归良基的前提）；
+    E2E 的判据是「闪回画出的帧 == 垫底素材在**映射出的那个过去 t** 上的帧」，并另有一条
+    **方向断言**（中段必须等于 2 秒前而不是 5 秒）—— 只断「画面变了」的话，一个正放的
+    错误实现照样过。
   - `tests/unit/curve-meta.test.ts` —— 曲线编辑器的参数量纲与「能不能打关键帧」
     判据（realtime 全部 range / bake 只有 speed / sim 全不可 / 特效按 instanceId
     展开 / 音频只有 gain / 已失效曲线仍要列出来）。它与 `Inspector.svelte::keyframable`

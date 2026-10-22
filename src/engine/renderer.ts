@@ -184,9 +184,21 @@ export class Renderer {
    * 渲染入口，加必选参数会改变既有调用行为。
    */
   renderFrame(project: Project, t: number, opts?: BuildStackOptions): void {
+    this.currentProject = project;
     if (!this.exportSize) this.syncSize(project.resolution);
     this.compositor.render(project, t, opts);
   }
+
+  /**
+   * 最近一次 `renderFrame` 收到的工程 —— 闪回（`recall` 型生成器）重渲「过去的
+   * 整帧」时要用的就是它。
+   *
+   * 为什么从这儿取而不是注入一个 `getProject()`：容器给的那个只保证拍网格 /
+   * 种子 / 帧率（`render-core.ts` 的 `RenderCoreProject`），重渲却要整棵树
+   * （轨道、素材、分辨率）。而 `renderFrame` 本来就每帧收到完整工程，它就是
+   * 「眼下这一帧用的是哪份工程」的**唯一权威**——离屏缩略图那几台也自动正确。
+   */
+  currentProject: Project | null = null;
 
   /**
    * 注入「跳帧后必须跟着重新定位」的钩子。目前只有算法运行时

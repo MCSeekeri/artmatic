@@ -13,6 +13,10 @@
  * **明确报错**：缺条目、孤儿条目、文案键解析不了、`previewParams` 写了不存在
  * 的参数键、文案超过 44 字 —— 全部会红。
  *
+ * 表里的 `group` 是选择器的**浏览分组**（数学模拟 / 几何图形 / 物理模拟 / 特殊），
+ * 决定卡片落在哪个小标题下。**它是必填字段**（漏了编译报错）；运行期只有插件
+ * 走 `algoGroupOf` 的兜底 —— 插件没有目录条目，一律落 `DEFAULT_ALGO_GROUP`。
+ *
  * ## 为什么预览要有「配方」而不是直接用默认值
  *
  * **因为默认值在 t = 0 时对 sim / bake 是全黑的。** 元胞自动机、反应扩散、
@@ -57,9 +61,32 @@
 
 import type { MessageKey } from '../i18n/locales';
 
+/**
+ * 生成器的**浏览分组**（选择器里的小标题）。
+ *
+ * 与特效的 `EffectCategory` 不同，它是**浏览维度**而不是技术分类：判据是
+ * 「用户想找的东西长什么样」，所以 `sandpile`（物理）与 `cyclic-ca`（数学）
+ * 虽然都是网格上的规则，却分在两处。技术分类（bake / sim / realtime）在卡片
+ * 上另有标记，不占小标题 —— 那个维度用户不关心。
+ */
+export type AlgoGroupId = 'math' | 'geometry' | 'physics' | 'special';
+
+/** 小标题的展示顺序。 */
+export const ALGO_GROUPS: AlgoGroupId[] = ['math', 'geometry', 'physics', 'special'];
+
+/**
+ * 没有分组信息的生成器（插件）落在哪。
+ *
+ * 与 `DEFAULT_EFFECT_CATEGORY` 同一条理由：必须是一个具体值而不是 `null`，
+ * 否则那些卡片在选择器里**一条都看不见**，看起来像加载失败。
+ */
+export const DEFAULT_ALGO_GROUP: AlgoGroupId = 'special';
+
 export interface AlgoCatalogEntry {
   /** 一句话说明。存**文案键**，理由同 `effects/types.ts` 的 `labelKey`。 */
   descKey: MessageKey;
+  /** 浏览分组。必填 —— 漏了会在选择器里掉出全部小标题之外。 */
+  group: AlgoGroupId;
   /**
    * 预览的采样时刻（秒）。
    *
@@ -85,26 +112,26 @@ const RT_TIME = 4;
  * `intRes` 提到最高档：缩略图是**唯一一次**渲染，没有「拖一下滑杆重渲」的
  * 机会，所以直接按质量优先。实测 640×360 下没有任何生成器会慢到需要降档。
  */
-function rt(descKey: MessageKey, previewT: number = RT_TIME): AlgoCatalogEntry {
-  return { descKey, previewT, previewParams: { intRes: '720' } };
+function rt(group: AlgoGroupId, descKey: MessageKey, previewT: number = RT_TIME): AlgoCatalogEntry {
+  return { descKey, group, previewT, previewParams: { intRes: '720' } };
 }
 
 export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   /* ---------------------------------------------------------------- bake */
-  rule110: { descKey: 'algo.desc.rule110', previewT: 8 },
-  bifurcation: { descKey: 'algo.desc.bifurcation', previewT: 6 },
-  lsystem: { descKey: 'algo.desc.lsystem', previewT: 10 },
+  rule110: { descKey: 'algo.desc.rule110', group: 'math', previewT: 8 },
+  bifurcation: { descKey: 'algo.desc.bifurcation', group: 'math', previewT: 6 },
+  lsystem: { descKey: 'algo.desc.lsystem', group: 'math', previewT: 10 },
   // `'value'` 揭示按 speed 推进，要到 speed 秒把 255 走完才全长出来。
-  'chaos-game': { descKey: 'algo.desc.chaosGame', previewT: 8 },
-  dla: { descKey: 'algo.desc.dla', previewT: 10 },
+  'chaos-game': { descKey: 'algo.desc.chaosGame', group: 'math', previewT: 8 },
+  dla: { descKey: 'algo.desc.dla', group: 'physics', previewT: 10 },
 
   /* ----------------------------------------------------------------- sim */
-  'game-of-life': { descKey: 'algo.desc.gameOfLife', previewT: 25 },
-  'langtons-ant': { descKey: 'algo.desc.langtonsAnt', previewT: 30 },
-  'reaction-diffusion': { descKey: 'algo.desc.reactionDiffusion', previewT: 40 },
-  'brians-brain': { descKey: 'algo.desc.briansBrain', previewT: 6 },
-  'cyclic-ca': { descKey: 'algo.desc.cyclicCa', previewT: 8 },
-  sandpile: { descKey: 'algo.desc.sandpile', previewT: 20 },
+  'game-of-life': { descKey: 'algo.desc.gameOfLife', group: 'math', previewT: 25 },
+  'langtons-ant': { descKey: 'algo.desc.langtonsAnt', group: 'math', previewT: 30 },
+  'reaction-diffusion': { descKey: 'algo.desc.reactionDiffusion', group: 'physics', previewT: 40 },
+  'brians-brain': { descKey: 'algo.desc.briansBrain', group: 'math', previewT: 6 },
+  'cyclic-ca': { descKey: 'algo.desc.cyclicCa', group: 'math', previewT: 8 },
+  sandpile: { descKey: 'algo.desc.sandpile', group: 'physics', previewT: 20 },
   /*
    * 40 秒 = 1200 步（默认 rate 30）。此时主枝带侧枝、枝隙清楚，晶体半径约
    * 90 格 —— 占钉扎半径的六成，画幅里留得住呼吸。
@@ -113,29 +140,29 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    * 晶体变成一整个实心圆盘。这是 Reiter 模型的固有行为（"growth limited
    * by radius"），不是 bug —— 想要更大的晶体就调大「网格」。
    */
-  snowflake: { descKey: 'algo.desc.snowflake', previewT: 40 },
-  lenia: { descKey: 'algo.desc.lenia', previewT: 20 },
-  wireworld: { descKey: 'algo.desc.wireworld', previewT: 10 },
-  buddhabrot: { descKey: 'algo.desc.buddhabrot', previewT: 30 },
+  snowflake: { descKey: 'algo.desc.snowflake', group: 'physics', previewT: 40 },
+  lenia: { descKey: 'algo.desc.lenia', group: 'math', previewT: 20 },
+  wireworld: { descKey: 'algo.desc.wireworld', group: 'math', previewT: 10 },
+  buddhabrot: { descKey: 'algo.desc.buddhabrot', group: 'math', previewT: 30 },
 
   /* ------------------------------------------------------------ realtime */
   // 基础图案：默认参数下与 t 无关（滚动 / 旋转默认 0），0 秒截即可
-  bars: rt('algo.desc.bars', 0),
-  grid: rt('algo.desc.grid', 0),
-  gradient: rt('algo.desc.gradient', 0),
-  mandelbrot: rt('algo.desc.mandelbrot', 0),
-  menger: rt('algo.desc.menger'),
-  mandelbulb: rt('algo.desc.mandelbulb'),
-  apollonian: rt('algo.desc.apollonian'),
-  newton: rt('algo.desc.newton', 0),
-  kleinian: rt('algo.desc.kleinian', 0),
-  lyapunov: rt('algo.desc.lyapunov', 0),
+  bars: rt('geometry', 'algo.desc.bars', 0),
+  grid: rt('geometry', 'algo.desc.grid', 0),
+  gradient: rt('geometry', 'algo.desc.gradient', 0),
+  mandelbrot: rt('math', 'algo.desc.mandelbrot', 0),
+  menger: rt('math', 'algo.desc.menger'),
+  mandelbulb: rt('math', 'algo.desc.mandelbulb'),
+  apollonian: rt('math', 'algo.desc.apollonian'),
+  newton: rt('math', 'algo.desc.newton', 0),
+  kleinian: rt('math', 'algo.desc.kleinian', 0),
+  lyapunov: rt('math', 'algo.desc.lyapunov', 0),
 
-  'scene-ripple': rt('algo.desc.sceneRipple'),
-  'scene-field': rt('algo.desc.sceneField'),
-  'scene-datamosh': rt('algo.desc.sceneDatamosh'),
-  'scene-flow': rt('algo.desc.sceneFlow'),
-  'scene-strands': rt('algo.desc.sceneStrands'),
+  'scene-ripple': rt('geometry', 'algo.desc.sceneRipple'),
+  'scene-field': rt('physics', 'algo.desc.sceneField'),
+  'scene-datamosh': rt('special', 'algo.desc.sceneDatamosh'),
+  'scene-flow': rt('physics', 'algo.desc.sceneFlow'),
+  'scene-strands': rt('physics', 'algo.desc.sceneStrands'),
   /*
    * 体积烟雾：t 无关（噪声沿 `-wind·t` 平移，没有「长出来」的过程），4 秒只是
    * 让涡纹走到一个不像 t = 0 的相位。
@@ -145,10 +172,24 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    */
   smoke: {
     descKey: 'algo.desc.smoke',
+    group: 'physics',
     previewT: 4,
     previewParams: { intRes: '720', bgMode: 'solid', bg: '#0a0c11' },
   },
+
+  /* ------------------------------------------------------------- recall */
+  /*
+   * 闪回的画面来自「片段之前的整帧」，所以缩略图**必须**给它一些过去：
+   * `algo-thumb-renderer.ts` 会给这类生成器垫一条彩条轨、把片段头往后挪。
+   * 采样时刻要落在片段头（约 40% 处）之后。
+   */
+  flashback: { descKey: 'algo.desc.flashback', group: 'special', previewT: 6 },
 };
+
+/** 某个生成器的浏览分组。插件没有目录条目 → 落在 `DEFAULT_ALGO_GROUP`。 */
+export function algoGroupOf(id: string): AlgoGroupId {
+  return ALGO_CATALOG[id]?.group ?? DEFAULT_ALGO_GROUP;
+}
 
 /**
  * 取某个生成器的预览配方（含全局参数合并）。

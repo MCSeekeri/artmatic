@@ -129,7 +129,6 @@ export const inspector = {
   'insp.pickerSort': '排序',
   'insp.pickerSortDefault': '默认顺序',
   'insp.pickerSortName': '名称',
-  'insp.pickerSortCategory': '分类',
   'insp.pickerSelected': '已选',
   'insp.pickerSelCount': '已选 {n} 个',
   'insp.pickerApply': '保存并应用',
@@ -155,6 +154,12 @@ export const inspector = {
   'insp.algoPickerHit': '{n} 个生成器',
   'insp.algoPickerEmpty': '没有符合条件的生成器。',
   'insp.algoPickerSortDefault': '默认顺序',
+
+  /* 算法选择器的小标题。分类依据见 `algos/catalog.ts` 的 `AlgoGroupId`。 */
+  'insp.algoGroupMath': '数学模拟',
+  'insp.algoGroupGeometry': '几何图形',
+  'insp.algoGroupPhysics': '物理模拟',
+  'insp.algoGroupSpecial': '特殊',
 
   /* ------------------------------------------------ 片段动作 */
   'insp.editTypography': '编辑排版',

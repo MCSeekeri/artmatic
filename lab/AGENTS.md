@@ -19,3 +19,8 @@
   generator id 由 lab 内层 resolver 拦截；**不注册进 `algos/registry.ts`、不改 `schema.ts`**。
 - 分辨率档位靠 `renderer.setExportSize()` 钉死后备缓冲 —— `preview-size.ts` 的
   `k = Math.min(1, scale)` **只缩不放**，中间舞台列在常见视口下会被悄悄缩小。
+- **回放型生成器（闪回）在 lab 里要自带「之前的素材」**：`build-project.ts` 给它
+  垫一条彩条轨（`FEED`）并把片段头挪到 `LAB_RECALL_START`（6 秒）。垫底必须用
+  **已注册的生成器** —— 回放帧由 `render/recall.ts` 自己那台合成器重渲，它不认识
+  `lab:` 伪 id。`selectSource` 还会在播放头停在片段头之前时往前推一把，否则
+  选中它是「整屏透明」，看起来与坏掉一模一样。

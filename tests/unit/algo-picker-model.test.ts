@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   buildItems,
   filterItems,
+  groupItems,
   labelOf,
   sortItems,
   type AlgoItem,
 } from '../../src/ui/algo-picker/picker-model';
 import { listGenerators } from '../../src/algos/registry';
+import { ALGO_GROUPS } from '../../src/algos/catalog';
 import type { MessageKey } from '../../src/i18n/locales';
 
 /**
@@ -99,5 +101,29 @@ describe('labelOf', () => {
   it('已知 id → 显示名；未知 id → null（调用方自行退回显示 id）', () => {
     expect(labelOf(items, 'snowflake')).toBe('雪花');
     expect(labelOf(items, 'no-such')).toBeNull();
+  });
+});
+
+describe('groupItems', () => {
+  const items = buildItems(tr);
+
+  it('组序恒为 ALGO_GROUPS，且把全部条目**恰好一次**分完', () => {
+    const groups = groupItems(items, tr);
+    expect(groups.map((g) => g.id)).toEqual([...ALGO_GROUPS]);
+    expect(groups.reduce((n, g) => n + g.items.length, 0)).toBe(items.length);
+    for (const g of groups) {
+      for (const it of g.items) expect(it.group).toBe(g.id);
+    }
+  });
+
+  it('空组不出现（筛到只剩一条时不留下另外三个空标题）', () => {
+    const one = items.filter((i) => i.id === 'mandelbrot');
+    const groups = groupItems(one, tr);
+    expect(groups.length).toBe(1);
+    expect(groups[0]!.items.map((i) => i.id)).toEqual(['mandelbrot']);
+  });
+
+  it('每个生成器都落在一个已知分组里（没有掉出小标题之外的）', () => {
+    for (const it of items) expect(ALGO_GROUPS).toContain(it.group);
   });
 });

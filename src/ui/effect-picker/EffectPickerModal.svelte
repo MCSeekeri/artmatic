@@ -27,6 +27,7 @@
     buildItems,
     categoryChips,
     filterItems,
+    groupItems,
     sortItems,
     tagChips,
     toggleIn,
@@ -61,17 +62,22 @@
   });
   const filter = $derived<FilterState>({ query, categories, tags });
   const visible = $derived.by(() => sortItems(filterItems(items, filter), sort));
-  const cards = $derived(visible.map((it) => ({ item: it, thumb: thumbUrl(it.id) })));
+  /**
+   * 分组后的卡片。**筛选与排序都在分组之前完成** —— 分组只是把结果装进小标题
+   * 里，不参与筛选：空组自然消失（`groupItems` 只回有项的组）。
+   */
+  const groups = $derived(
+    groupItems(visible, tr).map((g) => ({
+      id: g.id,
+      label: g.label,
+      cards: g.items.map((it) => ({ item: it, thumb: thumbUrl(it.id) })),
+    })),
+  );
   const filterCount = $derived(activeFilterCount(filter));
   const sortOptions = $derived(
     PICKER_SORTS.map((s) => ({
       value: s,
-      label:
-        s === 'name'
-          ? tr('insp.pickerSortName')
-          : s === 'category'
-            ? tr('insp.pickerSortCategory')
-            : tr('insp.pickerSortDefault'),
+      label: s === 'name' ? tr('insp.pickerSortName') : tr('insp.pickerSortDefault'),
     })),
   );
 
@@ -210,24 +216,38 @@
       </div>
     {/if}
 
-    <!-- 主体 -->
-    <div class="fxp-body" class:fxp-grid={view === 'grid'} class:fxp-list={view === 'list'}>
-      {#if cards.length === 0}
+    <!-- 主体：小标题 + 分隔线 + 该组自己的卡片网格 -->
+    <div class="fxp-body">
+      {#if visible.length === 0}
         <p class="fxp-none" data-testid="effect-picker-none">
           {tr('insp.pickerNone')}
           <br /><span class="fxp-none-hint">{tr('insp.pickerEmptyHint')}</span>
         </p>
       {:else}
-        {#each cards as c (c.item.id)}
-          <div class="fxp-slot">
-            <EffectCard
-              item={c.item}
-              {view}
-              thumb={c.thumb}
-              selected={selected.includes(c.item.id)}
-              onpick={toggleSelect}
-            />
-          </div>
+        {#each groups as g (g.id)}
+          <section class="fxp-group" data-testid={`effect-picker-group-${g.id}`}>
+            <h3 class="fxp-group-head">
+              <span class="fxp-group-name">{g.label}</span>
+              <span class="fxp-group-n">{g.cards.length}</span>
+            </h3>
+            <div
+              class="fxp-tiles"
+              class:fxp-tiles-grid={view === 'grid'}
+              class:fxp-tiles-list={view === 'list'}
+            >
+              {#each g.cards as c (c.item.id)}
+                <div class="fxp-slot">
+                  <EffectCard
+                    item={c.item}
+                    {view}
+                    thumb={c.thumb}
+                    selected={selected.includes(c.item.id)}
+                    onpick={toggleSelect}
+                  />
+                </div>
+              {/each}
+            </div>
+          </section>
         {/each}
       {/if}
     </div>
@@ -333,16 +353,45 @@
 
   /* ---------------------------------------------------------------- 主体 */
   .fxp-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-5);
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: var(--sp-4) var(--sp-5);
   }
-  .fxp-body.fxp-grid {
+
+  /* 小标题：名称 + 条数 + 一条填满剩余宽度的分隔线。 */
+  .fxp-group-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 0 0 var(--sp-3);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .fxp-group-head::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .fxp-group-n {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 400;
+  }
+
+  .fxp-tiles {
     display: grid;
+    align-content: start;
+  }
+  .fxp-tiles.fxp-tiles-grid {
     grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
     gap: var(--sp-4);
-    align-content: start;
   }
   /*
    * 列表形态：**宽度够就并两列**。
@@ -353,11 +402,9 @@
    * < 约 720px）自然退回一列；用 `auto-fill` 而不是 `auto-fit`，条目少时
    * 不留一条被拉伸的空白列。
    */
-  .fxp-body.fxp-list {
-    display: grid;
+  .fxp-tiles.fxp-tiles-list {
     grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
     gap: var(--sp-2) var(--sp-4);
-    align-content: start;
   }
   .fxp-slot {
     min-width: 0;

@@ -5,12 +5,13 @@ import {
   buildItems,
   categoryChips,
   filterItems,
+  groupItems,
   sortItems,
   tagChips,
   toggleIn,
   type EffectItem,
 } from '../../src/ui/effect-picker/picker-model';
-import { EFFECT_TAGS } from '../../src/effects/catalog';
+import { EFFECT_CATEGORIES, EFFECT_TAGS } from '../../src/effects/catalog';
 import { LOCALES } from '../../src/i18n/locales';
 import type { MessageKey } from '../../src/i18n/locales';
 
@@ -64,6 +65,19 @@ describe('选择器模型：搜索', () => {
   it('按 id 搜（知道上游名字的人直接打 id）', () => {
     const hit = filterItems(ITEMS, { ...EMPTY_FILTER, query: 'kino' });
     expect(hit.map((i) => i.id).sort()).toEqual(['kino-datamosh', 'kino-feedback']);
+  });
+
+  it('按拼音搜：全拼 / 连写 / 首字母都能命中', () => {
+    const hit = (q: string): string[] => filterItems(ITEMS, { ...EMPTY_FILTER, query: q }).map((i) => i.id);
+    expect(hit('xiang su hua')).toContain('pixelate');
+    expect(hit('xiangsuhua')).toContain('pixelate');
+    expect(hit('xsh')).toContain('pixelate');
+  });
+
+  it('拼音连写不会误伤：搜 `gao si mo hu` 只该落在高斯模糊，而不是命中全部', () => {
+    const hit = filterItems(ITEMS, { ...EMPTY_FILTER, query: 'gao si mo hu' });
+    expect(hit.map((i) => i.id)).toContain('blur');
+    expect(hit.length).toBeLessThan(ITEMS.length);
   });
 
   it('按说明里的词搜（搜「黑白色」能搜到去饱和度）', () => {
@@ -131,17 +145,6 @@ describe('选择器模型：排序', () => {
     }
   });
 
-  it('分类排序按分类表的顺序分组', () => {
-    const sorted = sortItems(ITEMS, 'category');
-    const order = ['color', 'geometry', 'glitch', 'style', 'blur', 'signal'];
-    let cursor = -1;
-    for (const it of sorted) {
-      const at = order.indexOf(it.category);
-      expect(at).toBeGreaterThanOrEqual(cursor);
-      cursor = at;
-    }
-  });
-
   it('默认顺序不动原数组，且不改动入参', () => {
     const input = ITEMS.slice(0, 10);
     const snapshot = input.map((i) => i.id);
@@ -149,6 +152,30 @@ describe('选择器模型：排序', () => {
     expect(out.map((i) => i.id)).toEqual(snapshot);
     sortItems(input, 'name');
     expect(input.map((i) => i.id)).toEqual(snapshot); // 排序是拷贝，不是原地
+  });
+});
+
+describe('选择器模型：分组', () => {
+  it('组序恒为分类表顺序，且把全部条目**恰好一次**分完', () => {
+    const groups = groupItems(ITEMS, tr);
+    expect(groups.map((g) => g.id)).toEqual([...EFFECT_CATEGORIES]);
+    expect(groups.reduce((n, g) => n + g.items.length, 0)).toBe(ITEMS.length);
+    for (const g of groups) {
+      for (const it of g.items) expect(it.category).toBe(g.id);
+    }
+  });
+
+  it('空组不出现，且组内保持传入顺序（排序只决定组内顺序）', () => {
+    const only = ITEMS.filter((i) => i.category === 'glitch');
+    const groups = groupItems(only, tr);
+    expect(groups.map((g) => g.id)).toEqual(['glitch']);
+    expect(groups[0]!.items.map((i) => i.id)).toEqual(only.map((i) => i.id));
+  });
+
+  it('小标题是翻译过的分类名（不是文案键）', () => {
+    for (const g of groupItems(ITEMS, tr)) {
+      expect(g.label.startsWith('fx.'), `${g.id} 的小标题没翻译`).toBe(false);
+    }
   });
 });
 

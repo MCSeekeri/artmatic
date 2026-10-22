@@ -158,7 +158,8 @@ function thumbProject(defId: string, base: ThumbBaseId, size: ThumbSize, duratio
         instanceId: `thumb-${defId}`,
         defId,
         enabled: true,
-        values: {},
+        // 默认值就能读出特效的走空表；时域那类要目录给配方（见 `EffectCatalogEntry.previewParams`）。
+        values: { ...(EFFECT_CATALOG[defId]?.previewParams ?? {}) },
       },
     ],
   };

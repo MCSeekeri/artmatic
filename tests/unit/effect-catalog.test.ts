@@ -110,6 +110,25 @@ describe('缩略图底图', () => {
     // 底图 id 不许和真生成器撞（撞了就会被 resolver 误判成真生成器）
     for (const b of THUMB_BASES) expect(isThumbGeneratorId(b.id)).toBe(false);
   });
+
+  /*
+   * `previewParams` 的键必须是这个特效**真的有的**参数。
+   *
+   * 写错一个键不会报任何错：`?? defaultValue` 会静默忽略它，于是缩略图又回到
+   * 「默认参数下的样子」—— 而给时域特效配这条配方的唯一理由就是默认参数下
+   * 看不出特效，所以漏掉之后**症状与没写一模一样**。
+   */
+  it('previewParams 只写真实存在的参数键', () => {
+    const bad: string[] = [];
+    for (const [id, entry] of Object.entries(EFFECT_CATALOG)) {
+      if (!entry.previewParams) continue;
+      const keys = new Set(getEffect(id)!.params.map((p) => p.key));
+      for (const k of Object.keys(entry.previewParams)) {
+        if (!keys.has(k)) bad.push(`${id}.${k}`);
+      }
+    }
+    expect(bad, '这些缩略图配方写了不存在的参数 → 静默忽略').toEqual([]);
+  });
 });
 
 describe('标签', () => {

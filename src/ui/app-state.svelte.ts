@@ -23,6 +23,7 @@ import { AudioPlayer } from '../audio/player';
 import { ProjectAudio } from './project-audio';
 // 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
 import { createRenderCore } from '../render/render-core';
+import type { RecallService } from '../render/recall';
 // 钉尺寸取材的唯一序列（截图 / 体积采样 / 导出循环共用），见该文件头。
 import { withExportFrame } from '../render/export-frame';
 import { FontRegistry } from '../typography/font-registry';
@@ -1156,7 +1157,11 @@ class AppState {
     // ① 片段级的资源：模拟状态纹理（装的是状态，只能显式回收）与音频包络。
     for (const track of p.store.project.tracks) {
       for (const clip of track.clips) {
-        if (clip.kind === 'source' && clip.source.type === 'algo') this.algos?.forget(clip.id);
+        if (clip.kind === 'source' && clip.source.type === 'algo') {
+          this.algos?.forget(clip.id);
+          // 同一片段在**回放侧**还有一份独立的模拟状态（闪回的过去帧用它重渲）
+          this.recall?.forget(clip.id);
+        }
         if (clip.kind === 'effect') {
           for (const inst of clip.chain) {
             this.audio?.drop(inst.instanceId);
@@ -1944,6 +1949,11 @@ class AppState {
    */
   algos!: AlgoRuntime;
   sources!: SourceManager;
+  /**
+   * 回放服务（闪回）。导出预热里调 `prepare`，关工程时逐片段 `forget` ——
+   * 它自带一台独立的 `AlgoRuntime`，模拟状态纹理不显式回收就会跟着进程一直长。
+   */
+  recall!: RecallService;
   /** 视频取帧器（`engine/video-source.ts`）。导出前逐帧 prepare、关工程时 forget。 */
   video!: VideoSourceManager;
   player!: AudioPlayer;
@@ -2180,6 +2190,7 @@ class AppState {
     this.algos = core.algos;
     this.sources = core.sources;
     this.video = core.video;
+    this.recall = core.recall;
     // 占位图上的文字走 i18n（engine 不 import i18n，由宿主注入）。
     core.sources.setOfflineLabel(tr('pool.offline'));
 
@@ -2207,13 +2218,15 @@ class AppState {
     this.textRaster.customThemes = () => this.project.customThemes ?? [];
 
     /*
-     * 导出预热是**两个来源共用同一个槽位**（`Renderer.setPrewarm` 只有一个）。
-     * 两者都是「异步就绪」的：排版等光栅化缓存，视频等解码到精确帧。
+     * 导出预热是**三个来源共用同一个槽位**（`Renderer.setPrewarm` 只有一个）。
+     * 三者都是「异步就绪」的：排版等光栅化缓存，视频等解码到精确帧，闪回等
+     * **它要回放的那个过去帧**里的视频也解到精确帧（见 `render/recall.ts`）。
      * 必须都 await —— 排版缺席只是少几个字，视频缺席就是一帧错画面。
      */
     this.renderer.setPrewarm(async (p, t) => {
       await this.textRaster.prewarmFrame(p, t);
       await this.video.prepareProject(p, t, this.renderer.kit.w);
+      await core.recall.prepare(p, t, this.renderer.kit.w);
     });
     this.renderer.setFontPrewarm((p) => this.textRaster.prewarmFonts(p));
     this.renderer.setExportLifecycle(

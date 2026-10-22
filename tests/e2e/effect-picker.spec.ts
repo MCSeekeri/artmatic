@@ -207,3 +207,29 @@ test('选择器：每张卡片都有缩略图，且真的显示出来了', async
   });
   expect(mean, '缩略图是空白的（资源在但内容为黑）').toBeGreaterThan(10);
 });
+
+test('选择器：拼音能搜（全拼 / 连写 / 首字母），命中的是同一个特效', async ({ page }) => {
+  await boot(page);
+  await openPicker(page);
+
+  for (const q of ['xiang su hua', 'xiangsuhua', 'xsh']) {
+    await page.getByTestId('effect-picker-search').fill(q);
+    await expect(page.locator('[data-effect-id="pixelate"]'), `「${q}」没搜到像素化`).toBeVisible();
+  }
+});
+
+test('选择器：分类变成小标题 + 分隔线，六个分组按分类表顺序', async ({ page }) => {
+  await boot(page);
+  await openPicker(page);
+
+  const heads = page.locator('[data-testid^="effect-picker-group-"] .fxp-group-name');
+  await expect(heads).toHaveCount(6);
+  expect(await heads.allInnerTexts()).toEqual(['调色', '几何', '故障', '风格化', '模糊与光', '信号']);
+  // 分组只切小标题、不筛东西：卡片总数仍等于命中数读数
+  await expect(items(page)).toHaveCount(await hitCount(page));
+
+  // 空组不出现（筛到只剩调色时不留五个空标题占位置）
+  await page.getByTestId('effect-picker-search').fill('qu bao he du');
+  await expect(page.locator('[data-testid^="effect-picker-group-"]')).toHaveCount(1);
+  await expect(page.getByTestId('effect-picker-group-color')).toBeVisible();
+});

@@ -98,7 +98,8 @@ export function compileAllEffects(kit: Kit): CompileResult[] {
 export function compileAlgoShader(kit: Kit, id: string): CompileResult {
   const def = getGenerator(id);
   if (!def) return { id, ok: false, error: `注册表里没有 ${id}` };
-  if (def.kind === 'bake') return { id, ok: true };
+  // bake 与 recall 都没有自己的着色器（前者共用常量 reveal program，后者根本不算像素）。
+  if (def.kind === 'bake' || def.kind === 'recall') return { id, ok: true };
   try {
     if (def.kind === 'realtime') {
       const prog = kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));

@@ -1,0 +1,160 @@
+/**
+ * pinyin.ts — 中文显示名 → 拼音（无声调、音节用空格分开）。
+ *
+ * ## 为什么是一个手写表，而不是引一个拼音库
+ *
+ * 要转拼音的只有**这份目录里的名字**（特效 79 + 生成器 32 + 十几个分类/标签），
+ * 而 `pinyin-pro` 那一类运行期库带的是整部字典（几百 KB）——为了搜索框里的
+ * 一百多个词，给首屏加几百 KB 不划算。名字是**受控的小集合**，所以直接列出来，
+ * 由 `tests/unit/pinyin.test.ts` 守「每个名字都有条目、条目都对应真名字」。
+ *
+ * 代价：**新增特效/生成器/分类时要在这里补一行**。漏了的症状是「打拼音搜不到
+ * 那一个」，不报错 —— 所以那条守卫是必须的，它把静默缺口变成一声明确的失败。
+ *
+ * ## 为什么这个文件在 `locales/` 下
+ *
+ * 键是**中文字符串**。`tests/unit/i18n.test.ts` 的硬编码文案守卫禁止 `src/` 下
+ * 出现面向用户的中日韩字面量，而这里是一张查找表、不是文案（既不属于
+ * `LOCALES`，也不进 `MessageKey`）—— 与 `effects.ts` 里那张方框跟踪词库同一条
+ * 处置：放在守卫的豁免范围内，并在文件头写清它不是文案。
+ *
+ * ## 写法约定
+ *
+ * - 只转**汉字部分**：`'ASCII 滤镜': 'lv jing'`（拉丁字母本来就在名字里）。
+ * - 多音字按这个语境取音：`逐行抖动` 是 hang（行 = 一行），`行列偏移` 也是 hang。
+ * - 音节之间用一个空格；首字母缩写由运行时算（`i18n/pinyin.ts`），不另写一份。
+ */
+export const PINYIN_NAMES: Record<string, string> = {
+  /* ------------------------------------------------------------ 特效名 */
+  回声拖尾: 'hui sheng tuo wei',
+  通道错位: 'tong dao cuo wei',
+  切片错位: 'qie pian cuo wei',
+  像素化: 'xiang su hua',
+  扫描线: 'sao miao xian',
+  液晶屏幕: 'ye jing ping mu',
+  色阶量化: 'se jie liang hua',
+  萨巴蒂尔效应: 'sa ba di er xiao ying',
+  去饱和度: 'qu bao he du',
+  色彩校正: 'se cai jiao zheng',
+  双色调: 'shuang se diao',
+  热成像: 're cheng xiang',
+  二分色: 'er fen se',
+  通道换色: 'tong dao huan se',
+  三段色阶: 'san duan se jie',
+  边缘检测: 'bian yuan jian ce',
+  霓虹边缘: 'ni hong bian yuan',
+  锐化: 'rui hua',
+  镜像: 'jing xiang',
+  万花筒: 'wan hua tong',
+  极坐标: 'ji zuo biao',
+  缩放: 'suo fang',
+  圆筒变形: 'yuan tong bian xing',
+  径向模糊: 'jing xiang mo hu',
+  浮雕: 'fu diao',
+  红青立体: 'hong qing li ti',
+  像素排序: 'xiang su pai xu',
+  霓虹描边: 'ni hong miao bian',
+  暗角: 'an jiao',
+  凸起畸变: 'tu qi ji bian',
+  半调网屏: 'ban diao wang ping',
+  'ASCII 滤镜': 'lv jing',
+  逐行抖动: 'zhu hang dou dong',
+  游移: 'you yi',
+  整帧抖动: 'zheng zhen dou dong',
+  画面滚卷: 'hua mian gun juan',
+  平铺: 'ping pu',
+  漩涡: 'xuan wo',
+  涟漪: 'lian yi',
+  行列偏移: 'hang lie pian yi',
+  '3D 变换': 'bian huan',
+  频闪: 'pin shan',
+  分通道频闪: 'fen tong dao pin shan',
+  抽帧: 'chou zhen',
+  'RGB 爆发': 'bao fa',
+  缩放故障: 'suo fang gu zhang',
+  风格化故障: 'feng ge hua gu zhang',
+  冲击波: 'chong ji bo',
+  同心环: 'tong xin huan',
+  '通道错位·扩展': 'tong dao cuo wei kuo zhan',
+  颗粒: 'ke li',
+  软故障: 'ruan gu zhang',
+  数据弯折: 'shu ju wan zhe',
+  'VHS 磁带': 'ci dai',
+  复合视频: 'fu he shi pin',
+  流场: 'liu chang',
+  涂抹: 'tu mo',
+  视差浮雕: 'shi cha fu diao',
+  纤维位移: 'xian wei wei yi',
+  熔融: 'rong rong',
+  隧道: 'sui dao',
+  反馈循环: 'fan kui xun huan',
+  镜头光晕: 'jing tou guang yun',
+  液体光: 'ye ti guang',
+  流线等高: 'liu xian deng gao',
+  辉光: 'hui guang',
+  高斯模糊: 'gao si mo hu',
+  镜头鬼影: 'jing tou gui ying',
+  融帧故障: 'rong zhen gu zhang',
+  动态模糊: 'dong tai mo hu',
+  运动遮罩: 'yun dong zhe zhao',
+  培养皿: 'pei yang min',
+  音频可视化: 'yin pin ke shi hua',
+  体积光: 'ti ji guang',
+  水面倒影: 'shui mian dao ying',
+  闪频故障: 'shan pin gu zhang',
+  视频反馈: 'shi pin fan kui',
+  数据融毁: 'shu ju rong hui',
+  方框跟踪: 'fang kuang gen zong',
+
+  /* ---------------------------------------------------------- 生成器名 */
+  基本元胞自动机: 'ji ben yuan bao zi dong ji',
+  生命游戏: 'sheng ming you xi',
+  彩条: 'cai tiao',
+  网格: 'wang ge',
+  渐变: 'jian bian',
+  闪回: 'shan hui',
+  '分形（逃逸时间）': 'fen xing tao yi shi jian',
+  一维映射分岔图: 'yi wei ying she fen cha tu',
+  'Langton 蚂蚁（turmite）': 'ma yi',
+  'L-system（离根距离场）': 'li gen ju li chang',
+  'Menger 海绵': 'hai mian',
+  'Mandelbulb（幂次球）': 'mi ci qiu',
+  阿波罗尼奥斯球堆: 'a bo luo ni ao si qiu dui',
+  '牛顿分形（zⁿ−1）': 'niu dun fen xing',
+  'Kleinian 群极限集': 'qun ji xian ji',
+  李雅普诺夫分形: 'li ya pu nuo fu fen xing',
+  反应扩散: 'fan ying kuo san',
+  'Brian 的脑': 'de nao',
+  循环元胞自动机: 'xun huan yuan bao zi dong ji',
+  阿贝尔沙堆: 'a bei er sha dui',
+  雪花生长: 'xue hua sheng zhang',
+  'Lenia（连续生命）': 'lian xu sheng ming',
+  'Wireworld（电子线路）': 'dian zi xian lu',
+  烟雾: 'yan wu',
+  坐佛显影: 'zuo fo xian ying',
+  混沌游戏: 'hun dun you xi',
+  扩散受限聚集: 'kuo san shou xian ju ji',
+  同心涟漪: 'tong xin lian yi',
+  景深尘场: 'jing shen chen chang',
+  损坏栅格: 'sun huai zha ge',
+  域扭曲墨迹: 'yu niu qu mo ji',
+  竖线束: 'shu xian shu',
+
+  /* -------------------------------------------- 分类 / 标签 / 分组小标题 */
+  调色: 'tiao se',
+  几何: 'ji he',
+  故障: 'gu zhang',
+  风格化: 'feng ge hua',
+  模糊与光: 'mo hu yu guang',
+  信号: 'xin hao',
+  叠加型: 'die jia xing',
+  带反馈: 'dai fan kui',
+  '多 pass': 'duo',
+  吃音频: 'chi yin pin',
+  随时间动: 'sui shi jian dong',
+  浮点历史: 'fu dian li shi',
+  数学模拟: 'shu xue mo ni',
+  几何图形: 'ji he tu xing',
+  物理模拟: 'wu li mo ni',
+  特殊: 'te shu',
+};

@@ -1,10 +1,11 @@
 /**
  * types.ts — 算法生成器注册表协议（与特效共用 ParamDef 类型系统）。
  *
- * 三型生成器各自验证一条架构通路：
+ * 四型生成器各自验证一条架构通路：
  *   bake    一次性烘焙（Worker 里跑）→ R8 纹理。例：Rule 110。
  *   sim     有状态模拟：固定步长 + 快照 + seek 重放（硬约束 1.3）。例：生命游戏。
  *   realtime 逐帧实时 shader，参数走关键帧。例：Mandelbrot。
+ *   recall  内容来自**时间轴上过去的整帧**，由宿主重渲。例：闪回。
  */
 
 import type { ParamDef } from '../effects/types';
@@ -143,6 +144,16 @@ export type GeneratorDef =
       /** 上面的自定义着色需要的额外 uniform。 */
       setTintUniforms?: AlgoSetUniforms;
     })
+  /**
+   * `recall` 型：内容不来自算法，而来自**时间轴上更早的那一帧**。
+   *
+   * 它是唯一依赖「工程此刻长什么样」的生成器，所以运行时不算像素 ——
+   * 由宿主注入的 `RecallProvider`（`render/recall.ts`）把过去的一整帧渲出来
+   * 交回去。详见 `flashback.ts` 的文件头。
+   *
+   * 没有 fragment / `intRes`：多一道 pass 只会把回放帧重采样一次。
+   */
+  | (GeneratorBase & { kind: 'recall' })
   | (GeneratorBase & {
       kind: 'realtime';
       /** fragment **不含头** —— 由 `ALGO_HEAD` 拼在前面（见 shader-lib.ts）。 */

@@ -42,6 +42,8 @@ import { sandpileDef } from './sandpile';
 import { reactionDiffusionDef } from './reaction-diffusion';
 import { sceneDefs } from './scenes';
 import { smokeDef } from './smoke';
+// 闪回：`recall` 型 —— 内容来自时间轴上更早的那一帧，不是算法（见 flashback.ts）
+import { flashbackDef } from './flashback';
 import { barsDef } from './bars';
 import { gridDef } from './grid';
 import { gradientDef } from './gradient';
@@ -80,10 +82,12 @@ const DEFS = new Map<string, GeneratorDef>(
     barsDef,
     gridDef,
     gradientDef,
-    // 程序化场景家族（angel-echo scenes.js）—— 一个文件，七个 def
+    // 程序化场景家族（angel-echo scenes.js）—— 一个文件，五个 def
     ...sceneDefs,
     // 体积烟雾：唯一会写 a < 1 的生成器（可压到别的轨道上）
     smokeDef,
+    // 闪回：把片段之前的画面倒着放回来（唯一的 `recall` 型）
+    flashbackDef,
   ].map((d) => [d.id, d]),
 );
 

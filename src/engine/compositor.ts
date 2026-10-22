@@ -242,8 +242,14 @@ export class Compositor {
     this.trTmp.resize(w, h);
   }
 
-  /** 渲染一帧到屏幕（默认帧缓冲）。预览与导出都走这一个入口。 */
-  render(project: Project, t: number, opts?: BuildStackOptions): void {
+  /**
+   * 渲染一帧到屏幕（默认帧缓冲）。预览与导出都走这一个入口。
+   *
+   * `dst` 非空时最后一步画进那张目标而不是屏幕 —— **闪回**（`render/recall.ts`）
+   * 用它把「过去的整帧」渲成一张纹理，再当作某一层的源。除此之外没有第二个
+   * 调用方：预览与导出永远传默认值。
+   */
+  render(project: Project, t: number, opts?: BuildStackOptions, dst: Target | null = null): void {
     const w = this.kit.w;
     const h = this.kit.h;
     this.ensure(w, h);
@@ -257,10 +263,10 @@ export class Compositor {
     this.kit.clear();
     const out = this.runOps(ops, acc, this.pong!, 0, { project, t, frame, w, h });
 
-    // 呈现到屏幕。ops 为空时 acc 是刚清过的透明黑。
+    // 呈现到屏幕（或 `dst`：闪回的回放帧）。ops 为空时 acc 是刚清过的透明黑。
     this.passProg.use();
     this.passProg.tex('u_texture', out.tex);
-    this.kit.pass(this.passProg, null);
+    this.kit.pass(this.passProg, dst);
 
     // 帧末收池：把这一帧没用到的实例历史按预算放掉（见 trimPools）。
     this.trimPools();

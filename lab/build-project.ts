@@ -21,6 +21,7 @@ import {
   type Track,
   type VisualTrack,
 } from '../src/core/schema';
+import { getGenerator } from '../src/algos/registry';
 
 /** 试炼场不参与导出，fps 只用来把 scrubber 的秒数换成帧号（u_seed 派生用）。 */
 export const LAB_FPS = 30;
@@ -65,6 +66,15 @@ export interface BuildLabOpts {
   bypass?: boolean;
 }
 
+/**
+ * 回放型生成器（闪回）在试炼场里的片段头。
+ *
+ * 它放的是「片段**之前**的画面」，所以在 0 处开场等于没有内容可放。给它一个
+ * 靠后的片段头，再在下面垫一条彩条轨当「之前的素材」，才看得见它在做什么。
+ * `lab-state.selectSource` 选中它时会把播放头推到这之后（同一个常量）。
+ */
+export const LAB_RECALL_START = 6;
+
 function baseClip(id: string, label: string) {
   return {
     id,
@@ -82,8 +92,17 @@ export function buildLabProject(
   resolution: { w: number; h: number },
   opts: BuildLabOpts = {},
 ): Project {
+  /*
+   * 回放型（闪回）：内容来自「片段之前」，所以片段头靠后、下面再垫一条彩条轨。
+   * 彩条必须用**已注册的**生成器而不是 `lab:` 测试图 —— 回放帧由
+   * `render/recall.ts` 自己那台合成器重渲，它不认识 lab 的伪 id。
+   */
+  const isRecall = getGenerator(sel.sourceId)?.kind === 'recall';
+  const start = isRecall ? LAB_RECALL_START : 0;
+
   const src: SourceClip = {
     ...baseClip('lab-src', 'src'),
+    start,
     kind: 'source',
     source: { type: 'algo', generator: sel.sourceId, params: sel.sourceParams },
     blend: 'normal',
@@ -126,6 +145,20 @@ export function buildLabProject(
   }
 
   tracks.push(srcTrack);
+
+  // 垫在源轨**下面**（列表越靠后 z 越小）：闪回盖在它上面，回放的正是它。
+  if (isRecall) {
+    const feed: SourceClip = {
+      ...baseClip('lab-feed', 'feed'),
+      kind: 'source',
+      source: { type: 'algo', generator: 'bars', params: { scroll: 1 } },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'stretch',
+    };
+    tracks.push({ kind: 'visual', id: 'lab-track-feed', name: 'FEED', enabled: true, clips: [feed] });
+  }
 
   return {
     schemaVersion: SCHEMA_VERSION,

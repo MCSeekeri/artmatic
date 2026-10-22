@@ -18,6 +18,7 @@ import {
 } from '../../effects/catalog';
 import { getEffect, listEffects } from '../../effects/registry';
 import { resolveLabel } from '../../i18n/label';
+import { pinyinHaystack } from '../../i18n/pinyin';
 import type { MessageKey } from '../../i18n/locales';
 
 export type Translate = (key: MessageKey) => string;
@@ -42,9 +43,13 @@ export interface EffectItem {
 }
 
 export type PickerView = 'grid' | 'list';
-export type PickerSort = 'default' | 'name' | 'category';
+/**
+ * 排序只有两档。原来还有一档「分类」—— 分类已经变成小标题之后，它就退化成
+ * 「分类内按名称」，与 `name` 完全重合，所以删掉了。
+ */
+export type PickerSort = 'default' | 'name';
 
-export const PICKER_SORTS: PickerSort[] = ['default', 'name', 'category'];
+export const PICKER_SORTS: PickerSort[] = ['default', 'name'];
 
 /**
  * 建造全部条目。
@@ -84,7 +89,24 @@ export function buildItems(tr: Translate): EffectItem[] {
       tags,
       categoryLabel,
       tagLabels,
-      haystack: [id, name, desc, categoryLabel, ...tagLabels].join(' ').toLowerCase(),
+      /*
+       * 拼音只补**名称 / 分类 / 标签**，不补说明：说明是整句（「把画面重排成
+       * 一格格的字符」），逐句标拼音既没人维护也没人这样搜。拉丁名字本来就在
+       * 名称里，靠 `pinyinHaystack` 返回空串退化成原来的行为。
+       */
+      haystack: [
+        id,
+        name,
+        desc,
+        categoryLabel,
+        ...tagLabels,
+        pinyinHaystack(name),
+        pinyinHaystack(categoryLabel),
+        ...tagLabels.map(pinyinHaystack),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase(),
       pluginId,
     });
   }
@@ -122,14 +144,37 @@ export function sortItems(items: readonly EffectItem[], sort: PickerSort): Effec
   const out = items.slice();
   if (sort === 'name') {
     out.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
-  } else if (sort === 'category') {
-    out.sort((a, b) => {
-      const d = EFFECT_CATEGORIES.indexOf(a.category) - EFFECT_CATEGORIES.indexOf(b.category);
-      return d !== 0 ? d : a.name.localeCompare(b.name, 'zh-Hans-CN');
-    });
   }
   // 'default' = 目录表的顺序（作者按「相邻的放一起」编过），原样不动。
   return out;
+}
+
+/** 一组卡片 + 它的小标题。 */
+export interface EffectGroup {
+  id: EffectCategory;
+  label: string;
+  items: EffectItem[];
+}
+
+/**
+ * 按分类切成小标题分组。
+ *
+ * **空组不出现**：筛到只剩「故障」时，界面上不该留五个空标题占位置。
+ * 组序恒为 `EFFECT_CATEGORIES`（调色 → 几何 → 故障 → 风格化 → 模糊与光 → 信号），
+ * 与排序无关 —— 排序只决定组内顺序。小标题是**结构**，不该跟着排序跳来跳去。
+ */
+export function groupItems(items: readonly EffectItem[], tr: Translate): EffectGroup[] {
+  const byId = new Map<EffectCategory, EffectItem[]>();
+  for (const it of items) {
+    const list = byId.get(it.category);
+    if (list) list.push(it);
+    else byId.set(it.category, [it]);
+  }
+  return EFFECT_CATEGORIES.filter((c) => byId.has(c)).map((c) => ({
+    id: c,
+    label: tr(`fx.cat.${c}` as MessageKey),
+    items: byId.get(c)!,
+  }));
 }
 
 /** 当前筛选条件里有几项是「非默认」的 —— 用来在「条件筛选」按钮上打计数。 */

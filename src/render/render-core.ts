@@ -1,6 +1,6 @@
 /**
- * render-core.ts — 合成根（composition root）：把「源解析 + 算法运行时 + 特效执行器」
- * 装到一台 Renderer 上。
+ * render-core.ts — 合成根（composition root）：把「源解析 + 算法运行时 + 特效执行器
+ * + 回放服务」装到一台 Renderer 上。
  *
  * 为什么单独一层：本模块 import `engine` + `algos` + `effects`，而
  * `algos/`、`effects/` 本就位于 `engine/` **之上**（见 effects/runner.ts、
@@ -30,6 +30,7 @@ import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
 import { createEffectRunner } from '../effects/runner';
 import { createTransitionRunner } from '../effects/transitions/runner';
+import { createRecallService, type RecallService } from './recall';
 import type { AudioFeatureSource } from '../algos/feature-source';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
@@ -95,6 +96,11 @@ export interface RenderCore {
   glyphs: GlyphAtlases;
   /** 算法运行时。暴露出来是为了宿主能换特征来源（`setFeatureSource`）。 */
   algos: AlgoRuntime;
+  /**
+   * 回放服务（闪回 / `recall` 型生成器）。宿主只在导出预热里用到 ——
+   * `prepare()` 要把回放帧里的视频解到精确帧（见 `recall.ts`）。
+   */
+  recall: RecallService;
 }
 
 export function createRenderCore(
@@ -129,8 +135,11 @@ export function createRenderCore(
   sources.setVideoResolver((clip, t) => video.frameFor(clip, t, renderer.kit.w));
 
   renderer.setResolver(sources.resolve);
-  renderer.setEffectRunner(createEffectRunner(renderer.kit, () => opts.getProject().seed));
-  renderer.setTransitionRunner(createTransitionRunner(renderer.kit));
+  // 执行器本身无状态（历史都在 Compositor 的池子里），所以回放那台也复用它们。
+  const runEffect = createEffectRunner(renderer.kit, () => opts.getProject().seed);
+  const runTransition = createTransitionRunner(renderer.kit);
+  renderer.setEffectRunner(runEffect);
+  renderer.setTransitionRunner(runTransition);
   /*
    * 跳帧后让有状态模拟重新对齐（见 AlgoRuntime.alignSims），并清掉追踪状态。
    * 必须走 `Renderer.onSeek()` 这条唯一的路 —— 主应用与 lab 的每一个 seek
@@ -154,5 +163,27 @@ export function createRenderCore(
   const glyphs = new GlyphAtlases(renderer.kit);
   renderer.setGlyphAtlases(glyphs);
 
-  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, glyphs, algos };
+  /*
+   * 回放（闪回）：`recall` 型生成器向它索取「时间轴上过去的整帧」。
+   *
+   * 装配在最后一步是必须的 —— 它要复用上面那一批（源管理器、视频、烘焙、
+   * 频谱、字形），自己再起一台独立的 Compositor + AlgoRuntime（理由见
+   * `recall.ts` 文件头）。工程从 `Renderer.currentProject` 取：那是「这一帧
+   * 用的是哪份工程」的唯一权威。
+   */
+  const recall = createRecallService({
+    kit: renderer.kit,
+    getProject: () => renderer.currentProject,
+    sources,
+    video,
+    bake,
+    features: opts.features ?? null,
+    spectrum: spectrumTextures,
+    glyphs,
+    runEffect,
+    runTransition,
+  });
+  algos.setRecallProvider(recall.provider);
+
+  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, glyphs, algos, recall };
 }

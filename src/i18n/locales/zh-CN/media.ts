@@ -319,6 +319,10 @@ export const media = {
   'fx.rgbStrobe.green': '绿',
   'fx.rgbStrobe.blue': '蓝',
 
+  'fx.stutter': '抽帧',
+  'fx.stutter.rate': '帧率',
+  'fx.stutter.shutter': '快门占比',
+
   'fx.rgbBurst': 'RGB 爆发',
   'fx.rgbBurst.amplitude': '幅度',
   'fx.rgbBurst.speed': '速度',
@@ -520,6 +524,9 @@ export const media = {
   'fx.fastMosh.modeRelative': '相对',
   'fx.fastMosh.modeAbsolute': '绝对',
   'fx.fastMosh.modeDifference': '差分',
+
+  'fx.motionBlur': '动态模糊',
+  'fx.motionBlur.length': '曝光帧数',
 
   'fx.motionMask': '运动遮罩',
   'fx.motionMask.threshold': '阈值',
@@ -798,6 +805,11 @@ export const media = {
   'algo.gradient.colorA': '起始色',
   'algo.gradient.colorB': '结束色',
 
+  /* 闪回：回溯的是「片段之前」的一段画面，0 有哨兵含义（见 algos/flashback.ts）。 */
+  'algo.flashback': '闪回',
+  'algo.flashback.back': '回溯',
+  'algo.flashback.gap': '间隔',
+
   'algo.mandelbrot': '分形（逃逸时间）',
   'algo.mandelbrot.variant': '变体',
   'algo.mandelbrot.variantMandel': 'Mandelbrot',
@@ -1007,6 +1019,7 @@ export const media = {
   'algo.desc.sceneFlow': '粒子在噪声流场里被带着走，拖出丝状的痕迹。',
   'algo.desc.sceneStrands': '成束的细线在场上被拉扯，形成有方向的纹理。',
   'algo.desc.smoke': '沿射线累积的三维噪声，从喷口升起或从一边涌入，可留透明底叠在别的画面上。',
+  'algo.desc.flashback': '把片段之前的画面倒着放回来，速度自动对齐片段长度。',
 
   /* ---- 3D 内核（sdf-lib.ts）共用的文案键 ----
      四个 3D 生成器共用同一套「质量 + 光照 + 配色」参数，所以文案也共用 ——

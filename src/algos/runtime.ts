@@ -183,6 +183,22 @@ function planCost(msPerStep: number): number {
 export const SCRUB_STEP_BUDGET_MS = 6;
 export const SCRUB_CATCHUP_BUDGET_MS = 12;
 
+/**
+ * `recall` 型生成器的求值出口 —— 由宿主（`render/recall.ts`）注入。
+ *
+ * 返回 `null` 的语义与 bake 未就绪一致：**这一层这帧缺席**。它有三个来源：
+ * 片段之前没有内容、回放嵌套已达上限、宿主还没装（单测 / 离屏小工具）。
+ *
+ * 入参是**求值好的**参数（与 `setUniforms` 同一条纪律）：本模块不认识
+ * `ParamDef` 的语义，窗口怎么算是 `flashback.ts` 的事。
+ */
+export type RecallProvider = (
+  clip: SourceClip,
+  t: number,
+  params: Record<string, number | string>,
+  frame: number,
+) => SourceTexture | null;
+
 export class AlgoRuntime {
   private readonly revealProg: Program;
   private readonly tintProg: Program;
@@ -209,6 +225,8 @@ export class AlgoRuntime {
    * 场景的 uniform 照常派发，只是值全 0，画面偏暗，而不是 sampler / 参数缺失。
    */
   private featureSource: AudioFeatureSource | null = null;
+  /** `recall` 型（闪回）的求值出口。没装时那类生成器恒缺席。 */
+  private recall: RecallProvider | null = null;
   /** `at()` 的复用出参（每帧每源都读，不能分配）。 */
   private readonly features = emptyFeatures();
   /** 模拟步进的每帧预算（ms）。0 = 精确。见 `setStepBudget` / `planSimStep`。 */
@@ -227,6 +245,16 @@ export class AlgoRuntime {
 
   setFeatureSource(source: AudioFeatureSource | null): void {
     this.featureSource = source;
+  }
+
+  /**
+   * 注入 `recall` 型生成器的求值出口（见 `RecallProvider`）。
+   *
+   * 由 `render/render-core.ts` 装 —— 它要整帧重渲工程，属于**宿主能力**，
+   * 本模块（`algos/`）不认识工程树。
+   */
+  setRecallProvider(fn: RecallProvider | null): void {
+    this.recall = fn;
   }
 
   /**
@@ -354,6 +382,15 @@ export class AlgoRuntime {
     if (!def) return null;
     const params = this.evalParams(clip, def.params, t, grid);
     const seed = hashSeed(projectSeed, clip.id);
+
+    if (def.kind === 'recall') {
+      /*
+       * 回放：内容不在这个模块里，整帧要由宿主重渲。`t` 传原始时间而不是
+       * `max(0, t - clip.start)` —— 窗口是**绝对**时间轴上的过去，不是片段的
+       * 局部时间（见 flashback.ts）。
+       */
+      return this.recall?.(clip, t, params, frame) ?? null;
+    }
 
     if (def.kind === 'bake') {
       // 烘焙入参只求 clip.start 处的值——烘焙参数打关键帧 = 每帧重烘，禁止。
