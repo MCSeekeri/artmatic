@@ -23,6 +23,27 @@
   裁到字形里，「给文本框填个底色」就变成给字上色。`boxStroke` 同理（外壳的 CSS border，
   `box-sizing: border-box` 已由 elementStyle 钉死）。两者都由 `css.ts::textBoxStyle`
   产出**完整**声明表（就地同步没有删除语义，切回「无填充」必须能复位）。
+  ⚠️ **agent 写入会把纯色 `fill` 翻译成 `style.color`**（`agent-ops.ts::applyTextFill`）：
+  渲染侧只有渐变 / 径向 / 纹理参与字形填充，`solid` 是 no-op —— 不翻译的话
+  「同一个字段渐变有效、纯色被静默忽略」会被误判成字段名写错。
+- **agent 路径的默认值必须「不改变画面」**：`agent-ops.ts::addShapeElement` /
+  `addGeneratedShape` 不给 `fill` 时写 `{kind:'none'}`、不给 `stroke` 时写 `null`
+  （`createShapeElement` 给 `line` 的那条白色 4px 描边也一样被覆盖）。工厂里的实心紫
+  （`#6f64ef`）服务的是面板路径（人先看见再改色），agent 往往「先搭骨架再上色」——
+  一块默认紫会把画面染成它没打算要的样子。这条默认值必须同时出现在
+  `get_typography_capabilities().units.defaults` 里。
+- **元素动画是文档模型的一部分**（`ElementAnimation[]`，`animation.ts`），agent 侧
+  入口是 `agent-ops.ts::parseAnimationInput` / `animationFromInput` / `setAnimation` +
+  `typo_set_animation` / `typo_add_element.animation`。四条不能破：
+  1. `keys[].at` 在文档层只认 0..1 —— `{beat:n}` 的换算在控制平面（那里才有 BPM）。
+  2. 生成的 `@keyframes` 体**每一帧都写全被用到的属性**（缺的取恒等值），
+     否则 CSS 会从元素基础样式插值（基础样式里有用户自己的旋转 → 动画会「先歪一下」）。
+  3. `typo_replace_doc` 必须把 `animations` 一起搬过去。整份替换顺手清掉动画，
+     表现是「文档还在、动的东西没了」，且没有任何提示。
+  4. **手写 CSS 与 UI 是同一条路**：agent 的 `css` 入参必须过 `parseCustomCss`，
+     失败时把 `CustomCssError`（经 `CUSTOM_CSS_ERROR_KEYS` 翻译）回给模型。
+     读回形状（`animationView`）必须能被 `parseAnimationInput` 原样读回 ——
+     否则「读一遍再写回」会静默丢掉自定义动画、把无限循环变成 1 次。
 - **四条实现规则**（不遵守会静默出错）：
   1. **字体子集化，按字形集哈希缓存**。不做这条每帧上百毫秒，做了是毫秒级。
      字形集只在打字时变化，命中率极高。

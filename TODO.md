@@ -1,3 +1,74 @@
+# Agent 可达性缺口（2026-10-22 · 审计结果与待办）
+
+判定口径 = 根 `AGENTS.md` §1.9：**用户能在界面里做的写操作，控制平面都要有对应方法**。
+例外只有「改动 Artmatic 自身」：应用外观 / 偏好、工程与素材的**存储格式**、落盘路径、
+插件安装确认。本清单只列**工程内容**的缺口。
+
+## 已完成（2026-10-22）
+
+- 排版自定义 CSS 动画（`typo_set_animation.css`）、动画字段往返（`iterations`）、
+  `typo_replace_doc.droppedAnimations`。
+- 元素 `transform3d`（合并语义）/ `autoHeight` / `path` + `pathUnit` + `clipFrame`；
+  白名单收窄到「实现真的会读」的键。
+
+## 不做（用户 2026-10-22 判定）
+
+- **素材导入 + 音频片段**：Agent 不知道用户电脑上素材在哪，交给用户导入。
+  连带：`add_clip` 的 kind 不含 `audio`，音频轨对 Agent 只读（这是预期）。
+
+## P1（本轮）✔ 已完成 2026-10-22
+
+- [x] 段落标记：`add / split / rename / remove / move` → 工具 `edit_sections`（五合一）。
+      `store.moveSection` / `setFades` 是本轮给数值路径新增的两个入口（拖动仍走 live*）。
+- [x] `set_clip_props` 补齐片段字段：`fadeIn` / `fadeOut`（音频，互相钳制）、`crop`、
+      `quad`（拒绝退化四边形）、`key`（抠像，支持局部改）、`srcIn`。`null` = 关掉。
+- [x] 特效实例 `enabled` 开关：`add_effect({enabled})` + `set_params({enabled})`
+      （参数因此变可选，两者至少给一个）。
+- [x] 换算法生成器：`set_generator`（参数重置为新默认值；只删旧生成器参数名上的曲线）。
+- 文档：`docs/agent-control-plane.md` §12.6；help 文本 `plugin-spec.ts` 新增
+  「Sections」「Clip look」两节。
+
+## P2（下一轮）
+
+- [ ] 排版画幅尺寸：`doc.size` + 可选的 `resizeDocument` 按比例重排
+      （UI `TypographyEditor.svelte:201`，核心 `document.ts:1339`）。做竖版 / 方图必需。
+- [ ] 分组底板样式：`TypographyGroup.fill / stroke / radius / padding`
+      （`document.ts:509-518`；UI `actions.ts:1852-1882`）。
+- [ ] 排版图片 `key`（抠图）/ `quad`（四角）：`patchElement` 的 image 分支只有 fit/radius/crop。
+- [ ] 自定义配色方案：新建 / 改槽 / 删除 / 应用到整个工程
+      （`Project.customThemes` + `Project.typographyTheme`；UI `actions.ts:1420-1500`）。
+      注意 `typo_set_theme` 已经能**引用**已有的自定义方案，缺的是增删改。
+- [ ] 工程名 `p.name`（`set_project` 白名单少一项）。
+- [ ] 一键估 BPM/offset（`app-state.svelte.ts:2322 estimateBeatGrid`）：Agent 只能写值，算不出来。
+- [ ] 组名修改（`editor-state.svelte.ts:505`）。
+- [ ] 图层移动到指定下标（`typo_reorder_element` 只有四档 z 操作）。
+
+## P3（需要先定工具形态）
+
+- [ ] 布尔运算 / 拆分 / 参数化图形转路径 / 文字转路径 / 顶点增删锚点
+      （`actions.ts:2017-2227`，`path-ops.ts`、`text-outline.ts`）。
+      共同点：都是「选中若干元素 → 产出一批新元素」，要先定选中集与失败回滚语义。
+- [ ] 行内富文本（`runs[].style`）：`typo_set_text` / `typo_replace_doc` 目前只能整段一个样式。
+- [ ] 字体导入：需要字节 / 路径通道，与素材导入同一取舍（用户侧导入前不暴露）。
+
+## 媒体池操作（若将来暴露，必须带「需用户确认」）
+
+- 涉及：`collectAsset` / `relinkAsset` / `restoreUnusedAsset` / `trashUnusedAsset` /
+  `deleteUnusedAsset` / `clearProjectTrash` / `cleanupOrphanFiles`
+  （`ui/project-actions.ts:495-734`）。
+- 要求：**可选项**「操作媒体池需用户确认」（默认待定，与插件安装的审批卡同一机制），
+  确认挡在写盘之前；未确认时返回 `needs-approval`。
+- 理由：这些操作会移动 / 删除**用户磁盘上的文件**，而 Agent 无法从画面判断哪一份是原件。
+
+## 反向缺口（Agent 有、UI 没有；不阻塞，记录备查）
+
+- 文档背景 `doc.background`（`typo_set_background` 有，界面无写入入口）。
+- 片段 / 排版图片的 `crop`（UI 只有片段裁剪，排版图片没有）。
+- `typo_layout` 的 `grid / row / column`（Ribbon 只暴露 align / distribute）。
+- 全量特效编译守卫（`compile_all`，仅 MCP / 应用内按钮）。
+
+---
+
 # 进行中（2026-10-19 · W1 续：linked 素材 / 工程包 / Electron 宿主）
 
 按 `docs/plan-0.3-hardening.md` 之后的追加计划（用户 2026-10-19 确认）：

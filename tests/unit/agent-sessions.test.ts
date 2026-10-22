@@ -1,13 +1,24 @@
 /**
- * Agent 会话历史的两个不变量：
+ * Agent 会话历史的不变量（v5 起历史住在 `agent/sessions/`，不再进 project.json）：
  *
- *  1. **坏数据不能把工程弄成打不开的**：清洗函数永不抛，逐条丢弃。
- *  2. **撤销栈不碰历史**：`ProjectStore` 的快照剔除 `agentSessions`、恢复时保留
- *     当前值 —— 否则用户按一次 Ctrl+Z 会把聊天记录一起退回去。
+ *  1. **坏数据不能把工程弄成打不开的**：清洗函数永不抛，坏条目逐条丢弃。
+ *  2. **上限仍然生效**：30 会话 / 400 条 / 20k 字 —— 换存储位置不改变这条。
+ *  3. **被挤出去的会话要能被删掉**（`upsertAgentSession` 回传 `evicted`），
+ *     否则下次打开工程它们又会出现在历史里。
+ *  4. **工程里不再有历史**：v11 → v12 迁移把它删掉，撤销快照也不再需要特例。
  */
 
 import { describe, expect, it } from 'vitest';
-import { sanitizeAgentSessions, validateProject, type AgentSessionRecord } from '../../src/core/schema';
+import {
+  MAX_MESSAGES,
+  MAX_SESSIONS,
+  MAX_TEXT,
+  sanitizeAgentSession,
+  sanitizeAgentSessions,
+  upsertAgentSession,
+  type AgentSessionRecord,
+} from '../../src/agent/history';
+import { migrateProject, SCHEMA_VERSION, validateProject } from '../../src/core/schema';
 import { ProjectStore } from '../../src/core/project-store';
 import { createBlankProject } from '../../src/core/demo-project';
 
@@ -21,7 +32,7 @@ function session(id: string, updatedAt = 1): AgentSessionRecord {
   };
 }
 
-describe('sanitizeAgentSessions', () => {
+describe('sanitizeAgentSession / sanitizeAgentSessions', () => {
   it('非数组 / 坏条目直接丢弃，不抛', () => {
     expect(sanitizeAgentSessions(null)).toEqual([]);
     expect(sanitizeAgentSessions('x')).toEqual([]);
@@ -34,12 +45,18 @@ describe('sanitizeAgentSessions', () => {
     ).toEqual(['b']);
   });
 
+  it('单条会话：没有 id / 没有可用消息 = null（不产出一条空会话）', () => {
+    expect(sanitizeAgentSession(null)).toBeNull();
+    expect(sanitizeAgentSession({ id: 'x', messages: [] })).toBeNull();
+    expect(sanitizeAgentSession({ id: 'x', messages: [{ role: 'user', text: 'hi' }] })?.id).toBe('x');
+  });
+
   it('按 updatedAt 保留最近的 30 个', () => {
     const many = Array.from({ length: 40 }, (_, i) => session(`s${i}`, i));
     const out = sanitizeAgentSessions(many);
-    expect(out).toHaveLength(30);
+    expect(out).toHaveLength(MAX_SESSIONS);
     expect(out[0]!.id).toBe('s39');
-    expect(out.at(-1)!.id).toBe('s10');
+    expect(out.at(-1)!.id).toBe(`s${40 - MAX_SESSIONS}`);
   });
 
   it('同一 id 只留一条；单条文本与消息数有上限', () => {
@@ -55,35 +72,54 @@ describe('sanitizeAgentSessions', () => {
       },
     ]);
     expect(out.map((s) => s.id)).toEqual(['long', 'dup']);
-    expect(out[0]!.messages).toHaveLength(400);
-    expect(out[0]!.messages[0]!.text).toHaveLength(20_000);
+    expect(out[0]!.messages).toHaveLength(MAX_MESSAGES);
+    expect(out[0]!.messages[0]!.text).toHaveLength(MAX_TEXT);
   });
 });
 
-describe('validateProject / ProjectStore', () => {
-  it('合法会话随工程保留；坏会话不会让工程打不开', () => {
-    const p = createBlankProject('sessions');
-    p.agentSessions = [session('keep')];
-    expect(validateProject(structuredClone(p)).agentSessions?.map((s) => s.id)).toEqual(['keep']);
-
-    const bad = structuredClone(p) as unknown as { agentSessions: unknown };
-    bad.agentSessions = [{ id: 'x' }];
-    expect(validateProject(bad).agentSessions).toBeUndefined();
+describe('upsertAgentSession', () => {
+  it('覆盖同 id、按 updatedAt 排序、超出上限时回传被挤掉的 id', () => {
+    const list = Array.from({ length: MAX_SESSIONS }, (_, i) => session(`s${i}`, i));
+    const { sessions, evicted } = upsertAgentSession(list, session('new', 999));
+    expect(sessions).toHaveLength(MAX_SESSIONS);
+    expect(sessions[0]!.id).toBe('new');
+    // 最旧的那条被挤出去，并且**必须**由调用方删文件（否则下次打开它又回来了）
+    expect(evicted).toEqual(['s0']);
   });
 
-  it('撤销不会退回会话历史（快照剔除该字段）', () => {
-    const store = new ProjectStore(createBlankProject('undo-sessions'));
+  it('同 id 覆盖不改变条数，也不算挤掉别人', () => {
+    const list = [session('a', 1), session('b', 2)];
+    const { sessions, evicted } = upsertAgentSession(list, { ...session('a', 3), title: '新标题' });
+    expect(sessions.map((s) => s.id)).toEqual(['a', 'b']);
+    expect(sessions[0]!.title).toBe('新标题');
+    expect(evicted).toEqual([]);
+  });
+});
+
+describe('历史不在工程里（v12）', () => {
+  it('v11 工程带着 agentSessions 也能打开：字段被迁移掉，内容一字不差', () => {
+    const p = createBlankProject('legacy') as unknown as Record<string, unknown>;
+    p.schemaVersion = 11;
+    p.agentSessions = [session('keep')];
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(out.name).toBe('legacy');
+    expect('agentSessions' in out).toBe(false);
+  });
+
+  it('手改 JSON 留下 agentSessions 也不会被当成工程字段保留', () => {
+    const p = createBlankProject('stray') as unknown as Record<string, unknown>;
+    p.agentSessions = [session('x')];
+    const out = validateProject(structuredClone(p));
+    expect('agentSessions' in out).toBe(false);
+  });
+
+  it('撤销栈快照里没有历史（也不再需要特例）', () => {
+    const store = new ProjectStore(createBlankProject('undo'));
     store.commit('rename', (p) => (p.name = 'changed'));
-    store.setAgentSessions([session('a'), session('b', 2)]);
-
-    expect(store.project.name).toBe('changed');
-    expect(store.project.agentSessions).toHaveLength(2);
-
     expect(store.undo()).toBe(true);
-    expect(store.project.name).toBe('undo-sessions');
-    // 历史保留（它不是「改动」）
-    expect(store.project.agentSessions?.map((s) => s.id)).toEqual(['a', 'b']);
-
+    expect(store.project.name).toBe('undo');
+    expect('agentSessions' in store.project).toBe(false);
     expect(store.redo()).toBe(true);
     expect(store.project.name).toBe('changed');
   });

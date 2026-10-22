@@ -136,7 +136,13 @@ export function makeSourceClip(input: SourceClipInput): SourceClip {
     blend: input.blend ?? 'normal',
     opacity: input.opacity ?? 1,
     transform: { ...defaultTransform(), ...(input.transform ?? {}) },
-    fit: input.fit ?? 'contain',
+    /*
+     * `solid` 的源是一张 **1×1 纹理**（`engine/sources.ts::solid`），所以
+     * `contain` 会把它画成画面短边长的**正方形**（16:9 工程里只占中间一块）。
+     * 纯色片段的意图几乎总是「铺满整个画面」，默认因此给 `stretch` ——
+     * 与 UI 新建纯色片段同档（`ui/Timeline.svelte`）。
+     */
+    fit: input.fit ?? (input.kind === 'solid' ? 'stretch' : 'contain'),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
   };
 }
@@ -152,6 +158,8 @@ export interface EffectClipInput {
   curves?: Record<string, Curve>;
   /** 影响深度：只作用于下方最近的 N 条启用视觉轨；0 / 缺省 = 下方全部。 */
   affectDepth?: number;
+  /** 绑定片段：链只作用在这个 SourceClip 的层上（与 `affectDepth` 互斥）。 */
+  boundClipId?: string;
 }
 
 /** 造一个 `EffectClip`（adjustment layer 语义，只作用于 z 序在它之下的合成结果）。 */
@@ -159,6 +167,13 @@ export function makeEffectClip(input: EffectClipInput): EffectClip {
   checkSpan(input.start, input.end);
   if (input.affectDepth !== undefined && (!Number.isInteger(input.affectDepth) || input.affectDepth < 0)) {
     throw new ControlFailure('invalid-argument', tr('agent.args.affectDepth'));
+  }
+  if (input.boundClipId !== undefined && (typeof input.boundClipId !== 'string' || !input.boundClipId)) {
+    throw new ControlFailure('invalid-argument', tr('agent.args.boundClip'), { boundClipId: input.boundClipId });
+  }
+  if (input.boundClipId !== undefined && input.affectDepth !== undefined) {
+    // 互斥：绑定 = 「这一层的滤镜」，影响深度 = 「对下面几条轨做处理」。
+    throw new ControlFailure('invalid-argument', tr('agent.args.boundVsDepth'));
   }
   const chain: EffectInstance[] = (input.chain ?? []).map((c) => ({
     instanceId: c.instanceId ?? newId(),
@@ -175,6 +190,7 @@ export function makeEffectClip(input: EffectClipInput): EffectClip {
     fadeSec: Math.max(0, input.fadeSec ?? 0),
     curves: { ...(input.curves ?? {}) },
     chain,
+    ...(input.boundClipId ? { boundClipId: input.boundClipId } : {}),
     // 0 等同于缺省（下方全部），不写进工程里
     ...(input.affectDepth ? { affectDepth: input.affectDepth } : {}),
   };

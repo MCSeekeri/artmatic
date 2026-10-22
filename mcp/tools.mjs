@@ -393,8 +393,11 @@ export const TOOLS = [
     name: 'artmatic_add_effect_clip',
     kind: 'write',
     description:
-      '加一个特效（调整层）片段。**只作用于它下方（z 更小）的轨道**；chain 按顺序执行。' +
-      'affectDepth 限定只作用下方最近 N 条启用轨（0 = 全部）。',
+      '加一个特效片段。两种用法：① 调整层（默认）—— 只作用于它下方（z 更小）的轨道，' +
+      'affectDepth 限定只作用下方最近 N 条启用轨；② **绑定片段** boundClipId —— 链只跑在' +
+      '那个片段的层上（先 placement，再特效，最后按该片段自己的 blend/opacity 混入），' +
+      '与 z 序无关，也不影响别的层。节拍级的短促特效用它，不必每次开一条轨道。' +
+      'boundClipId 与 affectDepth 互斥；目标必须是 source 片段。',
     args: {
       trackId: ID('轨道'),
       start: t({ required: true }),
@@ -403,6 +406,7 @@ export const TOOLS = [
       label: F.string(),
       fadeSec: F.number({ minimum: 0 }),
       affectDepth: F.integer({ minimum: 0 }),
+      boundClipId: F.string({ description: '绑定到这个 source 片段（与 affectDepth 互斥）。' }),
     },
   },
   {
@@ -441,21 +445,41 @@ export const TOOLS = [
   {
     name: 'artmatic_set_clip_props',
     kind: 'write',
-    description: '改片段属性。可写字段只有 label / fadeSec / blend / opacity / transform / fit。',
+    description:
+      '改片段属性。可写：label / fadeSec / blend / opacity / transform / fit / affectDepth / boundClipId /' +
+      ' fadeIn + fadeOut（仅音频，秒，fadeIn+fadeOut ≤ 片段长度）/ srcIn（音频 / 视频的源内偏移）/' +
+      ' crop（{left,top,right,bottom} 0..1，只收可见窗口不缩放）/ quad（四角 [x,y]，null 关）/' +
+      ' key（{color,tolerance,softness,spill} 抠像，null 关）。null = 关掉那个效果。',
     args: {
       clipId: ID('片段'),
-      patch: F.any({ required: true, description: '{ label?, fadeSec?, blend?, opacity?, transform?, fit? }' }),
+      patch: F.any({ required: true, description: '见 description 的白名单字段。' }),
     },
   },
   {
     name: 'artmatic_set_params',
     kind: 'write',
-    description: '改参数。target:source 走源的参数表（algo 的生成器参数 / solid 的颜色），target:effect 走特效链第 chainIndex 条的 values。',
+    description:
+      '改参数。target:source 走源的参数表（algo 的生成器参数 / solid 的颜色）；' +
+      "target:effect 改特效链第 chainIndex 条 —— params 与 enabled 至少给一个，" +
+      'enabled 单独用就是「只关掉这一条做对比」。',
     args: {
       clipId: ID('片段'),
       target: F.string({ required: true, enum: ['source', 'effect'] }),
       chainIndex: F.integer({ minimum: 0, description: "target:'effect' 时要给。" }),
-      params: F.scalars({ required: true }),
+      params: F.scalars({ description: '参数键值对（给了 enabled 时可省略）。' }),
+      enabled: F.boolean({ description: "target:'effect'：这条实例的开关。" }),
+    },
+  },
+  {
+    name: 'artmatic_set_generator',
+    kind: 'write',
+    description:
+      '换掉算法片段的生成器（起止 / 混合 / 非生成器曲线保留）。参数重置为新生成器的默认值再合并 params；' +
+      '旧生成器的参数曲线会被删掉（新生成器上没有这些键）。',
+    args: {
+      clipId: ID('片段'),
+      generator: F.string({ required: true }),
+      params: F.scalars(),
     },
   },
   {
@@ -479,6 +503,7 @@ export const TOOLS = [
       defId: F.string({ required: true }),
       values: F.scalars(),
       index: F.integer({ minimum: 0, description: '插入位置，省略 = 追加到末尾。' }),
+      enabled: F.boolean({ description: '建成就停用（默认 true）。' }),
     },
   },
   {
@@ -524,6 +549,22 @@ export const TOOLS = [
       duration: F.number({ minimum: 0.1 }),
       beatGrid: F.any({ description: '{ bpm?, offset?, beatsPerBar? }' }),
       overlapBehavior: F.string({ enum: ['push', 'reject', 'trim'] }),
+    },
+  },
+  {
+    name: 'artmatic_edit_sections',
+    kind: 'write',
+    description:
+      '段落标记（sections）的增删改。段落**只存起点**：这一段的结尾是下一段的起点，最后一段到工程末尾。' +
+      'op: add{start,name?} | split{sectionId,at} | rename{sectionId,name} | remove{sectionId} |' +
+      ' move{sectionId,start}。start / at 是秒；add 会夹进 [0, duration]；split 在两半太窄时直接报错、' +
+      '不改任何东西。返回改后的完整 sections（已按 start 排序）。',
+    args: {
+      op: F.string({ required: true, enum: ['add', 'split', 'rename', 'remove', 'move'] }),
+      sectionId: F.string({ description: '目标段落（split / rename / remove / move）。' }),
+      start: F.number({ description: '起点秒数（add / move）。' }),
+      at: F.number({ description: '切点秒数（split）。' }),
+      name: F.string({ description: '显示名（add / rename）。' }),
     },
   },
   {
@@ -576,13 +617,40 @@ export const TOOLS = [
       t: t(),
       size: F.size({ description: '默认 320×宽（小尺寸更快）。' }),
       grid: F.integer({ minimum: 1, maximum: 16, description: '分块数，默认 4。' }),
+      only: F.any({
+        description: '隔离渲染：{ trackId?, elementId? }。只让这一层可见（工程本身不改）。',
+      }),
     },
   },
   {
     name: 'artmatic_render_frame',
     kind: 'view',
-    description: '出图（PNG）。**只在需要「看」的时候用**：审美判断 / 最终验收 / 给人看。',
-    args: { t: t(), size: F.size({ description: '默认工程分辨率。' }) },
+    description:
+      '出图（PNG）。**只在需要「看」的时候用**：审美判断 / 最终验收 / 给人看。' +
+      'only 可只渲染一条轨 / 一个排版元素（临时隐藏其它层，工程不改）。',
+    args: {
+      t: t(),
+      size: F.size({ description: '默认工程分辨率。' }),
+      only: F.any({ description: '隔离渲染：{ trackId?, elementId? }。' }),
+      region: F.any({ description: '局部放大：{x,y,w,h}（0..1 的裁切框，裁完放大到 ≥480px 宽）。' }),
+    },
+  },
+  {
+    name: 'artmatic_render_sequence',
+    kind: 'view',
+    description:
+      '一段时间的若干帧拼成**一张联系表**（行优先，每格左下角烧时间戳）。' +
+      '判断节奏 / 卡点必须用它 —— 单帧看不出「这个重音落在拍上没」。' +
+      'from / to / step 都是秒；默认 6 帧均分，最多 24 帧。',
+    args: {
+      from: F.number({ description: '起始秒，默认 0。' }),
+      to: F.number({ description: '结束秒（不含），默认工程时长。' }),
+      step: F.number({ description: '间隔秒；省略 = 6 帧均分。' }),
+      size: F.size({ description: '单格尺寸，默认 320 宽。' }),
+      cols: F.integer({ minimum: 1, maximum: 6, description: '列数，默认 3。' }),
+      only: F.any({ description: '隔离渲染：{ trackId?, elementId? }。' }),
+      region: F.any({ description: '局部放大：{x,y,w,h}。' }),
+    },
   },
   {
     name: 'artmatic_export',
@@ -626,14 +694,17 @@ export const TOOLS = [
   {
     name: 'artmatic_get_typography_capabilities',
     kind: 'read',
-    description: '排版能力：图形种类（及各自的专属参数）、22 个程序化生成器、配色方案、填充形态、布局操作。',
+    description:
+      '排版能力：图形种类（及各自的专属参数）、22 个程序化生成器（含语义 notes）、配色方案、' +
+      '填充形态、布局操作，以及 units（px / 0..1 比例 / rot 弧度 / 生成器坐标系）。',
     args: {},
   },
   {
     name: 'artmatic_get_typography_doc',
     kind: 'read',
     description:
-      '读文本片段的排版文档。detail:\'ids\' 只给元素 id / 类型 / 框，full 还给样式、填充、文本与生成器状态。' +
+      '读文本片段的排版文档。detail:\'ids\' 只给元素 id / 类型 / 框，full 还给样式、填充、文本、' +
+      '3D、动画（预设 / keys / 自定义 css 原文，可直接写回）与生成器状态。' +
       '省略 clipId 时用排版编辑器当前打开的那份。',
     args: {
       clipId: F.string({ description: '文本片段 id；省略 = 当前打开的排版文档。' }),
@@ -644,12 +715,25 @@ export const TOOLS = [
     name: 'artmatic_typo_add_element',
     kind: 'write',
     description:
-      '加排版元素。element.kind 决定形态：text{text,frame?,style?,fill?,boxFill?,boxStroke?} |' +
-      'shape{shape,frame?,fill?,stroke?,radius?,sides?,waist?,inner?,angle?,path?} |' +
-      'image{assetId,frame?,fit?,crop?}。frame = {x,y,w,h,rot}（文档 px，左上原点）。',
+      '加排版元素。element.kind 决定形态：text{text,frame?,style?,fill?,boxFill?,boxStroke?,autoHeight?} |' +
+      'shape{shape,frame?,fill?,stroke?,radius?,sides?,waist?,inner?,angle?,path?,pathUnit?,clipFrame?} |' +
+      'image{assetId,frame?,fit?,crop?}。frame = {x,y,w,h,rot}（文档 px，左上原点）。' +
+      '三者都接受 animation / animations（与 typo_set_animation 同 schema，含自定义 css）' +
+      '与 transform3d（元素级 3D）。',
     args: {
       clipId: F.string(),
       element: F.any({ required: true, description: '元素对象（见 description）。' }),
+    },
+  },
+  {
+    name: 'artmatic_typo_add_elements',
+    kind: 'write',
+    description:
+      '批量加排版元素：一次调用 = 一笔撤销。elements 的**数组顺序即 z 序**（后面的在前）。' +
+      '返回 { elementIds, elements }（含落库后的值）。',
+    args: {
+      clipId: F.string(),
+      elements: F.any({ required: true, description: '元素对象数组（形状同 typo_add_element.element）。' }),
     },
   },
   {
@@ -672,11 +756,57 @@ export const TOOLS = [
     kind: 'write',
     description:
       '改一个元素：name / frame / blend / opacity / visible / locked / text / style / fill / boxFill /' +
-      'boxStroke / stroke / radius / sides / waist / inner / angle / evenOdd / fit / crop / gen。',
+      'boxStroke / glyphStroke / autoHeight（仅文本）/ stroke / radius / sides / waist / inner / angle / evenOdd /' +
+      ' fit / crop / gen / transform3d（逐层合并，null 关闭）/ path（仅 shape:"svg"，写入会烘焙掉生成器绑定）/' +
+      ' pathUnit / clipFrame / animations / animation / addAnimation / removeAnimations。',
     args: {
       clipId: F.string(),
       elementId: F.string({ required: true }),
       patch: F.any({ required: true }),
+    },
+  },
+  {
+    name: 'artmatic_typo_update_elements',
+    kind: 'write',
+    description:
+      '批量改元素属性：一次调用 = 一笔撤销。updates = [{ elementId, patch }]；' +
+      '所有 id 在改动之前校验。返回改后的 elements。',
+    args: {
+      clipId: F.string(),
+      updates: F.any({ required: true, description: '[{ elementId, patch }]' }),
+    },
+  },
+  {
+    name: 'artmatic_typo_set_animation',
+    kind: 'write',
+    description:
+      '设置 / 替换 / 清除元素动画（与编辑器同一套 CSS 动画，导出里同样生效）。' +
+      'animation = { css } 或 { preset, duration?, delay?, loop?, easing? } 或 ' +
+      '{ keys:[{ at, opacity?, x?, y?, sx?, sy?, rot?, blur? }], duration?, delay?, easing? }。' +
+      'css 是编辑器「自定义动画」的语法：一个或多个 @keyframes 块 + 一条顶层 ' +
+      'animation: 名字 时长 …;（多条用逗号分隔）；只填 keyframes 体（from{…}to{…}）也可，' +
+      '时序取 duration / delay / loop / easing。任何可动的 CSS 属性都能写（3D 旋转 / clip-path /' +
+      ' 颜色 / 背景位移…），名字按元素命名空间化。顶层选择器 / @import / @charset / @namespace ' +
+      '会被拒绝并给出具体原因。' +
+      'at 为 0..1 或 { beat: n }；duration / delay 单位秒；loop: "once" | "infinite" | 数字。' +
+      '预设名见 get_typography_capabilities().animations.presets。animation:null 清空，' +
+      'mode:"add" 叠加第二条。',
+    args: {
+      clipId: F.string(),
+      elementId: F.string({ required: true }),
+      animation: F.any({ description: '动画对象，或 null 清空。' }),
+      mode: F.string({ enum: ['replace', 'add'] }),
+    },
+  },
+  {
+    name: 'artmatic_typo_measure',
+    kind: 'read',
+    description:
+      '排版几何体检（不渲染）：每个元素的框、文字实际内容高度 / 行数 / 被裁掉多少、' +
+      '出画距离、元素两两相交（文本压字单独标出）。适合「正文溢出 / 元素叠在一起」时先量再挪。',
+    args: {
+      clipId: F.string(),
+      elementIds: F.stringArray({ description: '只看这些元素（省略 = 全部）。' }),
     },
   },
   {
@@ -750,7 +880,12 @@ export const TOOLS = [
   {
     name: 'artmatic_typo_replace_doc',
     kind: 'write',
-    description: '整体替换文档（一笔撤销）。坏元素整条丢弃而不是整次失败 —— 看返回的 dropped。',
+    description:
+      '整体替换文档（一笔撤销）。坏元素整条丢弃而不是整次失败 —— 看返回的 dropped；' +
+      '不认识的键逐条列在 droppedKeys，非法动画条目列在 droppedAnimations' +
+      '（如 elements[2].animations[0]），都不是静默归一化。动画（预设 / keys / 自定义 css）' +
+      '会被保留，所以 detail:full 读出来的文档改完可以直接写回。text 是纯文本，' +
+      '逐段行内格式不在这条路上。',
     args: { clipId: F.string(), doc: F.any({ required: true }) },
   },
 

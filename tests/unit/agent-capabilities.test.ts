@@ -121,4 +121,18 @@ describe('getTypographyCapabilities', () => {
     expect(caps.layoutOps).toEqual(['align', 'distribute', 'grid', 'row', 'column']);
     expect(JSON.parse(JSON.stringify(caps))).toEqual(caps);
   });
+
+  it('单位与生成器语义是能力清单的一部分（不是靠渲染图反推）', () => {
+    const caps = getTypographyCapabilities(null);
+    expect(caps.units.frame).toContain('RADIANS');
+    expect(caps.units.shapeInner).toContain('px');
+    expect(caps.units.shapeWaist).toContain('ratio');
+    expect(caps.units.generator).toContain('0..100');
+
+    const rings = caps.generators.find((g) => g.id === 'rings');
+    expect(rings?.notes).toBeTruthy();
+    expect(rings?.notes).toContain('clamped');
+    // 参数表本身仍是纯数据（能过 JSON）。
+    expect(JSON.parse(JSON.stringify(rings?.params))).toEqual(rings?.params);
+  });
 });

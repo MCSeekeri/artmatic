@@ -145,30 +145,89 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
         case 'undo_state':
           return unwrap(await control.undoState());
 
-        case 'frame_signature':
-          return unwrap(
-            await control.frameSignature({
-              ...(typeof args.t === 'number' ? { t: args.t } : {}),
-              ...(args.size ? { size: asRecord(args.size) as { w: number; h: number } } : {}),
-              ...(typeof args.grid === 'number' ? { grid: Math.max(1, Math.round(args.grid)) } : {}),
-            }),
-          );
+        case 'frame_signature': {
+          const sig = await control.frameSignature({
+            ...(typeof args.t === 'number' ? { t: args.t } : {}),
+            ...(args.size ? { size: asRecord(args.size) as { w: number; h: number } } : {}),
+            ...(typeof args.grid === 'number' ? { grid: Math.max(1, Math.round(args.grid)) } : {}),
+            ...(args.only ? { only: asRecord(args.only) as never } : {}),
+          });
+          if (!sig.ok) return errText(sig.error.message, sig.error.code, sig.error.detail);
+          // 与 render_frame 同一条理由：隔离隐藏了哪些层必须回显，否则
+          // 「数值一模一样」会被误判成「参数没生效」。
+          const layers = await control.frameLayers({
+            ...(typeof args.t === 'number' ? { t: args.t } : {}),
+            ...(args.only ? { only: asRecord(args.only) as never } : {}),
+          });
+          return okText({ ...sig.data, ...(layers.ok ? { layers: layers.data.layers } : {}) });
+        }
 
         case 'render_frame': {
           const size = await snapshotSize(args.size);
           const r = await control.snapshotPng({
             ...(typeof args.t === 'number' ? { t: args.t } : {}),
             ...(size ? { size } : {}),
+            ...(args.only ? { only: asRecord(args.only) as never } : {}),
+            ...(args.region ? { region: asRecord(args.region) as never } : {}),
           });
           if (!r.ok) return errText(r.error.message, r.error.code, r.error.detail);
           const bytes = r.data;
           const dim = pngSize(bytes);
           const t = typeof args.t === 'number' ? args.t : undefined;
-          const caption = `Rendered frame${t === undefined ? '' : ` at t=${t}s`} (${dim.w}x${dim.h}).`;
+          const caption =
+            `Rendered frame${t === undefined ? '' : ` at t=${t}s`} (${dim.w}x${dim.h})` +
+            `${args.region ? ', zoomed' : ''}.`;
+          // 回显「这一帧到底合成了哪些层」：`only` 把特效轨一起隐藏时，截图与参数
+          // 无效长得一模一样，只有这份清单能区分两者。
+          const layers = await control.frameLayers({
+            ...(typeof args.t === 'number' ? { t: args.t } : {}),
+            ...(args.only ? { only: asRecord(args.only) as never } : {}),
+          });
           return {
             ok: true,
-            text: clip(JSON.stringify({ ok: true, data: { w: dim.w, h: dim.h, bytes: bytes.byteLength } })),
+            text: clip(
+              JSON.stringify({
+                ok: true,
+                data: {
+                  w: dim.w,
+                  h: dim.h,
+                  bytes: bytes.byteLength,
+                  ...(layers.ok ? { layers: layers.data.layers } : {}),
+                },
+              }),
+            ),
             images: [{ base64: bytesToBase64(bytes), mimeType: 'image/png', caption }],
+          };
+        }
+
+        case 'render_sequence': {
+          const size = args.size ? await snapshotSize(args.size) : undefined;
+          const r = await control.renderSequence({
+            ...(typeof args.from === 'number' ? { from: args.from } : {}),
+            ...(typeof args.to === 'number' ? { to: args.to } : {}),
+            ...(typeof args.step === 'number' ? { step: args.step } : {}),
+            ...(size ? { size } : {}),
+            ...(typeof args.cols === 'number' ? { cols: args.cols } : {}),
+            ...(args.only ? { only: asRecord(args.only) as never } : {}),
+            ...(args.region ? { region: asRecord(args.region) as never } : {}),
+          });
+          if (!r.ok) return errText(r.error.message, r.error.code, r.error.detail);
+          const { png, times, cols, rows, w, h } = r.data;
+          return {
+            ok: true,
+            text: clip(
+              JSON.stringify({
+                ok: true,
+                data: { times, cols, rows, w, h, bytes: png.byteLength, layout: 'row-major, time label bottom-left of each cell' },
+              }),
+            ),
+            images: [
+              {
+                base64: bytesToBase64(png),
+                mimeType: 'image/png',
+                caption: `Contact sheet: ${times.length} frames from ${times[0]?.toFixed(2)}s in ${cols}x${rows} cells.`,
+              },
+            ],
           };
         }
 
@@ -221,6 +280,7 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               ...(typeof args.label === 'string' ? { label: args.label } : {}),
               ...(typeof args.fadeSec === 'number' ? { fadeSec: args.fadeSec } : {}),
               ...(typeof args.affectDepth === 'number' ? { affectDepth: args.affectDepth } : {}),
+              ...(typeof args.boundClipId === 'string' ? { boundClipId: args.boundClipId } : {}),
             }),
           );
 
@@ -249,12 +309,26 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               ? await control.setEffectParams(
                   String(args.clipId ?? ''),
                   Number(args.chainIndex),
-                  asRecord(args.params) as Record<string, number | string>,
+                  args.params === undefined
+                    ? undefined
+                    : (asRecord(args.params) as Record<string, number | string>),
+                  typeof args.enabled === 'boolean' ? args.enabled : undefined,
                 )
               : await control.setClipSourceParams(
                   String(args.clipId ?? ''),
                   asRecord(args.params) as Record<string, number | string>,
                 ),
+          );
+
+        case 'set_generator':
+          return unwrap(
+            await control.setGenerator(
+              String(args.clipId ?? ''),
+              String(args.generator ?? ''),
+              args.params === undefined
+                ? undefined
+                : (asRecord(args.params) as Record<string, number | string>),
+            ),
           );
 
         case 'set_curve':
@@ -269,6 +343,7 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               String(args.defId ?? ''),
               asRecord(args.values) as Record<string, number | string>,
               typeof args.index === 'number' ? args.index : undefined,
+              typeof args.enabled === 'boolean' ? args.enabled : undefined,
             ),
           );
 
@@ -302,6 +377,39 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             }),
           );
 
+        case 'edit_sections': {
+          const op = String(args.op ?? '');
+          const sectionId = typeof args.sectionId === 'string' ? args.sectionId : '';
+          switch (op) {
+            case 'add':
+              return unwrap(
+                await control.editSections({
+                  op: 'add',
+                  start: Number(args.start),
+                  ...(typeof args.name === 'string' ? { name: args.name } : {}),
+                }),
+              );
+            case 'split':
+              return unwrap(
+                await control.editSections({ op: 'split', sectionId, at: Number(args.at) }),
+              );
+            case 'rename':
+              return unwrap(
+                await control.editSections({ op: 'rename', sectionId, name: String(args.name ?? '') }),
+              );
+            case 'remove':
+              return unwrap(await control.editSections({ op: 'remove', sectionId }));
+            case 'move':
+              return unwrap(
+                await control.editSections({ op: 'move', sectionId, start: Number(args.start) }),
+              );
+            default:
+              return errText(`unknown edit_sections op: ${op}`, 'invalid-argument', {
+                validIds: ['add', 'split', 'rename', 'remove', 'move'],
+              });
+          }
+        }
+
         case 'load_scene':
           return unwrap(await control.loadScene(args.project));
 
@@ -329,6 +437,22 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             ),
           );
 
+        case 'typo_add_elements':
+          return unwrap(
+            await control.addTypographyElements(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              (Array.isArray(args.elements) ? args.elements : []) as never,
+            ),
+          );
+
+        case 'typo_measure':
+          return unwrap(
+            await control.measureTypography(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              Array.isArray(args.elementIds) ? args.elementIds.map(String) : undefined,
+            ),
+          );
+
         case 'typo_add_generated_shape':
           return unwrap(
             await control.addGeneratedShape(typeof args.clipId === 'string' ? args.clipId : undefined, {
@@ -348,6 +472,24 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               typeof args.clipId === 'string' ? args.clipId : undefined,
               String(args.elementId ?? ''),
               asRecord(args.patch) as never,
+            ),
+          );
+
+        case 'typo_update_elements':
+          return unwrap(
+            await control.updateTypographyElements(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              (Array.isArray(args.updates) ? args.updates : []) as never,
+            ),
+          );
+
+        case 'typo_set_animation':
+          return unwrap(
+            await control.setTypographyAnimation(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              String(args.elementId ?? ''),
+              args.animation ?? null,
+              args.mode === 'add' ? 'add' : 'replace',
             ),
           );
 

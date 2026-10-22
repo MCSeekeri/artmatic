@@ -58,6 +58,24 @@ function buildStack(project: Project, t: number): Stack {
 - **`SCHEMA_VERSION` 抬到 5**，4→5 是**恒等迁移**：旧版打开新版工程要显式报错，
   而不是静默丢掉作用域再保存。
 
+### 绑定片段（`EffectClip.boundClipId`，v11）
+
+第二种作用方式，与影响深度**互斥**：链不算作用域、不看 z 序，而是**跑在目标
+`SourceClip` 那一层上**。
+
+- 执行位置是 `compositor.placeLayer` 的最后一步：`resolveSource.bound` 有值时，
+  链在 placement **之后**、blend **之前**跑（`applyBoundChain`，链内用常驻的
+  `layerScratch` 做 ping-pong）。所以特效看到的是「这一层自己的像素」，
+  看不到任何下方轨道，结果再按目标片段自己的 blend / opacity 混进 acc。
+- `buildStack` 先扫一遍「这一帧生效的绑定链」（`boundChains`），把它们挂到
+  对应 source 的 `ResolvedSource.bound` 上，**绝不再推一条 effect op**
+  （推了就是「同一道特效既作用在这一层又作用在下面所有层」）。
+- 绑定链**不受 `onlyTrackId` 影响**：那是这一层自己的样子，隔离观察时必须一起出现。
+  同一目标被多条绑定时按 z **升序**（下方轨道那条先跑）。
+- 目标片段不在这一帧 / 已被删 ⇒ 这条片段什么都不做，不报错。转场窗口里
+  from / to 各跑自己的绑定链。
+- 缺省（没有 `boundClipId`）走的是老路，**逐字节没变** —— 这条是回归的前提。
+
 > **z 序 = 列表位置取反**（`engine/stack.ts` 的 `buildStack`：`z = 视觉轨数 - 1 - 视觉轨下标`）。
 > `tracks[0]` 渲染在轨道列表最顶部，按 NLE 惯例就是最前景 ⇒ 它的 z 必须最大。
 > **编号只数视觉轨**（音频轨不参与合成）。

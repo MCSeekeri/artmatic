@@ -41,8 +41,13 @@ import type { AlignAxis } from '../typography/geometry';
  * audio 片段多了 `fadeIn` / `fadeOut`。**只加字段**，但「工程结构里多了一类
  * 用户可编辑的实体」值得让网关照版本号判断能力，而不是让旧客户端以为
  * 时间轴上只有片段。
+ *
+ * v4（2026-10-21）：排版写入的**返回形状**变了 —— 不再是 `{ changed }`，而是
+ * 回显改后的元素（`element` / `elements`）；新增批量写、`typo_measure`、
+ * `only` 隔离渲染与 `sceneVersion` 读接口。旧客户端读不到这些字段不会崩，
+ * 但会以为「写操作没有回执」，所以按契约变更抬版本。
  */
-export const CONTROL_API_VERSION = 3;
+export const CONTROL_API_VERSION = 4;
 
 export type ControlErrorCode =
   /** 参数形状不对 / 越界 / 枚举里没有这个 id。 */
@@ -184,6 +189,8 @@ export interface ClipView extends ClipIdView {
    * 0 / 缺省 = 下方全部。语义与边界规则见 `engine/stack.ts`。
    */
   affectDepth?: number;
+  /** 绑定片段：链只作用在这个 source 片段的层上（与 `affectDepth` 互斥）。 */
+  boundClipId?: string;
   /** 只给**有键**的曲线，不铺开全部参数名。 */
   curves?: Record<string, Curve>;
   /** audio 片段独有的两个字段。 */
@@ -230,6 +237,19 @@ export interface SceneSectionView {
   start: number;
   color?: string;
 }
+
+/**
+ * 段落的写操作（`edit_sections`）。
+ *
+ * 一个工具带 `op` 而不是五个工具：参数几乎不重叠，返回值又都是同一份 sections
+ * 列表 —— 拆成五个只会让模型多背四个名字（与 `typo_layout` 同一取舍）。
+ */
+export type SectionOp =
+  | { op: 'add'; start: number; name?: string }
+  | { op: 'split'; sectionId: string; at: number }
+  | { op: 'rename'; sectionId: string; name: string }
+  | { op: 'remove'; sectionId: string }
+  | { op: 'move'; sectionId: string; start: number };
 
 export interface SceneSnapshot {
   /** 秒，已吸附到帧栅格。 */
@@ -373,6 +393,11 @@ export interface TypographyGeneratorCapability {
   defaultSeed: number;
   aspect?: number;
   params: ParamSchema[];
+  /**
+   * 这个生成器**单看参数表看不出来**的语义（单位 / 夹取 / 覆盖关系）。
+   * 只给非显然的那几条，别把 label 复述一遍。
+   */
+  notes?: string;
 }
 
 export interface TypographyCapabilities {
@@ -383,6 +408,61 @@ export interface TypographyCapabilities {
     string,
     { radius: boolean; sides: boolean; waist: boolean; inner: boolean; angle: boolean }
   >;
+  /**
+   * **单位与语义**。参数表只给键 / 区间 / 默认值，不给「这个 0.1 是比例还是
+   * 100px 里的百分比」。缺了它，agent 只能靠渲染图反推量级。
+   */
+  units: {
+    frame: string;
+    shapeRadius: string;
+    shapeInner: string;
+    shapeSides: string;
+    shapeWaist: string;
+    shapeAngle: string;
+    generator: string;
+    /** 文字的排印参数单位（letterSpacing / lineHeight / stroke 宽度 …）。 */
+    text: string;
+    /** 颜料的坐标单位（渐变的 angle、纹理的 scale / thickness）。 */
+    paint: string;
+    /** 手写路径的坐标系（`path` / `pathUnit`：0..100 authored 还是元素像素盒）。 */
+    shapePath: string;
+    /** 元素级 3D 的单位与变换顺序（`transform3d`）。 */
+    transform3d: string;
+    /** agent 造元素时的默认值（透明填充 / 无描边 / 无动画）。 */
+    defaults: string;
+  };
+  /**
+   * 元素动画（CSS 动画系统，预览与导出同一条求值路径）。
+   *
+   * 为什么要在能力清单里列预设名：模型没法猜 `slide-in-up` 与 `slideInUp` 哪个
+   * 存在，而猜错的表现是「动画没生效、也没有报错」。
+   */
+  animations: {
+    presets: { id: string; duration: number; easing: string; params?: Record<string, number> }[];
+    easings: string[];
+    directions: string[];
+    fills: string[];
+    /** 关键帧输入支持的属性（`keys[].*`）。 */
+    keyProps: string[];
+    /** 一次动画最多几条关键帧。 */
+    maxKeys: number;
+    /**
+     * 手写 CSS 形态（`animation.css`）：编辑器「自定义动画」弹窗的同一套语法。
+     * `keys[]` 表达不了的动作（三维旋转 / clip-path / 背景位移 …）走这条。
+     */
+    customCss: {
+      /** 字段名（`typo_set_animation({ animation: { css } })`）。 */
+      field: string;
+      /** 合法的写法。 */
+      forms: string[];
+      /** 会被拒绝的东西（以及为什么）。 */
+      rejects: string;
+      /** 任何可动的 CSS 属性都能写 —— 这条要说出来，否则模型只用 keyProps 那七个。 */
+      anyProperty: string;
+    };
+    /** `typo_set_animation` 的 `at` / `keys[].at` 单位说明。 */
+    note: string;
+  };
   /** 程序化 SVG 生成器（22 个）。 */
   generators: TypographyGeneratorCapability[];
   themes: { id: string; name: string; builtin: boolean }[];
@@ -410,9 +490,13 @@ export interface TypographyElementView {
   visible: boolean;
   locked: boolean;
   groupId?: string;
+  /** 元素级 3D（缺省 = 没有）。与 `frame.rot` 复合，见 typography/document.ts。 */
+  transform3d?: unknown;
   /** text */
   text?: string;
   style?: Record<string, unknown>;
+  /** true = 宽固定、高随内容（文本框的默认行为）。 */
+  autoHeight?: boolean;
   fill?: unknown;
   boxFill?: unknown;
   boxStroke?: unknown;
@@ -420,6 +504,11 @@ export interface TypographyElementView {
   glyphStroke?: unknown;
   /** shape */
   shape?: string;
+  /** 手写路径（只在没有 `gen` 时回显：生成器的 path 可由参数复现）。 */
+  path?: string;
+  /** `'px'` = 路径写在元素自己的像素盒里（文本转路径的产物）。缺省 = 0..100。 */
+  pathUnit?: 'px';
+  clipFrame?: boolean;
   stroke?: unknown;
   radius?: number;
   sides?: number;
@@ -432,8 +521,8 @@ export interface TypographyElementView {
   assetId?: string;
   fit?: string;
   crop?: unknown;
-  /** 入场动画的描述（只给类型与时长，不给完整表达式）。 */
-  animations?: { kind: string; duration: number }[];
+  /** 入场动画的完整描述（预设 / 关键帧 / 自定义 CSS + 时序）。 */
+  animations?: Record<string, unknown>[];
 }
 
 export interface TypographyGroupView {
@@ -461,6 +550,77 @@ export interface TypographyDocIdView {
   size: { w: number; h: number };
   theme: string | null;
   elements: { id: string; kind: 'text' | 'shape' | 'image'; name: string; frame: TypographyFrame }[];
+}
+
+/** 一次批量更新的条目。 */
+export interface TypographyElementUpdate {
+  elementId: string;
+  patch: TypographyElementPatch;
+}
+
+/**
+ * `typo_measure` 的读数。**实测优先、估算兜底**：没有 DOM 时 `estimated`
+ * 为 true，此时只该用来发现「明显溢出」，别拿它做像素级对齐。
+ */
+export interface TypographyMeasure {
+  clipId: string;
+  size: { w: number; h: number };
+  elements: {
+    id: string;
+    kind: 'text' | 'shape' | 'image';
+    name: string;
+    frame: TypographyFrame;
+    visible: boolean;
+    locked: boolean;
+    text?: {
+      chars: number;
+      lines: number;
+      contentHeight: number;
+      contentWidth: number;
+      overflowY: number;
+      overflowX: number;
+      estimated: boolean;
+    };
+    /** 超出画布的像素数（正值 = 越界多少）。 */
+    outside?: { left: number; top: number; right: number; bottom: number };
+  }[];
+  /** 相交元素对，按面积从大到小（最多 50 对；按**未旋转**框算）。 */
+  overlaps: {
+    a: string;
+    b: string;
+    area: number;
+    rect: { x: number; y: number; w: number; h: number };
+    textOverlap: boolean;
+  }[];
+  summary: {
+    elements: number;
+    texts: number;
+    textOverflow: string[];
+    outside: string[];
+    overlapPairs: number;
+    rotated: number;
+  };
+}
+
+/**
+ * 隔离渲染：只让这几层可见（工程本身不改）。
+ *
+ * 数组形态是「同时看这几层」——比如「只看 BG + 它的特效轨」。注意隔离把**所有**
+ * 未列出的视觉轨关掉，包括特效轨：它是「看某一层自己的画面」，不是「试特效」。
+ */
+export interface RenderOnly {
+  /** 只保留这些视觉轨（其余视觉轨临时当作关闭）。 */
+  trackId?: string | string[];
+  /** 只保留这些排版元素（同一文档里的其它元素临时设为 visible:false）。 */
+  elementId?: string | string[];
+}
+
+/** 场景版本：判断「两个只读调用之间工程有没有变」。 */
+export interface SceneVersion {
+  /** `ProjectStore.version`（内容变化才递增；改名字 / 参数都算）。 */
+  version: number;
+  /** 当前播放头（秒，已吸附到帧栅格）。 */
+  playT: number;
 }
 
 /* --------------------------------------------------------------- 插件 */
@@ -689,7 +849,21 @@ export interface ControlContext {
  * 之所以不用「一个通用 patch 对象」：文字要 runs + style、图形要 shape + fill，
  * 混在一个宽松对象里，agent 写错字段名不会有任何报错（只是静默没生效）。
  */
-export type TypographyElementInput =
+/** 新建元素时顺手带的动画（与 `typo_set_animation` 的 `animation` 同构）。 */
+interface ElementAnimationInput {
+  /** 一条（等价于 `animations: [x]`）。 */
+  animation?: unknown;
+  /** 多条；数组顺序 = 嵌套顺序（后面的在里层，见 animation.ts）。 */
+  animations?: unknown[];
+}
+
+/** 三种元素共用的可选字段（与 `typo_update_element` 的 patch 同构）。 */
+interface ElementExtraInput {
+  /** 元素级 3D：`{ perspective, translate, rotate, scale, skew, origin, backface, style }`。 */
+  transform3d?: unknown;
+}
+
+export type TypographyElementInput = (
   | {
       kind: 'text';
       text: string;
@@ -700,6 +874,8 @@ export type TypographyElementInput =
       boxFill?: unknown;
       boxStroke?: unknown;
       glyphStroke?: unknown;
+      /** true = 宽固定、高随内容（与编辑器文本框的默认行为一致）。 */
+      autoHeight?: boolean;
       name?: string;
       opacity?: number;
       blend?: string;
@@ -715,7 +891,11 @@ export type TypographyElementInput =
       waist?: number;
       inner?: number;
       angle?: number;
+      /** 只有 `shape:'svg'` 有意义；与 `gen` 互斥，给了 path 就不该再给 gen。 */
       path?: string;
+      /** `'px'` = 路径写在元素自己的像素盒里（文本转路径）。缺省 0..100。 */
+      pathUnit?: 'px' | 'percent';
+      clipFrame?: boolean;
       evenOdd?: boolean;
       name?: string;
       opacity?: number;
@@ -731,7 +911,10 @@ export type TypographyElementInput =
       name?: string;
       opacity?: number;
       blend?: string;
-    };
+    }
+) &
+  ElementAnimationInput &
+  ElementExtraInput;
 
 export interface TypographyFrame {
   x: number;
@@ -767,6 +950,11 @@ export interface TypographyElementPatch {
   opacity?: number;
   visible?: boolean;
   locked?: boolean;
+  /**
+   * 元素级 3D：对象 = **逐层合并**（只给 `{rotate:{y:35}}` 不会清掉已有透视），
+   * `null` = 关闭（删字段）。
+   */
+  transform3d?: unknown;
   /** 元素阴影（多层，文档 px）。空数组 = 去掉阴影。 */
   shadows?: { color: string; dx: number; dy: number; blur: number }[];
   /** 元素虚化半径（文档 px）。0 = 不虚化。 */
@@ -778,8 +966,15 @@ export interface TypographyElementPatch {
   boxStroke?: unknown;
   /** 字形描边（-webkit-text-stroke）：{ color, width }，宽度 px。`null` = 去掉。 */
   glyphStroke?: unknown;
+  /** true = 宽固定、高随内容。 */
+  autoHeight?: boolean;
   /** shape */
   stroke?: unknown;
+  /** 手写路径（只对 `shape:'svg'` 生效；写入时清掉 `gen`）。 */
+  path?: string;
+  /** `'px'` = 路径写在元素自己的像素盒里；`'percent'` = 回到 0..100（删字段）。 */
+  pathUnit?: 'px' | 'percent';
+  clipFrame?: boolean;
   radius?: number;
   sides?: number;
   waist?: number;
@@ -789,6 +984,11 @@ export interface TypographyElementPatch {
   /** image */
   fit?: 'fill' | 'contain' | 'cover' | 'none';
   crop?: { x: number; y: number; w: number; h: number };
+  /** 动画：`animations` / `animation` 替换，`addAnimation` 追加，`removeAnimations` 清空。 */
+  animations?: unknown[];
+  animation?: unknown;
+  addAnimation?: unknown;
+  removeAnimations?: boolean;
 }
 
 export type TypographyLayoutRequest =

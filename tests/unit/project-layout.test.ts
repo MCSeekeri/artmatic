@@ -5,6 +5,7 @@ import {
   audioAnalysisSegments,
   baseName,
   PROJECT_DIRS,
+  agentSessionSegments,
   safeAssetId,
   safeExt,
   splitRelPath,
@@ -96,11 +97,21 @@ describe('路径推导', () => {
     expect(thumbSegments('clip-a')).toEqual(['thumbs', 'clip-a.png']);
   });
 
-  it('要建的目录里包含 assets / analysis/audio / thumbs', () => {
+  it('要建的目录里包含 assets / analysis/audio / thumbs / agent/sessions', () => {
     const flat = PROJECT_DIRS.map((d) => d.join('/'));
     expect(flat).toContain('assets');
     expect(flat).toContain('analysis/audio');
     expect(flat).toContain('thumbs');
+    expect(flat).toContain('agent/sessions');
+  });
+
+  it('会话文件落在 agent/sessions 下，id 里的路径分隔符与上跳被洗掉', () => {
+    expect(agentSessionSegments('s1')).toEqual(['agent', 'sessions', 's1.json']);
+    // 会话 id 来自 URL / 手改文件名时不能变成目录穿越：分隔符必须被洗掉
+    const tricky = agentSessionSegments('../../etc/passwd');
+    expect(tricky.slice(0, 2)).toEqual(['agent', 'sessions']);
+    expect(tricky[2]).not.toContain('/');
+    expect(tricky[2]!.endsWith('.json')).toBe(true);
   });
 });
 

@@ -43,6 +43,7 @@ export const errors = {
   'err.schema.visualTrackHasNonVisual': '视觉轨里有非视觉片段',
   'err.schema.effectClipMissingChain': '特效片段 {id} 缺少 chain',
   'err.schema.effectBadAffectDepth': '特效片段 {id} 的影响深度必须是非负整数',
+  'err.schema.effectBadBoundClip': '特效片段 {id} 的绑定片段 id 必须是非空字符串',
   'err.schema.typographyBadDoc': '排版片段 {id} 的 doc 非法',
   'err.schema.typographyBadSize': '排版片段 {id} 的文档尺寸非法',
   'err.schema.typographyBadTextRuns': '排版片段 {id} 里有文本元素缺少内容段（runs）',

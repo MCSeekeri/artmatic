@@ -13,7 +13,6 @@ import {
   type AnyClip,
   type AudioClip,
   type EffectClip,
-  type AgentSessionRecord,
   type OverlapBehavior,
   type Project,
   type Section,
@@ -86,32 +85,19 @@ export class ProjectStore {
   constructor(project: Project) {
     this.project = project;
     /*
-     * 快照**剔除 `agentSessions`**，恢复时保留当前值。
+     * 快照 = 整工程 JSON，**没有例外字段**。
      *
-     * 撤销栈存的是整工程 JSON；聊天记录如果跟着进快照，用户按一次 Ctrl+Z
-     * 会把对话一起退回上一轮（那不是「改动」，是日志）。插件文件同理不进工程。
+     * 曾经这里要剔除 `agentSessions`（聊天记录不该进撤销栈）。历史搬去
+     * `agent/sessions/` 之后这条特例消失了 —— 工程之外的日志一开始就不该
+     * 出现在工程的快照里。**别把「跟工程一起保存」误读成「属于工程」**。
      */
     this.stack = new CommandStack(
-      () => JSON.stringify({ ...this.project, agentSessions: undefined }),
+      () => JSON.stringify(this.project),
       (json) => {
-        const keep = this.project.agentSessions;
-        const next = JSON.parse(json) as Project;
-        if (keep?.length) next.agentSessions = keep;
-        else delete next.agentSessions;
-        this.project = next;
+        this.project = JSON.parse(json) as Project;
       },
       () => this.bump(),
     );
-  }
-
-  /**
-   * 写入 Agent 会话历史。**不走 commit**（见构造函数里的注释），
-   * 只 bump version 让界面与脏标记跟上。
-   */
-  setAgentSessions(sessions: AgentSessionRecord[]): void {
-    if (sessions.length) this.project.agentSessions = sessions;
-    else delete this.project.agentSessions;
-    this.touch();
   }
 
   subscribe(fn: () => void): () => void {
@@ -132,6 +118,17 @@ export class ProjectStore {
 
   beginTx(): void {
     this.stack.beginTx();
+  }
+
+  /**
+   * 当前是否有手势 / 会话事务开着。
+   *
+   * 给「一次调用要写两笔」的调用方（控制平面的 `set_clip_props`：淡变走
+   * `setFades`、其余字段走 `updateClip`）判断**要不要自己包一层** ——
+   * `beginTx` 会直接覆盖上一个快照，嵌套调用会把外层事务的起点抹掉。
+   */
+  get inTx(): boolean {
+    return this.stack.inTx;
   }
 
   /**
@@ -673,7 +670,32 @@ export class ProjectStore {
     const d = Math.max(0, Math.floor(Number(depth) || 0));
     this.commit(tr('insp.changeAffectDepth'), () => {
       const found = this.findClip(clipId);
-      if (found && found.clip.kind === 'effect') found.clip.affectDepth = d;
+      if (found && found.clip.kind === 'effect') {
+        found.clip.affectDepth = d;
+        // 与绑定片段互斥：写深度即解绑（两者同时存在是矛盾状态，
+        // `validateProject` 也会以绑定为准把深度丢掉）。
+        delete found.clip.boundClipId;
+      }
+    });
+  }
+
+  /**
+   * 绑定片段：让这条特效只作用于某个具体 source 片段的层（`null` = 解绑）。
+   *
+   * 语义与实现都在 `engine/stack.ts` / `compositor.ts`（渲染侧唯一真源）：
+   * 目标片段先 placement 成整帧层，链跑在这一层上，再按该片段自己的 blend 混入。
+   * 与 `affectDepth` 互斥 —— 这里写绑定时把深度清掉。
+   */
+  setEffectBoundClip(clipId: string, boundClipId: string | null): void {
+    this.commit(tr('insp.changeBoundClip'), () => {
+      const found = this.findClip(clipId);
+      if (!found || found.clip.kind !== 'effect') return;
+      if (boundClipId) {
+        found.clip.boundClipId = boundClipId;
+        delete found.clip.affectDepth;
+      } else {
+        delete found.clip.boundClipId;
+      }
     });
   }
 
@@ -798,6 +820,27 @@ export class ProjectStore {
     this.touch();
   }
 
+  /**
+   * 数值式的段落移动（一次调用 = 一笔撤销）。
+   *
+   * 拖动走 `liveMoveSection`（手势层自己 beginTx/endTx）；这里是控制平面那条
+   * 路径 —— 没有指针可以结算，必须自己 `commit`，否则改动只 bump version、
+   * 撤不回来。
+   */
+  moveSection(id: string, start: number): boolean {
+    const section = this.project.sections.find((s) => s.id === id);
+    if (!section) return false;
+    const next = Math.max(0, Number.isFinite(start) ? start : 0);
+    if (section.start === next) return false;
+    this.commit(tr('tl.moveSection'), (p) => {
+      const s = p.sections.find((x) => x.id === id);
+      if (!s) return;
+      s.start = next;
+      p.sections = sortSections(p.sections);
+    });
+    return true;
+  }
+
   renameSection(id: string, name: string): void {
     const next = name.trim().slice(0, 60);
     if (!next) return;
@@ -890,6 +933,25 @@ export class ProjectStore {
     }
     this.commit(tr(which === 'in' ? 'tl.setFadeIn' : 'tl.setFadeOut'), () => {
       writeFade(clip, which, clampFade(clip, which, seconds));
+    });
+  }
+
+  /**
+   * 一次写两条淡变（控制平面的 `set_clip_props` 用）。
+   *
+   * 与 `setFade` 共用同一份钳制，唯一区别是**一笔撤销**：逐条调 `setFade`
+   * 会留下两条记录，一次工具调用撤不干净。顺序固定 in → out（与拖手柄一致），
+   * 后面的钳制看得到前一条刚落的值。
+   */
+  setFades(clipId: string, patch: { fadeIn?: number; fadeOut?: number }): void {
+    const found = this.findClip(clipId);
+    if (!found) return;
+    const clip = found.clip;
+    if (clip.kind !== 'audio') return;
+    const label = patch.fadeIn !== undefined ? tr('tl.setFadeIn') : tr('tl.setFadeOut');
+    this.commit(label, () => {
+      if (patch.fadeIn !== undefined) writeFade(clip, 'in', clampFade(clip, 'in', patch.fadeIn));
+      if (patch.fadeOut !== undefined) writeFade(clip, 'out', clampFade(clip, 'out', patch.fadeOut));
     });
   }
 

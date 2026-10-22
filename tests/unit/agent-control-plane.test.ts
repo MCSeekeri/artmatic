@@ -462,3 +462,332 @@ describe('结构与不变量', () => {
     expect(snap.tracks.map((t) => t.z)).toEqual([null, 1, 0]);
   });
 });
+
+/* ------------------------------------------ 曲线寻址 / 绑定片段（Agent 反馈 1、3） */
+
+describe('曲线参数寻址', () => {
+  /** 一个只含单个 blur 实例的特效片段。 */
+  async function blurClip(h: Harness, start = 0, end = 2): Promise<string> {
+    const r = await ok(h.cp.addEffectClip(visualTrackId(h), { start, end, chain: [{ defId: 'blur' }] }));
+    return r.clipId;
+  }
+
+  it('唯一实例时可以用 defId 可读名，返回值回显规范键', async () => {
+    const h = harness();
+    const clipId = await blurClip(h);
+    const r = await ok(
+      h.cp.setCurve(clipId, 'blur.radius', { keys: [{ t: 0, v: 0 }, { t: 1, v: 12 }] } as never),
+    );
+    expect(r.changed).toBe(true);
+    // 规范键 = `<instanceId>.radius`，而且回显出来（agent 不必再猜写成了什么）。
+    expect(r.param.endsWith('.radius')).toBe(true);
+    const { clip } = h.store.findClip(clipId)!;
+    if (clip.kind !== 'effect') throw new Error('应为特效片段');
+    expect(clip.curves[r.param]).toBeTruthy();
+  });
+
+  it('缺 interp 时按 smooth 落库（不再靠报错学这个字段）', async () => {
+    const h = harness();
+    const clipId = await blurClip(h);
+    const r = await ok(h.cp.setCurve(clipId, 'blur.radius', { keys: [{ t: 0, v: 1 }, { t: 0.5, v: 9 }] } as never));
+    const { clip } = h.store.findClip(clipId)!;
+    if (clip.kind !== 'effect') throw new Error('应为特效片段');
+    expect(clip.curves[r.param]!.keys.map((k) => k.interp)).toEqual(['smooth', 'smooth']);
+  });
+
+  it('同一 defId 有两个实例时报歧义，并列出候选（chainIndex + 完整 id）', async () => {
+    const h = harness();
+    const r = await ok(
+      h.cp.addEffectClip(visualTrackId(h), {
+        start: 0,
+        end: 2,
+        chain: [{ defId: 'blur' }, { defId: 'blur' }],
+      }),
+    );
+    const res = await h.cp.setCurve(r.clipId, 'blur.radius', { keys: [{ t: 0, v: 1 }] } as never);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.code).toBe('invalid-argument');
+    const candidates = (res.error.detail as { candidates: { chainIndex: number; instanceId: string }[] })
+      .candidates;
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map((c) => c.chainIndex)).toEqual([0, 1]);
+    expect(candidates.every((c) => c.instanceId.length > 20)).toBe(true);
+  });
+
+  it('add_effect 返回完整 instanceId 与可直接用的 keyPrefix', async () => {
+    const h = harness();
+    const clipId = await blurClip(h);
+    const added = await ok(h.cp.addEffect(clipId, 'blur'));
+    // 完整 uuid（而不是截短的 fx-xxxxxxxx）：曲线键要原样拼得出来。
+    expect(added.instanceId.length).toBeGreaterThan(20);
+    expect(added.keyPrefix).toBe(`${added.instanceId}.`);
+    expect(added.chainIndex).toBe(1);
+    const r = await ok(h.cp.setCurve(clipId, `${added.keyPrefix}radius`, { keys: [{ t: 0, v: 3 }] } as never));
+    expect(r.param).toBe(`${added.instanceId}.radius`);
+  });
+});
+
+describe('绑定片段（boundClipId）', () => {
+  it('可以绑到一个 source 片段，写进工程里', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const src = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2 }));
+    const fx = await ok(
+      h.cp.addEffectClip(track, { start: 0, end: 1, chain: [{ defId: 'blur' }], boundClipId: src.clipId }),
+    );
+    const { clip } = h.store.findClip(fx.clipId)!;
+    if (clip.kind !== 'effect') throw new Error('应为特效片段');
+    expect(clip.boundClipId).toBe(src.clipId);
+  });
+
+  it('与影响深度互斥；目标必须是存在的 source 片段', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const src = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2 }));
+    expect(
+      await code(
+        h.cp.addEffectClip(track, {
+          start: 3,
+          end: 4,
+          chain: [{ defId: 'blur' }],
+          boundClipId: src.clipId,
+          affectDepth: 1,
+        }),
+      ),
+    ).toBe('invalid-argument');
+    expect(await code(h.cp.addEffectClip(track, { start: 3, end: 4, chain: [], boundClipId: 'nope' }))).toBe(
+      'not-found',
+    );
+    // 绑到另一条特效片段上不算「一层」—— 只接受 source。
+    const fx = await ok(h.cp.addEffectClip(track, { start: 5, end: 6, chain: [{ defId: 'blur' }] }));
+    expect(await code(h.cp.addEffectClip(track, { start: 7, end: 8, chain: [], boundClipId: fx.clipId }))).toBe(
+      'invalid-argument',
+    );
+  });
+
+  it('set_clip_props 可以解绑（null），解绑后 affectDepth 不再残留', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const src = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2 }));
+    const fx = await ok(
+      h.cp.addEffectClip(track, { start: 0, end: 1, chain: [{ defId: 'blur' }], boundClipId: src.clipId }),
+    );
+    const applied = await ok(h.cp.setClipProps(fx.clipId, { boundClipId: null }));
+    expect(applied.applied.boundClipId).toBeNull();
+    const { clip } = h.store.findClip(fx.clipId)!;
+    if (clip.kind !== 'effect') throw new Error('应为特效片段');
+    expect(clip.boundClipId).toBeUndefined();
+    expect(clip.affectDepth).toBeUndefined();
+  });
+});
+
+/* ------------------------------------- P1：段落 / 视觉字段 / 特效开关 / 换生成器 */
+
+describe('段落标记（edit_sections）', () => {
+  it('add / split / rename / move / remove，每一步一笔撤销', async () => {
+    const h = harness();
+    await ok(h.cp.setProject({ duration: 8 }));
+    const added = await ok(h.cp.editSections({ op: 'add', start: 2, name: '副歌' }));
+    expect(added.sections.map((s) => s.name)).toEqual(['副歌']);
+    const id = added.sections[0]!.id;
+
+    // 只有一段时，它的结尾 = 工程末尾（8s）；在 4s 处切 → 两段
+    const split = await ok(h.cp.editSections({ op: 'split', sectionId: id, at: 4 }));
+    expect(split.sections.map((s) => s.start)).toEqual([2, 4]);
+
+    const renamed = await ok(h.cp.editSections({ op: 'rename', sectionId: id, name: '主歌' }));
+    expect(renamed.sections[0]!.name).toBe('主歌');
+
+    const moved = await ok(h.cp.editSections({ op: 'move', sectionId: id, start: 0 }));
+    expect(moved.sections.map((s) => s.start)).toEqual([0, 4]);
+
+    const removed = await ok(h.cp.editSections({ op: 'remove', sectionId: id }));
+    expect(removed.sections).toHaveLength(1);
+
+    // 每一步都是一笔：撤销一次回到「两段」。
+    expect(h.store.undo()).toBe(true);
+    expect(h.store.project.sections).toHaveLength(2);
+  });
+
+  it('切不动 / 段落不存在都是可判别错误，且不改工程', async () => {
+    const h = harness();
+    await ok(h.cp.setProject({ duration: 4 }));
+    const added = await ok(h.cp.editSections({ op: 'add', start: 0 }));
+    const id = added.sections[0]!.id;
+    const before = JSON.stringify(h.store.project.sections);
+
+    expect(await code(h.cp.editSections({ op: 'split', sectionId: id, at: 0.001 }))).toBe('invalid-argument');
+    expect(await code(h.cp.editSections({ op: 'rename', sectionId: 'nope', name: 'x' }))).toBe('not-found');
+    expect(await code(h.cp.editSections({ op: 'add', start: Number.NaN }))).toBe('invalid-argument');
+    expect(JSON.stringify(h.store.project.sections)).toBe(before);
+  });
+});
+
+describe('片段视觉字段（set_clip_props 补齐）', () => {
+  /** 造一条音频片段：`add_clip` 不支持 audio（素材导入不在 Agent 职责内）。 */
+  function audioClip(h: Harness, end = 4): string {
+    const trackId = h.store.addTrack('audio');
+    const clipId = `aud-${end}`;
+    h.store.addClip(trackId, {
+      kind: 'audio',
+      id: clipId,
+      assetId: 'a1',
+      srcIn: 0,
+      start: 0,
+      end,
+      label: 'a',
+      fadeSec: 0,
+      curves: {},
+    });
+    return clipId;
+  }
+
+  it('音频 fadeIn / fadeOut 一次写入、互相钳制、只留一笔撤销', async () => {
+    const h = harness();
+    const clipId = audioClip(h, 4);
+    const r = await ok(h.cp.setClipProps(clipId, { fadeIn: 3, fadeOut: 3 }));
+    // 4 秒的片段：先写 in=3（out 还是 0），再写 out 只剩 1 秒。
+    expect(r.applied.fadeIn).toBe(3);
+    expect(r.applied.fadeOut).toBe(1);
+
+    expect(h.store.undo()).toBe(true);
+    const { clip } = h.store.findClip(clipId)!;
+    if (clip.kind !== 'audio') throw new Error('应为音频片段');
+    expect(clip.fadeIn ?? 0).toBe(0);
+    expect(clip.fadeOut ?? 0).toBe(0);
+  });
+
+  it('fadeIn 写在画面片段上是可判别的错误（不是静默忽略）', async () => {
+    const h = harness();
+    const solid = await ok(h.cp.addClip(visualTrackId(h), { kind: 'solid', color: '#000000', start: 0, end: 1 }));
+    expect(await code(h.cp.setClipProps(solid.clipId, { fadeIn: 1 }))).toBe('invalid-argument');
+  });
+
+  it('crop / quad 可写可清；退化的四角被拒绝', async () => {
+    const h = harness();
+    const solid = await ok(h.cp.addClip(visualTrackId(h), { kind: 'solid', color: '#000000', start: 0, end: 1 }));
+    const r = await ok(
+      h.cp.setClipProps(solid.clipId, {
+        crop: { left: 0.2, right: 0.2 },
+        quad: { tl: [0.1, 0], tr: [1, 0], br: [1, 1], bl: [0, 1] },
+      }),
+    );
+    expect((r.applied.crop as { left: number }).left).toBeCloseTo(0.2, 6);
+    expect((r.applied.quad as { tl: number[] }).tl).toEqual([0.1, 0]);
+
+    const cleared = await ok(h.cp.setClipProps(solid.clipId, { crop: null, quad: null }));
+    expect(cleared.applied.crop).toBeNull();
+    expect(cleared.applied.quad).toBeNull();
+
+    // 四点共线 = 退化：透视矩阵无解，画面上是「整层消失」。
+    expect(
+      await code(h.cp.setClipProps(solid.clipId, { quad: { tl: [0, 0], tr: [1, 1], br: [0, 0], bl: [1, 1] } })),
+    ).toBe('invalid-argument');
+  });
+
+  it('视频片段能改 srcIn（源内偏移），音频也能', async () => {
+    const h = harness();
+    h.store.commit('登记视频', (p) => {
+      p.assets['v1'] = { id: 'v1', kind: 'video', name: 'v' };
+    });
+    const video = await ok(
+      h.cp.addClip(visualTrackId(h), { kind: 'video', assetId: 'v1', srcIn: 0, start: 0, end: 2 }),
+    );
+    const r = await ok(h.cp.setClipProps(video.clipId, { srcIn: 1.5 }));
+    expect(r.applied.srcIn).toBe(1.5);
+
+    const audioId = audioClip(h, 2);
+    expect((await ok(h.cp.setClipProps(audioId, { srcIn: 0.5 }))).applied.srcIn).toBe(0.5);
+  });
+
+  it('key 只用于图片 / 视频，且能局部改参数、能关掉', async () => {
+    const h = harness();
+    h.store.commit('登记图片', (p) => {
+      p.assets['img1'] = { id: 'img1', kind: 'image', name: 'i' };
+    });
+    const img = await ok(h.cp.addClip(visualTrackId(h), { kind: 'image', assetId: 'img1', start: 0, end: 1 }));
+    const r = await ok(h.cp.setClipProps(img.clipId, { key: { color: '#00ff00', tolerance: 0.3 } }));
+    expect((r.applied.key as { color: string }).color).toBe('#00ff00');
+    // 局部改：只给 spill，颜色 / 容差沿用
+    const partial = await ok(h.cp.setClipProps(img.clipId, { key: { spill: 0.9 } }));
+    expect((partial.applied.key as { color: string; spill: number }).color).toBe('#00ff00');
+    expect((partial.applied.key as { spill: number }).spill).toBeCloseTo(0.9, 6);
+    expect((await ok(h.cp.setClipProps(img.clipId, { key: null }))).applied.key).toBeNull();
+
+    const algo = await ok(
+      h.cp.addClip(visualTrackId(h), { kind: 'algo', generator: 'mandelbrot', start: 2, end: 3 }),
+    );
+    expect(await code(h.cp.setClipProps(algo.clipId, { key: { color: '#00ff00' } }))).toBe('invalid-argument');
+  });
+});
+
+describe('特效实例开关（enabled）', () => {
+  it('set_params 可以只开关；只给参数时开关不变；都不给是错误', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const fx = await ok(h.cp.addEffectClip(track, { start: 0, end: 1, chain: [{ defId: 'blur' }] }));
+
+    const off = await ok(h.cp.setEffectParams(fx.clipId, 0, undefined, false));
+    expect(off.enabled).toBe(false);
+
+    const caps = await ok(h.cp.getCapabilities({ detail: 'params', ids: ['blur'] }));
+    const paramKey = caps.effects[0]!.params![0]!.key;
+    const tuned = await ok(h.cp.setEffectParams(fx.clipId, 0, { [paramKey]: 1 } as never, undefined));
+    expect(tuned.enabled).toBe(false);
+    expect(tuned.values[paramKey]).toBe(1);
+
+    expect(await code(h.cp.setEffectParams(fx.clipId, 0))).toBe('invalid-argument');
+  });
+
+  it('add_effect 可以直接建成停用', async () => {
+    const h = harness();
+    const fx = await ok(h.cp.addEffectClip(visualTrackId(h), { start: 0, end: 1, chain: [] }));
+    const added = await ok(h.cp.addEffect(fx.clipId, 'blur', {}, undefined, false));
+    expect(added.enabled).toBe(false);
+    const { clip } = h.store.findClip(fx.clipId)!;
+    if (clip.kind !== 'effect') throw new Error('应为特效片段');
+    expect(clip.chain[added.chainIndex]!.enabled).toBe(false);
+  });
+});
+
+describe('换算法生成器（set_generator）', () => {
+  it('参数重置为新生成器的默认值，旧参数曲线被删、其它曲线保留', async () => {
+    const h = harness();
+    const caps = await ok(h.cp.getCapabilities({ detail: 'params' }));
+    const a = caps.generators[0]!;
+    const b = caps.generators[1]!;
+    const oldKey = a.params![0]!.key;
+    expect(a.id).not.toBe(b.id);
+
+    const clip = await ok(
+      h.cp.addClip(visualTrackId(h), { kind: 'algo', generator: a.id, start: 0, end: 2 }),
+    );
+    // 手动种两条曲线：旧生成器的参数 + 通用 opacity
+    h.store.updateClip(clip.clipId, 'test', (c) => {
+      if (c.kind !== 'source' || c.source.type !== 'algo') return;
+      c.curves[oldKey] = { mode: 'keyframe', keys: [{ t: 0, v: 0 }] } as never;
+      c.curves.opacity = { mode: 'keyframe', keys: [{ t: 0, v: 1 }] } as never;
+    });
+
+    const next = await ok(h.cp.setGenerator(clip.clipId, b.id, {}));
+    expect(next.generator).toBe(b.id);
+    // 新生成器的默认值全部落库（不是只留给定的那几个）
+    expect(Object.keys(next.params).sort()).toEqual(b.params!.map((p) => p.key).sort());
+
+    const after = h.store.findClip(clip.clipId)!;
+    if (after.clip.kind !== 'source' || after.clip.source.type !== 'algo') throw new Error('应为算法片段');
+    expect(after.clip.source.generator).toBe(b.id);
+    expect(after.clip.curves[oldKey]).toBeUndefined();
+    expect(after.clip.curves.opacity).toBeDefined();
+  });
+
+  it('非算法片段 / 不存在的生成器都是可判别错误', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const solid = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 1 }));
+    expect(await code(h.cp.setGenerator(solid.clipId, 'mandelbrot'))).toBe('unsupported');
+    const algo = await ok(h.cp.addClip(track, { kind: 'algo', generator: 'mandelbrot', start: 1, end: 2 }));
+    expect(await code(h.cp.setGenerator(algo.clipId, 'definitely-not-a-generator'))).toBe('not-found');
+  });
+});

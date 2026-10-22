@@ -97,6 +97,26 @@ const REPEAT_WARN = 3;
 const REPEAT_WARN_AGAIN = 6;
 const REPEAT_HARD = 12;
 
+/**
+ * 「同一组参数」不等于「同一个问题」的工具。
+ *
+ * `render_frame` / `frame_signature` 的入参只有 t 与 size —— 工程在这两次调用
+ * 之间被改过时，重新渲一次恰恰是**正确**的动作。判据因此带上场景版本
+ * （`control.sceneVersion()`：内容版本 + 播放头），工程变了就重新计数。
+ */
+const SCENE_SENSITIVE_TOOLS = new Set(['render_frame', 'frame_signature']);
+
+/** 重复调用的判据键（纯函数，单测覆盖）。场景敏感的工具带上版本。 */
+export function repeatKeyOf(
+  name: string,
+  argsJson: string,
+  scene?: { version: number; playT: number } | null,
+): string {
+  const base = `${name}:${argsJson}`;
+  if (!scene || !SCENE_SENSITIVE_TOOLS.has(name)) return base;
+  return `${base}@${scene.version}:${scene.playT}`;
+}
+
 /** 第 n 次重复同一个「工具 + 参数」时该做什么（纯函数，单测覆盖）。 */
 /** 控制平面结果 → 工具结果。与 `executor` 的包装同形，避免回环里再造一份。 */
 function outcomeOf<T>(r: ControlResult<T>): ToolOutcome {
@@ -583,7 +603,12 @@ export class AgentSession {
            * 之后每一条消息都 400）。改成**附加在这条 tool 结果后面**：结构不变，
            * 模型照样读得到。
            */
-          const key = `${call.name}:${call.arguments}`;
+          let scene: { version: number; playT: number } | null = null;
+          if (SCENE_SENSITIVE_TOOLS.has(call.name)) {
+            const v = await this.opts.control.sceneVersion();
+            if (v.ok) scene = v.data;
+          }
+          const key = repeatKeyOf(call.name, call.arguments, scene);
           const n = (repeat.get(key) ?? 0) + 1;
           repeat.set(key, n);
           const repeatStep = repeatAction(n);

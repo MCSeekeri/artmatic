@@ -19,6 +19,7 @@
 │   └── .trash/         清理掉的未使用素材（先搬进来，不直接删）
 ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
 ├── plugins/            这个工程挂的插件（一个插件 = 一个 .js），见 `src/plugins/AGENTS.md`
+├── agent/sessions/     Agent 对话历史（一个会话 = 一个 <id>.json），见 `agent-history.ts`
 └── thumbs/             缩略图缓存（可丢弃）
 ```
 
@@ -29,6 +30,14 @@
 - `src/project/layout.ts` 是路径规则的唯一真源。路径一律按**段数组**处理，不拼字符串再拆
   —— FSA 的 `name` 里不允许出现分隔符。`plugins/` 也走这一套
   （`pluginPathSegments` / `safePluginId`），并已加入 `PROJECT_DIRS`。
+- **`agent/sessions/` 是工程数据，不是缓存**（与 `plugins/` 同类）：删了就是丢对话
+  历史，所以它不在可丢弃清单里。一个会话一个文件是刻意的：
+  - 一轮对话只重写自己那个文件（整份重写 = 30 × 400 条摘要跟着每次落盘）；
+  - 删会话是 unlink，不用「读全量 → 过滤 → 重写」；
+  - 一个坏文件只丢一条会话（`readAgentHistory` 只记 `failed`），工程照常打开。
+  **不做索引文件**：目录列表就是索引（30 个小文件）。排序口径在
+  `agent/history.ts::sanitizeAgentSessions`，别在 IO 层再写一份。写失败只
+  `console.error` —— 历史是日志，不挡保存、不挡打开。
 - **`project.json` 不写 `savedAt`**：写进去会让「内容没变 → 字节没变」失效。
 - **原子性由浏览器提供**：`createWritable()` 默认 siloed 模式（同目录写 `.crswap`，
   `close()` 时才 rename）。Web 上**没有 fsync**。我们能自己做的只有两件：

@@ -79,6 +79,25 @@ const OPT_CLIP_ID = p('clipId', 'string', 'Text clip id. Omit to use the documen
 const ELEMENT_ID = req('elementId', 'string', 'Typography element id.');
 const T = p('t', 'number', 'Time in SECONDS (snapped to the frame grid). Omit = current playhead.');
 const SIZE = p('size', 'size', 'Pixel size { w, h }. Omit = project resolution.');
+const ONLY = p(
+  'only',
+  'json',
+  'Isolate before rendering: { trackId?: string | string[], elementId?: string | string[] }. ' +
+    'Every visual track NOT listed is hidden — INCLUDING effect (adjustment) clips living on their ' +
+    'own tracks, so a chain on ANOTHER track will not show up here. Isolation answers "what does ' +
+    'this track look like on its own"; it is NOT a way to test an effect chain (render without ' +
+    '`only` for that, and read `layers` in the result to see what actually composited). ' +
+    'Effects BOUND to a listed clip (boundClipId) do stay, because they are part of that layer. ' +
+    'The project is NOT modified.',
+);
+
+const REGION = p(
+  'region',
+  'json',
+  'Zoom into a part of the frame: { x, y, w, h } in 0..1 of the rendered image. The crop is ' +
+    'upscaled (nearest neighbour, to >=480px wide) so fine detail (ASCII, halftone, small type) ' +
+    'is readable without rendering the whole frame at a huge size.',
+);
 
 export const AGENT_TOOLS: ToolSpec[] = [
   /* ---------------------------------------------------------------- 读 */
@@ -133,8 +152,9 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'get_typography_capabilities',
     description:
-      'Shape kinds (with supported params), 22 procedural SVG generators (with parameter schemas), ' +
-      'themes, paint forms, blend modes, layout ops.',
+      'Shape kinds (with supported params), 22 procedural SVG generators (with parameter schemas ' +
+      'and semantic notes), themes, paint forms, blend modes, layout ops, and a `units` block ' +
+      'that says what the numbers mean (px vs 0..1 ratios, rot in radians, generator box).',
     params: [],
     writes: false,
   },
@@ -142,7 +162,10 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'get_typography_doc',
     description:
       "A text clip's typography document. detail:'ids' gives element ids / kinds / frames only; " +
-      "detail:'full' also gives styles, paints, text and generator state.",
+      "detail:'full' (the default) also gives styles, paints, text, 3D, generator state and " +
+      'animations (preset / keys / custom css verbatim). The full view is round-trippable: what ' +
+      'you read back can be edited and sent to typo_replace_doc (unknown keys come back in ' +
+      '`droppedKeys`, bad animation entries in `droppedAnimations` — read both fields).',
     params: [OPT_CLIP_ID, p('detail', 'string', "ids | full (default full).", { enum: ['ids', 'full'] })],
     writes: false,
   },
@@ -163,15 +186,39 @@ export const AGENT_TOOLS: ToolSpec[] = [
     description:
       'Cheap numeric fingerprint of a frame: per-channel means, spread (structure detector), ' +
       'block means, sample colors. Use this for self-checks; use render_frame when you must look.',
-    params: [T, SIZE, p('grid', 'integer', 'Block grid size (default 4).')],
+    params: [T, SIZE, p('grid', 'integer', 'Block grid size (default 4).'), ONLY],
     writes: false,
   },
   {
     name: 'render_frame',
     description:
       'Render one frame through the real preview/export path and return it as an image. ' +
-      'Default size 640x360 (cheap). Use it to judge composition and visual quality.',
-    params: [T, SIZE],
+      'Default size 640x360 (cheap). Use it to judge composition and visual quality. ' +
+      'Pass `only` to look at a single track or typography element in isolation. ' +
+      'Pass `region` to zoom into a part of the frame. ' +
+      'The result also lists `layers` — the tracks/clips that actually composited, which is how ' +
+      'you tell "the isolation hid it" apart from "my parameter did nothing".',
+    params: [T, SIZE, ONLY, REGION],
+    writes: false,
+    slow: true,
+  },
+  {
+    name: 'render_sequence',
+    description:
+      'Render several frames over a time range and return them as ONE contact-sheet image ' +
+      '(row-major, each cell labelled with its time). This is how you judge rhythm, beat sync ' +
+      'and motion: a single still cannot show whether an accent lands on the beat. ' +
+      '`from` / `to` / `step` are SECONDS; default is 6 evenly spaced frames, max 24. ' +
+      'Use a small `size` (e.g. 240x135) — each cell is a thumbnail.',
+    params: [
+      p('from', 'number', 'Start time in seconds (default 0).'),
+      p('to', 'number', 'End time in seconds (exclusive; default project duration).'),
+      p('step', 'number', 'Spacing in seconds (default: fit ~6 frames into the range).'),
+      SIZE,
+      p('cols', 'integer', 'Columns in the sheet (default 3, max 6).'),
+      ONLY,
+      REGION,
+    ],
     writes: false,
     slow: true,
   },
@@ -218,7 +265,12 @@ export const AGENT_TOOLS: ToolSpec[] = [
     description:
       "Add a source clip. kind: solid | algo | image | video | text. For algo pass `generator` + " +
       '`params` (keys from get_capabilities). For text, `doc` is optional: an empty document is created ' +
-      'and you fill it with typo_* tools. Times in seconds.',
+      'and you fill it with typo_* tools. Times in seconds.\n' +
+      '`fit` defaults: solid = stretch (its source is a 1x1 texture, so contain would draw a ' +
+      'centred SQUARE instead of filling the frame), everything else = contain. ' +
+      'Adding a clip past the current end grows project.duration — that is intentional (the tail ' +
+      'is what an outgoing transition fades into black); call set_project({duration}) if you need ' +
+      'the old length back.',
     params: [
       req('trackId', 'string', 'Visual track id.'),
       req('kind', 'string', 'solid | algo | image | video | text', {
@@ -245,7 +297,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'add_effect_clip',
     description:
-      'Add an effect (adjustment) clip. It only affects tracks BELOW it. `chain` is applied in order.',
+      'Add an effect clip. Two modes, pick deliberately:\n' +
+      '1) adjustment layer (default): affects the composite of the tracks BELOW it, `affectDepth` ' +
+      'limits it to the nearest N enabled tracks. Costs one extra track.\n' +
+      '2) BOUND to one clip (`boundClipId`): the chain runs on that clip\'s own layer only, after ' +
+      'placement and before its blend — z order is irrelevant, and it does not affect anything ' +
+      'else. This is the one to use for beat-level accents (a 0.25s strobe on one shot): it needs ' +
+      'no dedicated track per hit, and "which layer is this on" is explicit instead of implied by ' +
+      'track position. A bound clip must be a source clip; `boundClipId` and `affectDepth` are ' +
+      'mutually exclusive.\n' +
+      'Tracks are cheap in the model but expensive for a human to read: prefer one effect clip with ' +
+      'a longer chain (and curves) over a track per effect, and prefer `boundClipId` over a new ' +
+      'track per accent.',
     params: [
       req('trackId', 'string', 'Visual track id.'),
       req('start', 'number', 'Start time in seconds.'),
@@ -253,7 +316,8 @@ export const AGENT_TOOLS: ToolSpec[] = [
       p('chain', 'json', 'Array of { defId, values? } (defIds from get_capabilities).'),
       p('label', 'string', 'Clip label.'),
       p('fadeSec', 'number', 'Fade duration in seconds.'),
-      p('affectDepth', 'integer', 'Only the nearest N enabled tracks below (0 = all).'),
+      p('affectDepth', 'integer', 'Only the nearest N enabled tracks below (0 = all). Not with boundClipId.'),
+      p('boundClipId', 'string', 'Bind the chain to this source clip instead of using z order.'),
     ],
     writes: true,
   },
@@ -294,44 +358,104 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'set_clip_props',
     description:
-      'Patch label / fadeSec / blend / opacity / transform / fit / affectDepth. ' +
-      'transform is { x, y, sx, sy, rot } with x/y as 0..1 anchors and rot in radians.',
+      'Patch clip fields. Whitelisted keys:\n' +
+      '  label, fadeSec (visual clip cut fade), blend, opacity, transform { x, y, sx, sy, rot } ' +
+      '(x/y are 0..1 anchors, rot is RADIANS), fit, affectDepth, boundClipId\n' +
+      '  fadeIn / fadeOut — AUDIO clips only, seconds. Clamped so fadeIn + fadeOut <= clip length; 0 removes.\n' +
+      '  srcIn — audio / video source offset in seconds (shifting the content inside the clip, ' +
+      'without moving its edges).\n' +
+      '  crop — source clips: { left?, top?, right?, bottom? } as fractions of the SOURCE (0..1) that ' +
+      'are cut away. It only narrows the visible window (AE Crop), it does not scale the content. ' +
+      'null removes it; all-zero removes it too.\n' +
+      '  quad — source clips: { tl, tr, br, bl }, each [x, y] in layer space (0..1 = the layer box). ' +
+      'null removes it; a degenerate (zero-area) quad is rejected because it renders as nothing.\n' +
+      '  key — image / video clips: chroma key { color: "#rrggbb", tolerance?, softness?, spill? } ' +
+      '(0..1 each; omitted fields keep their current value). null removes it.\n' +
+      'boundClipId (effect clips only) rebinds the chain to one source clip — null unbinds; it ' +
+      'replaces affectDepth (they are mutually exclusive). ' +
+      'Returns `applied` with the stored value of each field you sent (null = the effect is off).',
     params: [CLIP_ID, req('patch', 'json', 'Whitelisted fields only.')],
     writes: true,
   },
   {
     name: 'set_params',
     description:
-      "Set source params (target:'source') or an effect instance's params (target:'effect' + chainIndex). " +
-      'Unknown keys are rejected — read get_capabilities first.',
+      "Set source params (target:'source') or one effect instance (target:'effect' + chainIndex).\n" +
+      "On target:'effect' you may pass `params`, `enabled`, or both — switching a single instance " +
+      'off is how you tell two candidate looks apart without removing anything.\n' +
+      'Unknown keys are rejected — read get_capabilities first. Returns `values` with the stored ' +
+      'value of each key you sent (defaults and clamps already applied) plus the stored `enabled`.',
     params: [
       CLIP_ID,
       req('target', 'string', 'source | effect', { enum: ['source', 'effect'] }),
       p('chainIndex', 'integer', 'Effect index inside the chain (required for target=effect).'),
-      req('params', 'scalars', 'Parameter key/value pairs.'),
+      p('params', 'scalars', 'Parameter key/value pairs (optional when `enabled` is given).'),
+      p('enabled', 'boolean', "target=effect only: switch this instance on / off."),
+    ],
+    writes: true,
+  },
+  {
+    name: 'set_generator',
+    description:
+      "Replace an algo clip's generator (start / end / blend / non-generator curves are kept). " +
+      'Params are reset to the new generator\'s defaults and then merged with `params`. ' +
+      'Curves keyed by the OLD generator\'s params are deleted — they do not exist on the new one. ' +
+      'Returns the stored generator + params.',
+    params: [
+      CLIP_ID,
+      req('generator', 'string', 'Generator id (get_capabilities.generators).'),
+      p('params', 'scalars', 'Parameter overrides for the new generator.'),
     ],
     writes: true,
   },
   {
     name: 'set_curve',
     description:
-      'Attach a keyframe curve to a parameter, or pass null to remove it. ' +
-      'Only range parameters can be keyframed. Keys are relative to clip start unless curve.beatAnchor.',
+      'Attach a keyframe curve to a parameter, or pass null to remove it. Only range parameters ' +
+      'can be keyframed.\n' +
+      'CURVE SCHEMA — exactly these keys, no others:\n' +
+      '{\n' +
+      '  mode?: "keyframe" | "impulse" | "follower",   // default "keyframe"\n' +
+      '  keys: [{\n' +
+      '    t: number,          // SECONDS. Relative to clip.start, or to the anchored beat when\n' +
+      '                        // curve.beatAnchor is set. Must be non-decreasing across keys.\n' +
+      '    v: number,          // the value (NOT "value"), in the parameter\'s own unit\n' +
+      '    interp?: "linear" | "step" | "smooth" | "bezier",  // default "smooth"; affects the\n' +
+      '                        // segment FROM this key to the NEXT one\n' +
+      '    hOut?: [dx, dy],    // bezier out-handle, offset from this key, [seconds, value]\n' +
+      '    hIn?: [dx, dy]      // bezier in-handle, offset from this key, [seconds, value]\n' +
+      '  }],\n' +
+      '  beatAnchor?: { beat: number } | null,   // keys\' t=0 sits on that beat (follows BPM changes)\n' +
+      '  impulse?: { decay: number },            // mode "impulse": decay seconds, default 0.3\n' +
+      '  follower?: { attack: number; release: number }  // mode "follower", default 0.05 / 0.3\n' +
+      '}\n' +
+      'Example: {"keys":[{"t":0,"v":0,"interp":"smooth"},{"t":0.5,"v":1,"interp":"smooth"}]}\n' +
+      'PARAM ADDRESSING — `param` accepts, in order of preference:\n' +
+      '  - "<instanceId>.<key>" for an effect parameter (full id, or any unique prefix)\n' +
+      '  - "<defId>.<key>" when only ONE instance of that effect exists in the chain,\n' +
+      '    e.g. "blur.amount" (readable form; ambiguous defId returns both candidates)\n' +
+      '  - "<key>" alone for a source param (opacity / transform.x / generator keys)\n' +
+      '  - "gain" for an audio clip\n' +
+      'Not curvable => the error detail.allowed lists every legal key for that clip.',
     params: [
       CLIP_ID,
-      req('param', 'string', 'Parameter key (from get_clip.curves / capability params).'),
-      p('curve', 'curve', 'Curve object, or null / omitted to remove the curve.'),
+      req('param', 'string', 'Parameter key — see the addressing rules in the tool description.'),
+      p('curve', 'curve', 'Curve object (schema in the description), or null to remove the curve.'),
     ],
     writes: true,
   },
   {
     name: 'add_effect',
-    description: "Append (or insert at `index`) an effect instance to an effect clip's chain.",
+    description:
+      "Append (or insert at `index`) an effect instance to an effect clip's chain. Returns " +
+      '{ instanceId, chainIndex, keyPrefix } — `keyPrefix + "<param>"` is exactly what set_curve ' +
+      'expects for this instance (e.g. "b7f0…-4a.amount"), so there is no need to re-read the clip.',
     params: [
       CLIP_ID,
       req('defId', 'string', 'Effect def id.'),
       p('values', 'scalars', 'Parameter overrides (defaults are filled in).'),
       p('index', 'integer', 'Insert position (default: end).'),
+      p('enabled', 'boolean', 'Create the instance disabled (default true).'),
     ],
     writes: true,
   },
@@ -375,6 +499,28 @@ export const AGENT_TOOLS: ToolSpec[] = [
       p('duration', 'number', 'Duration in seconds.'),
       p('beatGrid', 'json', '{ bpm, offset, beatsPerBar }.'),
       p('overlapBehavior', 'string', 'push | reject | trim', { enum: ['push', 'reject', 'trim'] }),
+    ],
+    writes: true,
+  },
+  {
+    name: 'edit_sections',
+    description:
+      'Add / split / rename / remove / move a section marker. Sections store ONLY their start time: ' +
+      'a section ends where the next one begins, and the last one ends at project duration. That is ' +
+      'why "mark the drop" is `add` and "cut this one here" is `split`.\n' +
+      'op: add { start, name? } | split { sectionId, at } | rename { sectionId, name } | ' +
+      'remove { sectionId } | move { sectionId, start }.\n' +
+      'start / at are SECONDS. add clamps to [0, duration]; split fails when either half would be ' +
+      'shorter than the minimum gap (nothing is changed in that case). ' +
+      'Returns the full sections list (sorted, start only) — read it back instead of re-fetching the scene.',
+    params: [
+      req('op', 'string', 'add | split | rename | remove | move', {
+        enum: ['add', 'split', 'rename', 'remove', 'move'],
+      }),
+      p('sectionId', 'string', 'Target section (split / rename / remove / move).'),
+      p('start', 'number', 'Start time in SECONDS (add / move).'),
+      p('at', 'number', 'Cut time in SECONDS (split).'),
+      p('name', 'string', 'Display name (add / rename).'),
     ],
     writes: true,
   },
@@ -425,15 +571,39 @@ export const AGENT_TOOLS: ToolSpec[] = [
       "Add a text / shape / image element. element.kind selects the variant: " +
       "{kind:'text', text, frame?, style?, fill?, boxFill?, boxStroke?} | " +
       "{kind:'shape', shape, frame?, fill?, stroke?, radius?, sides?, waist?, inner?, angle?, path?} | " +
-      "{kind:'image', assetId, frame?, fit?, crop?}. Frames are { x, y, w, h, rot } in document px.",
+      "{kind:'image', assetId, frame?, fit?, crop?}. " +
+      'Every variant also accepts `animation` (one) or `animations` (array) — same schema as ' +
+      'typo_set_animation (preset / keys / custom css), so the element can arrive already ' +
+      'animated in ONE call — plus `transform3d` for element-level 3D. ' +
+      'Frames are { x, y, w, h, rot } in document px (rot in radians). Returns the stored element. ' +
+      'Defaults you must know: a shape or generated shape is created with fill:none and no ' +
+      'stroke — nothing is drawn unless you pass `fill` / `stroke` (the editor UI uses an accent ' +
+      'fill, the agent path deliberately does not). For text, fill:{kind:\'solid\',color} is ' +
+      'applied to style.color (gradient / radial / texture stay in `fill`). ' +
+      'Units: radius / inner in px, waist is 0..1, angle in degrees, fontSize / letterSpacing in px.',
     params: [OPT_CLIP_ID, req('element', 'json', 'Element input (see description).')],
+    writes: true,
+  },
+  {
+    name: 'typo_add_elements',
+    description:
+      'Add many elements in ONE call and ONE undo entry. `elements` is an array of the same ' +
+      'element inputs as typo_add_element; array order IS z order (later = in front). Use this ' +
+      'instead of a long serial chain of typo_add_element calls. Returns { elementIds, elements } ' +
+      'with the stored values.',
+    params: [
+      OPT_CLIP_ID,
+      req('elements', 'json', 'Array of element inputs (same shape as typo_add_element.element).'),
+    ],
     writes: true,
   },
   {
     name: 'typo_add_generated_shape',
     description:
       'Insert one of the 22 procedural SVG generators (rings, barcodes, contours, ...). Pass genId and ' +
-      'optionally params / seed; the element becomes an ordinary shape afterwards.',
+      'optionally params / seed; the element becomes an ordinary shape afterwards. Read the ' +
+      "generator's `notes` in get_typography_capabilities for units and clamping. Returns the " +
+      'stored element.',
     params: [
       OPT_CLIP_ID,
       req('genId', 'string', 'Generator id (get_typography_capabilities).'),
@@ -450,12 +620,76 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'typo_update_element',
     description:
       'Patch one element: name, frame, blend, opacity, visible, locked, text, style, fill, boxFill, ' +
-      'boxStroke, glyphStroke (text only: {color, width}, -webkit-text-stroke), ' +
-      'stroke, radius, sides, waist, inner, angle, evenOdd, fit, crop, ' +
+      'boxStroke, glyphStroke (text only: {color, width}, -webkit-text-stroke), autoHeight ' +
+      '(text only), stroke, radius, sides, waist, inner, angle, evenOdd, fit, crop, ' +
       'shadows (array of {color, dx, dy, blur}, document px), blur (px), ' +
-      'gen (to re-seed a generated shape). Unknown keys are ignored.',
+      'transform3d (MERGES — send only {rotate:{y:35}} to tilt; null removes 3D), ' +
+      'path (shape:"svg" only — writing it clears the generator binding, i.e. it bakes the shape; ' +
+      'pair it with pathUnit:"px" for text-outline paths), pathUnit, clipFrame, ' +
+      'gen (to re-seed a generated shape), animations (replace the list) / animation (replace ' +
+      'with one) / addAnimation (append) / removeAnimations:true. Unknown keys are ignored. ' +
+      'Returns the whole element ' +
+      "as stored, so you don't need to re-read the document to confirm it landed. " +
+      "For text, fill:{kind:'solid',color} writes style.color (same field, one semantics).",
     params: [OPT_CLIP_ID, ELEMENT_ID, req('patch', 'json', 'Whitelisted fields.')],
     writes: true,
+  },
+  {
+    name: 'typo_update_elements',
+    description:
+      'Patch many elements in ONE call and ONE undo entry. `updates` is [{ elementId, patch }]. ' +
+      'Every id is validated before anything changes. Returns { changed, elements } with the ' +
+      'stored values — use this to restyle a whole set (e.g. 21 layers) without 21 round trips.',
+    params: [
+      OPT_CLIP_ID,
+      req('updates', 'json', 'Array of { elementId, patch } (same patch keys as typo_update_element).'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_set_animation',
+    description:
+      'Attach / replace / clear an element animation (the same CSS animation system the editor ' +
+      'uses — it renders in exports too, driven by the project clock).\n' +
+      'animation is ONE of:\n' +
+      '  { css: "<@keyframes blocks + animation shorthand>", duration?, delay?, loop?, easing?, ' +
+      'direction?, fill? }\n' +
+      '  { preset: "<name>", duration?, delay?, loop?, easing?, direction?, fill?, params? }\n' +
+      '  { keys: [ { at, opacity?, x?, y?, sx?, sy?, rot?, blur? }, ... ], duration?, delay?, ' +
+      'loop?, easing? }\n' +
+      'css is the editor\'s "custom animation" syntax: one or more `@keyframes name{…}` blocks plus ' +
+      'ONE top-level `animation: name 1s ease 0s 1 normal both;` (comma-separate several). A bare ' +
+      'keyframes body (`from{opacity:0}to{opacity:1}`) still works and takes its timing from ' +
+      'duration / delay / loop / easing. Any animatable CSS property is allowed and names are ' +
+      'namespaced per element — use this for 3D flips, clip-path wipes, color / background motion. ' +
+      'Rejected (with the exact reason): top-level selectors, @import / @charset / @namespace, tags.\n' +
+      'Preset names: call get_typography_capabilities().animations.presets (e.g. fade-in, ' +
+      'slide-in-up, zoom-in, pop, spin, pulse, shake, blur-in).\n' +
+      'keys[]: at is 0..1 of the animation, or { beat: n } (converted with the project BPM). ' +
+      'x / y are px offsets, sx / sy scale, rot in DEGREES, blur in px, opacity 0..1. 2..20 keys.\n' +
+      'duration / delay are SECONDS. loop: "once" | "infinite" | number.\n' +
+      'Pass animation:null to remove every animation from the element. mode:"add" stacks a ' +
+      'second animation instead of replacing (each one gets its own wrapper, so fade + shake ' +
+      'compose). Returns the stored element with the full animation list (css included, so it ' +
+      'can be edited and sent back verbatim).',
+    params: [
+      OPT_CLIP_ID,
+      ELEMENT_ID,
+      p('animation', 'json', 'Animation object (schema above), or null to clear.'),
+      p('mode', 'string', 'replace (default) | add', { enum: ['replace', 'add'] }),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_measure',
+    description:
+      'Measure a typography document WITHOUT rendering: per-element frame, measured text content ' +
+      'height / line count / clipped overflow, how far elements stick out of the canvas, and ' +
+      'pairwise overlaps (text-on-text flagged). Use it instead of guessing pixels when text ' +
+      'overflows its box or elements collide, and before moving things around by trial and error. ' +
+      'Text sizes are measured in the browser; `estimated:true` means no DOM was available.',
+    params: [OPT_CLIP_ID, p('elementIds', 'stringArray', 'Only these elements. Omit = all.')],
+    writes: false,
   },
   {
     name: 'typo_set_text',
@@ -534,7 +768,12 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'typo_replace_doc',
     description:
       'Replace the whole typography document (one undo entry). Bad elements are dropped instead of ' +
-      'failing the whole call — check the returned `dropped` count.',
+      'failing the whole call — check the returned `dropped` count. Keys/fields that were not ' +
+      'recognised come back in `droppedKeys` (e.g. "elements[2].colour"); animation entries that ' +
+      'failed validation come back in `droppedAnimations` (e.g. "elements[2].animations[0]") — ' +
+      'nothing is silently normalised away. Animations (preset, keys AND custom css) are ' +
+      'preserved, so a document read with detail:full can be edited and written straight back. ' +
+      '`text` is plain text; inline per-run formatting is not expressible here.',
     params: [OPT_CLIP_ID, req('doc', 'json', 'A complete TypographyDocument.')],
     writes: true,
   },

@@ -23,6 +23,7 @@ import {
   createTextElement,
   defaultTextStyle,
   defaultTransform3D,
+  mergeTransform3D,
   type ElementShadow,
   type ImageElement,
   type MixBlend,
@@ -33,7 +34,7 @@ import {
   type TextStyle,
   type TextStyleShadow,
   type TextureFrame,
-  type Transform3D,
+  type Transform3DPatch,
   type TypographyDocument,
   type TypographyElement,
   type ZOrderOp,
@@ -559,19 +560,8 @@ function strokePaintNext(cur: Stroke | null | undefined, patch: ShapePaintPatch)
 /** `patchTransform3d` 的写库体（同样的理由：commit 与实时预览必须同源）。 */
 function applyTransform3d(doc: TypographyDocument, patch: Transform3DPatch): void {
   for (const el of anyElement(doc)) {
-    // 面板只在启用后才显示控件；这里再兜一道，免得别处调进来写出半个对象。
-    const t = el.transform3d ?? defaultTransform3D();
-    el.transform3d = {
-      ...t,
-      perspective: patch.perspective ?? t.perspective,
-      translate: { ...t.translate, ...patch.translate },
-      rotate: { ...t.rotate, ...patch.rotate },
-      scale: { ...t.scale, ...patch.scale },
-      skew: { ...t.skew, ...patch.skew },
-      origin: { ...t.origin, ...patch.origin },
-      backface: patch.backface ?? t.backface,
-      style: patch.style ?? t.style,
-    };
+    // 面板只在启用后才显示控件；合并函数从恒等值起算，免得别处调进来写出半个对象。
+    el.transform3d = mergeTransform3D(el.transform3d, patch);
   }
 }
 
@@ -736,23 +726,6 @@ function placeImageAssetImpl(
 }
 
 /* ------------------------------------------------------------ 动作表 */
-
-/**
- * 3D 参数的补丁：嵌套对象**逐层合并**，只写要改的键。
- *
- * 为什么不用 `Partial<Transform3D>`：那样 `translate` 只能整组替换 ——
- * 面板里改一个 X 就得把 Y / Z 一起读上来再传回去，多一处会写错的地方。
- */
-export interface Transform3DPatch {
-  perspective?: number;
-  translate?: Partial<Transform3D['translate']>;
-  rotate?: Partial<Transform3D['rotate']>;
-  scale?: Partial<Transform3D['scale']>;
-  skew?: Partial<Transform3D['skew']>;
-  origin?: Partial<Transform3D['origin']>;
-  backface?: Transform3D['backface'];
-  style?: Transform3D['style'];
-}
 
 export interface TypographyActions {
   /* 文本 */

@@ -95,6 +95,14 @@ export interface ResolvedSource {
    * 走与改动前逐位相同的算式。
    */
   crop?: CropSettings;
+  /**
+   * **绑定在这层上的特效链**（`EffectClip.boundClipId === clip.id`，v11）。
+   *
+   * 与 `EffectOp` 的区别：它们不作用于 acc，而是在 placement 之后、blend 之前
+   * 直接跑在**这一层**上（见 `compositor.placeLayer`）。缺省不带这个字段 ——
+   * 「没有绑定」必须与改动前的路径逐字节相同。
+   */
+  bound?: EffectClip[];
 }
 
 /**
@@ -183,7 +191,12 @@ export function paramWithCurve(
  * `key` / `quad` 也在这一步解析，于是转场窗口里 from / to 各自带着自己的抠图与
  * 四角 —— 转场通路对两侧各调一次 placement，它们天然相互独立。
  */
-function resolveSource(clip: SourceClip, t: number, grid: BeatGrid): ResolvedSource {
+function resolveSource(
+  clip: SourceClip,
+  t: number,
+  grid: BeatGrid,
+  bound?: EffectClip[],
+): ResolvedSource {
   const opacity =
     paramWithCurve(clip, 'opacity', clip.opacity, t, grid) * fadeWeight(clip, clip.fadeSec, t);
   const out: ResolvedSource = {
@@ -203,6 +216,7 @@ function resolveSource(clip: SourceClip, t: number, grid: BeatGrid): ResolvedSou
   if (clip.key) out.key = clip.key;
   if (clip.quad && !isIdentityQuad(clip.quad)) out.quadInverse = quadInverseMatrix(clip.quad);
   if (clip.crop && !isIdentityCrop(clip.crop)) out.crop = clip.crop;
+  if (bound && bound.length > 0) out.bound = bound;
   return out;
 }
 
@@ -237,6 +251,42 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
   // 只导某轨时其余视觉轨一律跳过（z 编号不受影响，见 BuildStackOptions）。
   const onlyTrackId = opts?.onlyTrackId;
 
+  /*
+   * 绑定片段（v11）的预处理：先把「这一帧生效的、绑在某片段上的链」收成一张表，
+   * 推 source op 时再挂上去。
+   *
+   * **不受 `onlyTrackId` 影响**：绑定链属于目标片段自己的样子（它就是那一段的
+   * 滤镜），隔离观察这一层时它必须一起出现 —— 否则 `only` 看到的是一张「少了
+   * 滤镜」的图，而 agent 会把它当成「参数没生效」。
+   *
+   * 同一个目标被多条绑定时按 z **升序**（下方轨道那条先跑），这样链的先后由
+   * 轨道序决定、而不是由 `tracks[]` 的迭代顺序偷偷决定。
+   */
+  const boundChains = new Map<string, EffectClip[]>();
+  {
+    const byTarget = new Map<string, { z: number; clip: EffectClip }[]>();
+    for (const track of project.tracks) {
+      if (!track.enabled || track.kind !== 'visual') continue;
+      const z = last - visualIndex.get(track.id)!;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'effect' || !clip.boundClipId) continue;
+        if (t < clip.start || t >= clip.end) continue;
+        // 整条链都没启用 = 这条片段什么也不做，连挂都不挂。
+        if (!clip.chain.some((inst) => inst.enabled)) continue;
+        const list = byTarget.get(clip.boundClipId);
+        if (list) list.push({ z, clip });
+        else byTarget.set(clip.boundClipId, [{ z, clip }]);
+      }
+    }
+    for (const [id, list] of byTarget) {
+      list.sort((a, b) => a.z - b.z);
+      boundChains.set(
+        id,
+        list.map((x) => x.clip),
+      );
+    }
+  }
+
   project.tracks.forEach((track) => {
     if (!track.enabled || track.kind !== 'visual') return;
     if (onlyTrackId !== undefined && track.id !== onlyTrackId) return;
@@ -260,8 +310,9 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
             op: {
               type: 'transition',
               z,
-              from: resolveSource(win.from, t, grid),
-              to: resolveSource(win.to, t, grid),
+              // 转场两侧各带自己的绑定链：贴在 from 上的滤镜不该跑到 to 上。
+              from: resolveSource(win.from, t, grid, boundChains.get(win.from.id)),
+              to: resolveSource(win.to, t, grid, boundChains.get(win.to.id)),
               defId: tr.defId,
               values: tr.values,
               progress: win.progress,
@@ -277,10 +328,16 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
       if (t < clip.start || t >= clip.end) continue;
 
       if (clip.kind === 'effect') {
+        // 绑定的片段已经在 boundChains 里，绝不作为 adjustment layer 再推一次
+        // —— 推了就是「同一道特效既作用在这一层又作用在下面所有层」。
+        if (clip.boundClipId) continue;
         if (clip.chain.some((i2) => i2.enabled)) flat.push({ vis, op: { type: 'effect', z, clip } });
         continue;
       }
-      flat.push({ vis, op: { type: 'source', z, source: resolveSource(clip, t, grid) } });
+      flat.push({
+        vis,
+        op: { type: 'source', z, source: resolveSource(clip, t, grid, boundChains.get(clip.id)) },
+      });
     }
   });
 

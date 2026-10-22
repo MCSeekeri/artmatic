@@ -106,3 +106,52 @@ test('检查器：影响深度可改，提示跟着轨道走，时间轴上有�
   }, stage.fxClipId);
   expect(stored).toBe(1);
 });
+
+test('检查器：未绑定的特效能主动绑到某一层，解绑后回到影响深度', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+
+  const stage = await buildDepthStage(page, {
+    effect: { id: 'fx', defId: 'bleach', values: { amount: 1 }, depth: 1 },
+    scope: { id: 'top', source: { type: 'solid', color: RED } },
+    below: { id: 'bot', source: { type: 'solid', color: BG } },
+  });
+  await page.evaluate((id) => {
+    (
+      window as never as { __artmatic: { appState: { selectedClipId: string | null } } }
+    ).__artmatic.appState.selectedClipId = id;
+  }, stage.fxClipId);
+
+  // 未绑定 ⇒ 影响深度可编辑
+  await expect(page.getByTestId('effect-affect-depth')).toHaveValue('1');
+
+  // 绑到 SCOPE 轨的那个片段（下拉里显示「轨道 · 片段名」）
+  await page.getByTestId('effect-bind-target').click();
+  await page.getByTestId('effect-bind-opt-top').click();
+
+  const bound = await page.evaluate((id) => {
+    const A = (
+      window as never as {
+        __artmatic: {
+          store: { findClip: (i: string) => { clip: { boundClipId?: string; affectDepth?: number } } | null };
+        };
+      }
+    ).__artmatic;
+    const c = A.store.findClip(id)!.clip;
+    return { bound: c.boundClipId, depth: c.affectDepth };
+  }, stage.fxClipId);
+  expect(bound.bound).toBe('top');
+  // 互斥：绑定写进去的同时深度被清掉（不是两个都留着等渲染侧去挑）
+  expect(bound.depth).toBeUndefined();
+
+  // 深度输入框让位给绑定；时间轴上给角标（否则看不出这条特效绑在哪一层）
+  await expect(page.getByTestId('effect-affect-depth')).toHaveCount(0);
+  await expect(page.getByTestId('clip-effect-bound')).toHaveText('→top');
+
+  // 解绑 ⇒ 回到影响深度
+  await page.getByTestId('effect-bind-target').click();
+  await page.getByTestId('effect-bind-opt-').click();
+  await expect(page.getByTestId('effect-affect-depth')).toBeVisible();
+  await expect(page.getByTestId('clip-effect-bound')).toHaveCount(0);
+});

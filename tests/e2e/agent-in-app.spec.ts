@@ -381,7 +381,9 @@ test('ask_user：模型主动暂停提问，回答后继续同一轮', async ({ 
   await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('就用红色', { timeout: 20_000 });
 });
 
-test('会话历史：随工程保存、可搜索、可清空', async ({ page }) => {
+// 这一条跑在「没有目录」的工程上：历史只在内存里（与「工程没保存」同一语义）。
+// 落盘那条由下一个用例守。
+test('会话历史：可搜索、可清空（未保存的工程只在内存里）', async ({ page }) => {
   await openPanel(page);
   await configureKey(page);
 
@@ -405,6 +407,121 @@ test('会话历史：随工程保存、可搜索、可清空', async ({ page }) 
   await expect(page.getByTestId('agent-history-confirm-clear')).toBeVisible();
   await page.getByTestId('agent-history-confirm-clear-ok').click();
   await expect(page.getByTestId('agent-history-item')).toHaveCount(0);
+});
+
+/**
+ * 历史住在工程目录的 `agent/sessions/<id>.json`，**不在 project.json 里**。
+ *
+ * 这条同时守三件事：文件真的落了盘；`project.json` 里没有聊天记录；清空历史
+ * 会把文件删掉（而不是只清内存 —— 否则下次打开又回来了）。
+ */
+test('会话历史落盘到 agent/sessions，且不写进 project.json', async ({ page }) => {
+  const DIR = 'e2e-agent-history';
+  await openPanel(page);
+  await configureKey(page);
+
+  // 上一轮的残留会让「文件存在」这类断言假绿。
+  await page.evaluate(async (d) => {
+    const p = (
+      window as never as { __artmatic: { project: { wipe(n: string): Promise<void> } } }
+    ).__artmatic.project;
+    await p.wipe(d);
+  }, DIR);
+
+  // 先给工程一个真实目录，否则历史只会在内存里（与「工程没保存」同一语义）。
+  const saved = await page.evaluate(async (d) => {
+    const p = (
+      window as never as {
+        __artmatic: {
+          project: {
+            useOpfs(n: string): Promise<string>;
+            save(): Promise<boolean>;
+            list(path?: string): Promise<{ name: string }[]>;
+          };
+        };
+      }
+    ).__artmatic.project;
+    await p.useOpfs(d);
+    const ok = await p.save();
+    const root = await p.list(d).catch((e: unknown) => [{ name: `ERR:${String(e)}` }]);
+    return { ok, root: root.map((f) => f.name) };
+  }, DIR);
+  expect(saved.ok, `保存失败：${JSON.stringify(saved.root)}`).toBe(true);
+  expect(saved.root, '工程目录里应当有 agent/sessions（PROJECT_DIRS）').toContain('agent');
+
+  await stubLlm(page, [textChunk('落盘回答。') + DONE]);
+  await send(page, '落盘测试消息');
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('落盘回答', { timeout: 20_000 });
+
+  // 轮末写盘是排队进行的：轮询到文件出现（而不是死等一个固定时长）。
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async (d) => {
+          const p = (
+            window as never as { __artmatic: { project: { list(path: string): Promise<{ name: string }[]> } } }
+          ).__artmatic.project;
+          const files = await p.list(`${d}/agent/sessions`).catch(() => []);
+          return files.filter((f) => f.name.endsWith('.json')).length;
+        }, DIR),
+      { timeout: 10_000 },
+    )
+    .toBe(1);
+
+  const stored = await page.evaluate(async (d) => {
+    const p = (
+      window as never as {
+        __artmatic: { project: { list(path: string): Promise<{ name: string }[]>; read(path: string): Promise<string | null> } };
+      }
+    ).__artmatic.project;
+    const files = await p.list(`${d}/agent/sessions`);
+    const name = files.find((f) => f.name.endsWith('.json'))!.name;
+    const raw = await p.read(`${d}/agent/sessions/${name}`);
+    const projectJson = await p.read(`${d}/project.json`);
+    return { session: JSON.parse(raw ?? '{}') as Record<string, unknown>, projectJson: projectJson ?? '' };
+  }, DIR);
+  expect(stored.session.version).toBe(1);
+  expect(stored.session.title).toContain('落盘测试消息');
+  expect(JSON.stringify(stored.session.messages)).toContain('落盘回答');
+  // 工程本体里不应该再出现聊天记录（历史不再是 Project 的字段）
+  expect(stored.projectJson).not.toContain('agentSessions');
+
+  // 重新打开工程：历史从磁盘读回来（这条才证明「关掉再开还在」）
+  await page.evaluate(async (d) => {
+    const p = (
+      window as never as { __artmatic: { project: { open(n: string): Promise<boolean> } } }
+    ).__artmatic.project;
+    await p.open(d);
+  }, DIR);
+  await expect(page.getByTestId('agent-drawer')).toBeVisible();
+  await page.getByTestId('agent-history').click();
+  await expect(page.getByTestId('agent-history-item')).toHaveCount(1, { timeout: 10_000 });
+
+  // 清空 → 文件也消失
+  await page.getByTestId('agent-history-clear').click();
+  await page.getByTestId('agent-history-confirm-clear-ok').click();
+  await expect(page.getByTestId('agent-history-item')).toHaveCount(0);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async (d) => {
+          const p = (
+            window as never as { __artmatic: { project: { list(path: string): Promise<{ name: string }[]> } } }
+          ).__artmatic.project;
+          const files = await p.list(`${d}/agent/sessions`).catch(() => []);
+          return files.filter((f) => f.name.endsWith('.json')).length;
+        }, DIR),
+      { timeout: 10_000 },
+    )
+    .toBe(0);
+
+  // 收尾：删掉测试目录，别让下一轮「文件存在」类断言假绿。
+  await page.evaluate(async (d) => {
+    const p = (
+      window as never as { __artmatic: { project: { wipe(n: string): Promise<void> } } }
+    ).__artmatic.project;
+    await p.wipe(d);
+  }, DIR);
 });
 
 test('一轮对话：读场景 → 加片段 → 本轮改动条 → 撤销本轮', async ({ page }) => {

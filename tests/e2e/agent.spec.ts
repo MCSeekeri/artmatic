@@ -43,6 +43,17 @@ interface ControlApi {
   exportBase64(opt: unknown): Promise<unknown>;
   exportState(): Promise<unknown>;
   abortExport(): Promise<unknown>;
+  sceneVersion(): Promise<unknown>;
+  addTypographyElements(clipId: string | undefined, inputs: unknown[]): Promise<unknown>;
+  measureTypography(clipId: string | undefined, elementIds?: string[]): Promise<unknown>;
+  getTypographyDoc(clipId: string | undefined, detail?: string): Promise<unknown>;
+  setTypographyAnimation(
+    clipId: string | undefined,
+    elementId: string,
+    animation: unknown,
+    mode?: string,
+  ): Promise<unknown>;
+  replaceTypographyDoc(clipId: string | undefined, doc: unknown): Promise<unknown>;
 }
 
 interface Ok<T> {
@@ -429,4 +440,204 @@ test('安全边界：工具面是白名单，且页面里没有给 agent 的代�
   expect(result.keys.length).toBeGreaterThan(30);
   expect(result.hasEval).toEqual([]);
   expect(result.hasWs).toEqual([]);
+});
+
+/**
+ * v4：几何体检与隔离渲染。
+ *
+ * 两条都只能在浏览器里守：`typo_measure` 的文字高度来自真实 DOM 排版
+ * （Node 里只有估算分支），`only` 隔离要走真实合成路径才能看出「只渲这一层」。
+ */
+test('v4：typo_measure 量真实文字，only 隔离只渲一层且不改工程', async ({ page }) => {
+  await boot(page);
+  await loadStage(page, 4);
+
+  const result = await page.evaluate(async () => {
+    const C = (window as never as { __artmatic: { control: ControlApi; store: { version: number } } }).__artmatic
+      .control;
+
+    const track = (await C.addTrack('visual', 'TXT')) as Ok<{ trackId: string }>;
+    const clip = (await C.addClip(track.data.trackId, {
+      kind: 'text',
+      start: 0,
+      end: 4,
+    })) as Ok<{ clipId: string }>;
+    const clipId = clip.data.clipId;
+
+    const added = (await C.addTypographyElements(clipId, [
+      {
+        kind: 'text',
+        text: 'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG AGAIN AND AGAIN AND AGAIN',
+        frame: { x: 16, y: 16, w: 150, h: 16 },
+        style: { fontSize: 16 },
+      },
+      { kind: 'shape', shape: 'rect', frame: { x: 30, y: 20, w: 80, h: 80 } },
+      { kind: 'shape', shape: 'rect', frame: { x: 310, y: 0, w: 100, h: 40 } },
+    ])) as Ok<{ elementIds: string[] }>;
+    const [body, overlap, outside] = added.data.elementIds;
+    // 版本号不是纯读的判据：首次渲染时的字体加载会 `store.touch()`（这是设计如此，
+    // 让下一帧重绘）。这里比的是**工程内容**。
+    const projectBeforeViews = JSON.stringify(
+      (window as never as { __artmatic: { store: { project: unknown } } }).__artmatic.store.project,
+    );
+
+    const m = (await C.measureTypography(clipId)) as Ok<{
+      elements: { id: string; text?: { estimated: boolean; lines: number; overflowY: number } }[];
+      overlaps: { a: string; b: string }[];
+      summary: { textOverflow: string[]; outside: string[]; overlapPairs: number };
+    }>;
+
+    // 隔离渲染：只开红轨 / 只开蓝轨，读回像素的主色。
+    const meanOf = async (trackId: string) => {
+      const r = (await C.snapshotPng({ t: 0, size: { w: 160, h: 90 }, only: { trackId } })) as Ok<unknown>;
+      const px = (await C.readPixels()) as Ok<{ rgba: Uint8Array }>;
+      let red = 0;
+      let blue = 0;
+      for (let i = 0; i < px.data.rgba.length; i += 4) {
+        red += px.data.rgba[i]!;
+        blue += px.data.rgba[i + 2]!;
+      }
+      return { ok: r.ok, red, blue };
+    };
+    const onlyRed = await meanOf('v1');
+    const onlyBlue = await meanOf('v2');
+    const missing = (await C.snapshotPng({ only: { elementId: 'nope' } })) as Err;
+    const projectAfterViews = JSON.stringify(
+      (window as never as { __artmatic: { store: { project: unknown } } }).__artmatic.store.project,
+    );
+
+    const text = m.data.elements.find((e) => e.id === body)?.text;
+    return {
+      measureOk: m.ok,
+      estimated: text?.estimated,
+      lines: text?.lines ?? 0,
+      overflowY: text?.overflowY ?? 0,
+      textOverflow: m.data.summary.textOverflow.includes(body),
+      outside: m.data.summary.outside.includes(outside),
+      overlapPairs: m.data.summary.overlapPairs,
+      hasPair:
+        m.data.overlaps.some((p) => (p.a === body && p.b === overlap) || (p.a === overlap && p.b === body)) ||
+        m.data.overlaps.length > 0,
+      onlyRedOk: onlyRed.ok,
+      onlyBlueOk: onlyBlue.ok,
+      redDominates: onlyRed.red > onlyRed.blue,
+      blueDominates: onlyBlue.blue > onlyBlue.red,
+      missingCode: missing.ok ? null : missing.error.code,
+      projectUnchanged: projectAfterViews === projectBeforeViews,
+    };
+  });
+
+  expect(result.measureOk).toBe(true);
+  // 浏览器里是实测，不是估算；长文案必然多行 + 溢出。
+  expect(result.estimated).toBe(false);
+  expect(result.lines).toBeGreaterThan(1);
+  expect(result.overflowY).toBeGreaterThan(0);
+  expect(result.textOverflow).toBe(true);
+  expect(result.outside).toBe(true);
+  expect(result.overlapPairs).toBeGreaterThan(0);
+  expect(result.hasPair).toBe(true);
+
+  expect(result.onlyRedOk).toBe(true);
+  expect(result.onlyBlueOk).toBe(true);
+  expect(result.redDominates).toBe(true);
+  expect(result.blueDominates).toBe(true);
+  expect(result.missingCode).toBe('not-found');
+  // 观察不是编辑：量 / 出图不改变工程内容。
+  expect(result.projectUnchanged).toBe(true);
+});
+
+/**
+ * Agent 写自定义 CSS 动画（2026-10-22）。
+ *
+ * 三条一起守，缺一条这个能力就还是「看起来有」：
+ *  1. **能写**：`typo_add_element.animation` / `typo_set_animation` 收 `css`（与编辑器弹窗同一套语法）；
+ *  2. **能读回**：`detail:full` 给的是 `css` + `animation` 原文，整份写回（`typo_replace_doc`）
+ *     不丢条目、不改字段；
+ *  3. **真会动**：同一层在两个时刻的亮度不同 —— 文档里有动画不等于渲染路径上跑了它。
+ */
+test('agent 写自定义 CSS 动画：能写、能原样写回、真会动', async ({ page }) => {
+  await boot(page);
+  await loadStage(page, 4);
+
+  const result = await page.evaluate(async () => {
+    const C = (window as never as { __artmatic: { control: ControlApi } }).__artmatic.control;
+
+    const track = (await C.addTrack('visual', 'CSS')) as Ok<{ trackId: string }>;
+    const clip = (await C.addClip(track.data.trackId, { kind: 'text', start: 0, end: 4 })) as Ok<{
+      clipId: string;
+    }>;
+    const clipId = clip.data.clipId;
+
+    // ① 新建元素时直接带自定义 CSS（裸 keyframes 体之外的「块 + 简写」写法）。
+    const added = (await C.addTypographyElements(clipId, [
+      {
+        kind: 'shape',
+        shape: 'rect',
+        frame: { x: 40, y: 40, w: 240, h: 100 },
+        fill: { kind: 'solid', color: '#ffffff' },
+        animation: {
+          css: '@keyframes fade{from{opacity:0}to{opacity:1}}',
+          animation: 'fade 2s linear both',
+        },
+      },
+    ])) as Ok<{ elementIds: string[] }>;
+    const elementId = added.data.elementIds[0]!;
+
+    // ② 用专门的工具换成多块 + 逗号简写（编辑器支持的那一档）。
+    const set = (await C.setTypographyAnimation(clipId, elementId, {
+      css:
+        '@keyframes slide{from{transform:translateX(-120px)}to{transform:translateX(0)}}' +
+        '@keyframes fade{from{opacity:0}to{opacity:1}}',
+      animation: 'slide 1s linear both, fade 2s linear both',
+    })) as Ok<{ changed: boolean }>;
+
+    // ③ 读回 → 整份写回 → 再读回。
+    const before = (await C.getTypographyDoc(clipId, 'full')) as Ok<{
+      elements: { id: string; animations?: Record<string, unknown>[] }[];
+    }>;
+    const beforeAnim = before.data.elements[0]!.animations?.[0];
+    const replaced = (await C.replaceTypographyDoc(clipId, before.data)) as Ok<{
+      droppedKeys: string[];
+      droppedAnimations: string[];
+    }>;
+    const after = (await C.getTypographyDoc(clipId, 'full')) as Ok<{
+      elements: { animations?: Record<string, unknown>[] }[];
+    }>;
+    const afterAnim = after.data.elements[0]!.animations?.[0];
+
+    // ④ 真渲：只看这条轨（隔离掉舞台的红蓝底），比两个时刻的亮度。
+    const meanAt = async (t: number): Promise<number> => {
+      const sig = (await C.frameSignature({ t, grid: 4, only: { trackId: track.data.trackId } })) as Ok<{
+        mean: [number, number, number];
+      }>;
+      return sig.data.mean[0];
+    };
+    const at0 = await meanAt(0);
+    const at15 = await meanAt(1.5);
+
+    return {
+      changed: set.data.changed,
+      droppedKeys: replaced.data.droppedKeys,
+      droppedAnimations: replaced.data.droppedAnimations,
+      cssWritten: typeof beforeAnim?.css === 'string' && String(beforeAnim.css).includes('@keyframes'),
+      shorthandWritten: typeof beforeAnim?.animation === 'string' && String(beforeAnim.animation).includes('slide'),
+      cssKept: afterAnim?.css === beforeAnim?.css,
+      shorthandKept: afterAnim?.animation === beforeAnim?.animation,
+      at0,
+      at15,
+    };
+  });
+
+  expect(result.changed).toBe(true);
+  expect(result.droppedAnimations).toEqual([]);
+  // 整份往返不该把 clipId 之类的读侧字段当成「未知键」报出来。
+  expect(result.droppedKeys).toEqual([]);
+  expect(result.cssWritten).toBe(true);
+  expect(result.shorthandWritten).toBe(true);
+  expect(result.cssKept).toBe(true);
+  expect(result.shorthandKept).toBe(true);
+
+  // opacity:0 的那一帧几乎全黑；1.5 秒时已经过了 3/4（0.75 → 白块）。
+  expect(result.at0).toBeLessThan(6);
+  expect(result.at15).toBeGreaterThan(30);
 });

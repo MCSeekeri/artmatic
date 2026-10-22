@@ -24,6 +24,7 @@ import type { ParamDef } from '../effects/types';
 import { resolveLabel } from '../i18n/label';
 import { tr } from '../i18n/index.svelte';
 import { BUILTIN_THEMES, themeDisplayName, themeIds, type TypographyTheme } from '../typography/theme';
+import { ANIM_PRESETS } from '../typography/animation';
 import { SVG_GENERATORS, defaultsOf } from '../typography/svg-gen/registry';
 import { shapeParamSupport } from '../typography/shapes';
 import {
@@ -222,12 +223,70 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
   return {
     shapeKinds: [...SHAPE_KINDS],
     shapeParams: Object.fromEntries(SHAPE_KINDS.map((k) => [k, shapeParamSupport(k)])),
+    /*
+     * 单位说明是**能力清单的一部分**，不是注释：参数表只给区间与默认值，
+     * 而 agent 真正会猜错的是「0.1 是比例还是 10px」。写在这里的每一条都
+     * 对应一个会静默出错的实际语义（见 typography/shapes.ts）。
+     */
+    units: {
+      frame:
+        'x / y / w / h are document pixels (top-left origin). rot is RADIANS, ' +
+        'rotated around the box centre. w / h are the unrotated box.',
+      shapeRadius: 'corner / vertex radius in document px (not a ratio).',
+      shapeInner:
+        'wall thickness in document px (not a ratio). Default = short side × 0.1 for ' +
+        '`frame`, × 0.18 for `ring`; clamped so the hole cannot collapse.',
+      shapeSides: 'vertex count (3..64). Only polygon / star use it.',
+      shapeWaist: 'star valley radius as a ratio of the outer radius (0..1).',
+      shapeAngle: 'pie sweep in degrees (1..360).',
+      generator:
+        'Generator params are authored in a 0..100 square box that is then stretched to ' +
+        'the element frame. Length-like values (width / tickWidth / bandWidth / gaps in ' +
+        'the bar generators) are in that box: on a square frame 1 ≈ 1% of the side; on a ' +
+        'non-square frame x distances scale with the frame width and y distances with the ' +
+        'height, so the pattern is stretched rather than letterboxed. Values whose range ' +
+        'is 0..1 are ratios of that box. Per-generator `notes` flag the cases where a ' +
+        'parameter is clamped or scaled differently. **Paint generators with `fill`**: ' +
+        'their path is a set of closed shapes, so a `stroke` traces every outline and, at ' +
+        'bar widths below ~1 box unit, neighbouring outlines merge into a solid block.',
+      text:
+        'fontSize is px. letterSpacing is px (NOT em): 8 means 8px between glyphs. ' +
+        'lineHeight is a MULTIPLIER of fontSize (1.2 = 120%), not px. fontWeight is 100..900. ' +
+        'glyphStroke.width and boxStroke.width are px. shadows dx/dy/blur are document px. ' +
+        'rot on a frame is radians, but a text element has no rotation field of its own — ' +
+        'frame.rot is the only rotation and it is applied around the box centre. ' +
+        'autoHeight:true means the box width is fixed and the height follows the text.',
+      shapePath:
+        '`path` is only read when `shape:"svg"`. Default coordinate space is 0..100 authored and ' +
+        'stretched to the frame; `pathUnit:"px"` means the path is already in the element\'s own ' +
+        'pixel box (text-outline paths need this — 0..100 would stretch their stroke). Writing ' +
+        '`path` drops the generator binding (`gen`), i.e. it bakes the shape.',
+      transform3d:
+        'Element-level 3D. perspective is px (0 = orthographic); translate is px (z = depth); ' +
+        'rotate / skew are DEGREES; scale is a multiplier; origin is 0..1 of the element box ' +
+        '(CSS transform-origin). Order is FIXED: perspective → translate3d → rotateX → rotateY → ' +
+        'rotateZ → skewX → skewY → scale3d (rotate.z adds to frame.rot, both are around Z). ' +
+        'On a patch it MERGES (send only the sub-objects you want to change); null removes 3D. ' +
+        'Note transform-origin is per element, so several tilted elements in one row each need ' +
+        'their own transform3d. Combine with shadows carefully: filter makes preserve-3d flat.',
+      paint:
+        'Paint.colors accept hex or theme slots (@accent1 / @dk1 / @lt1 ...). linear.angle is ' +
+        'DEGREES (0 = left→right). stop.offset is 0..1 along the gradient. texture.scale is a ' +
+        'multiplier of the pattern cell, texture.thickness is in document px.',
+      defaults:
+        'Elements created by the agent start EMPTY: shapes and generated shapes get ' +
+        'fill {kind:"none"} and stroke null unless you pass them, so nothing is drawn by ' +
+        'accident (the editor UI uses a solid accent fill for hand-made shapes — do not ' +
+        'rely on that here). Text gets the document text style (default color = theme text ' +
+        'slot). No animation is attached unless you pass `animation` / `animations`.',
+    },
     generators: SVG_GENERATORS.map((g) => ({
       id: g.id,
       group: g.group,
       name: tr(g.labelKey),
       defaultSeed: g.defaultSeed,
       ...(g.aspect === undefined ? {} : { aspect: g.aspect }),
+      ...(g.notes ? { notes: g.notes } : {}),
       params: serializeParams(g.params),
     })),
     themes: themeIds(custom).map((id) => {
@@ -244,6 +303,46 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
     textAligns: ['left', 'center', 'right', 'justify'],
     textVAligns: ['top', 'middle', 'bottom'],
     strokeStyles: ['solid', 'dashed', 'dotted'],
+    /*
+     * 动画清单。**预设名必须列出来**：模型猜 `slide-in-up` / `slideInUp` 的命中率
+     * 大约是掷硬币，而猜错的表现是「动画没生效、也没有任何报错」。
+     */
+    animations: {
+      presets: ANIM_PRESETS.map((p) => ({
+        id: p.id,
+        duration: p.duration,
+        easing: typeof p.easing === 'string' ? p.easing : 'cubic-bezier',
+        ...(p.params ? { params: p.params } : {}),
+      })),
+      easings: ['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'cubic-bezier(x1,y1,x2,y2)'],
+      directions: ['normal', 'reverse', 'alternate', 'alternate-reverse'],
+      fills: ['none', 'forwards', 'backwards', 'both'],
+      keyProps: ['opacity', 'x', 'y', 'sx', 'sy', 'rot', 'blur'],
+      maxKeys: 20,
+      customCss: {
+        field: 'css',
+        forms: [
+          'one or more `@keyframes <name>{ … }` blocks plus ONE top-level `animation: <name> <duration> …;` shorthand (comma-separate several)',
+          'a bare keyframes body, e.g. `from{opacity:0}to{opacity:1}` (legacy form; timing comes from duration / delay / loop / easing)',
+        ],
+        rejects:
+          'Top-level selectors, @import / @charset / @namespace, HTML tags and position tricks are ' +
+          'rejected — a custom animation can only ever affect the element it is attached to. Names ' +
+          'are namespaced per element, so two elements may both define `@keyframes pulse`.',
+        anyProperty:
+          'Any animatable CSS property works (transform / 3D rotate / filter / color / clip-path / ' +
+          'letter-spacing / background-position …). Use it whenever `keys[]` cannot express the ' +
+          'motion — do not approximate a 3D flip with scale.',
+      },
+      note:
+        '`duration` / `delay` are SECONDS. `keys[].at` is 0..1 of the animation (not seconds, ' +
+        'not frames); `{ beat: n }` is also accepted and is converted with the project BPM. ' +
+        'Key props: x / y are px offsets, sx / sy are scale factors, rot is DEGREES, blur is px, ' +
+        'opacity is 0..1. Animations live in the document and are evaluated by the same clock ' +
+        'as everything else, so they render in exports too. The read-back shape (what ' +
+        '`get_typography_doc` returns, `iterations` instead of `loop`) is accepted verbatim, so a ' +
+        'document can be read, edited and written back without losing animations.',
+    },
     layoutOps: ['align', 'distribute', 'grid', 'row', 'column'],
     alignAxes: [
       'left',

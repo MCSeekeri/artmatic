@@ -146,6 +146,12 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     await hydrateRenderAssets(assetStore);
     // 桌面版：监视 linked 的本机原文件（只标 stale，不自动换内容）。
     watchProjectAssets(proj);
+    /*
+     * 对话历史在**插件之前**读：它不参与渲染，纯数据；放在这里是因为
+     * `adoptProject` 已经产生工程 id，而后面 `mountPlugins` 可能要编译着色器。
+     * 读失败只影响历史面板（`loadAgentHistory` 自己吞掉单文件错误）。
+     */
+    await appState.loadAgentHistory(proj.id, dir);
 
     /*
      * 插件在**素材之后、其余收尾之前**挂载。
@@ -221,6 +227,8 @@ export async function openProjectDirectory(
 export function attachProjectDirectory(dir: FsDirHandle, key: string): void {
   appState.projectDir = dir;
   appState.projectKey = key;
+  // 「先聊天、后接目录」这条路（E2E 与将来的另存到此处）：内存里的历史要补写。
+  appState.flushAgentHistory(appState.activeProject.id, dir);
   // 让这个位置也能被「最近工程 / 恢复上次打开的工程」重新打开 —— 与
   // `openAt` 里那次 `putHandle` 同一件事。缺了它，E2E 的 OPFS 工程
   // 打开着却永远恢复不了（句柄没进 IndexedDB）。
@@ -289,6 +297,15 @@ async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<b
       p.key = key;
       appState.refreshOpenTabs();
     }
+    /*
+     * Agent 历史补写。
+     *
+     * 首次保存之前 `p.dir` 是 null，会话只活在内存里；接上目录（含「另存为」换了
+     * 新目录）之后必须整份刷过去，否则「先聊几轮再保存」会丢掉保存前的那几轮。
+     * 目录树由 `saveProject` 刚建好（`PROJECT_DIRS` 含 `agent/sessions`），
+     * 所以这次补写一定能落到已存在的目录里。
+     */
+    appState.flushAgentHistory(p.id, dir);
     p.savedVersion = p.store.version;
     p.savedAt = Date.now();
     // 有正式落点了，本地草稿退休；降级提示也该消失（下一次写失败会重新亮）。

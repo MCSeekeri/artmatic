@@ -248,6 +248,10 @@ const perspective: SvgGenSpec = {
   labelKey: 'gen.perspective',
   group: 'iso',
   defaultSeed: 61,
+  notes:
+    'vpX / vpY are fractions of the frame (0.5 = centre). gap is the fraction of each ' +
+    'step left empty (0.35 = 35%); at gap 0 the layers tile solidly and read as one ' +
+    'black block. depth is an easing exponent, not a distance.',
   params: [
     range('layers', 'gen.p.layers', 2, 20, 1, 8),
     range('vpX', 'gen.p.vpX', 0.2, 0.8, 0.01, 0.5),

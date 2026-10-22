@@ -180,7 +180,7 @@ describe('parseCustomCss — 多条形态', () => {
   });
 
   it('未定义的名字被拒绝', () => {
-    expect(parseCustomCss('@keyframes x{a:0}animation: zzz 1s;')).toEqual({
+    expect(parseCustomCss('@keyframes x{from{a:0}to{a:1}}animation: zzz 1s;')).toEqual({
       ok: false,
       reason: 'unknownName',
     });
@@ -194,10 +194,20 @@ describe('parseCustomCss — 多条形态', () => {
   });
 
   it('简写解析失败被拒绝', () => {
-    expect(parseCustomCss('@keyframes x{a:0}animation: 1s 2s 3s;')).toEqual({
+    expect(parseCustomCss('@keyframes x{from{a:0}to{a:1}}animation: 1s 2s 3s;')).toEqual({
       ok: false,
       reason: 'badAnimation',
     });
+  });
+
+  it('关键帧体内写了选择器被拒绝（浏览器会整条丢弃那种 @keyframes）', () => {
+    expect(parseCustomCss('div{color:red}')).toEqual({ ok: false, reason: 'badSelector' });
+    expect(parseCustomCss('@keyframes x{div{color:red}}animation: x 1s;')).toEqual({
+      ok: false,
+      reason: 'badSelector',
+    });
+    // 合法的关键帧选择器照旧：from / to / 百分比 / 逗号并列。
+    expect(parseCustomCss('0%,100%{opacity:1}50%{opacity:.2}').ok).toBe(true);
   });
 
   it('非法的关键帧名被拒绝', () => {

@@ -120,6 +120,12 @@ async function dispatch(name, args, extra) {
     case 'artmatic_typo_add_element':
       return unwrap(await bridge.call('addTypographyElement', [args.clipId, args.element]));
 
+    case 'artmatic_typo_add_elements':
+      return unwrap(await bridge.call('addTypographyElements', [args.clipId, args.elements]));
+
+    case 'artmatic_typo_measure':
+      return unwrap(await bridge.call('measureTypography', [args.clipId, args.elementIds]));
+
     case 'artmatic_typo_add_generated_shape':
       return unwrap(
         await bridge.call('addGeneratedShape', [
@@ -138,6 +144,19 @@ async function dispatch(name, args, extra) {
 
     case 'artmatic_typo_update_element':
       return unwrap(await bridge.call('updateTypographyElement', [args.clipId, args.elementId, args.patch]));
+
+    case 'artmatic_typo_update_elements':
+      return unwrap(await bridge.call('updateTypographyElements', [args.clipId, args.updates]));
+
+    case 'artmatic_typo_set_animation':
+      return unwrap(
+        await bridge.call('setTypographyAnimation', [
+          args.clipId,
+          args.elementId,
+          args.animation ?? null,
+          args.mode === 'add' ? 'add' : 'replace',
+        ]),
+      );
 
     case 'artmatic_typo_set_text':
       return unwrap(await bridge.call('setTypographyText', [args.clipId, args.elementId, args.text]));
@@ -264,6 +283,7 @@ async function dispatch(name, args, extra) {
             label: args.label,
             fadeSec: args.fadeSec,
             affectDepth: args.affectDepth,
+            boundClipId: args.boundClipId,
           },
         ]),
       );
@@ -292,11 +312,14 @@ async function dispatch(name, args, extra) {
           });
         }
         return unwrap(
-          await bridge.call('setEffectParams', [args.clipId, args.chainIndex, args.params]),
+          await bridge.call('setEffectParams', [args.clipId, args.chainIndex, args.params, args.enabled]),
         );
       }
       return unwrap(await bridge.call('setClipSourceParams', [args.clipId, args.params]));
     }
+
+    case 'artmatic_set_generator':
+      return unwrap(await bridge.call('setGenerator', [args.clipId, args.generator, args.params]));
 
     case 'artmatic_set_curve':
       return unwrap(await bridge.call('setCurve', [args.clipId, args.param, args.curve ?? null]));
@@ -304,7 +327,9 @@ async function dispatch(name, args, extra) {
     case 'artmatic_add_effect': {
       const bad = await requireId(args.defId, 'effects', '特效');
       if (bad) return bad;
-      return unwrap(await bridge.call('addEffect', [args.clipId, args.defId, args.values, args.index]));
+      return unwrap(
+        await bridge.call('addEffect', [args.clipId, args.defId, args.values, args.index, args.enabled]),
+      );
     }
 
     case 'artmatic_remove_effect':
@@ -327,6 +352,22 @@ async function dispatch(name, args, extra) {
     case 'artmatic_set_project':
       return unwrap(await bridge.call('setProject', [args]));
 
+    case 'artmatic_edit_sections': {
+      const op = args.op;
+      // 只把该 op 需要的键送过去：其余 `undefined` 会让控制平面的类型判断更难读。
+      const req =
+        op === 'add'
+          ? { op, start: args.start, name: args.name }
+          : op === 'split'
+            ? { op, sectionId: args.sectionId, at: args.at }
+            : op === 'rename'
+              ? { op, sectionId: args.sectionId, name: args.name }
+              : op === 'remove'
+                ? { op, sectionId: args.sectionId }
+                : { op, sectionId: args.sectionId, start: args.start };
+      return unwrap(await bridge.call('editSections', [req]));
+    }
+
     case 'artmatic_load_scene':
       return unwrap(await bridge.call('loadScene', [args.project]));
 
@@ -347,14 +388,48 @@ async function dispatch(name, args, extra) {
 
     /* ---------------------------------------------------------- 看 / 导 */
     case 'artmatic_frame_signature':
-      return unwrap(await bridge.call('frameSignature', [{ t: args.t, size: args.size, grid: args.grid }]));
+      return unwrap(
+        await bridge.call('frameSignature', [
+          { t: args.t, size: args.size, grid: args.grid, only: args.only },
+        ]),
+      );
 
     case 'artmatic_render_frame': {
-      const r = await bridge.snapshotPng({ t: args.t, size: args.size });
+      const r = await bridge.snapshotPng({
+        t: args.t,
+        size: args.size,
+        only: args.only,
+        region: args.region,
+      });
       if (!r.ok) return errResult(r.error);
       return {
         content: [
           { type: 'text', text: JSON.stringify({ ok: true, data: { bytes: r.data.bytes } }) },
+          { type: 'image', data: r.data.base64, mimeType: 'image/png' },
+        ],
+      };
+    }
+
+    case 'artmatic_render_sequence': {
+      const r = await bridge.renderSequencePng({
+        from: args.from,
+        to: args.to,
+        step: args.step,
+        size: args.size,
+        cols: args.cols,
+        only: args.only,
+        region: args.region,
+      });
+      if (!r.ok) return errResult(r.error);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              data: { times: r.data.times, cols: r.data.cols, rows: r.data.rows, w: r.data.w, h: r.data.h },
+            }),
+          },
           { type: 'image', data: r.data.base64, mimeType: 'image/png' },
         ],
       };
@@ -463,7 +538,7 @@ const server = new Server(
     capabilities: { tools: {} },
     // 网关的版本在 initialize 的 serverInfo 里带上（与控制平面版本分开演进）。
     instructions:
-      `Artmatic 控制平面网关 v${GATEWAY_VERSION}（控制平面契约 v3）。渲染只在浏览器里发生：` +
+      `Artmatic 控制平面网关 v${GATEWAY_VERSION}（控制平面契约 v4）。渲染只在浏览器里发生：` +
       '所有工具都是对**页面上那一台编辑器**的操作，没有第二套求值路径。' +
       '先 get_capabilities 拿合法 id；参数表用 detail:"params" 按需展开。' +
       '写插件前先 artmatic_help(topic:"plugin-api")；安装需要用户在页面上确认。' +
@@ -498,4 +573,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 await server.connect(new StdioServerTransport());
-log(`就绪（control-plane API v3，网关 v${GATEWAY_VERSION}）。日志走 stderr，stdout 只走协议。`);
+log(`就绪（control-plane API v4，网关 v${GATEWAY_VERSION}）。日志走 stderr，stdout 只走协议。`);

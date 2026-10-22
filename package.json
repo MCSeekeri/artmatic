@@ -31,6 +31,7 @@
     "gifenc": "^1.0.3",
     "gl-transitions": "^1.71.0",
     "harfbuzzjs": "^1.6.2",
+    "marked": "^18.1.1",
     "mediabunny": "^1.61.0",
     "polygon-clipping": "^0.15.7"
   },

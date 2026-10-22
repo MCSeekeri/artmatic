@@ -30,6 +30,11 @@ const rings: SvgGenSpec = {
   labelKey: 'gen.rings',
   group: 'radial',
   defaultSeed: 5,
+  notes:
+    'rInner / rOuter are fractions of the 0..100 box (0.46 ≈ 46% of the frame). ' +
+    'width is a length in that same box (1 ≈ 1% of the frame side), and it is clamped ' +
+    'to 0.9× the gap between neighbouring rings — with many rings a large width is ' +
+    'silently capped, so lower count or raise rOuter instead of pushing width up.',
   params: [
     range('count', 'gen.p.count', 2, 24, 1, 8),
     range('rInner', 'gen.p.rInner', 0, 0.42, 0.01, 0.12),
@@ -130,6 +135,10 @@ const dial: SvgGenSpec = {
   labelKey: 'gen.dial',
   group: 'radial',
   defaultSeed: 42,
+  notes:
+    'tickLen / ringWidth / tickWidth are lengths in the 0..100 box (1 ≈ 1% of the frame ' +
+    'side). Ticks are drawn as closed quads and the ring as a band; the element must be ' +
+    'filled (or stroked) or nothing shows.',
   params: [
     range('count', 'gen.p.count', 12, 120, 1, 60),
     range('majorEvery', 'gen.p.majorEvery', 2, 12, 1, 5),

@@ -22,9 +22,8 @@
    */
   import Modal from '../controls/Modal.svelte';
   import Button from '../controls/Button.svelte';
-  import { parseCustomCss, type CustomCssError, type CustomCssParse } from '../../typography/animation';
+  import { CUSTOM_CSS_ERROR_KEYS, parseCustomCss, type CustomCssParse } from '../../typography/animation';
   import { tr } from '../../i18n/index.svelte';
-  import type { MessageKey } from '../../i18n/locales';
 
   interface Props {
     /**
@@ -43,23 +42,13 @@
   let text = $state(initialOf());
   let error = $state<string | null>(null);
 
-  const REASON_KEY: Record<CustomCssError, MessageKey> = {
-    unbalanced: 'typo.customCssUnbalanced',
-    badAtRule: 'typo.customCssErrAtRule',
-    badSelector: 'typo.customCssErrSelector',
-    badKeyframeName: 'typo.customCssErrBadName',
-    missingAnimation: 'typo.customCssErrMissingAnimation',
-    badAnimation: 'typo.customCssErrBadAnimation',
-    unknownName: 'typo.customCssErrUnknownName',
-  };
-
   const parsed = $derived(parseCustomCss(text));
   const isEmpty = $derived(text.trim() === '');
   const liveError = $derived(errorOf(parsed));
   const preview = $derived(previewOf(parsed));
 
   function errorOf(p: CustomCssParse): string {
-    return p.ok ? '' : tr(REASON_KEY[p.reason]);
+    return p.ok ? '' : tr(CUSTOM_CSS_ERROR_KEYS[p.reason]);
   }
 
   /** 归一化后的结果预览：旧单 body 包一层 @keyframes，多动画显示块 + 简写。 */
@@ -76,7 +65,7 @@
       return;
     }
     if (!p.ok) {
-      error = tr(REASON_KEY[p.reason]);
+      error = tr(CUSTOM_CSS_ERROR_KEYS[p.reason]);
       return;
     }
     if (!onsave(text)) {

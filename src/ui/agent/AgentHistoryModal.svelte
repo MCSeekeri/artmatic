@@ -2,9 +2,10 @@
   /**
    * AgentHistoryModal — 当前工程的 Agent 会话历史（只读）。
    *
-   * 数据源是 `project.agentSessions`（随工程保存、可一键清空）。刻意**不做
-   * 「载入并继续对话」**：续聊需要完整的 wire 消息（tool_calls / tool_call_id），
-   * 那些存进工程既臃肿又容易和当前模型不兼容。这里只解决「翻回去看当时做了什么」。
+   * 数据源是工程目录的 `agent/sessions/<id>.json`（由 `appState` 载入内存，可一键
+   * 清空）。刻意**不做「载入并继续对话」**：续聊需要完整的 wire 消息
+   * （tool_calls / tool_call_id），那些存进磁盘既臃肿又容易和当前模型不兼容。
+   * 这里只解决「翻回去看当时做了什么」。
    */
   import Modal from '../controls/Modal.svelte';
   import Button from '../controls/Button.svelte';
@@ -14,7 +15,7 @@
   import { agentState } from './agent-state.svelte';
   import { toolLabel } from './tool-labels';
   import { tr } from '../../i18n/index.svelte';
-  import type { AgentSessionRecord, AgentStoredMessage } from '../../core/schema';
+  import type { AgentSessionRecord, AgentStoredMessage } from '../../agent/history';
 
   interface Props {
     onclose: () => void;
@@ -288,6 +289,7 @@
     flex-direction: column;
     min-height: 0;
     min-width: 0;
+    user-select: text;
   }
   .detail-head {
     display: flex;

@@ -62,6 +62,13 @@ import type { ProjectRef } from '../project/handles';
 import { rgbToHex } from '../core/color';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import { loadOpenTabs, saveOpenTabs } from '../project/open-tabs';
+import {
+  clearAgentHistory as clearAgentHistoryOnDisk,
+  readAgentHistory,
+  removeAgentSession,
+  writeAgentSession,
+} from '../project/agent-history';
+import { upsertAgentSession, type AgentSessionRecord } from '../agent/history';
 import { DENSITY } from './tokens';
 // `TimelineMode` 的概念属于时间轴（标尺怎么读），值与「每个形态有哪些吸附档位」
 // 都在那边 —— 这里只保管用户选了哪个，不在 UI 层再抄一份表。
@@ -352,6 +359,22 @@ export interface OpenProject {
    * 「点一个片段」只清掉其中一个，另一个残留着，而且没有任何地方会报错。
    */
   selectedClipIds: string[];
+  /**
+   * Agent 对话历史的内存副本（磁盘真源在 `agent/sessions/<id>.json`）。
+   *
+   * 为什么放在 `OpenProject` 上：历史**跟工程走**（切选项卡要看到各自那份），
+   * 而它又不在 `Project` 里（见 `agent/history.ts` 的注释）。打开工程时由
+   * `loadAgentHistory` 填，之后每次轮末写回磁盘并就地更新这一份。
+   */
+  agentSessions: AgentSessionRecord[];
+  /**
+   * 历史最近一次**整份**写到哪个目录（`flushAgentHistory` / `loadAgentHistory` 记账）。
+   *
+   * 自动保存会频繁调 `writeTo`，每次都把 30 个会话重写一遍是白费 IO。只有
+   * 「第一次保存 / 另存为换了目录」才需要整份刷 —— 判据就是目录句柄变了。
+   * 不放进 `Project`，也不需要有响应性（纯记账）。
+   */
+  agentHistoryDir: FsDirHandle | null;
 }
 
 /**
@@ -385,6 +408,8 @@ function createPlaceholder(): OpenProject {
     issues: [],
     playT: 0,
     selectedClipIds: [],
+    agentSessions: [],
+    agentHistoryDir: null,
   };
 }
 
@@ -956,6 +981,7 @@ class AppState {
     savedVersion?: number;
     savedAt?: number;
     issues?: AssetIssue[];
+    agentSessions?: AgentSessionRecord[];
     /** 立刻激活。默认 true。 */
     activate?: boolean;
   }): OpenProject {
@@ -972,6 +998,8 @@ class AppState {
       issues: init.issues ?? [],
       playT: 0,
       selectedClipIds: [],
+      agentSessions: init.agentSessions ?? [],
+      agentHistoryDir: null,
     };
     this.projects.push(p);
     if (init.activate !== false) this.activateProject(p.id);
@@ -1969,6 +1997,106 @@ class AppState {
   async mountPlugins(projectId: string, dir: FsDirHandle | null): Promise<void> {
     if (!dir) return;
     await this.plugins.mountFromDirectory(dir, projectId);
+  }
+
+  /* ------------------------------------------------ Agent 对话历史（agent/） */
+
+  /**
+   * 历史写入的串行队列。
+   *
+   * `createWritable({mode:'exclusive'})` 撞上同一个文件时后到者会拿到
+   * `NoModificationAllowedError`。轮末保存是串行的，但「清空历史」可能正好落在
+   * 一次保存之后 —— 排队比让调用方各自加锁便宜。
+   */
+  private historyQueue: Promise<void> = Promise.resolve();
+
+  private enqueueHistory(job: () => Promise<void>): void {
+    this.historyQueue = this.historyQueue.then(job).catch((e) => {
+      // 历史是日志，不是工程真相：写不进去不该打断任何操作，但必须留痕。
+      console.error('[agent-history] 写入失败：', e);
+    });
+  }
+
+  /** 按 id 取工程（异步回调里不能用「当前」——用户可能已经切了选项卡）。 */
+  private projectById(projectId: string): OpenProject | null {
+    return this.projects.find((p) => p.id === projectId) ?? null;
+  }
+
+  /**
+   * 打开工程后读历史。
+   *
+   * 目录不存在 = 还没聊过（正常状态）。读失败的文件只记一条警告 ——
+   * 一个坏文件不该让工程打不开，也不该让其它会话消失。
+   */
+  async loadAgentHistory(projectId: string, dir: FsDirHandle | null): Promise<void> {
+    if (!dir) return;
+    const p = this.projectById(projectId);
+    if (!p) return;
+    const { sessions, failed } = await readAgentHistory(dir);
+    p.agentSessions = sessions;
+    // 磁盘已经是这个目录的真源了 ⇒ 下一次保存不需要再整份刷一遍。
+    p.agentHistoryDir = dir;
+    if (failed.length > 0) {
+      console.warn(`[agent-history] ${failed.length} 个会话文件读不出来`, failed);
+    }
+  }
+
+  /**
+   * 记录一条会话（轮末调用）。内存立即更新，磁盘排队写。
+   *
+   * 没有目录（工程还没保存过）时**只留在内存**：与「工程没保存，内容也只活在内存」
+   * 同一条约定，不在 localStorage 里偷偷存一份（AGENTS §1.7）。
+   */
+  saveAgentSession(projectId: string, record: AgentSessionRecord): void {
+    const p = this.projectById(projectId);
+    if (!p) return;
+    const { sessions, evicted } = upsertAgentSession(p.agentSessions, record);
+    p.agentSessions = sessions;
+    const dir = p.dir;
+    if (!dir) return;
+    this.enqueueHistory(async () => {
+      await writeAgentSession(dir, record);
+      // 超出上限被挤出去的那几条，文件也要删 —— 否则下次打开它们又回来了。
+      for (const id of evicted) await removeAgentSession(dir, id);
+    });
+  }
+
+  deleteAgentSession(projectId: string, sessionId: string): void {
+    const p = this.projectById(projectId);
+    if (!p) return;
+    p.agentSessions = p.agentSessions.filter((s) => s.id !== sessionId);
+    const dir = p.dir;
+    if (!dir) return;
+    this.enqueueHistory(() => removeAgentSession(dir, sessionId));
+  }
+
+  clearAgentSessions(projectId: string): void {
+    const p = this.projectById(projectId);
+    if (!p) return;
+    p.agentSessions = [];
+    const dir = p.dir;
+    if (!dir) return;
+    this.enqueueHistory(async () => {
+      await clearAgentHistoryOnDisk(dir);
+    });
+  }
+
+  /**
+   * 把内存里的历史整份刷到目录。
+   *
+   * 首次保存 / 另存为时用：那之前 `p.dir` 是 null，所有会话只在内存里；
+   * 接上目录之后必须补写，否则「先聊了十轮、再保存工程」会丢掉前九轮。
+   */
+  flushAgentHistory(projectId: string, dir: FsDirHandle): void {
+    const p = this.projectById(projectId);
+    if (!p) return;
+    // 目录没变 = 会话早就按条写过盘了（自动保存会频繁走到这里，别整份重写）。
+    if (p.agentHistoryDir === dir) return;
+    p.agentHistoryDir = dir;
+    const snapshot = [...p.agentSessions];
+    this.enqueueHistory(async () => {
+      for (const record of snapshot) await writeAgentSession(dir, record);
+    });
   }
 
   /**

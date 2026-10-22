@@ -26,7 +26,7 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 
 - **不 import `ui/`**：运行期实例全部走注入的 `ControlContext`。
 - **可以 import `typography/` 的纯模型层**（`document` / `shapes` / `svg-gen` /
-  `theme` / `agent-ops`），**禁止** import `typography/render-dom`（DOM）。
+  `theme` / `animation` / `agent-ops`），**禁止** import `typography/render-dom`（DOM）。
 - **不 import `project/plugins`**：写盘走 `ctx.persistPlugin` / `ctx.removePlugin`，
   插件宿主走 `ctx.getPluginHost()`（结构类型 `AgentPluginHost`）。
 - `getStore()` 每次重新取 —— 多工程下缓存它必然错。
@@ -39,16 +39,24 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - **一轮对话 = 一笔撤销**：session 用 `beginTx` / `endTx` 包住整轮，
   而 `CommandStack.commit` 在事务打开时**不单独入栈**（`core/commands.ts`）。
   不要在事务内再手动 begin 第二层事务。
-- **会话历史随工程保存，但不进撤销栈**：`project.agentSessions` 由
-  `ProjectStore.setAgentSessions` 写入（bump version，不 commit）；快照会剔除
-  这个字段、恢复时保留当前值。否则一次 Ctrl+Z 会把聊天记录一起退回去。
-  历史上限见 `sanitizeAgentSessions`（30 会话 / 400 条 / 20k 字），图片只留说明。
+- **会话历史不在 `project.json` 里**（v12 起）：数据模型在 `agent/history.ts`，
+  落盘在工程目录的 `agent/sessions/<id>.json`（`project/agent-history.ts`），
+  一个会话一个文件。理由：挂在工程上时「聊一句 = 原子重写整份工程」，而且撤销
+  栈要专门剔除它 —— 那条特例本身就是设计味道。现在一轮对话只写自己那个文件，
+  删会话是 unlink，坏文件只丢一条会话。
+  上限仍是 30 会话 / 400 条 / 20k 字（`sanitizeAgentSessions`），图片只留说明。
+  被上限挤掉的会话**要连文件一起删**（`upsertAgentSession` 回传 `evicted`），
+  否则下次打开它又回来了。
+  内存副本挂在 `OpenProject.agentSessions`（切选项卡各看各的）；没有目录
+  （工程还没保存）时只在内存里，首次保存由 `flushAgentHistory` 补写。
 - 校验全部**前置**：参数不合法时在改动之前抛 `ControlFailure`，绝不半途修改。
   `setCurve` 额外校验贝塞尔手柄的形状（`handles` 4 元组 / `hOut` / `hIn` 2 元组，
   全是有限数）—— 形状不对会在求值侧变成 NaN，表现为「整条曲线在画面上静默消失」。
 
 ## 工具面
 
+- **根 AGENTS §1.9：新功能必须 Agent 可达。** 加功能时把「纯函数原语 → 控制平面方法 →
+  两处工具表 → 能力清单 → 描述」一次走完；漏掉能力清单，模型连试都不会试。
 - 工具描述是**给模型读的 API 文档**（英文），界面文案走 i18n 的 `agent.*`。
   工具卡的标题用 `agent.toolName.<camelCase>`（`ui/agent/tool-labels.ts` 把
   `ask_user` 这样的 snake_case 转成键段；i18n 守卫只允许 `[a-zA-Z0-9]`）。
@@ -59,12 +67,62 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   （应用内短名 ↔ `artmatic_` 前缀）。`tests/unit/agent-tools-parity.test.ts`
   断言名字集合与必填参数一致；MCP 独有工具要显式列进允许清单。
 - 拒绝未知参数键（拼错一个字母就静默取默认值是最难查的一类）。
+- **写操作必须回显改后的值**：`changed:true` 让模型只能再读整份文档 / 再渲一张图
+  来确认，而一次往返的成本远高于一句回执。排版写返回 `element` / `elements`，
+  `set_params` 返回 `values`，`set_clip_props` 返回 `applied`。
+- **片段 / 段落 / 特效实例的四个后补入口**（2026-10-22）：`set_clip_props` 的
+  `fadeIn` / `fadeOut` / `srcIn` / `crop` / `quad` / `key`、`edit_sections`（add /
+  split / rename / remove / move 五合一）、`set_params({ enabled })`（参数变可选）、
+  `set_generator`。共同纪律：`null` = 关掉那个效果；只回**落库值**；需要两笔提交时
+  靠 `store.inTx` 判断要不要自己包事务 —— `beginTx` 会覆盖外层快照，嵌套调用会把
+  会话层的起点抹掉。
+- **批量写优先**：`typo_add_elements` / `typo_update_elements` 一次调用 = 一笔撤销，
+  数组顺序即 z 序。不要把一个元素一次往返当成「更安全」——21 个元素就是 21 次
+  整工程快照。
+- `typo_measure` 是**纯读**的几何体检（文字实际内容高度 / 溢出 / 相交 / 出画）。
+  文字度量优先用 DOM，没有 DOM 时标 `estimated:true`；别把估算当实测。
+- `render_frame` / `frame_signature` 的 `only` 是**观察用**隔离（浅拷贝一个
+  project 给渲染器，不改 store、不 bump version）。它只在出图这一帧生效。
+  `trackId` / `elementId` 都接受数组。**隔离会连特效轨一起隐藏** —— 它是「看某一层
+  自己的画面」，不是「试特效」；绑定在目标片段上的链除外（那是这一层的一部分）。
+- **观察必须回显「合成了哪些层」**：`render_frame` / `frame_signature` 的返回里带
+  `layers`（由 `buildStack` 的产物算出）。没有它时，「隔离把特效轨藏了」与
+  「我改的参数没生效」给出**一模一样**的截图，模型只能靠猜。
+- `render_sequence({ from, to, step, size, cols })` 是**节奏自检的入口**：多帧拼成
+  一张联系表（时间戳烧在每格底部）。单帧回答不了「这个重音落在拍上没有」。
+- `region: { x, y, w, h }`（0..1）是**局部放大**：裁完按最近邻放大到 ≥480px 宽。
+  看 ASCII / 半调 / 小字用它，不要为了细节把整帧提到 1920（token 一样贵）。
+
+### 特效片段的作用方式：影响深度 vs 绑定片段
+
+- `affectDepth`：adjustment layer，作用于下方 N 条启用轨的合成结果（要占一条轨）。
+- `boundClipId`（v11）：链只跑在**那一个 source 片段的层**上（placement 之后、
+  blend 之前），与 z 序无关、不影响别的层。**节拍级短促特效用它**，否则每一段
+  卡点都要开一条轨道，而「叠在哪一层上」这个意图在轨道序里反而看不出来。
+- 两者**互斥**：`makeEffectClip` / `setClipProps` / `validateProject` 三处都按
+  「绑定优先」处理（同一次 patch 给两个直接拒绝）。目标必须是存在的 source 片段。
+- 工具描述里因此写了「不要吝啬轨道也别滥开」：一条长链 > 一特效一轨，
+  `boundClipId` > 一卡点一轨。
+
+### 曲线寻址（`set_curve` 的 `param`）
+
+`<instanceId>.<key>` 是规范形式；同时接受**唯一前缀**、**唯一 defId**（`blur.radius`）
+与**单独的参数键**（全链只有一个实例有它时）。歧义一律报错并在
+`detail.candidates` 里列出 `chainIndex` + 完整 `instanceId` —— 随便挑一个的表现是
+「曲线跑到了另一个特效上」，从画面上极难看出来。`add_effect` 返回
+`{ instanceId, chainIndex, keyPrefix }`，`keyPrefix + key` 永远可直接用
+（实例 id 是完整 `newId()`，不再截短 —— 两种 id 形态并存是这条反馈的根因）。
+曲线对象缺 `interp` 时按 `smooth` 落库，不要再用报错逼模型学这个字段。
 
 ## 能力清单（`getCapabilities`）
 
 - `detail:'ids'` 只给 id；`params` 给完整参数表（键 / 类型 / 区间 / 选项 / 默认值 /
   能否打关键帧）。**参数表可以很大**，所以支持 `ids` 过滤。
 - `ParamDef.visibleWhen` 是函数，序列化时必须剥掉（`serializeParam`）。
+- **单位是能力清单的一部分**：排版清单的 `units` 说明 frame 是 px / `rot` 是
+  弧度、形状参数谁是 px 谁是 0..1、生成器参数在 0..100 authored 盒里；
+  生成器的 `notes`（`SvgGenSpec.notes`）只写参数表看不出来的夹取 / 覆盖。
+  少了这两处，模型只能靠渲染图反推量级。
 - 文本片段的 `source.doc` 在快照里只给摘要（`ClipTextSummary`），详情走
   `getTypographyDoc` —— 这是 `CONTROL_API_VERSION = 2` 的读形状变更。
 - 段落标记（v3）在 `head()` 里给**两份快照**：`sections: { id, name, start, color? }`。
@@ -78,7 +136,27 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - 每个写方法一次 `commit`（一个工具调用 = 一笔撤销）。
 - `coerceDocument` **永不抛**：坏元素整条丢弃，工程必须打得开。
 - 文本元素的三层填充别混：`fill`（字形）/ `boxFill`（文本框底）/ `boxStroke`（边框）。
-- 布局优先走 `typo_layout`，别让模型手算坐标。
+- **文本的纯色 `fill` 在写入时翻译成 `style.color`**（`agent-ops.ts::applyTextFill`）。
+  渲染侧本来就只让渐变 / 径向 / 纹理走 `background-clip: text`；不翻译的话
+  「同一个字段渐变有效、纯色被静默忽略」，模型会以为自己写错了字段名。
+  读回的视图因此是 `style.color`，`fill` 只在渐变类时出现。
+- **agent 造的形状默认是空的**：没给 `fill` ⇒ `{kind:'none'}`，没给 `stroke` ⇒ `null`
+  （`line` 在工厂里那条白色 4px 描边也一样被覆盖）。面板路径的实心紫是为「人先看见
+  再改色」服务的，agent 的默认值必须**不改动画面** —— 一块没打算要的紫足以毁掉
+  一张合成图，而 640 宽的截图里分辨不出它是不是默认值。默认值写在
+  `get_typography_capabilities().units.defaults` 里，别只写在代码注释里。
+- **生成器用 `fill` 画**：`barcode` / `hudticks` 这类是密集的闭合矩形，`stroke`
+  会描每一根的轮廓，宽度一过就煳成实心板。这条写进了各自 spec 的 `notes`。
+- 布局优先走 `typo_layout`，别让模型手算坐标。布局结果回显每个元素的新 frame。
+- **动画是文档的一部分**：`typo_set_animation` / `typo_add_element.animation` 写的是
+  `typography/animation.ts` 的 CSS 动画（预览与导出同一条求值路径）。
+  `keys[].at` 收 0..1 或 `{ beat: n }`（换算在 `control-plane.ts`，文档模型只收 0..1）；
+  预设名必须从 `get_typography_capabilities().animations.presets` 取 —— 猜错拼写
+  的表现是「动画没生效、也不报错」。视图里回显**完整动画字段**，否则模型读不回
+  自己设过什么。
+- `typo_replace_doc` 的 `droppedKeys` 是契约的一部分：未知键逐条报出来（
+  `elements[2].colour`），静默归一化会让模型照着一份自己以为对的文档继续做。
+  同理 `docView` 的 `full` 对缺 `fonts` / `elements` 的旧文档必须兜底（曾经整档崩 `internal`）。
 
 ## 插件作者面
 
@@ -132,6 +210,8 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - **重复调用先引导、别掐断**：同一个「工具 + 参数」第 3 / 6 次把引导**附加在
   那条 tool 结果末尾**，第 12 次才判死。⚠️ 不能插 system 消息（DeepSeek 带 tools
   会 400，且坏历史会让之后每条都 400）。
+  `render_frame` / `frame_signature` 的判据额外带 `sceneVersion()`（内容版本 +
+  播放头）——工程变了就是新问题，不该被「你调用过三次了」拦住。
 - **400 自愈**：`bad-response + 400` 之后清空模型历史并提示。**上下文超限例外**
   （归 `context`）：那是装不下，不是历史被污染 —— 压缩，不要清空。
 - `ask_user` 是 **appOnly** 工具：由 session 直接拦截并向 UI 要答案（`onAskUser`）。

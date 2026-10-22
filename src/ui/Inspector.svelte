@@ -415,6 +415,31 @@
     return { depth, names };
   });
 
+  /**
+   * 绑定片段的可选目标：**其它视觉轨上的** source 片段。
+   *
+   * 同轨被排除：同轨片段在时间上不重叠，特效在它自己的区间里看不到同轨的另一段
+   * （而且特效与 source 同轨重叠本身就是 `conflict`）。绑定目标若不在候选里
+   * （被删 / 被移到同轨），补一条原值，否则下拉会显示「不绑定」而实际仍是绑定 ——
+   * 那种「显示与实际不一致」比多一条选项坏得多。
+   */
+  const bindOptions = $derived.by(() => {
+    void appState.version;
+    const f = found;
+    const out: { value: string; label: string }[] = [{ value: '', label: tr('insp.bindNone') }];
+    if (!f || f.clip.kind !== 'effect') return out;
+    const bound = f.clip.boundClipId;
+    for (const t of appState.project.tracks) {
+      if (t.kind !== 'visual' || t.id === f.track.id) continue;
+      for (const c of t.clips) {
+        if (c.kind !== 'source') continue;
+        out.push({ value: c.id, label: `${t.name} · ${c.label || c.source.type}` });
+      }
+    }
+    if (bound && !out.some((o) => o.value === bound)) out.push({ value: bound, label: bound });
+    return out;
+  });
+
   function setTransition(clip: AnyClip, defId: string): void {
     if (!defId) {
       appState.store.clearTransitionOut(clip.id);
@@ -1071,22 +1096,34 @@
       {/if}
     {:else if clip.kind === 'effect'}
       <!--
-        影响深度：这个片段作用于下方几条轨（0 = 下方全部）。
+        作用方式：绑定到某个片段（只作用于那一层）或按影响深度作用（下方 N 条轨）。
 
-        它是**片段级**属性而不是链级，所以放在链之前 —— 与「淡变」「混合」那些并列，
-        而不是塞进某个特效实例的卡片里（那样会看起来像某个特效的参数）。
+        两者互斥，所以**同一处只出现一个可编辑项**：绑定时不给深度输入框，解绑后
+        深度回到输入框（存的是 0 = 下方全部）。它是**片段级**属性而不是链级，
+        所以放在链之前 —— 与「淡变」「混合」那些并列。
       -->
-      <Field label={tr('insp.affectDepth')} tipText={tr('insp.affectDepthTip')}>
-        <NumberInput
-          value={clip.affectDepth ?? 0}
-          min={0}
-          step={1}
-          width={64}
-          testid="effect-affect-depth"
-          onchange={(v) => appState.store.setEffectAffectDepth(clip.id, v)}
+      <Field label={tr('insp.bindClip')} tipText={tr('insp.bindClipTip')}>
+        <Select
+          value={clip.boundClipId ?? ''}
+          options={bindOptions}
+          testid="effect-bind-target"
+          optionTestidPrefix="effect-bind-opt"
+          onchange={(v) => appState.store.setEffectBoundClip(clip.id, v || null)}
         />
       </Field>
-      {#if scopeInfo}
+      {#if !clip.boundClipId}
+        <Field label={tr('insp.affectDepth')} tipText={tr('insp.affectDepthTip')}>
+          <NumberInput
+            value={clip.affectDepth ?? 0}
+            min={0}
+            step={1}
+            width={64}
+            testid="effect-affect-depth"
+            onchange={(v) => appState.store.setEffectAffectDepth(clip.id, v)}
+          />
+        </Field>
+      {/if}
+      {#if !clip.boundClipId && scopeInfo}
         <!-- 到底影响了哪几条轨是**算出来的**而不是描述的（深度只数启用的轨），
              所以把它显示出来 —— 否则用户只能靠数轨道列表去猜。 -->
         {#if scopeInfo.depth === 0}
@@ -1373,6 +1410,7 @@
   .note.insp-warn {
     color: var(--warning);
   }
+
   /* 算法片段顶部：生成器名 + 「更换算法艺术」按钮。名字占满剩余宽度并省略，
      按钮贴右不换行 —— 名字再长也不该把按钮挤到第二行。 */
   .algo-head {

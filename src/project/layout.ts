@@ -55,6 +55,22 @@ export const THUMBS_DIR = 'thumbs';
  */
 export const PLUGINS_DIR = 'plugins';
 
+/**
+ * Agent 对话历史目录。
+ *
+ * `agent/sessions/<id>.json`：**一个会话一个文件**。
+ *
+ * ⚠️ 它是**工程数据**（用户会想跟着工程目录一起拷走），但不是 `project.json`
+ * 的一部分 —— 聊天记录曾经挂在 Project 上，代价是「聊一句 = 原子重写整份工程」，
+ * 而且撤销栈要专门剔除它。一个文件一个会话之后：一轮对话只写自己那一个文件，
+ * 删会话是 unlink，坏文件只丢一条会话。
+ *
+ * `agent/` 与 `plugins/` 同属「工程自带的东西」，所以**不在**可丢弃清单里
+ * （对比 `thumbs/` 与 `analysis/`）。
+ */
+export const AGENT_DIR = 'agent';
+export const AGENT_SESSIONS_DIR = 'sessions';
+
 /** 打开/新建工程时要确保存在的目录（按层级顺序）。 */
 export const PROJECT_DIRS: readonly (readonly string[])[] = [
   [ASSETS_DIR],
@@ -62,6 +78,7 @@ export const PROJECT_DIRS: readonly (readonly string[])[] = [
   [ANALYSIS_DIR, AUDIO_ANALYSIS_DIR],
   [THUMBS_DIR],
   [PLUGINS_DIR],
+  [AGENT_DIR, AGENT_SESSIONS_DIR],
 ];
 
 /* ------------------------------------------------------------ 名字清洗 */
@@ -168,6 +185,16 @@ export function pluginRelPath(pluginId: string): string {
 /** 插件 id 在 `plugins/` 里的文件名（含扩展名）。 */
 export function pluginFileName(pluginId: string): string {
   return safePluginId(pluginId) + PLUGIN_EXT;
+}
+
+/**
+ * Agent 会话文件在 `agent/sessions/` 下的段数组。
+ *
+ * 文件名清洗复用 `safeAssetId`（只留 `[A-Za-z0-9._-]`、截断到 96）：会话 id 是
+ * 我们生成的 uuid，清洗是空操作；但它会从 URL / 手改的文件名进来，落盘前必须过一遍。
+ */
+export function agentSessionSegments(sessionId: string): string[] {
+  return [AGENT_DIR, AGENT_SESSIONS_DIR, `${safeAssetId(sessionId, 'session')}.json`];
 }
 
 /** 音频分析缓存在 `analysis/audio/` 下的段数组。 */

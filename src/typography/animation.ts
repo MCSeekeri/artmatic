@@ -284,7 +284,60 @@ export type CustomCssParse =
   | { ok: true; css: string; animation?: string }
   | { ok: false; reason: CustomCssError };
 
+/**
+ * 失败原因 → 文案键。**唯一一份**：编辑器弹窗与 agent 报错都从这里取。
+ *
+ * 两处各写一份的形态是「用户看到『引用的动画名没定义』、模型只收到『入参非法』」——
+ * 后者只能靠改字符串试错，而每次试错都是一整轮往返。
+ */
+export const CUSTOM_CSS_ERROR_KEYS: Record<CustomCssError, MessageKey> = {
+  unbalanced: 'typo.customCssUnbalanced',
+  badAtRule: 'typo.customCssErrAtRule',
+  badSelector: 'typo.customCssErrSelector',
+  badKeyframeName: 'typo.customCssErrBadName',
+  missingAnimation: 'typo.customCssErrMissingAnimation',
+  badAnimation: 'typo.customCssErrBadAnimation',
+  unknownName: 'typo.customCssErrUnknownName',
+};
+
 const KEYFRAME_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+/** `@keyframes` 体内合法的选择器：`from` / `to` / 百分比（可逗号分隔多个）。 */
+const KEYFRAME_SELECTOR_RE = /^(from|to|(?:\d+\.?\d*|\.\d+)%)$/i;
+
+/**
+ * 校验一段**关键帧体**（`from{…}to{…}`）的选择器是否合法。
+ *
+ * 为什么必须校验：浏览器遇到非法的关键帧选择器（比如手滑写了个 `div{color:red}`）
+ * 会**整条丢弃** `@keyframes`，于是动画「保存成功、就是不跑」，而且没有任何报错。
+ * 旧单 body 形态绕过了 `scanCssBlocks`，这里是它唯一的闸口。
+ */
+function validKeyframeBody(s: string): boolean {
+  const n = s.length;
+  let i = 0;
+  let sawBlock = false;
+  while (i < n) {
+    while (i < n && /\s/.test(s[i]!)) i++;
+    if (i >= n) break;
+    const start = i;
+    while (i < n && s[i] !== '{' && s[i] !== '}') i++;
+    if (i >= n || s[i] === '}') return false;
+    const sel = s.slice(start, i).trim();
+    if (!sel) return false;
+    for (const part of sel.split(',')) {
+      if (!KEYFRAME_SELECTOR_RE.test(part.trim())) return false;
+    }
+    let depth = 1;
+    i += 1;
+    while (i < n && depth > 0) {
+      if (s[i] === '{') depth += 1;
+      else if (s[i] === '}') depth -= 1;
+      i += 1;
+    }
+    if (depth !== 0) return false;
+    sawBlock = true;
+  }
+  return sawBlock;
+}
 
 /** 顶层（括号 / 花括号内不算）是否出现 `@` 规则或 `animation:` 声明。 */
 function looksStructured(s: string): boolean {
@@ -345,7 +398,10 @@ function scanCssBlocks(s: string): CssScan {
         i += 1;
       }
       if (depth !== 0) return fail('unbalanced');
-      keyframes.push({ name, body: s.slice(bodyStart, i - 1).trim() });
+      const body = s.slice(bodyStart, i - 1).trim();
+      // 体内选择器也要管：非法的关键帧选择器会让浏览器丢掉整条 @keyframes。
+      if (!validKeyframeBody(body)) return fail('badSelector');
+      keyframes.push({ name, body });
     } else {
       const start = i;
       let depth = 0;
@@ -410,7 +466,8 @@ function parseMultiCss(s: string): CustomCssParse {
 export function parseCustomCss(raw: string): CustomCssParse {
   const s = sanitizeCustomCss(raw);
   if (!s) return { ok: false, reason: 'unbalanced' };
-  if (!looksStructured(s)) return { ok: true, css: s };
+  // 旧形态没有 `@`，靠「整段就是一个关键帧体」判别；选择器写错时宁可拒绝。
+  if (!looksStructured(s)) return validKeyframeBody(s) ? { ok: true, css: s } : { ok: false, reason: 'badSelector' };
   return parseMultiCss(s);
 }
 

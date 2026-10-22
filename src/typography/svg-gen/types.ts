@@ -61,6 +61,11 @@ export interface SvgGenSpec {
    * 条码天然是 4:1，塞进方盒会被拉成 40 倍的胖块。
    */
   aspect?: number;
+  /**
+   * 给 agent / 参数面板的**一句语义说明**：参数表看不出来的单位、夹取、
+   * 互相覆盖关系。只写非显然的那几条（label 已经说过的不重复）。
+   */
+  notes?: string;
   build(p: SvgGenParams, seed: number): SvgGenResult;
 }
 

@@ -47,6 +47,23 @@
   });
 
   /**
+   * 绑定片段的角标文字（`boundClipId`，v11）。
+   *
+   * 与深度角标共用同一条纪律：读 `appState.version`，否则绑上之后角标要等换一次
+   * 选中才出现。目标被删了就回落到 id —— 显示一个 `→undefined` 会更难查。
+   */
+  const boundTarget = $derived.by(() => {
+    void appState.version;
+    if (clip.kind !== 'effect' || !clip.boundClipId) return null;
+    const foundClip = appState.store.findClip(clip.boundClipId);
+    return {
+      id: clip.boundClipId,
+      label: foundClip?.clip.label || clip.boundClipId,
+      track: foundClip?.track.name ?? '',
+    };
+  });
+
+  /**
    * 音频淡变手柄的横向位置（px，片段内偏移）。
    *
    * 两端手柄贴住**淡变区的边界**（而不是片段边缘）：看到的就是听到的 ——
@@ -239,6 +256,14 @@
     <!-- 影响深度角标：不写出来就没人知道这条特效被限过范围（画面差别还很隐蔽） -->
     <span class="fx-depth" data-testid="clip-effect-depth" title={tr('insp.affectDepth')}>↓{affectDepth}</span>
   {/if}
+  {#if boundTarget}
+    <!-- 绑定片段角标：看不出这条特效绑在哪一层时，用户会以为它根本没生效 -->
+    <span
+      class="fx-depth fx-bound"
+      data-testid="clip-effect-bound"
+      title={boundTarget.track ? `${boundTarget.track} · ${boundTarget.label}` : boundTarget.label}
+    >→{boundTarget.label}</span>
+  {/if}
   {#if clip.fadeSec > 0}
     <!-- 淡入淡出标记：纯几何形状，不引图标（这里只有 10px 见方） -->
     <i class="fade" title={tr('tl.fade')}></i>
@@ -401,6 +426,14 @@
     line-height: 10px;
     opacity: 0.75;
     pointer-events: none;
+  }
+  /* 绑定角标与深度角标同位（两者互斥，不会同时出现）：名字长了就省略，
+     完整「轨道 · 片段」在 title 里。 */
+  .fx-bound {
+    max-width: calc(100% - 8px);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
   .edge {
     position: absolute;

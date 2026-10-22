@@ -145,6 +145,9 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
       })),
       // 0 = 下方全部 = 缺省，不铺开（agent 读到的键越少越省上下文）
       ...(clip.affectDepth ? { affectDepth: clip.affectDepth } : {}),
+      // 绑定片段（v11）：读不到它的话，agent 会以为这条特效在按 z 序作用，
+      // 然后花几轮去调一个根本不生效的 affectDepth。
+      ...(clip.boundClipId ? { boundClipId: clip.boundClipId } : {}),
       ...(curves ? { curves: curves as ClipView['curves'] } : {}),
     };
   }

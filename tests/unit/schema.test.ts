@@ -339,6 +339,43 @@ describe('影响深度（EffectClip.affectDepth）', () => {
   });
 });
 
+describe('绑定片段（EffectClip.boundClipId，v11）', () => {
+  const withBound = (extra: Record<string, unknown>) => {
+    const p = defaultProject('bound');
+    p.tracks.push({
+      kind: 'visual', id: newId(), name: 'V1', enabled: true,
+      clips: [{
+        kind: 'effect', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+        chain: [], ...extra,
+      }],
+    } as never);
+    return p;
+  };
+
+  it('v10 → v11 是恒等迁移：boundClipId 原样保留', () => {
+    const p = withBound({ boundClipId: 'src-42' });
+    p.schemaVersion = 10;
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'effect') throw new Error('unreachable');
+    expect(clip.boundClipId).toBe('src-42');
+  });
+
+  it('与影响深度同时出现时以绑定为准（丢掉 affectDepth，工程照常打开）', () => {
+    const out = validateProject(withBound({ boundClipId: 'src-42', affectDepth: 2 }));
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'effect') throw new Error('unreachable');
+    expect(clip.boundClipId).toBe('src-42');
+    expect(clip.affectDepth).toBeUndefined();
+  });
+
+  it('空 / 非字符串被拒', () => {
+    expect(() => validateProject(withBound({ boundClipId: '' }))).toThrow(/绑定片段/);
+    expect(() => validateProject(withBound({ boundClipId: 7 }))).toThrow(/绑定片段/);
+  });
+});
+
 describe('片段级抠图 / 四角（SourceClip.key / quad，v7）', () => {
   const sourceClip = (extra: Record<string, unknown> = {}) => ({
     kind: 'source', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},

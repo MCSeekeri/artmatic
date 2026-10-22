@@ -319,6 +319,144 @@ export function defaultTransform3D(): Transform3D {
   };
 }
 
+/**
+ * 3D 参数的补丁：嵌套对象**逐层合并**，只写要改的键。
+ *
+ * 为什么不用 `Partial<Transform3D>`：那样 `translate` 只能整组替换 ——
+ * 改一个 X 就得把 Y / Z 一起读上来再传回去，多一处会写错的地方。
+ * 属性面板与 agent 共用这一份（各自再写一遍的话，「面板生效、agent 不生效」
+ * 这类差异不会有任何报错）。
+ */
+export interface Transform3DPatch {
+  perspective?: number;
+  translate?: Partial<Transform3D['translate']>;
+  rotate?: Partial<Transform3D['rotate']>;
+  scale?: Partial<Transform3D['scale']>;
+  skew?: Partial<Transform3D['skew']>;
+  origin?: Partial<Transform3D['origin']>;
+  backface?: Transform3D['backface'];
+  style?: Transform3D['style'];
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function numOr(v: unknown, fallback: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * 外部输入 → 3D 补丁（只认白名单键，越界值夹到合法区）。
+ *
+ * 返回 null 表示「形状不对，整条忽略」—— `typo_replace_doc` 靠它永不抛。
+ * 没有出现的键**不补默认值**：那是 `mergeTransform3D` 的事，它才知道基值。
+ */
+export function coerceTransform3DPatch(raw: unknown): Transform3DPatch | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+  const out: Transform3DPatch = {};
+  if (rec.perspective !== undefined) out.perspective = Math.max(0, numOr(rec.perspective, 800));
+  /*
+   * 嵌套对象只带**出现的**键。补默认值会把「只改 Y」变成「把 X / Z 也重置」——
+   * 面板上改一个轴，另外两个轴被拽回 0，而且画面看起来只是「歪了」。
+   */
+  const t = asRecord(rec.translate);
+  if (t) {
+    out.translate = {
+      ...(t.x === undefined ? {} : { x: numOr(t.x, 0) }),
+      ...(t.y === undefined ? {} : { y: numOr(t.y, 0) }),
+      ...(t.z === undefined ? {} : { z: numOr(t.z, 0) }),
+    };
+  }
+  const r = asRecord(rec.rotate);
+  if (r) {
+    out.rotate = {
+      ...(r.x === undefined ? {} : { x: numOr(r.x, 0) }),
+      ...(r.y === undefined ? {} : { y: numOr(r.y, 0) }),
+      ...(r.z === undefined ? {} : { z: numOr(r.z, 0) }),
+    };
+  }
+  const s = asRecord(rec.scale);
+  if (s) {
+    out.scale = {
+      ...(s.x === undefined ? {} : { x: Math.max(0, numOr(s.x, 1)) }),
+      ...(s.y === undefined ? {} : { y: Math.max(0, numOr(s.y, 1)) }),
+      ...(s.z === undefined ? {} : { z: Math.max(0, numOr(s.z, 1)) }),
+    };
+  }
+  const k = asRecord(rec.skew);
+  if (k) {
+    out.skew = {
+      ...(k.x === undefined ? {} : { x: numOr(k.x, 0) }),
+      ...(k.y === undefined ? {} : { y: numOr(k.y, 0) }),
+    };
+  }
+  const o = asRecord(rec.origin);
+  if (o) {
+    out.origin = {
+      ...(o.x === undefined ? {} : { x: Math.max(0, Math.min(1, numOr(o.x, 0.5))) }),
+      ...(o.y === undefined ? {} : { y: Math.max(0, Math.min(1, numOr(o.y, 0.5))) }),
+    };
+  }
+  if (rec.backface === 'visible' || rec.backface === 'hidden') out.backface = rec.backface;
+  if (rec.style === 'flat' || rec.style === 'preserve-3d') out.style = rec.style;
+  return out;
+}
+
+/**
+ * 逐个数字键合并（只收有限数，越界夹到 `[min, max]`）。
+ *
+ * `NaN` 会让整条 `transform` 字符串失效（元素「静默不动」），所以这里宁可丢弃
+ * 那个键，也不把脏值写进文档。
+ */
+function mergeNums<T extends Record<string, number>>(
+  base: T,
+  patch: Partial<T> | undefined,
+  min = -Infinity,
+  max = Infinity,
+): T {
+  if (!patch) return base;
+  const out = { ...base };
+  for (const key of Object.keys(out) as (keyof T)[]) {
+    const v = patch[key];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      out[key] = Math.min(max, Math.max(min, v)) as T[keyof T];
+    }
+  }
+  return out;
+}
+
+/** 补丁 → 完整 3D 参数。`base` 缺省时从恒等值起算（与面板「先启用再调」同源）。 */
+export function mergeTransform3D(base: Transform3D | undefined, patch: Transform3DPatch): Transform3D {
+  const t = base ?? defaultTransform3D();
+  return {
+    ...t,
+    perspective:
+      typeof patch.perspective === 'number' && Number.isFinite(patch.perspective)
+        ? Math.max(0, patch.perspective)
+        : t.perspective,
+    translate: mergeNums(t.translate, patch.translate),
+    rotate: mergeNums(t.rotate, patch.rotate),
+    scale: mergeNums(t.scale, patch.scale, 0),
+    skew: mergeNums(t.skew, patch.skew),
+    origin: mergeNums(t.origin, patch.origin, 0, 1),
+    backface: patch.backface ?? t.backface,
+    style: patch.style ?? t.style,
+  };
+}
+
+/**
+ * 从读回形状（`elementView` 的 `transform3d`）还原一份**完整**参数。
+ * 与 `coerceTransform3DPatch` + `mergeTransform3D` 等效，但起点是恒等值 ——
+ * `typo_replace_doc` 用它（新元素没有基值）。
+ */
+export function coerceTransform3D(raw: unknown): Transform3D | null {
+  const patch = coerceTransform3DPatch(raw);
+  return patch ? mergeTransform3D(undefined, patch) : null;
+}
+
 export interface ElementBase {
   id: string;
   name: string;
@@ -512,6 +650,10 @@ export interface TextElement extends ElementBase {
    * 于是行内 run 各自的 `color` 会被盖掉。渲染侧遇到「有行内彩色 run」时会
    * 退回 `style.color`（见 render-dom.ts::textFillOf），宁可少一个能力，
    * 也不静默改掉用户已经设好的行内语义。
+   *
+   * ⚠️ agent 写入会把 `{kind:'solid', color}` **翻译**成 `style.color`
+   * （`agent-ops.ts::applyTextFill`）：同一个字段「渐变有效、纯色被静默忽略」
+   * 会被误判成字段名写错。读回的视图因此是 `style.color`。
    */
   fill?: Paint;
   /**

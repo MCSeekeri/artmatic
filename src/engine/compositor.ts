@@ -139,6 +139,8 @@ export class Compositor {
   private placedB: Target | null = null;
   /** 转场着色器的输出，随后作为一整层 blend 到 acc 上。 */
   private trTmp: Target | null = null;
+  /** 绑定链（`EffectClip.boundClipId`）链内 ping-pong 的草稿，见 `applyBoundChain`。 */
+  private layerScratch: Target | null = null;
   private readonly blendProg: Program;
   private readonly placeProg: Program;
   private readonly passProg: Program;
@@ -283,7 +285,7 @@ export class Compositor {
     let buf = buf0;
     for (const op of ops) {
       if (op.type === 'source') {
-        this.drawSource(op.source, acc, buf, c.w, c.h, c.t, c.frame);
+        this.drawSource(op.source, acc, buf, c);
         // 每个 op 都把结果写进了 buf：交换，让 buf 成为新的 acc。
         const tmp = acc;
         acc = buf;
@@ -291,7 +293,7 @@ export class Compositor {
         continue;
       }
       if (op.type === 'transition') {
-        this.drawTransition(op, acc, buf, c.w, c.h, c.t, c.frame);
+        this.drawTransition(op, acc, buf, c);
         const tmp = acc;
         acc = buf;
         buf = tmp;
@@ -411,21 +413,15 @@ export class Compositor {
    * 都试过，无效 —— 这不是应用层能根治的（GPU 采样的低位行为），
    * 别在这里加补救代码。要断言确定性，就在测量前多渲一帧丢弃。
    */
-  private placeLayer(
-    source: ResolvedSource,
-    dst: Target,
-    frameW: number,
-    frameH: number,
-    t: number,
-    frame: number,
-    opacityForLayer: number,
-  ): boolean {
-    const src = this.resolve(source.clip, t, frame);
+  private placeLayer(source: ResolvedSource, dst: Target, c: FrameCtx, opacityForLayer: number): boolean {
+    const src = this.resolve(source.clip, c.t, c.frame);
     dst.bind();
     this.kit.clear(); // 层外必须是透明，否则 blender 会以为整帧都被覆盖
     if (!src) return false;
 
     const { x, y, sx, sy, rot } = source.transform;
+    const frameW = c.w;
+    const frameH = c.h;
     const [dw, dh] = drawSizeFor(source.clip.fit, frameW, frameH, src.w, src.h, sx, sy);
     this.placeProg.use();
     this.placeProg
@@ -469,7 +465,53 @@ export class Compositor {
     }
 
     this.kit.pass(this.placeProg, dst);
+
+    /*
+     * 绑定链（v11）：在这一层上就地跑，输出仍是 `dst`。
+     *
+     * 放在 placement **之后**、blend **之前**是全部要点：特效看到的是「这一层
+     * 自己的像素」，看不到下方任何轨道；结果照常按目标片段自己的 blend /
+     * opacity 混进 acc。转场通路两侧各跑一次，互不串。
+     */
+    if (source.bound) this.applyBoundChain(source.bound, dst, c);
     return true;
+  }
+
+  /**
+   * 把一组绑定链按顺序跑在 `layer` 上，结果留在 `layer`（调用方只认这一张）。
+   *
+   * 链内 ping-pong 用一张常驻草稿（`layerScratch`）；偶数条特效时结果落在草稿里，
+   * 搬回来一次。没有草稿的话两条特效就会「写入自己正在读的纹理」—— GL 上那是
+   * 未定义行为，表现为同一帧的两次渲染不同。
+   */
+  private applyBoundChain(clips: readonly EffectClip[], layer: Target, c: FrameCtx): void {
+    if (!this.layerScratch) this.layerScratch = this.kit.target(c.w, c.h);
+    this.layerScratch.resize(c.w, c.h);
+    for (const clip of clips) {
+      const ctx: EffectCtx = {
+        t: c.t,
+        frame: c.frame,
+        w: c.w,
+        h: c.h,
+        fps: c.project.fps,
+        compositor: this,
+        clip,
+        grid: c.project.beatGrid,
+        spectrum: this.spectrum,
+        tracker: this.tracker,
+        glyphs: this.glyphs,
+      };
+      let src = layer;
+      let dst = this.layerScratch;
+      for (const inst of clip.chain) {
+        if (!inst.enabled) continue;
+        this.runEffect(inst, src, dst, ctx);
+        const tmp = src;
+        src = dst;
+        dst = tmp;
+      }
+      if (src !== layer) this.copyAcc(src, layer);
+    }
   }
 
   /** `acc` 原样搬进 `dst`：某一层这帧缺席时保持 ping-pong 流水不中断。 */
@@ -479,17 +521,9 @@ export class Compositor {
     this.kit.pass(this.passProg, dst);
   }
 
-  private drawSource(
-    source: ResolvedSource,
-    acc: Target,
-    buf: Target,
-    frameW: number,
-    frameH: number,
-    t: number,
-    frame: number,
-  ): void {
+  private drawSource(source: ResolvedSource, acc: Target, buf: Target, c: FrameCtx): void {
     // 普通通路：opacity 交给 blend pass（u_opacity = 1 → 与历史逐位相同）
-    const ok = this.placeLayer(source, this.placedA!, frameW, frameH, t, frame, 1);
+    const ok = this.placeLayer(source, this.placedA!, c, 1);
     if (!ok) {
       this.copyAcc(acc, buf);
       return;
@@ -513,23 +547,15 @@ export class Compositor {
    * 单侧缺席（algo 烘焙未就绪）时退化成该侧单独一层，而不是整层消失 ——
    * 预览允许「这一帧少一半」，但不该变成整帧黑。
    */
-  private drawTransition(
-    op: TransitionOp,
-    acc: Target,
-    buf: Target,
-    frameW: number,
-    frameH: number,
-    t: number,
-    frame: number,
-  ): void {
+  private drawTransition(op: TransitionOp, acc: Target, buf: Target, c: FrameCtx): void {
     const placedA = this.placedA!;
     const placedB = this.placedB!;
-    const hasFrom = this.placeLayer(op.from, placedA, frameW, frameH, t, frame, op.from.opacity);
-    const hasTo = this.placeLayer(op.to, placedB, frameW, frameH, t, frame, op.to.opacity);
+    const hasFrom = this.placeLayer(op.from, placedA, c, op.from.opacity);
+    const hasTo = this.placeLayer(op.to, placedB, c, op.to.opacity);
 
     let layer: Target;
     if (hasFrom && hasTo) {
-      this.runTransition(op.defId, op.values, placedA, placedB, op.progress, frameW / frameH, this.trTmp!);
+      this.runTransition(op.defId, op.values, placedA, placedB, op.progress, c.w / c.h, this.trTmp!);
       layer = this.trTmp!;
     } else if (hasFrom) {
       layer = placedA;

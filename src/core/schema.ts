@@ -28,7 +28,7 @@ import type { MessageKey } from '../i18n/locales';
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 12;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -79,41 +79,12 @@ export interface Project {
    * 缺省 = 无。坏数据由 `validateProject` 整条丢掉（详见那里的注释）。
    */
   customThemes?: TypographyTheme[];
-  /**
-   * 应用内 Agent 的对话历史（随工程保存，属工程内容）。
-   *
-   * **不进撤销栈**：`ProjectStore` 的快照会剔除这个字段、恢复时保留当前值 ——
-   * 否则用户按一次 Ctrl+Z 会把聊天记录一起退回去（那不是「改动」，是日志）。
-   * 坏数据整条丢弃，工程必须打得开。
-   */
-  agentSessions?: AgentSessionRecord[];
 }
 
-/* --------------------------------------------------------------- 会话历史 */
-
-export type AgentStoredRole = 'user' | 'assistant' | 'tool' | 'error' | 'reasoning' | 'image';
-
-export interface AgentStoredMessage {
-  role: AgentStoredRole;
-  /** 纯文本（工具卡存的是结果摘要）。上限见 `sanitizeAgentSessions`。 */
-  text: string;
-  toolName?: string;
-  toolStatus?: 'running' | 'ok' | 'error';
-  code?: string;
-  ms?: number;
-  /** `role:'image'` 的说明（**不存 base64**：那是工程体积的灾难）。 */
-  caption?: string;
-}
-
-export interface AgentSessionRecord {
-  id: string;
-  /** 第一条用户消息的前若干字，列表里当标题。 */
-  title: string;
-  /** 毫秒时间戳（界面显示用；不参与渲染）。 */
-  createdAt: number;
-  updatedAt: number;
-  messages: AgentStoredMessage[];
-}
+/*
+ * 对话历史**不在**这里：它是 `agent/sessions/<id>.json`（见 `src/agent/history.ts`）。
+ * 挂在 Project 上的代价是「聊一句 = 重写整份工程」，而且撤销栈要专门绕开它。
+ */
 
 export interface Asset {
   id: string;
@@ -274,6 +245,25 @@ export interface EffectClip extends ClipBase {
    * 边界情形（内层特效需要更深的轨道、下方没有启用轨）见那份文件头。
    */
   affectDepth?: number;
+  /**
+   * **绑定片段**（v11）：把链挂在某个具体的 `SourceClip` 上，作为**那一层自己的
+   * 第一步合成** —— 与 z 序无关，也不算作用域。
+   *
+   * 语义：目标片段先按 placement 画成整帧层，链在这个层上按顺序跑，最后才用
+   * 目标片段自己的 blend / opacity 混进 acc。所以它是「这一层的自带滤镜」，
+   * 不是 adjustment layer；同一帧里两条特效片段各自绑不同片段也不会互相影响。
+   *
+   * - 与 `affectDepth` **互斥**。两者同时出现时以绑定为准，`validateProject`
+   *   会把 `affectDepth` 丢掉（手改 JSON 不该让工程打不开）。
+   * - 目标片段这一帧不在 / 已被删除 ⇒ 这条片段什么都不做（不报错）。
+   * - 目标片段处于转场窗口里时，链分别作用在 from 与 to 两层上。
+   * - 时间范围仍由这条片段自己的 `[start, end)` 决定，与目标片段无关。
+   *
+   * 为什么需要它：节拍级的短促特效（0.25s 的频闪）如果只能靠 adjustment layer
+   * 表达，就必须为每一段单独开一条轨道 —— 轨道数会随卡点数量线性增长，而
+   * 「叠在哪一层上」这个意图在轨道序里反而看不出来。
+   */
+  boundClipId?: string;
 }
 
 /** 声音事件，不参与视觉合成。 */
@@ -473,6 +463,32 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 旧版静默忽略 `crop` 再保存，用户裁好的边就没了（静默数据丢失，最难查的一类）。
    */
   9: (p) => ({ ...p, schemaVersion: 10 }),
+
+  /**
+   * v10 → v11：`EffectClip` 新增可选的 `boundClipId`（绑定片段）。
+   *
+   * **恒等迁移**：字段可选（缺省 = 原来的 adjustment layer 语义），v10 的工程
+   * 读进来天然合法。抬版本号的唯一目的仍然是让「新版存出的工程被旧版打开」走
+   * `versionTooNew` 明确报错 —— 旧版会把 `boundClipId` 整条忽略（那条特效于是
+   * 按 z 序作用于下方所有轨），画面完全变样且没有任何提示。
+   */
+  10: (p) => ({ ...p, schemaVersion: 11 }),
+
+  /**
+   * v11 → v12：**把 Agent 对话历史从工程里赶出去**。
+   *
+   * 历史不再属于 `project.json`，而是工程目录里的 `agent/sessions/<id>.json`
+   * （`project/agent-history.ts`）。这条迁移只做一件事：把旧字段删掉。
+   *
+   * 旧数据**不抢救**：工程还没发布，迁移里多一段「把会话搬去文件」的代码
+   * 只会让这条已经在磁盘上消失的路径长期留在代码里，而它没有任何真实用户。
+   * 副作用是可接受的：升级后的旧工程打开时历史是空的，工程内容一字不差。
+   */
+  11: (p) => {
+    const next = { ...p, schemaVersion: 12 } as Record<string, unknown>;
+    delete next.agentSessions;
+    return next;
+  },
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -490,59 +506,6 @@ export function migrateProject(raw: Record<string, unknown>): Project {
     v = cur.schemaVersion as number;
   }
   return validateProject(cur);
-}
-
-/**
- * 会话历史的清洗：**永不抛**，坏条目逐条丢弃。
- *
- * 三个上限都是为了「工程文件不能被聊天记录撑爆」：单条文本 20k 字、
- * 单个会话 400 条、总共 30 个会话（按 updatedAt 保留最近的）。
- * 图片只留说明，不存 base64 —— 一张 1MB 的截图乘上几十轮就是几十 MB。
- */
-export function sanitizeAgentSessions(raw: unknown): AgentSessionRecord[] {
-  if (!Array.isArray(raw)) return [];
-  const ROLES = new Set<AgentStoredRole>(['user', 'assistant', 'tool', 'error', 'reasoning', 'image']);
-  const out: AgentSessionRecord[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    const r = item as Partial<AgentSessionRecord>;
-    if (typeof r.id !== 'string' || !r.id) continue;
-    if (!Array.isArray(r.messages)) continue;
-    const messages: AgentStoredMessage[] = [];
-    for (const m of r.messages) {
-      if (!m || typeof m !== 'object') continue;
-      const msg = m as Partial<AgentStoredMessage>;
-      if (typeof msg.text !== 'string' || !ROLES.has(msg.role as AgentStoredRole)) continue;
-      messages.push({
-        role: msg.role as AgentStoredRole,
-        text: msg.text.slice(0, 20_000),
-        ...(typeof msg.toolName === 'string' ? { toolName: msg.toolName } : {}),
-        ...(msg.toolStatus === 'ok' || msg.toolStatus === 'error' || msg.toolStatus === 'running'
-          ? { toolStatus: msg.toolStatus }
-          : {}),
-        ...(typeof msg.code === 'string' ? { code: msg.code } : {}),
-        ...(Number.isFinite(Number(msg.ms)) ? { ms: Number(msg.ms) } : {}),
-        ...(typeof msg.caption === 'string' ? { caption: msg.caption.slice(0, 500) } : {}),
-      });
-      if (messages.length >= 400) break;
-    }
-    if (!messages.length) continue;
-    const created = Number(r.createdAt);
-    const updated = Number(r.updatedAt);
-    out.push({
-      id: r.id,
-      title: (typeof r.title === 'string' && r.title.trim() ? r.title : '').slice(0, 120),
-      createdAt: Number.isFinite(created) ? created : 0,
-      updatedAt: Number.isFinite(updated) ? updated : 0,
-      messages,
-    });
-  }
-  // 最近更新的排前面；同一 id 只留一条（手改 JSON 可能造出重复）。
-  const seen = new Set<string>();
-  return out
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)))
-    .slice(0, 30);
 }
 
 export function validateProject(raw: unknown): Project {
@@ -582,18 +545,17 @@ export function validateProject(raw: unknown): Project {
     }
   }
   /*
-   * Agent 会话历史（可选）。与 customThemes 同一条纪律：坏数据丢弃，
-   * 工程必须打得开；上限见 `sanitizeAgentSessions`。
-   */
-  const sessions = sanitizeAgentSessions((p as { agentSessions?: unknown }).agentSessions);
-  if (sessions.length) (p as { agentSessions?: AgentSessionRecord[] }).agentSessions = sessions;
-  else delete (p as { agentSessions?: AgentSessionRecord[] }).agentSessions;
-  /*
    * 段落标记（v8）。与上面两条同一条纪律：坏条目逐条丢弃，工程必须打得开。
    * 缺字段（v7 工程、手改 JSON）补成 `[]` —— **写成必填**是为了让读取方不必
    * 到处 `?? []`；那正是「某处忘了兜底 → 时间轴整块空白」的来源。
    */
   p.sections = sanitizeSections((p as { sections?: unknown }).sections);
+  /*
+   * v12 起历史不在工程里。`migrateProject` 只在 v11→v12 那一步删它，
+   * 而手改过的 JSON（或从别处拷来的片段）可能带着这个键 —— 留着的话它会被
+   * 原样写回磁盘，工程文件里就永远挂着一坨没人读的聊天记录。删掉。
+   */
+  delete (p as { agentSessions?: unknown }).agentSessions;
   /*
    * 顺手修掉历史数据里的「主题色引用跑进非排版颜色参数」。
    *
@@ -691,6 +653,18 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
       // 而不是让它一路穿透到 `buildStack` 里以「数到第 N 条轨」的语义变成别的东西。
       if (fx.affectDepth !== undefined && (!Number.isInteger(fx.affectDepth) || fx.affectDepth < 0)) {
         throw new SchemaError(tr('err.schema.effectBadAffectDepth', { id: c.id }));
+      }
+      /*
+       * 绑定片段（v11）。**两种作用方式互斥**：绑定 = 「这一层的滤镜」，
+       * 影响深度 = 「对下面几条轨的画面做一道处理」。同时存在时以绑定为准，
+       * 把 affectDepth 丢掉 —— 这与「坏数据回落、工程必须打得开」同一条纪律
+       * （手改 JSON 写出两个字段是数据矛盾，不是会传染的结构错误）。
+       */
+      if (fx.boundClipId !== undefined) {
+        if (typeof fx.boundClipId !== 'string' || !fx.boundClipId) {
+          throw new SchemaError(tr('err.schema.effectBadBoundClip', { id: c.id }));
+        }
+        delete fx.affectDepth;
       }
     }
     // text 源的最小校验。validateProject 历史上不深校验 source 字段，

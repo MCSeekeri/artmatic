@@ -178,8 +178,9 @@ E2E 与 `scripts/gen-*-thumbs.mjs` 依赖那些键，动它们等于把仓库里
 
 - **统一返回**：`{ ok: true, data: T } | { ok: false, error: { code: string; message: string; detail?: unknown } }`。
   **不抛异常**（exception 跨传输层会丢类型）。`code` 是稳定的机器可读枚举，`message` 给人看。
-- **版本化**：常量 `CONTROL_API_VERSION = 1`（初始）。`describe()` 返回 `{ apiVersion, appVersion, schemaVersion }`。
-  网关在握手时校验主版本，不匹配就拒绝并给出明确错误。
+- **版本化**：常量 `CONTROL_API_VERSION`（初始为 1，当前 4 —— 变更史见 §10 / §11）。
+  `describe()` 返回 `{ apiVersion, appVersion, schemaVersion }`。网关在握手时校验主版本，
+  不匹配就拒绝并给出明确错误。
 - **异步**：全部方法返回 `Promise`（帧渲染、导出、持久化本来就有异步性）。
 - **纯读无副作用**：`read` 类方法**不得**改动 `store.version`、不得推 `playT`、不得 `setExportSize`。
 - **写操作等值**：写方法签名与 `ProjectStore` 的**既有方法一一对应**，**不新增语义**（映射表见 §3.3）。
@@ -261,16 +262,18 @@ interface ClipView {
 | `moveClip(clipId, targetTrackId, newStart)` | `commit(label, () => { liveMoveClip(...); settlePlacement(...) })` | ✅ |
 | `resizeClip(clipId, edge, time)` | `commit(label, () => { liveResizeClip(...); settleResize(...) })` | ✅ |
 | `splitClip(clipId, at)` | `splitClipAt(trackId, clipId, at)` (L477) | ✅ |
-| `setClipProps(clipId, patch)` | `updateClip(clipId, label, fn)` (L532) | ✅ |
+| `setClipProps(clipId, patch)` | `updateClip(clipId, label, fn)` (L532)；音频淡变走 `setFades`（一片，两笔提交时自包事务） | ✅ |
 | `setClipSourceParams(clipId, params)` | `updateClip` + 逐键写 `source.params` | ✅ |
-| `setEffectParams(clipId, chainIndex, values)` | `updateClip` + 写 `chain[i].values` | ✅ |
+| `setGenerator(clipId, generator, params?)` | `updateClip` + 写 `source.generator` / `source.params` + 删旧生成器参数曲线 | ✅ |
+| `setEffectParams(clipId, chainIndex, values?, enabled?)` | `updateClip` + 写 `chain[i].values` / `chain[i].enabled` | ✅ |
 | `setCurve(clipId, param, curve)` | `updateClip` + 写 `curves[param]` | ✅ |
-| `addEffect(clipId, defId, values?)` | `updateClip` + `chain.push(...)` | ✅ |
+| `addEffect(clipId, defId, values?, index?, enabled?)` | `updateClip` + `chain.splice` | ✅ |
 | `removeEffect(clipId, chainIndex)` | `updateClip` + `chain.splice` | ✅ |
 | `reorderEffect(clipId, from, to)` | `updateClip` + 数组重排 | ✅ |
 | `setTransitionOut(clipId, defId, duration, values)` | `setTransitionOut` (L569) | ✅ |
 | `clearTransitionOut(clipId)` | `clearTransitionOut` (L592) | ✅ |
 | `setProject(patch)` | `setFps` (L463) / `setResolution` (L445) / `setDuration` (L422) / `setBeatGrid` (L618) / `setOverlapBehavior` (L539) | ✅ |
+| `editSections(req)` | `addSection` / `splitSection` / `renameSection` / `removeSection` / `moveSection`（本轮新增，数值路径） | ✅ |
 | `loadScene(project)` | `loadFrom` (L630) | ✅ |
 | `undo()` / `redo()` | `undo` (L101) / `redo` (L105) | — |
 | `beginTx()` / `endTx(label)` | `beginTx` (L79) / `endTx` (L91) | ✅（整段一笔） |
@@ -390,10 +393,11 @@ MCP 的 `content`（结构化 JSON 或图片块）。写类工具的 `label` 统
 | `artmatic_move_clip` | `{ clipId, targetTrackId, newStart }` | `moveClip` |
 | `artmatic_resize_clip` | `{ clipId, edge: 'start'\|'end', time }` | `resizeClip` |
 | `artmatic_split_clip` | `{ clipId, at }` | `splitClipAt` |
-| `artmatic_set_clip_props` | `{ clipId, patch }` | `updateClip` |
-| `artmatic_set_params` | `{ clipId, target: 'source'\|'effect', chainIndex?, params }` | `updateClip` |
+| `artmatic_set_clip_props` | `{ clipId, patch }`（含 fadeIn / fadeOut / srcIn / crop / quad / key） | `updateClip` + `setFades` |
+| `artmatic_set_params` | `{ clipId, target: 'source'\|'effect', chainIndex?, params?, enabled? }` | `updateClip` |
+| `artmatic_set_generator` | `{ clipId, generator, params? }` | `updateClip` |
 | `artmatic_set_curve` | `{ clipId, param, curve }` | `updateClip` |
-| `artmatic_add_effect` | `{ clipId, defId, values? }` | `updateClip` |
+| `artmatic_add_effect` | `{ clipId, defId, values?, index?, enabled? }` | `updateClip` |
 | `artmatic_remove_effect` | `{ clipId, chainIndex }` | `updateClip` |
 | `artmatic_reorder_effect` | `{ clipId, from, to }` | `updateClip` |
 | `artmatic_set_transition` | `{ clipId, defId, duration, values? }` | `setTransitionOut` |
@@ -402,6 +406,7 @@ MCP 的 `content`（结构化 JSON 或图片块）。写类工具的 `label` 统
 | `artmatic_remove_track` | `{ trackId }` | `removeTrack` |
 | `artmatic_set_track` | `{ trackId, enabled?, name? }` | `setTrackEnabled` / `renameTrack` |
 | `artmatic_set_project` | `{ fps?, resolution?, duration?, beatGrid?, overlapBehavior? }` | 对应 setter |
+| `artmatic_edit_sections` | `{ op: 'add'\|'split'\|'rename'\|'remove'\|'move', sectionId?, start?, at?, name? }` | 对应 store 方法 |
 | `artmatic_load_scene` | `{ project }` | `loadFrom`（整体改写路径 B） |
 | `artmatic_begin_transaction` / `artmatic_commit_transaction` | `{ label }` | `beginTx` / `endTx` |
 | `artmatic_undo` / `artmatic_redo` | — | `undo` / `redo` |
@@ -410,8 +415,9 @@ MCP 的 `content`（结构化 JSON 或图片块）。写类工具的 `label` 统
 
 | 工具 | 入参 | 返回 |
 |---|---|---|
-| `artmatic_render_frame` | `{ t, size? }` | MCP 图片内容块（PNG） |
-| `artmatic_frame_signature` | `{ t, size?, grid? }` | 数值指纹（**默认给这个**，省上下文） |
+| `artmatic_render_frame` | `{ t, size?, only?, region? }` | MCP 图片内容块（PNG）+ `layers` |
+| `artmatic_render_sequence` | `{ from, to, step?, size?, cols?, only?, region? }` | 一张联系表（PNG）+ 每格时间戳 |
+| `artmatic_frame_signature` | `{ t, size?, grid?, only? }` | 数值指纹（**默认给这个**，省上下文）+ `layers` |
 | `artmatic_export` | `{ format, frameRange?, size?, frameStep? }` | 进度通知 + 产物（或落盘路径） |
 | `artmatic_open_project` / `artmatic_save_project` | `{ path? }` | 结果 |
 | `artmatic_compile_all` | — | `{ okCount, total, failures }`（着色器体检，复用现有 `compileAll`） |
@@ -818,13 +824,66 @@ executor.ts   工具名 → 控制平面调用（唯一的应用内映射表）
 
 ### 10.7 测试
 
-- 会话历史：`project.agentSessions`（30 会话 / 400 条 / 20k 字上限，图片只留说明），
+- 会话历史：**不在 `project.json` 里**（v12 起）。一个会话一个文件，落在工程目录的
+  `agent/sessions/<id>.json`：数据模型与上限（30 会话 / 400 条 / 20k 字，图片只留说明）
+  在 `agent/history.ts`，字节读写 + 一个坏文件只丢一条的容错在
+  `project/agent-history.ts`。
   Agent 抽屉顶栏的 `history` 图标打开只读面板（搜索 / 单条删除 / 一键清空 /
-  导出 JSON 日志）。写入走 `ProjectStore.setAgentSessions`：bump version、
-  **不进撤销栈**（快照剔除该字段）。
+  导出 JSON 日志）。打开工程时 `appState.loadAgentHistory` 读进
+  `OpenProject.agentSessions`；轮末由 `saveAgentSession` 内存立即更新、磁盘排队写。
+  没有目录（工程还没保存）时只在内存里，首次保存由 `flushAgentHistory` 补写。
 - 单测：参数序列化、工具表 parity、排版原语与降级、SSE 分片解析、上下文裁剪、
-  插件说明书完整性、事务内 commit 只留一条记录、会话历史清洗与撤销隔离、
-  重复调用阶梯（3/6 提示、12 停止）、原生思考参数（off/low/high/max）。
+  插件说明书完整性、事务内 commit 只留一条记录、会话历史清洗与上限（撤销栈里
+  已经没有它）、重复调用阶梯（3/6 提示、12 停止）、原生思考参数（off/low/high/max）。
+- E2E `tests/e2e/agent-in-app.spec.ts` 另有一条守「历史真的落在 `agent/sessions/`、
+  `project.json` 里没有聊天记录、重新打开工程还能读回、清空会删文件」。
+
+---
+
+## 11. v4（2026-10-21）：按真实使用反馈修工具面
+
+一轮真实的「用 agent 做一张海报」暴露出八个问题。它们的共同形态是：
+**工具没有说谎，但也没把话说全** —— agent 只能靠渲染图与反复往返反推语义。
+这一轮全部按「让下一次调用就能做对」来改（`CONTROL_API_VERSION = 4`）。
+
+### 11.1 写入语义
+
+| 变更 | 为什么 |
+|---|---|
+| 形状给 `stroke` 且省略 `fill` ⇒ `fill:none` | 工厂默认的实心紫会把 `frame` / 描边类形状整块糊掉，而渲染图上只表现为「描边没生效」。**仅限新建 / 文档导入**；给已有图形补描边不会清掉它的填充。 |
+| 文本的 `fill:{kind:'solid'}` 写入 `style.color` | 渲染侧 `textFillStyle` 只认渐变 / 径向 / 纹理；同一个字段「渐变有效、纯色被忽略」会被误判成字段名写错。读回因此是 `style.color`，`fill` 只在渐变类时出现。 |
+| 写操作回显 | 排版写返回 `element` / `elements`；`set_params` 返回 `values`；`set_clip_props` 返回 `applied`。`changed:true` 逼模型再读整份文档或再渲一张图，往返成本高一个量级。 |
+
+### 11.2 批量与几何
+
+- `typo_add_elements` / `typo_update_elements`：一次调用 = 一笔撤销。新增的
+  数组顺序即 z 序；所有输入在 `commit` 之前校验，绝不半途写入。上限 200 项
+  （一条 undo 快照里的合理体积）。
+- `typo_measure`：**纯读**的几何体检 —— 每个元素的框、文字实际内容高度 / 行数 /
+  溢出、出画距离、元素两两相交（文本压字单独标出）。文字优先用 DOM 量；
+  没有 DOM 时退回估算并标 `estimated:true`。相交按**未旋转**框算，
+  `summary.rotated` 给出带旋转的元素个数。
+- `render_frame` / `frame_signature` 的 `only: { trackId?, elementId? }`：
+  给渲染器一份浅拷贝的 project（其它视觉轨 `enabled:false` / 同文档其它元素
+  `visible:false`），**不动 store、不入撤销栈**。调分层密度时先隔离再出图。
+  v5 起两个键都可传数组，且返回里回显 `layers`（实际参与合成的图层）——
+  隔离会连特效轨一起隐藏，没有这份清单就分不清「隔离藏了」与「参数没生效」。
+
+### 11.3 能力清单的语义
+
+- `getTypographyCapabilities().units`：frame 是文档 px、`rot` 是**弧度**；
+  `radius` / `inner` 是 px，`waist` 是 0..1 比例，`angle` 是度；
+  生成器参数在 0..100 authored 盒里（长度类 ≈ 每 1% 画幅边长，范围 0..1 的是比例）。
+- `SvgGenSpec.notes` → 清单里的 `generators[].notes`：只写参数表看不出来的
+  夹取 / 覆盖（例如 `rings.width` 被圈间距的 0.9× 夹住、`perspective.gap=0`
+  会糊成一块）。
+
+### 11.4 重复调用的判据
+
+`render_frame` / `frame_signature` 的重复计数带上 `sceneVersion()`（内容版本 +
+播放头）。同一组 t/size 在工程变化之后是新的问题；按纯参数判死会把正常的
+「改完再看一眼」拦成死循环。
+
 - E2E `tests/e2e/agent-in-app.spec.ts`：用 `page.route` 伪造 SSE（不需要真 Key），
   覆盖「读场景 → 加片段 → 撤销本轮」「排版加元素 → 截图 → 布局 → 撤销」
   「坏着色器 → 结构化 issue → 好源码进注册表」「安装需要确认」。
@@ -850,3 +909,100 @@ executor.ts   工具名 → 控制平面调用（唯一的应用内映射表）
 5. **`SettingsModal`（应用的全局设置）没有重复放一份 Agent 配置**：唯一入口是
    Agent 自己的根级 modal（避免两处 key 状态同步）。若将来要并进全局设置，必须共用
    `agentState` 而不是各自读写 localStorage。
+
+---
+
+## 12. v5（2026-10-22）：第二轮真实反馈
+
+这一轮的形态与 v4 不同：问题大多**不在工具说谎，而在「工具面之外的结构」**——
+一旦超出「一条轨道一组片段」的简单形状，agent 就只能靠猜。改动集中在四处：
+
+### 12.1 特效片段有了第二种作用方式（`boundClipId`，v11）
+
+节拍级的短促特效（0.25s 频闪）原本只能靠 adjustment layer 表达，于是**每一段
+卡点都要开一条轨道**。现在 `EffectClip.boundClipId` 让链只跑在**目标 SourceClip
+那一层**上（placement 之后、blend 之前），与 z 序无关，也不影响别的层。
+
+- 与 `affectDepth` 互斥（`makeEffectClip` / `setClipProps` / `validateProject`
+  三处一致：绑定优先，或者直接拒绝同一次 patch 里给两个）。
+- 目标必须是 source 片段；目标不在这一帧 = 这条特效什么都不做。
+- 检查器里有「绑定片段」下拉（候选 = 其它视觉轨的 source 片段，首项「不绑定」），
+  绑定时影响深度输入框让位；时间轴片段上给 `→片段名` 角标。绑定不是 agent 专属
+  能力 —— 用户随时能改。
+- 守卫：`tests/e2e/agent-bound-effect.spec.ts`（判据是「方块外逐位不变」+
+  「解绑后同一条链确实改到了下方」，缺一不可）。
+
+### 12.2 曲线与参数命名空间
+
+- `set_curve` 的工具描述里带**完整 Curve schema**（`keys[].t/v/interp`、
+  `beatAnchor`、`impulse` / `follower`），缺 `interp` 按 `smooth` 落库。
+- `param` 接受可读名：`<instanceId>.<key>`（唯一前缀也行）、唯一 defId
+  （`blur.radius`）、全链唯一的裸键。歧义报 `detail.candidates`（chainIndex +
+  完整 instanceId）。`add_effect` 返回 `keyPrefix`，原来的短 id `fx-xxxxxxxx`
+  改成完整 `newId()` —— 两种 id 形态并存是这一轮的根因。
+
+### 12.3 观察手段
+
+| 新增 | 解决什么 |
+|---|---|
+| `render_sequence({ from, to, step, size, cols })` | 单帧看不出节奏 / 卡点。返回**一张**联系表（每格烧时间戳），token 与一张图同量级。 |
+| `region: { x, y, w, h }` | 640 宽看不清 ASCII / 半调 / 小字。裁完最近邻放大到 ≥480px 宽，比整帧提分辨率便宜得多。 |
+| 返回里的 `layers` | `only` 会把特效轨一起隐藏，此时「截图一模一样」既可能是隔离、也可能是参数没生效。回显「实际参与合成的图层」把两者分开。 |
+| `only.trackId / elementId` 接受数组 | 「同时看这两层」原先做不到。 |
+
+### 12.4 排版：默认值与动画
+
+- `typo_set_animation({ clipId, elementId, animation, mode })` 把编辑器那套 CSS
+  动画系统开放给 agent，三种形态：`css`（`@keyframes` 块 + 一条 `animation`
+  简写的原文，与「自定义动画」弹窗同一套 `parseCustomCss` 校验，失败时把
+  `CustomCssError` 的原因原样回给模型）、`preset`（14 个，名字在
+  `get_typography_capabilities().animations.presets`）、`keys[]`
+  （`at` 为 0..1 或 `{ beat: n }`；`x/y/sx/sy/rot/blur/opacity`）。`mode:'add'`
+  叠加第二条，`null` 清空。`typo_add_element` 接受同一字段，一次成型。
+- **读回形状必须能原样写回**：`animationView` 给 `iterations`（不是 `loop`）、
+  自定义动画给 `css` / `animation` 原文，`parseAnimationInput` 两套字段名都认。
+  少了这条，`detail:full` 读一遍再写回就会把「无限循环」变成 1 次、把自定义
+  CSS 整条丢掉。
+- **agent 造的形状默认是空的**（`fill:none` + `stroke:null`，`line` 的白色 4px
+  描边也一并覆盖）。面板路径的实心紫是为了「人先看见再改色」，agent 的默认值
+  必须不改变画面。
+- 生成器的 paint 规则进了 `notes`（barcode / hudticks：用 `fill`，`stroke`
+  宽度一过就把相邻轮廓糊成一块）。
+- `units` 补了 `text` / `paint` / `transform3d` / `defaults`：`letterSpacing` 是
+  px 不是 em，`lineHeight` 是倍数，渐变角度是度，3D 的角度是度、`origin` 是 0..1。
+- `typo_replace_doc` 的 `droppedKeys` 逐条报出未知键、`droppedAnimations` 单独
+  报出坏动画条目（`elements[2].animations[0]`）；`docView` 的 `full` 对缺
+  `fonts` / `elements` 的旧文档兜底（原先整档 `internal`，等于文档对 agent 全黑）；
+  整份替换不再丢动画（含自定义 CSS）。
+- 属性面与编辑器对齐：`transform3d`（合并语义，`null` 关闭）、`autoHeight`、
+  `path` / `pathUnit` / `clipFrame`（写 `path` 会清掉 `gen`，即烘焙生成器）。
+  白名单里的键必须是实现真的会读的键 —— 不放行「收了但不处理」的字段。
+
+### 12.5 纯色片段与工程时长
+
+- `add_clip kind:'solid'` 默认 `fit:'stretch'`：源是 1×1 纹理，`contain` 会画成
+  居中的正方形（16:9 工程里只占中间 ~53% 宽）。
+- 片段越过 `project.duration` 会把它撑长 —— 这是**有意**的（多出来的尾巴就是
+  「转场到黑」），工具描述里写明，不再让 agent 以为是自己写错了。
+
+### 12.6 段落 / 片段视觉字段 / 特效开关 / 换生成器（2026-10-22 P1）
+
+审计（TODO.md 顶部那一条）暴露的「用户可达、Agent 不可达」补齐。四处都遵循同一
+口径：**读得回来的字段必须写得进去**，写完回显落库值。
+
+| 新增 | 为什么 | 取舍 |
+|---|---|---|
+| `edit_sections({ op })` | 快照里早就在报 `sections`，但 `set_project` 够不着它 —— 「按段落铺音乐」这件事 agent 完全没有坐标系 | 五合一（add/split/rename/remove/move）而不是五个工具：参数几乎不重叠，返回值又是同一份列表 |
+| `set_clip_props` + `fadeIn/fadeOut/srcIn/crop/quad/key` | 白名单只有 8 个键；音频淡变、源入点、抠像、四角、裁剪全都摸不到 | 三个视觉字段支持 `null`（关掉）；`crop` 走 `withCropEdge`（对边互斥），`quad` 拒绝退化四边形（面积 0 = 渲染空白） |
+| `set_params({ enabled })` / `add_effect({ enabled })` | 单条实例的开关是「两个候选哪个好看」唯一便宜的判据 | `params` 变可选，但两者至少给一个（都不给说明这次调用什么都不会发生） |
+| `set_generator` | `set_params` 只能改参数，换不了生成器；UI 的换法会顺带删旧参数曲线 | 参数重置为新生成器的默认值再合并；只删**旧生成器参数名**上的曲线，`opacity` / `transform.*` 保留 |
+
+两个实现细节值得记：
+
+- **一次调用一笔撤销**：`set_clip_props` 把淡变交给 `store.setFades`（与手柄共用
+  同一份钳制），其余字段交给 `updateClip`。两笔提交在没有外层事务时自己包一层
+  `beginTx/endTx` —— 判据是 `store.inTx`，因为 `beginTx` **会覆盖**已有快照，
+  嵌套调用会把会话层的起点抹掉。
+- **`add_clip` 仍然不产 audio 片段**：素材导入不在 Agent 职责内（用户 2026-10-22
+  判定），所以音频内容只能由用户导入；agent 能做的是读它、给 BPM、以及（在有音频
+  片段时）写淡变与 `srcIn`。

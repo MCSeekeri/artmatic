@@ -112,6 +112,9 @@ export const inspector = {
   'insp.affectDepthAll': '影响下方所有轨道。',
   'insp.affectDepthTracks': '影响：{names}',
   'insp.affectDepthEmpty': '下方没有启用的视觉轨，这个特效作用在空画面上。',
+  'insp.bindClip': '绑定片段',
+  'insp.bindClipTip': '只作用在选定片段那一层上，与轨道顺序无关；与影响深度互斥。',
+  'insp.bindNone': '不绑定（按影响深度）',
 
   /* ------------------------------------------------ 特效选择器 */
   'insp.pickerSearch': '搜索特效……',
@@ -178,6 +181,7 @@ export const inspector = {
   'insp.changeColor': '改颜色',
   'insp.changeSrcIn': '改 srcIn',
   'insp.changeAffectDepth': '改影响深度',
+  'insp.changeBoundClip': '改绑定片段',
 
   /* ------------------------------------------------ 转场（出画） */
   /* 转场的**参数名不翻译**：`pixelSize` / `blocksize` 那些逐字来自 gl-transitions

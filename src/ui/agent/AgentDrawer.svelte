@@ -22,6 +22,7 @@
   import PluginApprovalCard from './PluginApprovalCard.svelte';
   import AskUserCard from './AskUserCard.svelte';
   import ReasoningBlock from './ReasoningBlock.svelte';
+  import { renderMarkdown } from './markdown';
   import ProviderLogo from './ProviderLogo.svelte';
   import { agentState, type AgentEffort } from './agent-state.svelte';
   import { appState } from '../app-state.svelte';
@@ -317,21 +318,6 @@
 
   /* ------------------------------------------------------------- 渲染 */
 
-  /** 极简 markdown：只切代码块（插件源码是整段 ```js）。 */
-  function segments(text: string): { code: boolean; text: string }[] {
-    const out: { code: boolean; text: string }[] = [];
-    const re = /```[a-zA-Z0-9]*\n([\s\S]*?)```/g;
-    let last = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text))) {
-      if (m.index > last) out.push({ code: false, text: text.slice(last, m.index) });
-      out.push({ code: true, text: m[1] ?? '' });
-      last = m.index + m[0].length;
-    }
-    if (last < text.length) out.push({ code: false, text: text.slice(last) });
-    return out.length ? out : [{ code: false, text }];
-  }
-
   const statusText = $derived.by(() => {
     switch (agentState.status) {
       case 'thinking':
@@ -478,13 +464,7 @@
         </div>
       {:else if msg.role === 'assistant'}
         <div class="msg assistant" data-testid="agent-msg-assistant">
-          {#each segments(msg.text) as seg}
-            {#if seg.code}
-              <pre class="code">{seg.text}</pre>
-            {:else}
-              <div class="text">{seg.text}</div>
-            {/if}
-          {/each}
+          <div class="text md">{@html renderMarkdown(msg.text)}</div>
         </div>
       {:else if msg.role === 'reasoning'}
         <ReasoningBlock text={msg.text} />
@@ -893,11 +873,49 @@
     font-size: var(--fs-sm);
     line-height: 1.6;
   }
-  .msg.assistant .text {
-    white-space: pre-wrap;
+  /*
+   * 正文是 Markdown 渲染出来的 HTML，**不在 Svelte 的模板里** —— 所以每条规则
+   * 都必须走 `:global()`，否则编译器给模板元素加的那个作用域类不会出现在
+   * 注入的节点上，规则一条都不生效（表现是「有结构但完全没有样式」）。
+   */
+  .msg.assistant .md {
     word-break: break-word;
   }
-  .code {
+  .md :global(p) {
+    margin: 0 0 6px;
+  }
+  .md :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .md :global(ul),
+  .md :global(ol) {
+    margin: 4px 0 6px;
+    padding-left: 18px;
+  }
+  .md :global(li) {
+    margin: 2px 0;
+  }
+  .md :global(li::marker) {
+    color: var(--text-muted);
+  }
+  .md :global(h1),
+  .md :global(h2),
+  .md :global(h3),
+  .md :global(h4) {
+    margin: 8px 0 4px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .md :global(code) {
+    padding: 1px 3px;
+    background: var(--surface-2);
+    border-radius: 3px;
+    color: var(--text-primary);
+    font-family: 'Cascadia Code', Consolas, monospace;
+    font-size: 10px;
+  }
+  .md :global(pre) {
     margin: 6px 0;
     padding: var(--sp-2);
     max-height: 260px;
@@ -905,12 +923,45 @@
     background: var(--surface-0);
     border: 1px solid var(--border);
     border-radius: 3px;
+  }
+  .md :global(pre code) {
+    padding: 0;
+    background: transparent;
     color: var(--text-secondary);
-    font-family: 'Cascadia Code', Consolas, monospace;
-    font-size: 10px;
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+  .md :global(a) {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .md :global(blockquote) {
+    margin: 4px 0;
+    padding-left: 8px;
+    border-left: 2px solid var(--border);
+    color: var(--text-muted);
+  }
+  .md :global(table) {
+    margin: 6px 0;
+    border-collapse: collapse;
+    font-size: 10px;
+  }
+  .md :global(th),
+  .md :global(td) {
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    text-align: left;
+  }
+  .md :global(hr) {
+    margin: 8px 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+  .md :global(.md-img-alt) {
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .notice {

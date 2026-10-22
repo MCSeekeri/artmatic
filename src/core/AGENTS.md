@@ -69,6 +69,12 @@ interface EffectClip extends ClipBase {
   chain: EffectInstance[]                     // 一条片段可携带一串效果，可拖拽重排
   /** 影响深度：只作用于下方最近的 N 条启用视觉轨；0 / 缺省 = 下方全部（见 `src/engine/AGENTS.md`）。 */
   affectDepth?: number
+  /**
+   * v11 绑定片段：链只跑在**这一个 SourceClip 的层**上（与 z 序无关）。
+   * 与 `affectDepth` **互斥** —— 两者同时出现时 `validateProject` 以绑定为准丢掉深度。
+   * 执行位置与边界见 `src/engine/AGENTS.md`。
+   */
+  boundClipId?: string
 }
 
 /** 声音事件，不参与视觉合成。 */

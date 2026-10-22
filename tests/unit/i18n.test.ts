@@ -254,6 +254,13 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
      * 上下文恢复后画面会自己回来（`webglcontextrestored` → 重建渲染服务）。
      */
     '[preview] WebGL 上下文丢失（多为显存不足 / 驱动重置），等待浏览器恢复',
+    /*
+     * Agent 历史（`agent/sessions/`）的读写失败。历史是日志而不是工程真相，
+     * 写失败**不打断任何操作**，所以它只有 console 出口；界面上的「历史」面板
+     * 少一条会话时不会弹错，正是刻意的（一条坏文件不该挡住用户干活）。
+     */
+    '[agent-history] 写入失败：',
+    '[agent-history] ${failed.length} 个会话文件读不出来',
   ],
 
   /* ── 二、按 error.name 判定的哨兵；或测试替身内部 ─────────────────

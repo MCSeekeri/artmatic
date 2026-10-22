@@ -27,11 +27,14 @@ import { newId, type Project } from '../core/schema';
 import {
   SHAPE_KINDS,
   applyPaintPatch,
+  coerceTransform3D,
+  coerceTransform3DPatch,
   createImageElement,
   createShapeElement,
   createTextElement,
   defaultTextStyle,
   elementById,
+  mergeTransform3D,
   reorderElements,
   type ImageElement,
   type Paint,
@@ -46,6 +49,17 @@ import {
   type TypographyElement,
 } from './document';
 import { plainTextOf, runsFromText } from './rich-text';
+import {
+  ANIM_PRESETS,
+  createCustomAnimation,
+  createPresetAnimation,
+  isPresetId,
+  parseCustomCss,
+  type AnimTiming,
+  type CustomCssError,
+  type Easing,
+  type ElementAnimation,
+} from './animation';
 import { boundsOf, distribute, alignElements, toRects, type AlignAxis, type Rect } from './geometry';
 import { groupElements, groupList, pruneGroups, reorderSelection, ungroupElements } from './groups';
 import { buildFromSpec, generatorById, mergeParams } from './svg-gen/registry';
@@ -343,9 +357,75 @@ export function applyTextStylePatch(style: TextStyle, raw: unknown): boolean {
   return changed;
 }
 
+/**
+ * 文本元素的**字形填充**写入（agent / 文档导入共用）。
+ *
+ * `TextElement.fill` 的语义是「只有渐变 / 径向 / 纹理覆盖字形色，纯色仍走
+ * `style.color`」（见 `document.ts` 的注释）。对 agent 来说，同一个 `fill`
+ * 字段「渐变有效、纯色被静默忽略」是最容易误判成自己写错的一类不一致 ——
+ * 所以这里把 `solid` **翻译**成 `style.color`：
+ *
+ *  - `{ kind:'solid', color }` → `style.color = color`，并删掉 `fill`；
+ *  - `{ kind:'none' }` / `null` → 删掉 `fill`（回到 `style.color`）；
+ *  - 渐变 / 径向 / 纹理 → 整份写进 `fill`；
+ *  - 不带 `kind` 的局部补丁（`{ color }`）→ 沿用既有 `applyPaintPatch` 语义。
+ *
+ * 返回是否真的改了东西。`coercePaint` 永不抛（agent 的输出是不可信输入）。
+ */
+export function applyTextFill(el: TextElement, raw: unknown): boolean {
+  if (raw === null) {
+    const had = el.fill !== undefined;
+    delete el.fill;
+    return had;
+  }
+  if (!isRecord(raw)) return false;
+
+  if (!('kind' in raw)) {
+    // 局部补丁：只改已有填充的颜色 / 角度，不换类型。
+    const patch = coercePaintPatch(raw);
+    if (!patch) return false;
+    const next = applyPaintPatch(el.fill ?? { kind: 'none' }, patch);
+    const changed = JSON.stringify(next) !== JSON.stringify(el.fill ?? null);
+    if (next.kind === 'none') delete el.fill;
+    else el.fill = next;
+    return changed;
+  }
+
+  // 未知 kind 当作「没给」而不是降级成 none：补丁把已有渐变清掉，
+  // 与「拼错一个枚举值」的代价完全不对称。
+  if (typeof raw.kind !== 'string' || !PAINT_KINDS.has(raw.kind)) return false;
+  const paint = coercePaint(raw);
+  if (paint.kind === 'solid') {
+    const changed = el.style.color !== paint.color || el.fill !== undefined;
+    el.style.color = paint.color;
+    delete el.fill;
+    return changed;
+  }
+  if (paint.kind === 'none') {
+    const had = el.fill !== undefined;
+    delete el.fill;
+    return had;
+  }
+  const changed = JSON.stringify(paint) !== JSON.stringify(el.fill ?? null);
+  el.fill = paint;
+  return changed;
+}
+
 /* --------------------------------------------------------------- 新增元素 */
 
-export interface NewTextInput {
+/** 新建元素都能顺手带一条 / 一组动画（`typo_add_element` 的同名字段）。 */
+export interface AnimationCarrier {
+  animation?: unknown;
+  animations?: unknown[];
+}
+
+/** 新建元素的公共可选字段（与 `typo_update_element` 的 patch 同名同义）。 */
+export interface ElementExtras {
+  /** 元素级 3D：与恒等值合并，`null` / 省略 = 没有 3D。 */
+  transform3d?: unknown;
+}
+
+export interface NewTextInput extends AnimationCarrier, ElementExtras {
   text: string;
   frame?: FramePatch;
   style?: Record<string, unknown>;
@@ -354,12 +434,14 @@ export interface NewTextInput {
   boxStroke?: unknown;
   /** 字形描边（`-webkit-text-stroke`）：`{ color, width }`，宽度 px。 */
   glyphStroke?: unknown;
+  /** true = 宽固定、高随内容。 */
+  autoHeight?: boolean;
   name?: string;
   opacity?: number;
   blend?: string;
 }
 
-export interface NewShapeInput {
+export interface NewShapeInput extends AnimationCarrier, ElementExtras {
   shape: string;
   frame?: FramePatch;
   fill?: unknown;
@@ -370,13 +452,15 @@ export interface NewShapeInput {
   inner?: number;
   angle?: number;
   path?: string;
+  pathUnit?: 'px' | 'percent';
+  clipFrame?: boolean;
   evenOdd?: boolean;
   name?: string;
   opacity?: number;
   blend?: string;
 }
 
-export interface NewImageInput {
+export interface NewImageInput extends AnimationCarrier, ElementExtras {
   assetId: string;
   frame?: FramePatch;
   fit?: string;
@@ -396,12 +480,67 @@ const MIX_BLEND_IDS = new Set([
   'hard-light','soft-light','difference','exclusion','hue','saturation','color','luminosity',
 ]);
 
-function applyCommon(el: TypographyElement, input: { name?: string; opacity?: number; blend?: string }): void {
+/**
+ * 把 `animation` / `animations` 写进元素。非法输入**抛错**（调用方前置校验过；
+ * 这里抛是为了「静默丢一条动画」永远不会发生 —— 那在画面上就是「动画没反应」）。
+ *
+ * `append: false` 用于「设动画」语义（替换），`true` 用于新建元素（本来就空）。
+ */
+export function applyAnimations(el: TypographyElement, input: AnimationCarrier, append = true): boolean {
+  const raw = Array.isArray(input.animations)
+    ? input.animations
+    : input.animation !== undefined
+      ? [input.animation]
+      : [];
+  if (raw.length === 0) return false;
+  const parsed: ElementAnimation[] = [];
+  for (const item of raw) {
+    if (item === null) continue;
+    const anim = animationFromInput(item);
+    if (!anim) throw new Error('invalid animation input');
+    parsed.push(anim);
+  }
+  if (parsed.length === 0) return false;
+  el.animations = append ? [...(el.animations ?? []), ...parsed] : parsed;
+  return true;
+}
+
+/**
+ * `typo_set_animation` 的写入原语：`input === null` 清空，否则替换 / 追加一条。
+ * 非法输入抛错（调用方已在 `commit` 之前校验过一次，这里抛是第二道闸）。
+ */
+export function setAnimation(
+  el: TypographyElement,
+  input: unknown,
+  mode: 'replace' | 'add' = 'replace',
+): boolean {
+  if (input === null) {
+    el.animations = [];
+    return true;
+  }
+  const anim = animationFromInput(input);
+  if (!anim) throw new Error('invalid animation input');
+  el.animations = mode === 'add' ? [...(el.animations ?? []), anim] : [anim];
+  return true;
+}
+
+function applyCommon(
+  el: TypographyElement,
+  input: { name?: string; opacity?: number; blend?: string } & AnimationCarrier & ElementExtras,
+): void {
   if (typeof input.name === 'string' && input.name.trim()) el.name = input.name;
   if (Number.isFinite(Number(input.opacity))) el.opacity = Math.max(0, Math.min(1, Number(input.opacity)));
   if (typeof input.blend === 'string' && MIX_BLEND_IDS.has(input.blend)) {
     el.blend = input.blend as TypographyElement['blend'];
   }
+  // 3D 与 patch 同一条语义（对象合并、null 删除）；新建时基值是「没有」。
+  if (input.transform3d === null) {
+    delete el.transform3d;
+  } else if (input.transform3d !== undefined) {
+    const patch = coerceTransform3DPatch(input.transform3d);
+    if (patch) el.transform3d = mergeTransform3D(el.transform3d, patch);
+  }
+  applyAnimations(el, input);
 }
 
 /** 追加一个文字元素。返回它（调用方要 id）。 */
@@ -412,10 +551,12 @@ export function addTextElement(doc: TypographyDocument, input: NewTextInput): Te
   });
   applyFramePatch(el.frame, input.frame ?? {});
   applyTextStylePatch(el.style, input.style ?? {});
-  if (input.fill !== undefined) el.fill = coercePaint(input.fill);
+  // 纯色 fill 落到 style.color —— 见 applyTextFill 的注释。
+  if (input.fill !== undefined) applyTextFill(el, input.fill);
   if (input.boxFill !== undefined) el.boxFill = coercePaint(input.boxFill);
   if (input.boxStroke !== undefined) setTextBoxStroke(el, input.boxStroke);
   if (input.glyphStroke !== undefined) setGlyphStroke(el, input.glyphStroke);
+  if (input.autoHeight !== undefined) el.autoHeight = Boolean(input.autoHeight);
   applyCommon(el, input);
   doc.elements = [...doc.elements, el];
   return el;
@@ -428,11 +569,27 @@ export function addShapeElement(doc: TypographyDocument, input: NewShapeInput): 
   }
   const el = createShapeElement(doc.size, input.shape, {
     ...(input.path ? { path: input.path } : {}),
+    ...(input.pathUnit === 'px' ? { pathUnit: 'px' as const } : {}),
+    ...(input.clipFrame ? { clipFrame: true } : {}),
     ...(input.evenOdd !== undefined ? { evenOdd: input.evenOdd } : {}),
   });
   applyFramePatch(el.frame, input.frame ?? {});
-  if (input.fill !== undefined) el.fill = coercePaint(input.fill, el.fill);
-  if (input.stroke !== undefined) el.stroke = coerceStroke(input.stroke, el.stroke);
+  /*
+   * **agent 造的形状默认是空的**：没给 fill ⇒ `none`，没给 stroke ⇒ `null`。
+   *
+   * 面板里新建形状给实心紫是合理的（人眼立刻看到「它在那儿」，然后自己改）；
+   * agent 不是 —— 它往往是「先搭骨架、再逐个上色」，而一块默认紫会把画面染成
+   * 它没打算要的样子，并且从一张 640 宽的截图里很难分辨「这是我要的紫还是默认紫」。
+   * 同理，`line` 在工厂里会带一条白色 4px 描边：只给 fill 的调用方会得到
+   * 「一条比预期粗得多的白线」，所以这里也显式覆盖成 null（要描边就自己给）。
+   *
+   * `get_typography_capabilities().units` 里写明了这条默认值，模型不会因为
+   * 「忘了给 fill」而得到一张空白图还不知道原因。
+   */
+  if (input.fill !== undefined) el.fill = coercePaint(input.fill, { kind: 'none' });
+  else el.fill = { kind: 'none' };
+  if (input.stroke !== undefined) el.stroke = coerceStroke(input.stroke, null);
+  else el.stroke = null;
   if (Number.isFinite(Number(input.radius))) el.radius = Math.max(0, Number(input.radius));
   if (Number.isFinite(Number(input.sides))) el.sides = Math.max(3, Math.min(64, Math.round(Number(input.sides))));
   if (Number.isFinite(Number(input.waist))) el.waist = Math.max(0.02, Math.min(1, Number(input.waist)));
@@ -475,7 +632,17 @@ export function addImageElement(
 /** 按生成器 id 造一个 `shape:'svg'` 元素（参数会在内部补默认值）。 */
 export function addGeneratedShape(
   doc: TypographyDocument,
-  input: { genId: string; params?: Record<string, number | string>; seed?: number; frame?: FramePatch; name?: string; fill?: unknown; stroke?: unknown },
+  input: {
+    genId: string;
+    params?: Record<string, number | string>;
+    seed?: number;
+    frame?: FramePatch;
+    name?: string;
+    fill?: unknown;
+    stroke?: unknown;
+    animation?: unknown;
+    animations?: unknown[];
+  },
 ): ShapeElement {
   const spec = generatorById(input.genId);
   if (!spec) throw new Error(`unknown generator: ${input.genId}`);
@@ -500,13 +667,26 @@ export function addGeneratedShape(
     frame,
     ...(input.name ? { name: input.name } : {}),
   });
+  /*
+   * 与 `addShapeElement` 同一条默认值：**没给 fill ⇒ none，没给 stroke ⇒ null**。
+   *
+   * 生成器的图元是有面积的吗？不是 —— `barcode` / `rings` 这类是「细长条 / 细环」，
+   * 拿 `stroke` 去描它们，宽度一对叠就煳成一整块实心板（用户实测报过）。所以
+   * `notes` 里统一写「用 fill」；这里不再替调用方补一条默认描边。
+   * 例外只有 `strokeOnly` 的生成器（路径本身就是一条线，没有可填充的面积）：
+   * 那种必须给描边，否则画不出来，宽度取 2px。
+   */
   if (built.strokeOnly) {
     el.fill = { kind: 'none' };
-    el.stroke = el.stroke ?? { color: '#ffffff', width: 4, style: 'solid' };
+    el.stroke = { color: '#ffffff', width: 2, style: 'solid' };
+  } else {
+    el.fill = { kind: 'none' };
+    el.stroke = null;
   }
-  if (input.fill !== undefined) el.fill = coercePaint(input.fill, el.fill);
-  if (input.stroke !== undefined) el.stroke = coerceStroke(input.stroke, el.stroke);
+  if (input.fill !== undefined) el.fill = coercePaint(input.fill, { kind: 'none' });
+  if (input.stroke !== undefined) el.stroke = coerceStroke(input.stroke, null);
   applyFramePatch(el.frame, input.frame ?? {});
+  applyAnimations(el, input);
   el.gen = { id: spec.id, seed, params };
   doc.elements = [...doc.elements, el];
   return el;
@@ -540,6 +720,30 @@ export function patchElement(
   if (raw.visible !== undefined) el.visible = Boolean(raw.visible);
   if (raw.locked !== undefined) el.locked = Boolean(raw.locked);
 
+  /*
+   * 3D：`null` 关闭（删字段），对象则**合并**（与面板「先启用再调」同一条语义——
+   * 只给 `{rotate:{y:35}}` 不该把已有透视 / 位移清掉）。
+   */
+  if (raw.transform3d === null) {
+    delete el.transform3d;
+  } else if (raw.transform3d !== undefined) {
+    const patch = coerceTransform3DPatch(raw.transform3d);
+    if (patch) el.transform3d = mergeTransform3D(el.transform3d, patch);
+  }
+
+  /*
+   * 动画：`animations` / `animation` **替换**（与「改属性」的语义一致），
+   * `removeAnimations: true` 或 `animation: null` 清空，`addAnimation` 追加。
+   * 没有 `append` 语义的话，「把 pop 改成 fade」在工具面上只能先读再删再加。
+   */
+  if (raw.removeAnimations === true || raw.animation === null) {
+    el.animations = [];
+  } else if (raw.animations !== undefined || raw.animation !== undefined) {
+    applyAnimations(el, raw as AnimationCarrier, false);
+  } else if (raw.addAnimation !== undefined) {
+    applyAnimations(el, { animation: raw.addAnimation }, true);
+  }
+
   /* 阴影 / 虚化：所有元素通用，都是「空 = 删字段」。 */
   if (raw.blur !== undefined) {
     const v = Math.max(0, finite(raw.blur, 0));
@@ -562,17 +766,33 @@ export function patchElement(
 
   if (el.kind === 'text') {
     if (isRecord(raw.style)) applyTextStylePatch(el.style, raw.style);
-    const fillPatch = coercePaintPatch(raw.fill);
-    if (fillPatch) el.fill = applyPaintPatch(el.fill ?? { kind: 'none' }, fillPatch);
+    // 纯色 fill 等价于 style.color（见 applyTextFill）；null / {kind:'none'} = 清掉渐变。
+    if (raw.fill !== undefined) applyTextFill(el, raw.fill);
     const boxPatch = coercePaintPatch(raw.boxFill);
     if (boxPatch) el.boxFill = applyPaintPatch(el.boxFill ?? { kind: 'none' }, boxPatch);
     if (raw.boxStroke !== undefined) setTextBoxStroke(el, raw.boxStroke);
     if (raw.glyphStroke !== undefined) setGlyphStroke(el, raw.glyphStroke);
     if (raw.text !== undefined && typeof raw.text === 'string') el.runs = runsFromText(raw.text);
+    if (raw.autoHeight !== undefined) el.autoHeight = Boolean(raw.autoHeight);
   } else if (el.kind === 'shape') {
     const fillPatch = coercePaintPatch(raw.fill);
     if (fillPatch) el.fill = applyPaintPatch(el.fill, fillPatch);
     if (raw.stroke !== undefined) el.stroke = coerceStroke(raw.stroke, el.stroke);
+    /*
+     * 手写路径只对 `shape:'svg'` 有意义（其它图形由参数生成几何）。写 path 时
+     * 顺手清掉 `gen`：生成器元素一旦被手改过，下次改参数会把它静默覆盖掉。
+     * 这条与编辑器的「转为路径 / 进入顶点编辑」同源（见 typography/AGENTS.md）。
+     */
+    if (typeof raw.path === 'string' && el.shape === 'svg') {
+      el.path = raw.path;
+      delete el.gen;
+    }
+    if (raw.pathUnit === 'px') el.pathUnit = 'px';
+    else if (raw.pathUnit === 'percent') delete el.pathUnit;
+    if (raw.clipFrame !== undefined) {
+      if (raw.clipFrame) el.clipFrame = true;
+      else delete el.clipFrame;
+    }
     if (Number.isFinite(Number(raw.radius))) el.radius = Math.max(0, Number(raw.radius));
     if (Number.isFinite(Number(raw.sides))) el.sides = Math.max(3, Math.min(64, Math.round(Number(raw.sides))));
     if (Number.isFinite(Number(raw.waist))) el.waist = Math.max(0.02, Math.min(1, Number(raw.waist)));
@@ -752,6 +972,235 @@ export function setTheme(doc: TypographyDocument, id: string | null): void {
   else doc.theme = id;
 }
 
+/* --------------------------------------------------------------- 动画 */
+
+/** 关键帧输入（`at` 为 0..1 的动画进度；beat 由调用方先换算成进度）。 */
+export interface AnimationKeysInput {
+  at: number;
+  opacity?: number;
+  x?: number;
+  y?: number;
+  sx?: number;
+  sy?: number;
+  rot?: number;
+  blur?: number;
+}
+
+/**
+ * 动画输入（`typo_set_animation` 的 `animation` 参数，与 `typo_add_element` 的
+ * 同名子字段同构）。三种形态，**按优先级**：
+ *
+ *  - `css: '…'`（手写 CSS：一个或多个 `@keyframes` 块 + 一条 `animation` 简写；
+ *    旧形态「只填一个 keyframes 体」也接受）。与编辑器弹窗同一套校验
+ *    （`parseCustomCss`），所以两侧写出来的动画在文档里完全同构。
+ *  - `keys: [{ at, opacity, x, y, sx, sy, rot, blur }]`（生成一条 keyframes 体）
+ *  - `preset: 'fade-in' | 'slide-in-left' | ...`（内置 14 个）
+ *
+ * 都走项目已有的 CSS 动画系统（`typography/animation.ts`）：预览与导出对同一条
+ * 动画求同一个时间，因此**动画在导出里是真的**，不是只在预览里演一遍。
+ */
+export interface AnimationInput {
+  /**
+   * 手写 CSS。只允许 `@keyframes` 块 + 一条顶层 `animation:` 声明（选择器 /
+   * `@import` / `@charset` / `@namespace` 一律拒绝 —— 理由见
+   * `animation.ts` 的 `CustomAnimation.css` 注释：注入点唯一、不许逃出元素）。
+   */
+  css?: string;
+  /** 与 `css` 配套的简写值（等价于在 css 末尾写 `animation: …;`）。 */
+  animation?: string;
+  preset?: string;
+  duration?: number;
+  delay?: number;
+  /** 播放次数：`'once'` / `'infinite'` / 正数。缺省 once。 */
+  loop?: number | 'once' | 'infinite';
+  /**
+   * `loop` 的**读回别名**：`animationView` 回显的是 `iterations`，所以「读回来
+   * 再写回去」必须认它。两个都给时 `loop` 优先。
+   */
+  iterations?: number | 'infinite';
+  easing?: string | number[];
+  direction?: string;
+  fill?: string;
+  /** 预设参数（slide 的 dist / zoom 的 z0,z1 / blur 的 blur）。 */
+  params?: Record<string, number>;
+  keys?: AnimationKeysInput[];
+}
+
+const EASING_IDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
+const DIRECTIONS = new Set(['normal', 'reverse', 'alternate', 'alternate-reverse']);
+const FILLS = new Set(['none', 'forwards', 'backwards', 'both']);
+const MAX_ANIM_KEYS = 20;
+
+function timingOf(input: AnimationInput): Partial<AnimTiming> | null {
+  const out: Partial<AnimTiming> = {};
+  if (input.duration !== undefined) {
+    if (!(Number(input.duration) > 0)) return null;
+    out.duration = Number(input.duration);
+  }
+  if (input.delay !== undefined) out.delay = Math.max(0, Number(input.delay) || 0);
+  // `iterations` 是 `animationView` 的读回名（写回时不能丢），`loop` 是工具面的名字。
+  const loop = input.loop ?? input.iterations;
+  if (loop !== undefined) {
+    if (loop === 'infinite') out.iterations = Infinity;
+    else if (loop === 'once') out.iterations = 1;
+    else if (Number.isFinite(Number(loop)) && Number(loop) > 0) out.iterations = Number(loop);
+    else return null;
+  }
+  if (input.easing !== undefined) {
+    if (typeof input.easing === 'string' && EASING_IDS.has(input.easing)) out.easing = input.easing as Easing;
+    else if (Array.isArray(input.easing) && input.easing.length === 4 && input.easing.every((n) => Number.isFinite(Number(n)))) {
+      out.easing = input.easing.map(Number) as [number, number, number, number];
+    } else return null;
+  }
+  if (input.direction !== undefined) {
+    if (!DIRECTIONS.has(String(input.direction))) return null;
+    out.direction = input.direction as AnimTiming['direction'];
+  }
+  if (input.fill !== undefined) {
+    if (!FILLS.has(String(input.fill))) return null;
+    out.fill = input.fill as AnimTiming['fill'];
+  }
+  return out;
+}
+
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+/**
+ * 关键帧列表 → `@keyframes` 体。
+ *
+ * 每一帧都写**全部**被用到的属性（缺的取恒等值），因为 CSS 只对「两端都出现」
+ * 的属性做插值：只在首帧写 `transform` 的话，中间会从元素的基础样式插进来，
+ * 而基础样式里有用户自己的旋转 —— 动画看起来会莫名其妙地「先歪一下」。
+ */
+export function keyframesFromKeys(keys: readonly AnimationKeysInput[]): string | null {
+  if (keys.length < 2 || keys.length > MAX_ANIM_KEYS) return null;
+  const used = {
+    opacity: keys.some((k) => k.opacity !== undefined),
+    transform: keys.some((k) => k.x !== undefined || k.y !== undefined || k.sx !== undefined || k.sy !== undefined || k.rot !== undefined),
+    blur: keys.some((k) => k.blur !== undefined),
+  };
+  const sorted = [...keys].sort((a, b) => a.at - b.at);
+  const frames: string[] = [];
+  for (const k of sorted) {
+    if (!Number.isFinite(k.at)) return null;
+    const pct = round3(Math.max(0, Math.min(1, k.at)) * 100);
+    const decl: string[] = [];
+    if (used.opacity) decl.push(`opacity:${round3(Math.max(0, Math.min(1, k.opacity ?? 1)))}`);
+    if (used.transform) {
+      const x = round3(k.x ?? 0);
+      const y = round3(k.y ?? 0);
+      const sx = round3(k.sx ?? 1);
+      const sy = round3(k.sy ?? k.sx ?? 1);
+      const rot = round3(k.rot ?? 0);
+      decl.push(`transform:translate(${x}px,${y}px) scale(${sx},${sy}) rotate(${rot}deg)`);
+    }
+    if (used.blur) decl.push(`filter:blur(${round3(Math.max(0, k.blur ?? 0))}px)`);
+    frames.push(`${pct}%{${decl.join(';')}}`);
+  }
+  return frames.join('');
+}
+
+/**
+ * 输入 → 动画条目。**带原因的**解析结果：自定义 CSS 被拒时给出编辑器同一套
+ * `CustomCssError`，调用方翻成文案回给模型（「花括号没配平」与「引用未定义的
+ * 动画名」需要改的地方完全不同，只报一句「入参非法」等于让它瞎试）。
+ */
+export type AnimationParse =
+  | { ok: true; animation: ElementAnimation }
+  | { ok: false; reason?: CustomCssError };
+
+export function parseAnimationInput(raw: unknown): AnimationParse {
+  if (!isRecord(raw)) return { ok: false };
+  const input = raw as AnimationInput;
+  // 形状先过一遍：`css` 存在时它是唯一定义来源，keys / preset / params 一并忽略。
+  if (input.css !== undefined && typeof input.css !== 'string') return { ok: false };
+  const timing = timingOf(input);
+  if (!timing) return { ok: false };
+
+  if (typeof input.css === 'string') {
+    let text = input.css;
+    if (typeof input.animation === 'string' && input.animation.trim()) {
+      /*
+       * 单独的 `animation` 字段只在 css 里没写简写时拼进去。两处都写会解析出
+       * 两条 `animation` 声明，那在 parseMultiCss 里是明确的错误 —— 而模型很
+       * 可能「照编辑器预览的样子」两处都填。
+       */
+      const alone = parseCustomCss(text);
+      if (!(alone.ok && alone.animation)) text = `${text}\nanimation: ${input.animation.trim()};`;
+    }
+    const parsed = parseCustomCss(text);
+    if (!parsed.ok) return { ok: false, reason: parsed.reason };
+    return {
+      ok: true,
+      animation: createCustomAnimation(newId(), parsed.css, {
+        ...timing,
+        ...(parsed.animation ? { animation: parsed.animation } : {}),
+      }),
+    };
+  }
+
+  if (Array.isArray(input.keys) && input.keys.length > 0) {
+    const keys: AnimationKeysInput[] = input.keys
+      .filter(isRecord)
+      .map((k) => ({
+        at: finite(k.at, 0),
+        ...(k.opacity === undefined ? {} : { opacity: finite(k.opacity, 1) }),
+        ...(k.x === undefined ? {} : { x: finite(k.x, 0) }),
+        ...(k.y === undefined ? {} : { y: finite(k.y, 0) }),
+        ...(k.sx === undefined ? {} : { sx: finite(k.sx, 1) }),
+        ...(k.sy === undefined ? {} : { sy: finite(k.sy, 1) }),
+        ...(k.rot === undefined ? {} : { rot: finite(k.rot, 0) }),
+        ...(k.blur === undefined ? {} : { blur: finite(k.blur, 0) }),
+      }));
+    const body = keyframesFromKeys(keys);
+    if (!body) return { ok: false };
+    return { ok: true, animation: createCustomAnimation(newId(), body, timing) };
+  }
+
+  if (typeof input.preset === 'string' && isPresetId(input.preset)) {
+    const def = ANIM_PRESETS.find((d) => d.id === input.preset);
+    const params = { ...(def?.params ?? {}), ...(input.params ?? {}) };
+    return {
+      ok: true,
+      animation: createPresetAnimation(input.preset, newId(), {
+        ...timing,
+        ...(Object.keys(params).length ? { params } : {}),
+      }),
+    };
+  }
+  return { ok: false };
+}
+
+/** 输入 → 动画条目。不合法返回 null（调用方负责报错，不写半截数据）。 */
+export function animationFromInput(raw: unknown): ElementAnimation | null {
+  const parsed = parseAnimationInput(raw);
+  return parsed.ok ? parsed.animation : null;
+}
+
+/**
+ * 读回形状（写操作回显 / 文档视图共用）。
+ *
+ * **必须能被 `parseAnimationInput` 原样读回**：`typo_replace_doc` 的整份往返
+ * 依赖这一点。字段名因此同时认两套（`iterations` 是这里的名字，`loop` 是工具面
+ * 的名字），自定义动画的 `css` / `animation` 也是原样给出。
+ */
+export function animationView(a: ElementAnimation): Record<string, unknown> {
+  return {
+    id: a.id,
+    kind: a.kind,
+    ...(a.kind === 'preset' ? { preset: a.preset, ...(a.params ? { params: a.params } : {}) } : {}),
+    ...(a.kind === 'custom' ? { css: a.css, ...(a.animation ? { animation: a.animation } : {}) } : {}),
+    duration: a.duration,
+    delay: a.delay,
+    iterations: a.iterations === Infinity ? 'infinite' : a.iterations,
+    easing: a.easing,
+    direction: a.direction,
+    fill: a.fill,
+  };
+}
+
 /* --------------------------------------------------------------- 视图 */
 
 export interface DocViewOptions {
@@ -769,16 +1218,20 @@ function elementView(el: TypographyElement): Record<string, unknown> {
     visible: el.visible,
     locked: el.locked,
     ...(el.groupId ? { groupId: el.groupId } : {}),
-    ...(el.animations.length ? { animations: el.animations.map((a) => ({ kind: a.kind, duration: a.duration })) } : {}),
-    // 阴影 / 虚化对所有元素成立，与 transform3d 一样放在公共部分。
+    // 动画给**可复述的完整字段**（预设名 / 关键帧 / CSS / 时序）：只给 kind+duration
+    // 的话模型读不回来自己设过什么，只能再猜一次。
+    ...((el.animations ?? []).length ? { animations: (el.animations ?? []).map(animationView) } : {}),
+    // 阴影 / 虚化 / 3D 对所有元素成立，放在公共部分。
     ...(el.shadows?.length ? { shadows: el.shadows } : {}),
     ...(el.blur ? { blur: el.blur } : {}),
+    ...(el.transform3d ? { transform3d: el.transform3d } : {}),
   };
   if (el.kind === 'text') {
     return {
       ...base,
       text: plainTextOf(el.runs),
       style: { ...el.style },
+      autoHeight: el.autoHeight,
       ...(el.fill ? { fill: el.fill } : {}),
       ...(el.boxFill ? { boxFill: el.boxFill } : {}),
       ...(el.boxStroke ? { boxStroke: el.boxStroke } : {}),
@@ -792,6 +1245,14 @@ function elementView(el: TypographyElement): Record<string, unknown> {
       shape: el.shape,
       fill: el.fill,
       stroke: el.stroke,
+      /*
+       * `path` 只给**手写 / 文本转路径**的图形。生成器元素（`gen` 存在）的 path
+       * 可能是上千条命令，而它本来就能用 `gen.params` 复现 —— 回显它只会白烧
+       * 上下文。反过来，手写的 path 不回显就等于「读一次再写回去就丢了」。
+       */
+      ...(el.path && !el.gen ? { path: el.path } : {}),
+      ...(el.pathUnit === 'px' ? { pathUnit: 'px' } : {}),
+      ...(el.clipFrame ? { clipFrame: true } : {}),
       ...(el.radius !== undefined ? { radius: el.radius } : {}),
       ...(el.sides !== undefined ? { sides: el.sides } : {}),
       ...(el.waist !== undefined ? { waist: el.waist } : {}),
@@ -808,6 +1269,19 @@ function elementView(el: TypographyElement): Record<string, unknown> {
     ...(el.crop ? { crop: el.crop } : {}),
     ...(el.radius !== undefined ? { radius: el.radius } : {}),
   };
+}
+
+/**
+ * 单个元素的 full 视图。
+ *
+ * 写操作的返回值用它**回显改后的值**：`{ changed: true }` 让 agent 必须再读
+ * 整份文档（或渲一张图）才能确认改动落地，而一次 `typo_update_element` 的
+ * 意图往往只是「把这三个字段改成我给的数」。读回一个元素是几十到几百 token，
+ * 读回整份文档是几千。
+ */
+export function elementViewById(doc: TypographyDocument, id: string): Record<string, unknown> | null {
+  const el = elementById(doc, id);
+  return el ? elementView(el) : null;
 }
 
 /**
@@ -829,12 +1303,18 @@ export function docView(
   groups?: unknown[];
   fonts?: { family: string; format: string }[];
 } {
+  /*
+   * 字段兜底（`?? []`）不是防御性冗余：`fonts` / `elements` 在**类型上是必填**，
+   * 但手改过的 JSON、以及更早版本的文档里确实会缺 —— 缺一个就让整个 `full` 档
+   * 抛 `internal`，agent 于是完全看不到文档内容（这条是实际发生过的）。
+   */
+  const elements = Array.isArray(doc.elements) ? doc.elements : [];
   if (detail === 'ids') {
     return {
       clipId,
       size: { w: doc.size.w, h: doc.size.h },
       theme: doc.theme ?? null,
-      elements: doc.elements.map((e) => ({
+      elements: elements.map((e) => ({
         id: e.id,
         kind: e.kind,
         name: e.name,
@@ -846,10 +1326,10 @@ export function docView(
     clipId,
     size: { w: doc.size.w, h: doc.size.h },
     theme: doc.theme ?? null,
-    background: doc.background,
-    elements: doc.elements.map(elementView),
+    background: doc.background ?? { kind: 'none' },
+    elements: elements.map(elementView),
     groups: groupList(doc).map((g) => ({ ...g })),
-    fonts: doc.fonts.map((f) => ({ family: f.family, format: f.format })),
+    fonts: (doc.fonts ?? []).map((f) => ({ family: f.family, format: f.format })),
   };
 }
 
@@ -861,8 +1341,65 @@ export function docView(
  * **永不抛**（与 `pattern-codec` 同一条纪律）：agent 生成的文档结构可能整段错位，
  * 而「工程打不开」比「文档少几个元素」严重得多。坏元素整条丢弃，坏字段回落默认。
  */
-export function coerceDocument(raw: unknown, fallback: TypographyDocument): TypographyDocument {
+export interface CoerceReport {
+  /**
+   * 被丢掉的**未知键**（`doc.foo` / `elements[2].bar`）。
+   *
+   * 为什么要报：`typo_replace_doc` 的约定是「坏元素丢弃、坏字段回落」，但模型
+   * 分不清「我写错了键名」和「这个字段生效了」。静默归一化的结果是它照着一份
+   * 自己以为对的文档继续往下做，直到某次渲染对不上才回头。
+   */
+  droppedKeys: string[];
+  /**
+   * 被丢掉的**动画条目**（`elements[2].animations[0]`）。
+   *
+   * 与 `droppedKeys` 分开报：动画条目是合法的键、只是内容不合法（比如猜错预设名），
+   * 混进「未知键」会让模型以为字段名写错了。不报的话表现是「文档写进去了、
+   * 动画没了」，而模型会照着那份「看起来成功」的回执继续做。
+   */
+  droppedAnimations: string[];
+}
+
+/*
+ * `clipId` 是**读侧的回显字段**（`docView` 会给），整份往返时原样带回来。
+ * 不接受它的话，「读回来 → 直接写回」这条被文档承诺的路径会每次都报一个
+ * `clipId` 未知键 —— 模型会以为自己写错了什么。
+ */
+const DOC_KEYS = new Set(['clipId', 'size', 'background', 'elements', 'fonts', 'groups', 'theme']);
+const ELEMENT_KEYS = new Set([
+  'id', 'kind', 'name', 'frame', 'blend', 'opacity', 'visible', 'locked', 'animations',
+  'shadows', 'blur', 'groupId', 'transform3d',
+]);
+/*
+ * 白名单**必须是「实现真的会读」的键**：放进来却不处理，等于把这些键变成
+ * 静默丢弃（`runs` / `natural` 就是这么躺了一阵的）。写不了的字段宁可报出来。
+ */
+const KIND_KEYS: Record<string, string[]> = {
+  text: ['text', 'style', 'fill', 'boxFill', 'boxStroke', 'glyphStroke', 'autoHeight'],
+  shape: ['shape', 'path', 'pathUnit', 'clipFrame', 'fill', 'stroke', 'radius', 'sides', 'waist', 'inner', 'angle', 'evenOdd', 'gen'],
+  image: ['assetId', 'fit', 'crop', 'radius'],
+};
+
+/** 把一个元素输入里「不认识的键」记进 report（按 kind 的白名单）。 */
+function noteUnknownKeys(item: Record<string, unknown>, kind: string, at: number, report?: CoerceReport): void {
+  if (!report) return;
+  const allowed = new Set([...ELEMENT_KEYS, ...(KIND_KEYS[kind] ?? [])]);
+  for (const key of Object.keys(item)) {
+    if (!allowed.has(key)) report.droppedKeys.push(`elements[${at}].${key}`);
+  }
+}
+
+export function coerceDocument(
+  raw: unknown,
+  fallback: TypographyDocument,
+  report?: CoerceReport,
+): TypographyDocument {
   if (!isRecord(raw)) return fallback;
+  if (report) {
+    for (const key of Object.keys(raw)) {
+      if (!DOC_KEYS.has(key)) report.droppedKeys.push(key);
+    }
+  }
   const sizeRaw = isRecord(raw.size) ? raw.size : {};
   const size = {
     w: Math.max(2, Math.round(finite(sizeRaw.w, fallback.size.w))),
@@ -880,12 +1417,22 @@ export function coerceDocument(raw: unknown, fallback: TypographyDocument): Typo
   const style0 = defaultTextStyle(size);
   const seen = new Set<string>();
   const rawEls = Array.isArray(raw.elements) ? raw.elements : [];
-  for (const item of rawEls.slice(0, 200)) {
+  for (const [at, item] of rawEls.entries()) {
     if (!isRecord(item)) continue;
     const id = typeof item.id === 'string' && item.id.trim() && !seen.has(item.id) ? item.id : newId();
     seen.add(id);
     const kind = item.kind;
+    noteUnknownKeys(item, String(kind), at, report);
     const frame = isRecord(item.frame) ? (item.frame as Record<string, unknown>) : {};
+    const animations: ElementAnimation[] = [];
+    if (Array.isArray(item.animations)) {
+      for (const [ai, rawAnim] of item.animations.entries()) {
+        const parsed = parseAnimationInput(rawAnim);
+        if (parsed.ok) animations.push(parsed.animation);
+        else report?.droppedAnimations.push(`elements[${at}].animations[${ai}]`);
+      }
+    }
+    const t3 = isRecord(item.transform3d) ? coerceTransform3D(item.transform3d) : null;
     const common = {
       id,
       frame: commonFrame(size, frame),
@@ -896,6 +1443,11 @@ export function coerceDocument(raw: unknown, fallback: TypographyDocument): Typo
       ...(Number.isFinite(Number(item.opacity)) ? { opacity: Math.max(0, Math.min(1, Number(item.opacity))) } : {}),
       ...(item.visible === false ? { visible: false } : {}),
       ...(item.locked === true ? { locked: true } : {}),
+      // 3D 与阴影 / 虚化一样是公共字段；缺省 = 没有（不写键）。
+      ...(t3 ? { transform3d: t3 } : {}),
+      // 动画必须一起搬过去：`typo_replace_doc` 如果把动画静默丢掉，
+      // 「先写动画、再整份替换」就会在没有任何提示的情况下变成静止画面。
+      ...(animations.length ? { animations } : {}),
     };
     if (kind === 'text') {
       const el = createTextElement(size, {
@@ -904,18 +1456,26 @@ export function coerceDocument(raw: unknown, fallback: TypographyDocument): Typo
       });
       el.style = { ...style0 };
       if (isRecord(item.style)) applyTextStylePatch(el.style, item.style);
-      if (item.fill !== undefined) el.fill = coercePaint(item.fill);
+      if (item.fill !== undefined) applyTextFill(el, item.fill);
       if (item.boxFill !== undefined) el.boxFill = coercePaint(item.boxFill);
       if (item.boxStroke !== undefined) setTextBoxStroke(el, item.boxStroke);
       if (item.glyphStroke !== undefined) setGlyphStroke(el, item.glyphStroke);
+      if (item.autoHeight !== undefined) el.autoHeight = Boolean(item.autoHeight);
       doc.elements.push(el);
     } else if (kind === 'shape' && isShapeKind(item.shape)) {
       const el = createShapeElement(size, item.shape, {
         ...common,
         ...(typeof item.path === 'string' ? { path: item.path } : {}),
+        /*
+         * 路径坐标系必须一起搬：`pathUnit:'px'` 的路径（文本转路径的产物）落到
+         * 默认的 0..100 上会被非等比拉伸，描边变成一边粗一边细。
+         */
+        ...(item.pathUnit === 'px' ? { pathUnit: 'px' as const } : {}),
+        ...(item.clipFrame === true ? { clipFrame: true } : {}),
         ...(item.evenOdd === true ? { evenOdd: true } : {}),
       });
       if (item.fill !== undefined) el.fill = coercePaint(item.fill, el.fill);
+      else if (item.stroke !== undefined && item.stroke !== null) el.fill = { kind: 'none' };
       if (item.stroke !== undefined) el.stroke = coerceStroke(item.stroke, el.stroke);
       if (Number.isFinite(Number(item.radius))) el.radius = Math.max(0, Number(item.radius));
       if (Number.isFinite(Number(item.sides))) el.sides = Math.max(3, Math.min(64, Math.round(Number(item.sides))));

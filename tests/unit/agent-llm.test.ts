@@ -4,6 +4,7 @@ import {
   estimateMessagesTokens,
   recentTail,
   repeatAction,
+  repeatKeyOf,
   shouldCompact,
   trimMessages,
 } from '../../src/agent/llm/session';
@@ -132,6 +133,23 @@ describe('repeatAction', () => {
     expect(repeatAction(6)).toBe('hint');
     expect(repeatAction(12)).toBe('stop');
     expect(repeatAction(99)).toBe('stop');
+  });
+});
+
+describe('repeatKeyOf（场景版本参与判据）', () => {
+  it('render_frame 在工程变化后是新问题，播放头也是判据的一部分', () => {
+    const args = '{"t":0.5,"size":{"w":320,"h":180}}';
+    const a = repeatKeyOf('render_frame', args, { version: 5, playT: 0.5 });
+    const b = repeatKeyOf('render_frame', args, { version: 6, playT: 0.5 });
+    const c = repeatKeyOf('render_frame', args, { version: 6, playT: 1 });
+    expect(new Set([a, b, c]).size).toBe(3);
+    expect(repeatKeyOf('render_frame', args, { version: 6, playT: 0.5 })).toBe(b);
+  });
+
+  it('其它工具不受场景版本影响；没有版本时退回纯参数', () => {
+    const args = '{"clipId":"c1"}';
+    expect(repeatKeyOf('get_clip', args, { version: 5, playT: 0 })).toBe(repeatKeyOf('get_clip', args, { version: 9, playT: 3 }));
+    expect(repeatKeyOf('render_frame', args, null)).toBe(`render_frame:${args}`);
   });
 });
 

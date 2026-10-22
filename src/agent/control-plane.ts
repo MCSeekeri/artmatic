@@ -54,10 +54,21 @@ import { tr } from '../i18n/index.svelte';
 import type { ProjectStore } from '../core/project-store';
 import type { Renderer } from '../engine/renderer';
 import { frameOf, timeOf } from '../engine/clock';
+import { timeAtBeat } from '../core/time';
+import { buildStack, walkOps } from '../engine/stack';
 import { transitionCut } from '../core/transitions';
 import { defaultValues, type ParamDef } from '../effects/types';
 import { defaultEffectValues, getEffect } from '../effects/registry';
-import { getGenerator } from '../algos/registry';
+import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
+import {
+  defaultKeySettings,
+  identityCrop,
+  isIdentityCrop,
+  withCropEdge,
+  type CropSettings,
+  type KeySettings,
+  type QuadCorners,
+} from '../core/image-fx';
 import { defaultTransitionValues, getTransition } from '../effects/transitions/registry';
 import { Mp4Sink, probeMp4Codec } from '../exporters/mp4-sink';
 import { PngSequenceSink } from '../exporters/png-sequence';
@@ -101,15 +112,22 @@ import {
   type OpenProjectView,
   type PluginInfoView,
   type PluginTryResult,
+  type RenderOnly,
   type SceneDetail,
   type SceneIdSnapshot,
+  type SceneSectionView,
   type SceneSnapshot,
+  type SceneVersion,
+  type SectionOp,
   type TypographyDocIdView,
   type TypographyDocView,
   type TypographyElementInput,
   type TypographyElementPatch,
+  type TypographyElementUpdate,
+  type TypographyElementView,
   type TypographyCapabilities,
   type TypographyLayoutRequest,
+  type TypographyMeasure,
   type UndoState,
 } from './types';
 
@@ -129,6 +147,14 @@ const MIME: Record<ExportRequest['format'], string> = {
 };
 
 interface Size {
+  w: number;
+  h: number;
+}
+
+/** 0..1 的裁切框（`render_frame` 的局部放大）。 */
+interface Region {
+  x: number;
+  y: number;
   w: number;
   h: number;
 }
@@ -199,6 +225,84 @@ function paramKeys(params: ParamDef[] | undefined): string[] {
   return (params ?? []).map((p) => p.key);
 }
 
+/* ------------------------------------------- 片段视觉字段（key / quad / crop） */
+
+const HEX_COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/** 有限数并夹进 `[min, max]`；不是数就返回 null（调用方报错）。 */
+function numIn(v: unknown, min: number, max: number): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : null;
+}
+
+/**
+ * 色键参数：只认白名单四个键，缺省从 `base`（现有值 / 出厂值）继承。
+ *
+ * 局部对象是有意支持的：调容差时不该被迫把颜色一起传回来。形状不对返回 null
+ * —— 由调用方在改动**之前**报错，绝不半途写一半。
+ */
+function coerceKeySettings(raw: unknown, base: KeySettings | undefined): KeySettings | null {
+  if (!isRecord(raw)) return null;
+  const start = base ?? defaultKeySettings();
+  let color = start.color;
+  if (raw.color !== undefined) {
+    if (typeof raw.color !== 'string' || !HEX_COLOR_RE.test(raw.color)) return null;
+    color = raw.color;
+  }
+  const tolerance = raw.tolerance === undefined ? start.tolerance : numIn(raw.tolerance, 0, 1);
+  const softness = raw.softness === undefined ? start.softness : numIn(raw.softness, 0, 1);
+  const spill = raw.spill === undefined ? start.spill : numIn(raw.spill, 0, 1);
+  if (tolerance === null || softness === null || spill === null) return null;
+  return { color, tolerance, softness, spill };
+}
+
+/**
+ * 四角：每个是 `[x, y]` 两个有限数，且**面积不为 0**。
+ *
+ * 退化四边形（四点共线 / 重合）算不出透视矩阵，渲染结果是整层消失 —— 那是最难
+ * 归因的一类「静默无效」，所以在写入处就拒绝。
+ */
+function coerceQuad(raw: unknown): QuadCorners | null {
+  if (!isRecord(raw)) return null;
+  const corner = (v: unknown): [number, number] | null => {
+    if (!Array.isArray(v) || v.length !== 2) return null;
+    const x = Number(v[0]);
+    const y = Number(v[1]);
+    return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+  };
+  const tl = corner(raw.tl);
+  const tr = corner(raw.tr);
+  const br = corner(raw.br);
+  const bl = corner(raw.bl);
+  if (!tl || !tr || !br || !bl) return null;
+  const area =
+    Math.abs(
+      tl[0] * tr[1] - tr[0] * tl[1] +
+        tr[0] * br[1] - br[0] * tr[1] +
+        br[0] * bl[1] - bl[0] * br[1] +
+        bl[0] * tl[1] - tl[0] * bl[1],
+    ) / 2;
+  return area > 1e-6 ? { tl, tr, br, bl } : null;
+}
+
+/**
+ * 裁剪：四条边各自 0..1，走 `withCropEdge` 的**对边互斥**钳制（与 UI 同一份）。
+ *
+ * 局部对象合法（只改一条边）；全零的恒等值由调用方删字段（与 UI 同纪律：
+ * 全零 ≠「裁剪字段存在但全 0」，后者会让 `u_cropOn` 多开一条路径）。
+ */
+function coerceCropPatch(raw: unknown, base: CropSettings): CropSettings | null {
+  if (!isRecord(raw)) return null;
+  let next = { ...base };
+  for (const edge of ['left', 'top', 'right', 'bottom'] as const) {
+    if (raw[edge] === undefined) continue;
+    const v = numIn(raw[edge], 0, 1);
+    if (v === null) return null;
+    next = withCropEdge(next, edge, v);
+  }
+  return next;
+}
+
 async function bytesToBase64(buf: Uint8Array): Promise<string> {
   let latin = '';
   const CHUNK = 0x8000;
@@ -224,6 +328,12 @@ export interface AgentControlPlane {
   getClip(clipId: string): Promise<ControlResult<ClipView | null>>;
   listProjects(): Promise<ControlResult<OpenProjectView[]>>;
   undoState(): Promise<ControlResult<UndoState>>;
+  /**
+   * 场景版本（内容版本 + 播放头）。给会话层的**重复调用判据**用：
+   * `render_frame` 的同一组参数在工程变化之后是**有意义的重试**，不该被
+   * 「你调用过三次了」拦住。
+   */
+  sceneVersion(): Promise<ControlResult<SceneVersion>>;
   /** 按需取协议 / 模型说明（plugin-api · timeline · typography · workflow · images）。 */
   help(topic?: string): Promise<ControlResult<{ topic: string; text: string }>>;
   /**
@@ -238,18 +348,61 @@ export interface AgentControlPlane {
   addTrack(kind: 'visual' | 'audio', name?: string): Promise<ControlResult<{ trackId: string }>>;
   removeTrack(trackId: string): Promise<ControlResult<{ removed: string }>>;
   moveTrack(from: number, to: number): Promise<ControlResult<{ moved: boolean }>>;
-  setTrack(trackId: string, patch: { enabled?: boolean; name?: string }): Promise<ControlResult<{ changed: boolean }>>;
+  setTrack(
+    trackId: string,
+    patch: { enabled?: boolean; name?: string },
+  ): Promise<ControlResult<{ changed: boolean; enabled: boolean; name: string }>>;
   addClip(trackId: string, input: SourceClipInput): Promise<ControlResult<{ clipId: string; start: number; end: number }>>;
   addEffectClip(trackId: string, input: EffectClipInput): Promise<ControlResult<{ clipId: string }>>;
   removeClip(clipId: string): Promise<ControlResult<{ removed: string }>>;
   moveClip(clipId: string, targetTrackId: string, newStart: number): Promise<ControlResult<{ start: number; end: number }>>;
   resizeClip(clipId: string, edge: 'start' | 'end', time: number): Promise<ControlResult<{ start: number; end: number }>>;
   splitClip(clipId: string, at: number): Promise<ControlResult<{ leftId: string; rightId: string | null }>>;
-  setClipProps(clipId: string, patch: Record<string, unknown>): Promise<ControlResult<{ changed: boolean }>>;
-  setClipSourceParams(clipId: string, params: Record<string, number | string>): Promise<ControlResult<{ changed: boolean }>>;
-  setEffectParams(clipId: string, chainIndex: number, values: Record<string, number | string>): Promise<ControlResult<{ changed: boolean }>>;
-  setCurve(clipId: string, param: string, curve: Curve | null): Promise<ControlResult<{ changed: boolean }>>;
-  addEffect(clipId: string, defId: string, values?: Record<string, number | string>, index?: number): Promise<ControlResult<{ instanceId: string }>>;
+  setClipProps(
+    clipId: string,
+    patch: Record<string, unknown>,
+  ): Promise<ControlResult<{ changed: boolean; applied: Record<string, unknown> }>>;
+  setClipSourceParams(
+    clipId: string,
+    params: Record<string, number | string>,
+  ): Promise<ControlResult<{ changed: boolean; values: Record<string, number | string> }>>;
+  /**
+   * 改一个特效实例：参数与 / 或启用开关。两者至少给一个 ——
+   * 「只关掉这一条看差异」和「只调一个参数」都不该被迫带上另一个。
+   */
+  setEffectParams(
+    clipId: string,
+    chainIndex: number,
+    values?: Record<string, number | string>,
+    enabled?: boolean,
+  ): Promise<ControlResult<{ changed: boolean; values: Record<string, number | string>; enabled: boolean }>>;
+  /**
+   * 换掉算法片段的生成器（参数重置为新生成器的默认值 + 给定值）。
+   *
+   * 旧生成器的参数曲线会被删掉：它们的键在新生成器上不存在，留着只会在下次
+   * 「加一条曲线」时变成噪声（与 UI 的 `changeAlgo` 同一处置）。
+   */
+  setGenerator(
+    clipId: string,
+    generator: string,
+    params?: Record<string, number | string>,
+  ): Promise<ControlResult<{ generator: string; params: Record<string, number | string> }>>;
+  setCurve(
+    clipId: string,
+    param: string,
+    curve: Curve | null,
+  ): Promise<ControlResult<{ changed: boolean; param: string }>>;
+  /**
+   * 往链里加一个特效。返回的 `keyPrefix` 就是 `set_curve` 该用的前缀
+   * （`keyPrefix + paramKey`），所以调用方不必再读一次片段去凑实例 id。
+   */
+  addEffect(
+    clipId: string,
+    defId: string,
+    values?: Record<string, number | string>,
+    index?: number,
+    enabled?: boolean,
+  ): Promise<ControlResult<{ instanceId: string; chainIndex: number; keyPrefix: string; enabled: boolean }>>;
   removeEffect(clipId: string, chainIndex: number): Promise<ControlResult<{ changed: boolean }>>;
   reorderEffect(clipId: string, from: number, to: number): Promise<ControlResult<{ changed: boolean }>>;
   setTransition(clipId: string, defId: string, duration: number, values?: Record<string, number>): Promise<ControlResult<{ changed: boolean }>>;
@@ -261,6 +414,8 @@ export interface AgentControlPlane {
     beatGrid?: { bpm?: number; offset?: number; beatsPerBar?: number };
     overlapBehavior?: OverlapBehavior;
   }): Promise<ControlResult<{ changed: string[] }>>;
+  /** 段落标记的增 / 切 / 改名 / 删 / 移动。返回改后的完整列表（已按 start 排序）。 */
+  editSections(req: SectionOp): Promise<ControlResult<{ changed: boolean; sections: SceneSectionView[] }>>;
   loadScene(project: unknown): Promise<ControlResult<{ tracks: number; clips: number }>>;
   beginTx(): Promise<ControlResult<{ open: boolean }>>;
   endTx(label: string): Promise<ControlResult<{ changed: boolean }>>;
@@ -268,10 +423,43 @@ export interface AgentControlPlane {
   undo(): Promise<ControlResult<{ changed: boolean }>>;
   redo(): Promise<ControlResult<{ changed: boolean }>>;
   /* 看 */
-  renderFrame(opt?: { t?: number; size?: Size }): Promise<ControlResult<{ t: number; w: number; h: number }>>;
+  renderFrame(opt?: {
+    t?: number;
+    size?: Size;
+    only?: RenderOnly;
+  }): Promise<ControlResult<{ t: number; w: number; h: number }>>;
   readPixels(): Promise<ControlResult<{ w: number; h: number; rgba: Uint8Array }>>;
-  frameSignature(opt?: { t?: number; size?: Size; grid?: number }): Promise<ControlResult<FrameSignature>>;
-  snapshotPng(opt?: { t?: number; size?: Size }): Promise<ControlResult<Uint8Array>>;
+  frameSignature(opt?: {
+    t?: number;
+    size?: Size;
+    grid?: number;
+    only?: RenderOnly;
+  }): Promise<ControlResult<FrameSignature>>;
+  snapshotPng(opt?: {
+    t?: number;
+    size?: Size;
+    only?: RenderOnly;
+    /** 局部放大：0..1 的裁切框（裁完再放大到至少 480px 宽）。 */
+    region?: Region;
+  }): Promise<ControlResult<Uint8Array>>;
+  /**
+   * 联系表：一段时间里的若干帧拼成一张图（节奏 / 卡点自检）。
+   *
+   * `from` / `to` / `step` 都是**秒**；默认 6 帧均匀铺开，最多 24 帧。
+   */
+  renderSequence(opt?: {
+    from?: number;
+    to?: number;
+    step?: number;
+    size?: Size;
+    cols?: number;
+    only?: RenderOnly;
+    region?: Region;
+  }): Promise<ControlResult<{ png: Uint8Array; times: number[]; cols: number; rows: number; w: number; h: number }>>;
+  /** 这一帧实际参与合成的图层（`only` 生效之后的那一份）。 */
+  frameLayers(opt?: { t?: number; only?: RenderOnly }): Promise<
+    ControlResult<{ t: number; layers: { trackId: string; name: string; clips: { id: string; kind: string }[] }[] }>
+  >;
   /* 导 */
   export(opt: ExportRequest): Promise<ControlResult<ExportArtifact>>;
   exportBase64(opt: ExportRequest): Promise<ControlResult<ExportArtifactBase64>>;
@@ -289,7 +477,12 @@ export interface AgentControlPlane {
   addTypographyElement(
     clipId: string | undefined,
     input: TypographyElementInput,
-  ): Promise<ControlResult<{ elementId: string }>>;
+  ): Promise<ControlResult<{ elementId: string; element: TypographyElementView }>>;
+  /** 批量新增：一次调用、一笔撤销。数组顺序即 z 序（后面的在前）。 */
+  addTypographyElements(
+    clipId: string | undefined,
+    inputs: TypographyElementInput[],
+  ): Promise<ControlResult<{ elementIds: string[]; elements: TypographyElementView[] }>>;
   addGeneratedShape(
     clipId: string | undefined,
     input: {
@@ -301,17 +494,34 @@ export interface AgentControlPlane {
       fill?: unknown;
       stroke?: unknown;
     },
-  ): Promise<ControlResult<{ elementId: string }>>;
+  ): Promise<ControlResult<{ elementId: string; element: TypographyElementView }>>;
   updateTypographyElement(
     clipId: string | undefined,
     elementId: string,
     patch: TypographyElementPatch,
-  ): Promise<ControlResult<{ changed: boolean }>>;
+  ): Promise<ControlResult<{ changed: boolean; element: TypographyElementView }>>;
+  /** 批量改属性：一次调用、一笔撤销。 */
+  updateTypographyElements(
+    clipId: string | undefined,
+    updates: TypographyElementUpdate[],
+  ): Promise<ControlResult<{ changed: number; elements: TypographyElementView[] }>>;
+  /**
+   * 设 / 清 / 追加一个元素动画（CSS 动画系统，预览与导出同一条路径）。
+   *
+   * `animation === null` = 清空；`mode:'add'` = 叠一条（一个元素可以有多条）。
+   * 输入里 `keys[].at` 既可以是 0..1，也可以是 `{ beat: n }`（按工程 BPM 换算）。
+   */
+  setTypographyAnimation(
+    clipId: string | undefined,
+    elementId: string,
+    animation: unknown,
+    mode?: 'replace' | 'add',
+  ): Promise<ControlResult<{ changed: boolean; element: TypographyElementView }>>;
   setTypographyText(
     clipId: string | undefined,
     elementId: string,
     text: string,
-  ): Promise<ControlResult<{ changed: boolean }>>;
+  ): Promise<ControlResult<{ changed: boolean; element: TypographyElementView }>>;
   removeTypographyElement(
     clipId: string | undefined,
     elementId: string,
@@ -320,7 +530,7 @@ export interface AgentControlPlane {
     clipId: string | undefined,
     elementId: string,
     op: 'front' | 'back' | 'forward' | 'backward',
-  ): Promise<ControlResult<{ changed: boolean }>>;
+  ): Promise<ControlResult<{ changed: boolean; z: number }>>;
   groupTypographyElements(
     clipId: string | undefined,
     elementIds: string[],
@@ -333,7 +543,20 @@ export interface AgentControlPlane {
   layoutTypography(
     clipId: string | undefined,
     req: TypographyLayoutRequest,
-  ): Promise<ControlResult<{ moved: number }>>;
+  ): Promise<
+    ControlResult<{
+      moved: number;
+      elements: { id: string; frame: { x: number; y: number; w: number; h: number; rot: number } }[];
+    }>
+  >;
+  /**
+   * 几何体检：文字实际内容高度 / 被裁掉多少 / 元素相交 / 出画。
+   * 纯读（不渲染、不写文档），是「挪了几次还是对不齐」的替代品。
+   */
+  measureTypography(
+    clipId: string | undefined,
+    elementIds?: string[],
+  ): Promise<ControlResult<TypographyMeasure>>;
   setTypographyBackground(
     clipId: string | undefined,
     paint: unknown,
@@ -342,10 +565,14 @@ export interface AgentControlPlane {
     clipId: string | undefined,
     theme: string | null,
   ): Promise<ControlResult<{ changed: boolean }>>;
+  /**
+   * 整体替换文档。坏元素丢弃（`dropped`），**未知键逐条报出来**（`droppedKeys`）：
+   * 静默归一化会让模型照着一份自己以为对的文档继续往下做。
+   */
   replaceTypographyDoc(
     clipId: string | undefined,
     doc: unknown,
-  ): Promise<ControlResult<{ elements: number; dropped: number }>>;
+  ): Promise<ControlResult<{ elements: number; dropped: number; droppedKeys: string[] }>>;
 
   /* ------------------------------------------------------------- 插件 */
   /**
@@ -461,6 +688,40 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     return getGenerator(generator)?.params ?? [];
   }
 
+  /**
+   * 动画关键帧的 `at` 允许写 `{ beat: n }`：读工程 BPM 换算成动画进度。
+   *
+   * 换算只在这里发生（文档模型不认识拍号，`typography/` 只收 0..1）——
+   * 与 `core/curve.ts` 的 `beatAnchor` 同一条纪律：不要在数据里物化秒。
+   */
+  function resolveBeatKeys(store: ProjectStore, input: unknown): unknown {
+    if (!isRecord(input) || !Array.isArray(input.keys)) return input;
+    const duration = Number(input.duration) > 0 ? Number(input.duration) : 0.6;
+    const grid = store.project.beatGrid;
+    const keys = input.keys.map((k) => {
+      if (!isRecord(k) || !isRecord(k.at)) return k;
+      const beat = Number(k.at.beat);
+      if (!Number.isFinite(beat)) return k;
+      const sec = timeAtBeat(beat, grid);
+      return { ...k, at: Math.max(0, Math.min(1, sec / duration)) };
+    });
+    return { ...input, keys };
+  }
+
+  /** 绑定片段的目标校验：必须是存在且是 source 的片段（特效片段不能当目标）。 */
+  function checkBoundTarget(store: ProjectStore, clipId: string): void {
+    const found = store.findClip(clipId);
+    if (!found) {
+      throw new ControlFailure('not-found', tr('agent.clip.notFound', { id: clipId }), { clipId });
+    }
+    if (found.clip.kind !== 'source') {
+      throw new ControlFailure('invalid-argument', tr('agent.clip.boundNotSource', { id: clipId }), {
+        clipId,
+        kind: found.clip.kind,
+      });
+    }
+  }
+
   /* ------------------------------------------------------------ 包装 */
 
   function toFailure(e: unknown): ControlResult<never> {
@@ -490,6 +751,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'getClip'
     | 'listProjects'
     | 'undoState'
+    | 'sceneVersion'
     | 'help'
     | 'compileAll'
     | 'exportState'
@@ -561,6 +823,21 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           canUndo: store?.canUndo() ?? false,
           canRedo: store?.canRedo() ?? false,
         };
+      });
+    },
+
+    /**
+     * 场景版本。**纯读**：不推播放头、不碰 store.version。
+     *
+     * 会话层把它拼进「工具 + 参数」的重复判据里：同一组 `render_frame` 参数
+     * 在工程变化之后是新的问题，而不是第 3 次重复调用。
+     */
+    async sceneVersion() {
+      return run<SceneVersion>(() => {
+        const store = ctx.getStore();
+        if (!store) return { version: 0, playT: 0 };
+        const fps = store.project.fps;
+        return { version: store.version, playT: timeOf(frameOf(ctx.getPlayT(), fps), fps) };
       });
     },
 
@@ -651,6 +928,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'splitClip'
     | 'setClipProps'
     | 'setClipSourceParams'
+    | 'setGenerator'
     | 'setEffectParams'
     | 'setCurve'
     | 'addEffect'
@@ -659,6 +937,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'setTransition'
     | 'clearTransition'
     | 'setProject'
+    | 'editSections'
     | 'loadScene'
     | 'beginTx'
     | 'endTx'
@@ -723,7 +1002,9 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           store.renameTrack(trackId, String(patch.name));
           changed = changed || store.version !== v0;
         }
-        return { changed };
+        // 回显落库后的值（空名字会被 store 拒掉，这里给的就是真值）。
+        const after = store.track(trackId);
+        return { changed, enabled: after?.enabled ?? false, name: after?.name ?? '' };
       });
     },
 
@@ -768,6 +1049,9 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             });
           }
         }
+        // 绑定目标必须是**存在的 source 片段**：绑到一个不存在的 id 上，这条特效
+        // 永远不会生效，而界面上它看起来完全正常（最容易浪费一整轮的现象）。
+        if (input.boundClipId !== undefined) checkBoundTarget(store, input.boundClipId);
         const clip = makeEffectClip(input);
         store.addClip(trackId, clip);
         if (!store.findClip(clip.id)) {
@@ -872,16 +1156,53 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     async setClipProps(clipId, patch) {
       return run(() => {
         const store = beforeWrite();
-        needClip(store, clipId);
+        const { clip } = needClip(store, clipId);
         if (!isRecord(patch) || Object.keys(patch).length === 0) {
           throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'patch' }));
         }
-        const allowed = ['label', 'fadeSec', 'blend', 'opacity', 'transform', 'fit', 'affectDepth'];
+        const allowed = [
+          'label', 'fadeSec', 'blend', 'opacity', 'transform', 'fit', 'affectDepth', 'boundClipId',
+          // 音频淡变 / 源入点 / 视觉效果（v3 补齐）
+          'fadeIn', 'fadeOut', 'srcIn', 'key', 'quad', 'crop',
+        ];
         const bad = Object.keys(patch).filter((k) => !allowed.includes(k));
         if (bad.length > 0) {
           throw new ControlFailure('invalid-argument', tr('agent.args.notWritable', { keys: bad.join(', ') }), {
             allowed,
           });
+        }
+        /* ---- 片段种类：先判「这个字段在这类片段上有没有意义」 ---- */
+        const isAudio = clip.kind === 'audio';
+        const isSource = clip.kind === 'source';
+        const srcType = clip.kind === 'source' ? clip.source.type : null;
+        if ((patch.fadeIn !== undefined || patch.fadeOut !== undefined) && !isAudio) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.fadeNotAudio'));
+        }
+        if (patch.srcIn !== undefined && !(isAudio || srcType === 'video')) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.srcInNotMedia'));
+        }
+        if (patch.key !== undefined && !(srcType === 'image' || srcType === 'video')) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.mediaOnly', { field: 'key' }));
+        }
+        if (patch.quad !== undefined && !isSource) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.mediaOnly', { field: 'quad' }));
+        }
+        if (patch.crop !== undefined && !isSource) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.mediaOnly', { field: 'crop' }));
+        }
+        /*
+         * 绑定片段：`null` = 解绑（回到 adjustment layer 语义）。字符串则必须是
+         * 存在的 source 片段。与 `affectDepth` 互斥 —— 同一次 patch 里给两个
+         * 直接拒绝，而不是悄悄留一个（语义矛盾不该被静默仲裁）。
+         */
+        if (patch.boundClipId !== undefined && patch.boundClipId !== null) {
+          if (typeof patch.boundClipId !== 'string' || !patch.boundClipId) {
+            throw new ControlFailure('invalid-argument', tr('agent.args.boundClip'));
+          }
+          checkBoundTarget(store, patch.boundClipId);
+        }
+        if (patch.boundClipId !== undefined && patch.affectDepth !== undefined) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.boundVsDepth'));
         }
         if (patch.blend !== undefined && !BLEND_MODES.some((b) => b.id === patch.blend)) {
           throw new ControlFailure('invalid-argument', tr('agent.args.blend', { value: String(patch.blend) }), {
@@ -906,21 +1227,147 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         ) {
           throw new ControlFailure('invalid-argument', tr('agent.args.affectDepth'));
         }
+        if (patch.fadeIn !== undefined && !(Number(patch.fadeIn) >= 0)) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.fade'));
+        }
+        if (patch.fadeOut !== undefined && !(Number(patch.fadeOut) >= 0)) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.fade'));
+        }
+        if (patch.srcIn !== undefined && !(Number(patch.srcIn) >= 0)) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.seconds', { what: 'srcIn' }));
+        }
+        /*
+         * 三个视觉字段先算出**落库值**再写：形状不对就在改动之前报错。
+         * `null` 是明确的「关掉这个效果」，与「没给」是两件事 —— 后者要沿用现有值。
+         */
+        const keyNext =
+          patch.key === undefined
+            ? undefined
+            : patch.key === null
+              ? null
+              : coerceKeySettings(patch.key, isSource ? clip.key : undefined);
+        if (keyNext === null && patch.key !== null) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.badKey'), { key: patch.key });
+        }
+        const quadNext =
+          patch.quad === undefined ? undefined : patch.quad === null ? null : coerceQuad(patch.quad);
+        if (quadNext === null && patch.quad !== null) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.badQuad'), { quad: patch.quad });
+        }
+        const cropNext =
+          patch.crop === undefined
+            ? undefined
+            : patch.crop === null
+              ? null
+              : coerceCropPatch(patch.crop, (isSource ? clip.crop : undefined) ?? identityCrop());
+        if (cropNext === null && patch.crop !== null) {
+          throw new ControlFailure('invalid-argument', tr('agent.clip.badCrop'), { crop: patch.crop });
+        }
+
+        const hasFade = patch.fadeIn !== undefined || patch.fadeOut !== undefined;
+        const hasOther = Object.keys(patch).some((k) => k !== 'fadeIn' && k !== 'fadeOut');
         const before = store.version;
-        store.updateClip(clipId, label('set_clip_props'), (c) => {
-          if (patch.label !== undefined) c.label = String(patch.label);
-          if (patch.fadeSec !== undefined) c.fadeSec = Math.max(0, Number(patch.fadeSec));
-          // 影响深度只对特效片段有意义（它是 EffectClip 的字段）。
-          if (c.kind === 'effect' && patch.affectDepth !== undefined) {
-            c.affectDepth = Number(patch.affectDepth);
+        /*
+         * 淡变走 store 的钳制（`fadeIn + fadeOut ≤ 片段长度`），其余字段走 updateClip。
+         * 没有外层事务时两笔提交必须自己包一层：一次工具调用只该留一条撤销记录。
+         * `beginTx` 会**覆盖**已有快照，所以只在没有事务时包（会话层通常在整轮
+         * 动作外面已经开了一个）。
+         */
+        const wrap = hasFade && hasOther && !store.inTx;
+        if (wrap) store.beginTx();
+        try {
+          if (hasFade) {
+            store.setFades(clipId, {
+              ...(patch.fadeIn === undefined ? {} : { fadeIn: Number(patch.fadeIn) }),
+              ...(patch.fadeOut === undefined ? {} : { fadeOut: Number(patch.fadeOut) }),
+            });
           }
-          if (c.kind !== 'source') return;
-          if (patch.blend !== undefined) c.blend = patch.blend as BlendMode;
-          if (patch.opacity !== undefined) c.opacity = Number(patch.opacity);
-          if (patch.fit !== undefined) c.fit = patch.fit as SourceClip['fit'];
-          if (patch.transform !== undefined) Object.assign(c.transform, patch.transform);
-        });
-        return { changed: store.version !== before };
+          if (hasOther) {
+            store.updateClip(clipId, label('set_clip_props'), (c) => {
+              if (patch.label !== undefined) c.label = String(patch.label);
+              if (patch.fadeSec !== undefined) c.fadeSec = Math.max(0, Number(patch.fadeSec));
+              // 影响深度 / 绑定片段只对特效片段有意义（都是 EffectClip 的字段）。
+              if (c.kind === 'effect' && patch.affectDepth !== undefined) {
+                c.affectDepth = Number(patch.affectDepth);
+                delete c.boundClipId;
+              }
+              if (c.kind === 'effect' && patch.boundClipId !== undefined) {
+                if (patch.boundClipId === null) delete c.boundClipId;
+                else c.boundClipId = String(patch.boundClipId);
+                delete c.affectDepth;
+              }
+              if (c.kind === 'audio' && patch.srcIn !== undefined) c.srcIn = Math.max(0, Number(patch.srcIn));
+              if (c.kind !== 'source') return;
+              if (patch.blend !== undefined) c.blend = patch.blend as BlendMode;
+              if (patch.opacity !== undefined) c.opacity = Number(patch.opacity);
+              if (patch.fit !== undefined) c.fit = patch.fit as SourceClip['fit'];
+              if (patch.transform !== undefined) Object.assign(c.transform, patch.transform);
+              if (patch.srcIn !== undefined && c.source.type === 'video') {
+                c.source.srcIn = Math.max(0, Number(patch.srcIn));
+              }
+              if (keyNext !== undefined) {
+                if (keyNext === null) delete c.key;
+                else c.key = keyNext;
+              }
+              if (quadNext !== undefined) {
+                if (quadNext === null) delete c.quad;
+                else c.quad = quadNext;
+              }
+              // 全零裁剪删字段（与 UI 同纪律）：留着它会让渲染多开一条裁剪路径。
+              if (cropNext !== undefined) {
+                if (cropNext === null || isIdentityCrop(cropNext)) delete c.crop;
+                else c.crop = cropNext;
+              }
+            });
+          }
+          if (wrap) store.endTx(label('set_clip_props'));
+        } catch (e) {
+          if (wrap) store.cancelTx();
+          throw e;
+        }
+
+        // 回显**改后的值**（只回请求里那几个键）：`{changed:true}` 让 agent
+        // 只能靠再读一次片段或出一张图来确认，往返成本远高于这句回执。
+        const after = needClip(store, clipId).clip;
+        const applied: Record<string, unknown> = {};
+        for (const key of Object.keys(patch)) {
+          switch (key) {
+            case 'transform':
+              applied.transform = after.kind === 'source' ? { ...after.transform } : null;
+              break;
+            case 'affectDepth':
+              applied.affectDepth = after.kind === 'effect' ? (after.affectDepth ?? 0) : null;
+              break;
+            case 'boundClipId':
+              // 解绑回显 null（`undefined` 会被 JSON.stringify 丢掉，模型会以为没生效）。
+              applied.boundClipId = after.kind === 'effect' ? (after.boundClipId ?? null) : null;
+              break;
+            case 'fadeIn':
+            case 'fadeOut':
+              applied[key] = after.kind === 'audio' ? (key === 'fadeIn' ? (after.fadeIn ?? 0) : (after.fadeOut ?? 0)) : null;
+              break;
+            case 'srcIn':
+              applied.srcIn =
+                after.kind === 'audio'
+                  ? after.srcIn
+                  : after.kind === 'source' && after.source.type === 'video'
+                    ? after.source.srcIn
+                    : null;
+              break;
+            case 'key':
+              applied.key = after.kind === 'source' ? (after.key ?? null) : null;
+              break;
+            case 'quad':
+              applied.quad = after.kind === 'source' ? (after.quad ?? null) : null;
+              break;
+            case 'crop':
+              applied.crop = after.kind === 'source' ? (after.crop ?? null) : null;
+              break;
+            default:
+              applied[key] = (after as unknown as Record<string, unknown>)[key];
+          }
+        }
+        return { changed: store.version !== before, applied };
       });
     },
 
@@ -949,11 +1396,58 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           if (c.source.type === 'algo') Object.assign(c.source.params, given);
           else if (c.source.type === 'solid' && typeof given.color === 'string') c.source.color = given.color;
         });
-        return { changed: store.version !== before };
+        const after = needSourceClip(store, clipId);
+        const values: Record<string, number | string> = {};
+        for (const key of Object.keys(given)) {
+          if (after.source.type === 'algo') values[key] = after.source.params[key] ?? given[key]!;
+          else if (after.source.type === 'solid' && key === 'color') values.color = after.source.color;
+        }
+        return { changed: store.version !== before, values };
       });
     },
 
-    async setEffectParams(clipId, chainIndex, values) {
+    async setGenerator(clipId, generator, params) {
+      return run(() => {
+        const store = beforeWrite();
+        const clip = needSourceClip(store, clipId);
+        if (clip.source.type !== 'algo') {
+          throw new ControlFailure('unsupported', tr('agent.algo.notAlgo', { id: clipId, type: clip.source.type }));
+        }
+        const def = getGenerator(generator);
+        if (!def) {
+          throw new ControlFailure('not-found', tr('agent.algo.notFound', { id: generator }), {
+            validIds: listGenerators().map((g) => g.id),
+          });
+        }
+        const given = params === undefined ? {} : checkScalars(params, 'params');
+        checkKnownKeys(given, paramKeys(def.params), tr('agent.what.generator', { id: generator }));
+        const staleKeys = new Set(paramKeys(paramsOf(clip.source.generator)));
+        /*
+         * 参数默认值必须**一并写入**：只换 generator 名而沿用旧 params 的话，
+         * 新生成器会拿到一堆它不认识的键（被静默忽略），画面停在上一次的形态上。
+         */
+        const next = { ...defaultParams(generator), ...given };
+        const before = store.version;
+        store.updateClip(clipId, label('set_generator'), (c) => {
+          if (c.kind !== 'source' || c.source.type !== 'algo') return;
+          c.source.generator = generator;
+          c.source.params = { ...next };
+          /*
+           * 旧生成器的参数曲线在新生成器上没有对应物：留着它们既不会生效，
+           * 又会让 `set_curve` 的可读名解析多出一批死键（与 UI `changeAlgo` 同一处置）。
+           */
+          for (const key of staleKeys) delete c.curves[key];
+        });
+        const after = needSourceClip(store, clipId);
+        const values: Record<string, number | string> = {};
+        if (after.source.type === 'algo') {
+          for (const key of Object.keys(next)) values[key] = after.source.params[key] ?? next[key]!;
+        }
+        return { generator, params: values };
+      });
+    },
+
+    async setEffectParams(clipId, chainIndex, values, enabled) {
       return run(() => {
         const store = beforeWrite();
         const clip = needEffectClip(store, clipId);
@@ -964,19 +1458,33 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             tr('agent.args.chainIndex', { index: chainIndex, max: clip.chain.length - 1 }),
           );
         }
-        const given = checkScalars(values, 'values');
-        checkKnownKeys(
-          given,
-          paramKeys(getEffect(inst.defId)?.params),
-          tr('agent.what.effect', { id: inst.defId }),
-        );
+        /*
+         * 参数与开关是可分开的：「关掉这条看差异」不该被迫带一个参数，
+         * 反之亦然。两个都没给才是错误（那次调用什么都不会发生）。
+         */
+        if (values === undefined && enabled === undefined) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'params / enabled' }));
+        }
+        const given = values === undefined ? {} : checkScalars(values, 'values');
+        if (Object.keys(given).length > 0) {
+          checkKnownKeys(
+            given,
+            paramKeys(getEffect(inst.defId)?.params),
+            tr('agent.what.effect', { id: inst.defId }),
+          );
+        }
         const before = store.version;
         store.updateClip(clipId, label('set_params'), (c) => {
           if (c.kind !== 'effect') return;
           const target = c.chain[chainIndex];
-          if (target) Object.assign(target.values, given);
+          if (!target) return;
+          if (enabled !== undefined) target.enabled = enabled;
+          if (Object.keys(given).length > 0) Object.assign(target.values, given);
         });
-        return { changed: store.version !== before };
+        const after = needEffectClip(store, clipId).chain[chainIndex];
+        const applied: Record<string, number | string> = {};
+        for (const key of Object.keys(given)) applied[key] = after?.values[key] ?? given[key]!;
+        return { changed: store.version !== before, values: applied, enabled: after?.enabled ?? true };
       });
     },
 
@@ -984,25 +1492,21 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return run(() => {
         const store = beforeWrite();
         const { clip } = needClip(store, clipId);
-        const allowed = curveKeysOf(clip);
-        if (!allowed.includes(param)) {
-          throw new ControlFailure(
-            'invalid-argument',
-            tr('agent.curve.notCurvable', { id: clipId, param }),
-            { allowed },
-          );
-        }
-        if (curve !== null) validateCurve(param, curve);
+        // 可读名 → 规范键（`blur.amount` → `<uuid>.amount`）。歧义时报候选。
+        const key = resolveCurveKey(clip, param);
+        // 缺 `interp` 时按 smooth 落库（工具描述里写明了默认值）。
+        const normalized = curve === null ? null : withDefaultInterp(curve);
+        if (normalized !== null) validateCurve(key, normalized);
         const before = store.version;
         store.updateClip(clipId, label('set_curve'), (c) => {
-          if (curve === null) delete c.curves[param];
-          else c.curves[param] = curve;
+          if (normalized === null) delete c.curves[key];
+          else c.curves[key] = normalized;
         });
-        return { changed: store.version !== before };
+        return { changed: store.version !== before, param: key };
       });
     },
 
-    async addEffect(clipId, defId, values, index) {
+    async addEffect(clipId, defId, values, index, enabled) {
       return run(() => {
         const store = beforeWrite();
         const clip = needEffectClip(store, clipId);
@@ -1016,13 +1520,22 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         checkKnownKeys(given, paramKeys(def.params), tr('agent.what.effect', { id: defId }));
         // 默认值补齐：agent 只给「想改的那几个」。
         const merged = { ...defaultEffectValues(defId), ...given };
-        const instanceId = `fx-${newId().slice(0, 8)}`;
+        /*
+         * 实例 id 用**完整** `newId()`，不再截 8 位。
+         *
+         * 曲线键是 `${instanceId}.${param}`，截短之后有两种 id 形态同时存在于工程里
+         * （`add_effect_clip` 的 chain 给的是完整 id），模型必须记住「哪个接口返回的是
+         * 哪种」才能写对 `set_curve` —— 它做不到，实测就只能在报错里抄 allowed。
+         * 统一成完整 id 之后，返回值本身就能直接用。
+         */
+        const instanceId = newId();
         const at = index === undefined ? clip.chain.length : Math.max(0, Math.min(index, clip.chain.length));
+        const on = enabled ?? true;
         store.updateClip(clipId, label('add_effect'), (c) => {
           if (c.kind !== 'effect') return;
-          c.chain.splice(at, 0, { instanceId, defId, enabled: true, values: merged });
+          c.chain.splice(at, 0, { instanceId, defId, enabled: on, values: merged });
         });
-        return { instanceId };
+        return { instanceId, chainIndex: at, keyPrefix: `${instanceId}.`, enabled: on };
       });
     },
 
@@ -1162,6 +1675,80 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
+    async editSections(req) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!isRecord(req) || typeof req.op !== 'string') {
+          throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'op' }));
+        }
+        const sectionsOf = (): SceneSectionView[] =>
+          store.project.sections.map((s) => ({
+            id: s.id,
+            name: s.name,
+            start: s.start,
+            ...(s.color ? { color: s.color } : {}),
+          }));
+        const need = (id: string) => {
+          const section = store.project.sections.find((s) => s.id === id);
+          if (!section) {
+            throw new ControlFailure('not-found', tr('agent.section.notFound', { id }), {
+              validIds: store.project.sections.map((s) => s.id),
+            });
+          }
+          return section;
+        };
+        const before = JSON.stringify(store.project.sections);
+        // 先取成 `string`：switch 的 default 分支里 `req` 已经被收窄成 never。
+        const rawOp = String((req as { op?: unknown }).op);
+        const startOf = (v: unknown, what: string): number => {
+          if (!Number.isFinite(Number(v))) {
+            throw new ControlFailure('invalid-argument', tr('agent.args.seconds', { what }));
+          }
+          // 段落只存起点；越界会让段落带跑到工程外（时间轴上表现为「最后一段不见了」）。
+          return Math.min(Math.max(0, Number(v)), store.project.duration);
+        };
+
+        switch (req.op) {
+          case 'add':
+            store.addSection(startOf(req.start, 'start'), typeof req.name === 'string' ? req.name : undefined);
+            break;
+          case 'split': {
+            const section = need(String(req.sectionId ?? ''));
+            const at = startOf(req.at, 'at');
+            const created = store.splitSection(section.id, at);
+            if (!created) {
+              /*
+               * `splitSection` 在两半太窄时返回 null（菜单据此置灰）。静默成功会让
+               * 模型以为切开了，然后对着一份没变的 sections 继续往下做。
+               */
+              throw new ControlFailure('invalid-argument', tr('agent.section.tooNarrow', { at }));
+            }
+            break;
+          }
+          case 'rename': {
+            const section = need(String(req.sectionId ?? ''));
+            const name = String(req.name ?? '').trim();
+            if (!name) throw new ControlFailure('invalid-argument', tr('agent.section.badName'));
+            store.renameSection(section.id, name);
+            break;
+          }
+          case 'remove':
+            store.removeSection(need(String(req.sectionId ?? '')).id);
+            break;
+          case 'move': {
+            const section = need(String(req.sectionId ?? ''));
+            store.moveSection(section.id, startOf(req.start, 'start'));
+            break;
+          }
+          default:
+            throw new ControlFailure('invalid-argument', tr('agent.section.badOp', { op: rawOp }), {
+              validIds: ['add', 'split', 'rename', 'remove', 'move'],
+            });
+        }
+        return { changed: JSON.stringify(store.project.sections) !== before, sections: sectionsOf() };
+      });
+    },
+
     /**
      * 整体改写（方案 §3.6 的路径 B）：传一份完整 `Project`。
      *
@@ -1267,6 +1854,92 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     return SOURCE_KEYS;
   }
 
+  interface CurveCandidate {
+    key: string;
+    chainIndex: number;
+    instanceId: string;
+    defId: string;
+  }
+
+  /**
+   * 把 agent 写的参数名解析成**规范键**。接受四种写法（工具描述里写明）：
+   *
+   *  - `opacity` / `transform.x` / 生成器参数键（source 片段）—— 原样
+   *  - `<instanceId>.<key>`，instanceId 可以是**唯一前缀**（`fx-38a8` 能用）
+   *  - `<defId>.<key>`，仅当链里该 defId 只出现一次（`blur.amount` 这种可读写法）
+   *  - `<key>` 单独写，仅当全链只有一个实例有这个参数
+   *
+   * 有歧义时**报错并列出候选**（chainIndex + 完整 instanceId），而不是随便挑一个 ——
+   * 挑错的表现是「我设的曲线跑到了另一个特效上」，从画面上极难看出来。
+   */
+  function resolveCurveKey(clip: AnyClip, param: string): string {
+    const allowed = curveKeysOf(clip);
+    const raw = String(param ?? '').trim();
+    if (allowed.includes(raw)) return raw;
+
+    const dot = raw.lastIndexOf('.');
+    const key = dot > 0 ? raw.slice(dot + 1) : raw;
+    const prefix = dot > 0 ? raw.slice(0, dot) : '';
+
+    const candidates: CurveCandidate[] = [];
+    if (clip.kind === 'effect') {
+      for (const [chainIndex, inst] of clip.chain.entries()) {
+        for (const p of getEffect(inst.defId)?.params ?? []) {
+          if (p.type !== 'range') continue;
+          candidates.push({
+            key: `${inst.instanceId}.${p.key}`,
+            chainIndex,
+            instanceId: inst.instanceId,
+            defId: inst.defId,
+          });
+        }
+      }
+    }
+    const byKey = candidates.filter((c) => c.key === `${c.instanceId}.${key}`);
+
+    const ambiguous = (list: CurveCandidate[]): never => {
+      throw new ControlFailure('invalid-argument', tr('agent.curve.ambiguous', { param: raw, n: list.length }), {
+        param: raw,
+        candidates: list.map((c) => ({
+          chainIndex: c.chainIndex,
+          instanceId: c.instanceId,
+          defId: c.defId,
+          param: c.key,
+        })),
+      });
+    };
+
+    if (prefix) {
+      const byInstance = byKey.filter((c) => c.instanceId.startsWith(prefix));
+      if (byInstance.length === 1) return byInstance[0]!.key;
+      if (byInstance.length > 1) return ambiguous(byInstance);
+
+      const byDef = byKey.filter((c) => {
+        const local = c.defId.split('/').pop() ?? c.defId;
+        return c.defId === prefix || local === prefix;
+      });
+      if (byDef.length === 1) return byDef[0]!.key;
+      if (byDef.length > 1) return ambiguous(byDef);
+    } else if (byKey.length === 1) {
+      return byKey[0]!.key;
+    } else if (byKey.length > 1) {
+      return ambiguous(byKey);
+    }
+
+    throw new ControlFailure('invalid-argument', tr('agent.curve.notCurvable', { id: clip.id, param: raw }), {
+      allowed,
+    });
+  }
+
+  /** 缺 `interp` 的 key 按 smooth 落库（工具描述里的默认值就是它）。 */
+  function withDefaultInterp(curve: Curve): Curve {
+    if (!isRecord(curve) || !Array.isArray(curve.keys)) return curve;
+    return {
+      ...curve,
+      keys: curve.keys.map((k) => ({ ...k, interp: (k as { interp?: string }).interp ?? 'smooth' })) as Curve['keys'],
+    };
+  }
+
   /** 曲线形状校验。**形状不对会一路穿透到渲染期**，在那里表现为「参数不动」。 */
   function validateCurve(param: string, curve: Curve): void {
     if (!isRecord(curve) || !Array.isArray(curve.keys)) {
@@ -1280,7 +1953,9 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       if (!isRecord(k) || !Number.isFinite(Number(k.t)) || !Number.isFinite(Number(k.v))) {
         throw new ControlFailure('invalid-argument', tr('agent.curve.key', { param, index: i }));
       }
-      if (!['linear', 'step', 'smooth', 'bezier'].includes(String(k.interp))) {
+      // `interp` 缺省 = smooth（`withDefaultInterp` 已经补过；这里再放一次是为了
+      // 让「手写 JSON 里漏了 interp」不成为一个必须靠报错才能学会的知识点）。
+      if (k.interp !== undefined && !['linear', 'step', 'smooth', 'bezier'].includes(String(k.interp))) {
         throw new ControlFailure('invalid-argument', tr('agent.curve.interp', { param, index: i }));
       }
       /*
@@ -1341,6 +2016,73 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     }
   }
 
+  /** 一次序列渲染的帧数上限：再多就该用 export 了（这里是给人/模型看节奏的）。 */
+  const MAX_SEQUENCE_FRAMES = 24;
+  /** 拼图单元之间的缝（px），只是为了让相邻帧的边界看得出来。 */
+  const SHEET_GAP = 4;
+
+  function clampRegion(r: Region): { x: number; y: number; w: number; h: number } {
+    const x = Math.max(0, Math.min(1, Number(r.x) || 0));
+    const y = Math.max(0, Math.min(1, Number(r.y) || 0));
+    const w = Math.max(0.01, Math.min(1 - x, Number(r.w) || 1));
+    const h = Math.max(0.01, Math.min(1 - y, Number(r.h) || 1));
+    return { x, y, w, h };
+  }
+
+  /**
+   * 局部放大：先按比例裁，再**最近邻整数倍放大**到至少 480px 宽。
+   *
+   * 为什么放大而不是只裁：模型的视觉编码器在 200×120 的图上看不出 ASCII / 半调
+   * 的细节，而「为看细节把整帧提到 1920」既慢又白付 90% 的 token。裁 + 放大
+   * 把像素预算花在真正要判断的那一块上。
+   */
+  function cropAndZoom(
+    frame: { w: number; h: number; rgba: Uint8Array },
+    region: Region,
+  ): { w: number; h: number; rgba: Uint8Array } {
+    const r = clampRegion(region);
+    const x0 = Math.min(frame.w - 1, Math.max(0, Math.round(r.x * frame.w)));
+    const y0 = Math.min(frame.h - 1, Math.max(0, Math.round(r.y * frame.h)));
+    const cw = Math.max(1, Math.min(frame.w - x0, Math.round(r.w * frame.w)));
+    const ch = Math.max(1, Math.min(frame.h - y0, Math.round(r.h * frame.h)));
+    const cropped = new Uint8Array(cw * ch * 4);
+    for (let y = 0; y < ch; y++) {
+      const src = ((y0 + y) * frame.w + x0) * 4;
+      cropped.set(frame.rgba.subarray(src, src + cw * 4), y * cw * 4);
+    }
+    const factor = Math.max(1, Math.min(8, Math.ceil(480 / Math.max(1, cw))));
+    if (factor === 1) return { w: cw, h: ch, rgba: cropped };
+    const ow = cw * factor;
+    const oh = ch * factor;
+    const out = new Uint8Array(ow * oh * 4);
+    for (let y = 0; y < oh; y++) {
+      const sy = Math.floor(y / factor);
+      for (let x = 0; x < ow; x++) {
+        const sx = Math.floor(x / factor);
+        const s = (sy * cw + sx) * 4;
+        const d = (y * ow + x) * 4;
+        out[d] = cropped[s]!;
+        out[d + 1] = cropped[s + 1]!;
+        out[d + 2] = cropped[s + 2]!;
+        out[d + 3] = cropped[s + 3]!;
+      }
+    }
+    return { w: ow, h: oh, rgba: out };
+  }
+
+  /** RGBA → PNG（走一张 2D canvas；`preserveDrawingBuffer` 那条路代价更高，见 snapshotPng）。 */
+  async function encodePng(frame: { w: number; h: number; rgba: Uint8Array }): Promise<Uint8Array> {
+    const canvas = document.createElement('canvas');
+    canvas.width = frame.w;
+    canvas.height = frame.h;
+    const c2d = canvas.getContext('2d');
+    if (!c2d) throw new ControlFailure('internal', tr('agent.view.no2d'));
+    c2d.putImageData(new ImageData(new Uint8ClampedArray(frame.rgba), frame.w, frame.h), 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new ControlFailure('internal', tr('agent.view.pngFailed'));
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
   /** GL 的原点在**左下**，`ImageData` 的第 0 行在**顶部** —— 翻一次，否则图是倒的。 */
   function flipRows(data: Uint8Array, w: number, h: number): Uint8Array {
     const out = new Uint8Array(data.length);
@@ -1389,12 +2131,112 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     return normalizeSize({ w, h: (w * resolution.h) / Math.max(1, resolution.w) });
   }
 
-  const view: Pick<AgentControlPlane, 'renderFrame' | 'readPixels' | 'frameSignature' | 'snapshotPng'> = {
+  /**
+   * 隔离渲染：给渲染器一份「只留指定层」的 project。
+   *
+   * **工程本身不动**（不 commit、不 bump version）：这是一次观察，不是编辑。
+   * 浅拷贝轨道 / 片段，只把被隐藏的 `enabled` 与目标文档的 `visible` 换成新值
+   * —— 其余引用原样共享（渲染只读）。
+   */
+  function asIdList(v: string | string[] | undefined): string[] {
+    if (!v) return [];
+    return (Array.isArray(v) ? v : [v]).filter((x) => typeof x === 'string' && x.length > 0);
+  }
+
+  function isolatedProject(project: Project, only: RenderOnly | undefined): Project {
+    const trackIds = asIdList(only?.trackId);
+    const elementIds = asIdList(only?.elementId);
+    if (trackIds.length === 0 && elementIds.length === 0) return project;
+    let tracks: Project['tracks'] = project.tracks;
+
+    if (trackIds.length > 0) {
+      const keep = new Set<string>();
+      for (const id of trackIds) {
+        const target = tracks.find((t) => t.id === id);
+        if (!target) {
+          throw new ControlFailure('not-found', tr('agent.track.notFound', { id }), { trackId: id });
+        }
+        if (target.kind !== 'visual') {
+          throw new ControlFailure('invalid-argument', tr('agent.track.cannotHost', { id, kind: 'visual' }), {
+            trackId: id,
+          });
+        }
+        keep.add(id);
+      }
+      tracks = tracks.map((t) => (t.kind === 'visual' && !keep.has(t.id) ? { ...t, enabled: false } : t));
+    }
+
+    if (elementIds.length > 0) {
+      const keep = new Set(elementIds);
+      const found = new Set<string>();
+      tracks = tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => {
+          if (c.kind !== 'source' || c.source.type !== 'text') return c;
+          const hits = c.source.doc.elements.filter((e) => keep.has(e.id));
+          if (hits.length === 0) return c;
+          for (const e of hits) found.add(e.id);
+          return {
+            ...c,
+            source: {
+              ...c.source,
+              doc: {
+                ...c.source.doc,
+                elements: c.source.doc.elements.map((e) => ({ ...e, visible: keep.has(e.id) })),
+              },
+            },
+          };
+        }),
+      })) as Project['tracks'];
+      for (const id of elementIds) {
+        if (!found.has(id)) {
+          throw new ControlFailure('not-found', tr('agent.typo.elementNotFound', { id }), { elementId: id });
+        }
+      }
+    }
+    return { ...project, tracks };
+  }
+
+  /**
+   * 这一帧**真正参与合成**的图层。
+   *
+   * `render_frame` / `frame_signature` 的返回里要回显它：只有画面时，agent 分不清
+   * 「隔离把特效轨也隐藏了」与「我改的参数没用」—— 这两种情况的截图一模一样。
+   * 直接读 `buildStack` 的产物，保证与渲染器看到的是同一份 op。
+   */
+  function participatingLayers(
+    project: Project,
+    t: number,
+  ): { trackId: string; name: string; clips: { id: string; kind: string }[] }[] {
+    const ops = buildStack(project, t);
+    const active = new Set<string>();
+    walkOps(ops, (op) => {
+      if (op.type === 'source') active.add(op.source.clip.id);
+      else if (op.type === 'transition') {
+        active.add(op.from.clip.id);
+        active.add(op.to.clip.id);
+      } else active.add(op.clip.id);
+    });
+    const out: { trackId: string; name: string; clips: { id: string; kind: string }[] }[] = [];
+    for (const track of project.tracks) {
+      if (track.kind !== 'visual' || !track.enabled) continue;
+      const clips = track.clips
+        .filter((c) => active.has(c.id))
+        .map((c) => ({ id: c.id, kind: c.kind === 'effect' ? (c.boundClipId ? 'effect(bound)' : 'effect') : 'source' }));
+      if (clips.length > 0) out.push({ trackId: track.id, name: track.name, clips });
+    }
+    return out;
+  }
+
+  const view: Pick<
+    AgentControlPlane,
+    'renderFrame' | 'readPixels' | 'frameSignature' | 'snapshotPng' | 'renderSequence' | 'frameLayers'
+  > = {
     async renderFrame(opt) {
       return run(async () => {
         const store = needStore();
         const renderer = needRenderer();
-        const project = store.project;
+        const project = isolatedProject(store.project, opt?.only);
         const size = normalizeSize(opt?.size ?? project.resolution);
         const frame = await drawAndRead(renderer, project, opt?.t ?? ctx.getPlayT(), size);
         return { t: frame.t, w: frame.w, h: frame.h };
@@ -1425,7 +2267,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return run<FrameSignature>(async () => {
         const store = needStore();
         const renderer = needRenderer();
-        const project = store.project;
+        const project = isolatedProject(store.project, opt?.only);
         const size = normalizeSize(opt?.size ?? signatureSize(project.resolution));
         const frame = await drawAndRead(renderer, project, opt?.t ?? ctx.getPlayT(), size);
         return frameSignatureOf({
@@ -1443,22 +2285,98 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return run<Uint8Array>(async () => {
         const store = needStore();
         const renderer = needRenderer();
-        const project = store.project;
+        const project = isolatedProject(store.project, opt?.only);
         const size = normalizeSize(opt?.size ?? project.resolution);
         const frame = await drawAndRead(renderer, project, opt?.t ?? ctx.getPlayT(), size);
+        // 局部放大在**读回之后**做（裁 + 最近邻放大），不需要再渲一遍。
+        const shown = opt?.region ? cropAndZoom(frame, opt.region) : frame;
+        return encodePng(shown);
+      });
+    },
 
-        // 不用 WebGL 的 `preserveDrawingBuffer`：那会让预览的每一帧都多付一次
-        // 拷贝。这里已经把像素读回来了（同一任务内，一定是刚画出来的那一帧），
-        // 灌进一张 2D canvas 再编码即可。
-        const canvas = document.createElement('canvas');
-        canvas.width = frame.w;
-        canvas.height = frame.h;
-        const c2d = canvas.getContext('2d');
-        if (!c2d) throw new ControlFailure('internal', tr('agent.view.no2d'));
-        c2d.putImageData(new ImageData(new Uint8ClampedArray(frame.rgba), frame.w, frame.h), 0, 0);
-        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-        if (!blob) throw new ControlFailure('internal', tr('agent.view.pngFailed'));
-        return new Uint8Array(await blob.arrayBuffer());
+    /**
+     * 节奏自检：把一段时间的若干帧拼成**一张**联系表（contact sheet）。
+     *
+     * 为什么不是「返回 N 张图」：一张 6 格的拼图 ≈ 1 张图的 token，而 N 张就是 N 倍；
+     * 判断卡点 / 动势也正需要**并排**比较。时间戳烧在每格底下，否则模型分不清
+     * 「第几格是第几秒」。
+     */
+    async renderSequence(opt) {
+      return run<{ png: Uint8Array; times: number[]; cols: number; rows: number; w: number; h: number }>(
+        async () => {
+          const store = needStore();
+          const renderer = needRenderer();
+          const project = isolatedProject(store.project, opt?.only);
+          const duration = store.project.duration;
+          const from = Math.max(0, Math.min(duration, Number(opt?.from ?? 0)));
+          const to = Math.max(from + 1 / project.fps, Math.min(duration, Number(opt?.to ?? duration)));
+          const want = Math.round(Number(opt?.cols ?? 3));
+          const cols = Math.max(1, Math.min(6, Number.isFinite(want) ? want : 3));
+
+          // 默认 6 帧均匀铺开；给了 step 就按 step（秒）走。
+          const rawStep = Number(opt?.step);
+          const step = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : Math.max(1 / project.fps, (to - from) / 5);
+          const times: number[] = [];
+          for (let t = from; t < to - 1e-6 && times.length < MAX_SEQUENCE_FRAMES; t += step) times.push(t);
+          if (times.length === 0) times.push(from);
+
+          const cell = normalizeSize(
+            opt?.size ?? { w: 320, h: Math.max(2, Math.round((320 * project.resolution.h) / Math.max(1, project.resolution.w))) },
+          );
+          const rows = Math.ceil(times.length / cols);
+          const sheetW = cols * cell.w + (cols - 1) * SHEET_GAP;
+          const sheetH = rows * cell.h + (rows - 1) * SHEET_GAP;
+          const canvas = document.createElement('canvas');
+          canvas.width = sheetW;
+          canvas.height = sheetH;
+          const c2d = canvas.getContext('2d');
+          if (!c2d) throw new ControlFailure('internal', tr('agent.view.no2d'));
+          c2d.fillStyle = '#000000';
+          c2d.fillRect(0, 0, sheetW, sheetH);
+          c2d.font = '11px monospace';
+          c2d.textBaseline = 'bottom';
+
+          for (const [i, t] of times.entries()) {
+            const frame = await drawAndRead(renderer, project, t, cell);
+            const shown = opt?.region ? cropAndZoom(frame, opt.region) : frame;
+            const x = (i % cols) * (cell.w + SHEET_GAP);
+            const y = Math.floor(i / cols) * (cell.h + SHEET_GAP);
+            const patch = document.createElement('canvas');
+            patch.width = shown.w;
+            patch.height = shown.h;
+            const p2d = patch.getContext('2d');
+            if (!p2d) throw new ControlFailure('internal', tr('agent.view.no2d'));
+            p2d.putImageData(new ImageData(new Uint8ClampedArray(shown.rgba), shown.w, shown.h), 0, 0);
+            c2d.imageSmoothingEnabled = false;
+            c2d.drawImage(patch, 0, 0, shown.w, shown.h, x, y, cell.w, cell.h);
+            // 时间戳条：底下 14px，只盖住画面最下沿（构图判断不受影响）。
+            c2d.fillStyle = 'rgba(0,0,0,0.72)';
+            c2d.fillRect(x, y + cell.h - 14, cell.w, 14);
+            c2d.fillStyle = '#ffffff';
+            c2d.fillText(`${t.toFixed(2)}s  #${i + 1}`, x + 4, y + cell.h - 3);
+          }
+
+          const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+          if (!blob) throw new ControlFailure('internal', tr('agent.view.pngFailed'));
+          return {
+            png: new Uint8Array(await blob.arrayBuffer()),
+            times,
+            cols,
+            rows,
+            w: sheetW,
+            h: sheetH,
+          };
+        },
+      );
+    },
+
+    /** 这一帧参与的图层（`only` 之外的那些不会出现在里面）。 */
+    async frameLayers(opt) {
+      return run(() => {
+        const store = needStore();
+        const project = isolatedProject(store.project, opt?.only);
+        const t = timeOf(frameOf(opt?.t ?? ctx.getPlayT(), project.fps), project.fps);
+        return { t, layers: participatingLayers(project, t) };
       });
     },
   };
@@ -1616,25 +2534,53 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   const typography: Pick<
     AgentControlPlane,
     | 'addTypographyElement'
+    | 'addTypographyElements'
     | 'addGeneratedShape'
     | 'updateTypographyElement'
+    | 'updateTypographyElements'
+    | 'setTypographyAnimation'
     | 'setTypographyText'
     | 'removeTypographyElement'
     | 'reorderTypographyElement'
     | 'groupTypographyElements'
     | 'ungroupTypographyElements'
     | 'layoutTypography'
+    | 'measureTypography'
     | 'setTypographyBackground'
     | 'setTypographyTheme'
     | 'replaceTypographyDoc'
   > = {
+    /**
+     * 设 / 清 / 追加一个元素动画。`input === null` = 清空。
+     *
+     * `at` 支持 `{ beat: n }` 的换算在这一层做（要读 `project.beatGrid`）：
+     * 文档模型不认识 BPM，把「拍」的换算法留在工具面上，`typography/` 只收秒。
+     */
+    async setTypographyAnimation(clipId, elementId, input, mode) {
+      return run(() => {
+        const store = beforeWrite();
+        const id = typoClipId(clipId);
+        return typo.setElementAnimation(store, id, elementId, resolveBeatKeys(store, input), mode ?? 'replace');
+      });
+    },
+
     async addTypographyElement(clipId, input) {
       return run(() => {
         const store = beforeWrite();
         if (!isRecord(input)) {
           throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'element' }));
         }
-        return typo.addElement(store, typoClipId(clipId), input);
+        return typo.addElement(store, typoClipId(clipId), input as TypographyElementInput);
+      });
+    },
+
+    async addTypographyElements(clipId, inputs) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!Array.isArray(inputs)) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.batchEmpty', { what: 'elements' }));
+        }
+        return typo.addElements(store, typoClipId(clipId), inputs as TypographyElementInput[]);
       });
     },
 
@@ -1654,14 +2600,24 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         if (!isRecord(patch) || Object.keys(patch).length === 0) {
           throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'patch' }));
         }
-        return { changed: typo.updateElement(store, typoClipId(clipId), elementId, patch) };
+        return typo.updateElement(store, typoClipId(clipId), elementId, patch);
+      });
+    },
+
+    async updateTypographyElements(clipId, updates) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!Array.isArray(updates)) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.batchEmpty', { what: 'updates' }));
+        }
+        return typo.updateElements(store, typoClipId(clipId), updates as TypographyElementUpdate[]);
       });
     },
 
     async setTypographyText(clipId, elementId, text) {
       return run(() => {
         const store = beforeWrite();
-        return { changed: typo.setText(store, typoClipId(clipId), elementId, text) };
+        return typo.setText(store, typoClipId(clipId), elementId, text);
       });
     },
 
@@ -1678,7 +2634,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         if (!['front', 'back', 'forward', 'backward'].includes(op)) {
           throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: `op=${String(op)}` }));
         }
-        return { changed: typo.reorderElement(store, typoClipId(clipId), elementId, op) };
+        return typo.reorderElement(store, typoClipId(clipId), elementId, op);
       });
     },
 
@@ -1709,6 +2665,16 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           throw new ControlFailure('invalid-argument', tr('agent.typo.badLayout', { detail: 'op is required' }));
         }
         return typo.layout(store, typoClipId(clipId), req);
+      });
+    },
+
+    async measureTypography(clipId, elementIds) {
+      return run<TypographyMeasure>(async () => {
+        // 纯读：不停手势、不 commit。字体没加载完时量出来是回落字体的宽度 ——
+        // 与导出那条「必须 await document.fonts.ready」同一条理由。
+        if (typeof document !== 'undefined' && document.fonts?.ready) await document.fonts.ready;
+        const store = needStore();
+        return typo.measure(store, typoClipId(clipId), elementIds);
       });
     },
 

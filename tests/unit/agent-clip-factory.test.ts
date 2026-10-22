@@ -107,4 +107,27 @@ describe('makeEffectClip', () => {
     const clip = makeEffectClip({ start: 0, end: 1, chain: [{ defId: 'echo' }, { defId: 'echo' }] });
     expect(clip.chain[0]!.instanceId).not.toBe(clip.chain[1]!.instanceId);
   });
+
+  it('boundClipId 写进工程；与 affectDepth 互斥（同时给直接拒绝）', () => {
+    const clip = makeEffectClip({ start: 0, end: 1, boundClipId: 'src-1', chain: [{ defId: 'echo' }] });
+    expect(clip.boundClipId).toBe('src-1');
+    expect(clip.affectDepth).toBeUndefined();
+    expect(() =>
+      makeEffectClip({ start: 0, end: 1, boundClipId: 'src-1', affectDepth: 1 }),
+    ).toThrow();
+  });
+});
+
+describe('纯色片段的默认 fit（反馈第 4 条）', () => {
+  it('solid 默认 stretch：源是 1×1 纹理，contain 会画成居中的正方形', () => {
+    const clip = makeSourceClip({ kind: 'solid', start: 0, end: 1 });
+    expect(clip.fit).toBe('stretch');
+  });
+
+  it('其它源仍然默认 contain（图片/视频的「完整可见」是既有语义）', () => {
+    const clip = makeSourceClip({ kind: 'image', start: 0, end: 1, assetId: 'a' });
+    expect(clip.fit).toBe('contain');
+    // 显式给值永远优先。
+    expect(makeSourceClip({ kind: 'solid', start: 0, end: 1, fit: 'cover' }).fit).toBe('cover');
+  });
 });

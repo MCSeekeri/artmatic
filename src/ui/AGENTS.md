@@ -183,6 +183,12 @@
   最近项存 localStorage（`ui/recent-defs.ts`），**按注册表过滤后再截 5** —— 失效 id
   不许占展示位。新增「用过了」的写入点必须调用 `rememberRecentEffect/Algo`，
   否则下次菜单顺序不变（静默、无报错）。
+- **特效片段的「绑定片段」是下拉，不是按钮**（`effect-bind-target`）：候选只列
+  **其它视觉轨上的 source 片段**（同轨在时间上不重叠，绑了也看不到），首项是
+  「不绑定（按影响深度）」。绑定与影响深度**互斥**，所以绑定时深度输入框整个让位
+  —— 两个可编辑项同时存在时，用户会以为它们叠加生效。当前绑定值若不在候选里
+  （目标被删 / 被移到同轨）要补一条原值，否则下拉显示「不绑定」而实际仍是绑定。
+  时间轴对应角标是 `clip-effect-bound`（`→片段名`），与深度角标同位、互斥。
 
 ## 参数行与全局错误
 
@@ -400,11 +406,19 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   模型 / 思考强度的二级菜单。消息列表里每个子项必须 `flex: 0 0 auto`
   （工具卡组件自己也钉了），否则 flex column 会把它们压扁、滚动条永不出现。
 - **Agent 的历史入口在 Agent 抽屉顶栏、面板本身是根级 modal**：抽屉带 z-index 是
-  层叠上下文，modal 挂进去会被检查器盖住遮罩。会话记录存在 `project.agentSessions`
-  （随工程保存、不进撤销栈），历史面板只读，底部可导出 JSON 日志。
+  层叠上下文，modal 挂进去会被检查器盖住遮罩。会话记录在工程目录的
+  `agent/sessions/<id>.json`（不在 `project.json` 里，见 `src/agent/AGENTS.md`），
+  打开工程时由 `appState.loadAgentHistory` 读进 `OpenProject.agentSessions`；
+  历史面板只读，底部可导出 JSON 日志。
 - **对话内容必须可选中**（`app.css` 默认全局不可选）：`.stream` 显式恢复
   `user-select: text`；右键走自绘菜单（复制 / 全选 / 添加到输入框 / 复制整段），
   输入框保留原生菜单。全局 contextmenu 已在 `App.svelte` 禁止。
+- **助手正文渲染 Markdown**（`ui/agent/markdown.ts`，`marked`）：模型回答天然是
+  Markdown，按纯文本显示时用户看到的是 `**加粗**` 与 `- 条目`。三条安全约束
+  **必须保留**：解析前把 `<` 转义（模型输出是不可信输入）、链接白名单
+  （`javascript:` 落到 `#`）、图片只回显 alt（不请求第三方 URL）。
+  正文是 `{@html}` 注入的 HTML，**不在 Svelte 模板里** ⇒ 样式必须写
+  `.md :global(...)`，否则作用域类加不到注入节点上（表现是「有结构、完全没样式」）。
 - **工具卡显示的是「设置轨道」而不是 `set_track`**：`ui/agent/tool-labels.ts`
   把 id 转成 `agent.toolName.<camelCase>`；状态用名字前的小圆点编码，
   不用左边框色条。整轮结束后所有过程卡自动折叠。

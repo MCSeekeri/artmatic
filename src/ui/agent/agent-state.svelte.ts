@@ -33,7 +33,7 @@ import {
   providerOf,
 } from '../../agent/llm/index';
 import type { ProviderDef } from '../../agent/llm/index';
-import type { AgentSessionRecord, AgentStoredMessage } from '../../core/schema';
+import type { AgentSessionRecord, AgentStoredMessage } from '../../agent/history';
 import {
   PREFS_REV,
   activeApiKey,
@@ -518,18 +518,25 @@ class AgentUiState {
 
   /* ------------------------------------------------------------ 会话历史 */
 
-  /** 当前工程的会话记录（由 `project.agentSessions` 承载，随工程保存）。 */
+  /**
+   * 当前工程的会话记录。
+   *
+   * 数据挂在 `OpenProject.agentSessions`（每个选项卡一份），磁盘真源是
+   * `agent/sessions/<id>.json`。**不是 `project.agentSessions`** —— 聊天记录
+   * 不属于工程内容，挂在工程上会让「聊一句 = 重写整份 project.json」。
+   */
   get history(): AgentSessionRecord[] {
-    // 读 version 建立依赖：撤销 / 切工程 / 保存后列表要跟着刷新。
+    // 读 version 建立依赖：切工程 / 打开工程 / 删除会话后列表要跟着刷新。
     void appState.version;
-    return appState.store.project.agentSessions ?? [];
+    return appState.activeProject.agentSessions;
   }
 
   /**
    * 把当前消息流写成一条会话记录。
    *
    * **不写图片的 base64**（工程体积），只留说明；工具卡留下名字 / 状态 / 耗时。
-   * 由 `ProjectStore.setAgentSessions` 落库 —— 它 bump version 但不进撤销栈。
+   * 落盘走 `appState.saveAgentSession`：内存立即更新，磁盘排队写
+   * （先把消息落到磁盘上，关页面 / 崩溃最多丢最后一条）。
    */
   private saveSession(): void {
     if (!this.activeSessionId || this.messages.length === 0) return;
@@ -564,19 +571,18 @@ class AgentUiState {
       updatedAt: Date.now(),
       messages: stored,
     };
-    const rest = (appState.store.project.agentSessions ?? []).filter((s) => s.id !== record.id);
-    appState.store.setAgentSessions([record, ...rest].slice(0, 30));
+    // 归属用 `boundProjectId`（轮次开始时绑定的那份）：轮末用户切了选项卡也不会
+    // 把 A 的对话写进 B 的目录。
+    appState.saveAgentSession(this.boundProjectId, record);
   }
 
   deleteSession(id: string): void {
-    appState.store.setAgentSessions(
-      (appState.store.project.agentSessions ?? []).filter((s) => s.id !== id),
-    );
+    appState.deleteAgentSession(this.boundProjectId, id);
   }
 
   clearHistory(): void {
-    // 当前会话也一并清掉（它就在工程里）；内存里的消息保留与否由调用方决定。
-    appState.store.setAgentSessions([]);
+    // 当前会话也一并清掉（文件一起删）；内存里的消息保留与否由调用方决定。
+    appState.clearAgentSessions(this.boundProjectId);
     this.activeSessionId = null;
   }
 

@@ -16,6 +16,12 @@ const barcode: SvgGenSpec = {
   group: 'code',
   defaultSeed: 70,
   aspect: 4,
+  notes:
+    'Paint the bars with FILL, not stroke: the path is a set of closed rectangles, so a ' +
+    'stroke traces every bar outline. With bars only a fraction of a unit wide, a normal ' +
+    'stroke width is wider than the bar itself and neighbouring outlines merge into one ' +
+    'solid plate — that is a stroke-width artefact, not a generator bug. Also note the ' +
+    'frame is stretched (aspect 4): bar widths scale with the frame width.',
   params: [
     range('bars', 'gen.p.bars', 8, 120, 1, 56),
     range('minW', 'gen.p.minW', 0.4, 2, 0.1, 0.7),
@@ -63,6 +69,9 @@ const hudticks: SvgGenSpec = {
   group: 'code',
   defaultSeed: 81,
   aspect: 3,
+  notes:
+    'Same paint rule as barcode: use FILL. Every tick is a closed quad, and stroke widths ' +
+    'above ~1 unit swallow the gaps between ticks.',
   params: [
     range('count', 'gen.p.count', 8, 72, 1, 28),
     range('tickLen', 'gen.p.tickLen', 0.1, 0.6, 0.01, 0.32),
