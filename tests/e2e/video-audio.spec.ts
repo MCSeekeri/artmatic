@@ -45,6 +45,7 @@ interface TrackInfo {
   kind: string;
   name: string;
   enabled: boolean;
+  muted?: boolean;
   clips: { id: string; kind: string; start: number; end: number }[];
 }
 
@@ -75,6 +76,59 @@ async function importVideoClip(page: Page, trackId: string): Promise<string> {
   expect(clipId, '视频片段应当落下来').not.toBeNull();
   return clipId!;
 }
+
+/**
+ * 静音（v15）：两处入口、同一条语义 —— **画面留着，声音不要**。
+ *
+ * 这里只钉 UI 接线与落库；「哪些 span 出声 / 导出有没有声」由
+ * `tests/unit/audio-plan.test.ts` 的轨道静音那组钉死（预览、导出、预热表
+ * 都读同一张表）。
+ */
+test('静音：轨道喇叭只关声音；检查器 checkbox 让音量变灰', async ({ page }) => {
+  const errors = await boot(page);
+  const track = await cleanStage(page);
+  const videoId = await importVideoClip(page, track);
+
+  // 轨道头：有视频片段的轨才显示喇叭，点一下写入 muted
+  const row = page.locator(`[data-track-id="${track}"]`);
+  const muteBtn = row.getByTestId('track-muted');
+  await expect(muteBtn).toHaveCount(1);
+  await muteBtn.click();
+  await expect.poll(async () => (await tracksOf(page)).find((t) => t.id === track)?.muted).toBe(true);
+  // 画面开关不受影响（静音 ≠ 隐藏）
+  expect((await tracksOf(page)).find((t) => t.id === track)?.enabled).toBe(true);
+
+  // 轨道静音时，选中视频片段会在检查器里明说一句（否则「没勾片段静音却没声音」像 bug）
+  await page.locator(`[data-clip-id="${videoId}"]`).click();
+  await expect(page.getByTestId('video-track-muted')).toBeVisible();
+  await muteBtn.click();
+  await expect.poll(async () => (await tracksOf(page)).find((t) => t.id === track)?.muted).toBe(undefined);
+  await expect(page.getByTestId('video-track-muted')).toHaveCount(0);
+
+  // 检查器：勾静音 → 音量滑杆 / 淡变框变灰且不可拖
+  const gain = page.getByTestId('insp-video-gain');
+  await expect(gain).not.toHaveAttribute('aria-disabled', 'true');
+  await page.getByTestId('insp-video-muted').click();
+  await expect(gain).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTestId('insp-video-fade-in')).toBeDisabled();
+  await expect
+    .poll(() =>
+      page.evaluate((id) => {
+        const A = (window as never as {
+          __artmatic: { store: { findClip: (id: string) => { clip: { audio?: { muted?: boolean } } } | null } };
+        }).__artmatic;
+        return A.store.findClip(id)?.clip.audio?.muted ?? false;
+      }, videoId),
+    )
+    .toBe(true);
+
+  // 取消：滑杆恢复可拖，值还在（不因为静音被清掉）
+  await page.getByTestId('insp-video-muted').click();
+  await expect(gain).not.toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTestId('insp-video-fade-in')).toBeEnabled();
+
+  expect(errors, `不该有未捕获异常：${errors.join(' | ')}`).toEqual([]);
+});
 
 test('右键分离音频 → 新音频轨 + 视频静音 + 锁定跟随，解锁后独立', async ({ page }) => {
   const errors = await boot(page);

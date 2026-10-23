@@ -210,6 +210,22 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         linkLock: true,
         gainDb: [-60, 12],
         fades: true,
+        // v15：片段级静音（set_clip_audio.muted）与轨道级静音（set_track.muted）。
+        muted: true,
+        trackMute: 'visual tracks only',
+      },
+      /*
+       * 变速（v14）。两条容易猜错的：①`set_clip_props({ speed })` 保持片段
+       * 长度（只改「这段时间里放多少素材」），只有素材不够时才缩短；
+       * ②负速度只能走关键帧曲线（静态字段必须为正）。
+       */
+      videoSpeed: {
+        staticField: 'source.speed',
+        curveKey: 'speed',
+        range: [0.05, 100],
+        negativeSpeed: 'curve-only',
+        keepsClipLength: true,
+        shrinksWhenSourceShort: true,
       },
     },
   };

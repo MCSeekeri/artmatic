@@ -43,6 +43,8 @@ export const agent = {
   'agent.clip.badKey': '抠像参数不合法：color 要是 #rrggbb，tolerance / softness / spill 是 0..1',
   'agent.clip.badQuad': 'quad 需要四个角 {tl, tr, br, bl}，每个是 [x, y] 两个有限数，且四点不能共线',
   'agent.clip.badCrop': 'crop 的四条边是 0..1 的比例（对边之和不能吃掉整层）',
+  'agent.clip.speedNotVideo': 'speed 只用于视频片段（倒放走 set_curve 的 speed：关键帧可以取负）',
+  'agent.clip.speedPositive': 'speed 必须是正数（1 = 原速）；倒放请用 set_curve({ param: "speed", keys: [{ v: -1 }] })',
 
   /* ------------------------------------------------------------ 生成器 */
   'agent.algo.notAlgo': '片段 {id} 的源是 {type}，不是算法片段',
@@ -70,6 +72,7 @@ export const agent = {
   'agent.track.badIndex': '轨道下标越界（0..{max}）',
   'agent.track.audioOnlyAudio': '音频轨只装 audio 片段；画面片段请用视觉轨',
   'agent.track.cannotHost': '轨道 {id} 装不下 {kind} 片段',
+  'agent.track.muteAudioTrack': 'muted 只用于视觉轨（静音视频内嵌音轨）；音频轨用它自己的 enabled 控制声音',
 
   /* ------------------------------------------- 注册表里没有这个 id */
   'agent.gen.notFound': '没有生成器 {id}',

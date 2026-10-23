@@ -92,7 +92,8 @@ function sourceOf(input: SourceClipInput): SourceClip['source'] {
         type: 'video',
         assetId: input.assetId,
         srcIn: Math.max(0, input.srcIn ?? 0),
-        speed: input.speed && input.speed > 0 ? input.speed : 1,
+        // 与 `schema.ts` 的校验 / `ProjectStore.setClipSpeed` 同一区间：负速只走曲线。
+        speed: (input.speed ?? 0) > 0 ? Math.min(100, Math.max(0.05, input.speed!)) : 1,
       };
     }
     case 'text': {

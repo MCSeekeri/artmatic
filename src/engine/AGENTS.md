@@ -93,6 +93,18 @@ function buildStack(project: Project, t: number): Stack {
 > 写反的表现是**「特效完全无效且不报错」**。`core/demo-project.ts` 的 tracks 数组
 > 必须一起倒序，`tests/unit/stack.test.ts` 会挡住。
 
+### 视频取帧与变速（v14）
+
+`video-source.ts` 的 `mediaTimeOf(clip, t, grid)` 委托 `core/speed.ts`：有速度曲线时
+素材时间是**积分**，负速则往回走。两条容易踩的：
+
+- **`grid` 必须传**：速度曲线可以锚到拍（`Curve.beatAnchor`），没有网格就退回
+  「相对片段起点」的解释，画面整体错位一段。`createVideoSourceManager` 的
+  `getGrid` 由 `render-core` 注入（`opts.getProject().beatGrid`）。
+- 帧缓存键是**素材内时间** `ts`，所以缓存对变速天然正确；但倒放会让 `ts` 在相邻
+  帧之间往回跳，`sampleAt` 的常驻顺序迭代器会重开（`streams++`）。这是预期代价，
+  不是可以靠「缓存得更久」消掉的 —— 逐帧随机访问本来就是它不擅长的形态。
+
 ### 片段级几何与抠图（placement pass）
 
 `SourceClip.key`（色键）、`SourceClip.quad`（四角透视）与 `SourceClip.crop`（裁剪）

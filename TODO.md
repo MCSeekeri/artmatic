@@ -6,6 +6,16 @@
 
 ## 已完成（2026-10-22）
 
+- **静音（v15）**：`VisualTrack.muted` + 轨道头喇叭按钮（`track-muted`，只关内嵌音轨、
+  画面照常）；检查器视频音频区加「静音」checkbox，勾上后音量 / 淡变变灰。
+  三种「不发声」在 `audioSpans` 收口（轨禁用 / 轨静音 / 片段静音），预览、导出混流、
+  音轨预热表读同一张表。Agent：`set_track({ muted })` + `set_clip_audio({ muted })`，
+  `features.videoAudio` 补 `muted` / `trackMute`。`SCHEMA_VERSION` 14 → 15（恒等迁移）。
+- **视频变速（v14）**：`set_clip_props({ speed })` 常速（保持片段长度，素材不够才缩短，
+  回执带 `applied.end`）+ `set_curve(id, "speed", …)` 关键帧（**负值 = 倒放**）。
+  `SCHEMA_VERSION` 13 → 14（恒等迁移）。`getCapabilities().features.videoSpeed` 说明
+  「保持长度 / 负值只走曲线」；内嵌音轨在速度 ≤ 0 时静音（预览与导出同规则）。
+  数学唯一实现是 `core/speed.ts`（`∫v`），取帧 / trim / split / 混流都对着它。
 - 排版自定义 CSS 动画（`typo_set_animation.css`）、动画字段往返（`iterations`）、
   `typo_replace_doc.droppedAnimations`。
 - 元素 `transform3d`（合并语义）/ `autoHeight` / `path` + `pathUnit` + `clipFrame`；

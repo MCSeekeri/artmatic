@@ -263,7 +263,10 @@ async function dispatch(name, args, extra) {
 
     case 'artmatic_set_track':
       return unwrap(
-        await bridge.call('setTrack', [args.trackId, { enabled: args.enabled, name: args.name }]),
+        await bridge.call('setTrack', [
+          args.trackId,
+          { enabled: args.enabled, name: args.name, muted: args.muted },
+        ]),
       );
 
     case 'artmatic_add_clip': {

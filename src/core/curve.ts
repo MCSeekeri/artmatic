@@ -72,16 +72,26 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
 
 /**
+ * 绝对时刻 → 曲线自己的时间轴。
+ *
+ * `beatAnchor` 换算只发生在这里（求值与积分共用），全项目唯一一处。缺 `grid`
+ * 时锚定曲线按「相对片段起点」处理是**错的**，所以调用方必须把 grid 传全
+ * —— 这也是 `speed` 曲线把网格一路带到取帧器的原因。
+ */
+function curveTime(curve: Curve, tSec: number, ctx: EvalCtx): number {
+  return curve.beatAnchor && ctx.grid
+    ? tSec - timeAtBeat(curve.beatAnchor.beat, ctx.grid)
+    : tSec - (ctx.clipStart ?? 0);
+}
+
+/**
  * 求曲线在绝对时刻 tSec 的值。纯函数——同一曲线同一 tSec 永远同结果，
  * 与调用次数、调用顺序无关（确定性的根基之一）。
  */
 export function evalCurve(curve: Curve, tSec: number, ctx: EvalCtx = {}): number {
   if (curve.keys.length === 0) return 0;
-  // beatAnchor 换算只发生在这里，全函数唯一一处。
-  const t = curve.beatAnchor && ctx.grid
-    ? tSec - timeAtBeat(curve.beatAnchor.beat, ctx.grid)
-    : tSec - (ctx.clipStart ?? 0);
   const mode = curve.mode ?? 'keyframe';
+  const t = curveTime(curve, tSec, ctx);
   if (mode === 'impulse') return evalImpulse(curve, t);
   if (mode === 'follower') return evalFollower(curve, t);
   return evalKeyframes(curve.keys, t);
@@ -287,6 +297,109 @@ function followValue(
   const halfLife = target > start ? attack : release;
   if (halfLife <= 1e-6) return target;
   return target + (start - target) * Math.pow(0.5, (at - from) / halfLife);
+}
+
+/* ------------------------------------------------------------ 积分 */
+
+/**
+ * 曲线在 `[from, to]` 上的**定积分**（绝对时刻，秒）。
+ *
+ * 变速功能要它：速度曲线 `v(t)` 下，片段从 `start` 走 `t` 秒消耗的素材时长是
+ * `∫v`。有曲线时**不能**再用 `Δt × speed` —— 速度每秒都在变，乘法只对常速成立。
+ *
+ * 闭式（linear / step / smooth）优先，bezier 走复合 Simpson，且与求值共用同一份
+ * `bezierSegmentValue`：积分与「逐帧求值再累加」必须收敛到同一个数，否则预览
+ * （每帧求值）与导出（同一路径）会在长片段上慢慢错开，而这种偏差只表现为
+ * 「导出到中段突然对不上」，没人会想到是积分。
+ *
+ * 反向区间（`to < from`）返回负值 —— 倒放时媒体时间就是往回走的。
+ */
+export function integralCurve(curve: Curve, from: number, to: number, ctx: EvalCtx = {}): number {
+  const a = curveTime(curve, from, ctx);
+  const b = curveTime(curve, to, ctx);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return 0;
+  const dir = b > a ? 1 : -1;
+  return dir * integralCurveTime(curve, Math.min(a, b), Math.max(a, b));
+}
+
+/** `[lo, hi]` 在曲线自己时间轴上的积分（`lo ≤ hi`）。 */
+function integralCurveTime(curve: Curve, lo: number, hi: number): number {
+  if (lo === hi) return 0;
+  const mode = curve.mode ?? 'keyframe';
+  if (mode === 'impulse' || mode === 'follower') {
+    /*
+     * 这两种模式是闭式**值**而不是段插值，没有实用的原函数（follower 的分段
+     * 递推也能积，但那是给包络用的，没人会拿它做变速）。数值积分足够，固定
+     * 采样数 ⇒ 结果只取决于曲线本身，与调用时机无关。
+     */
+    return simpson(
+      (t) => (mode === 'impulse' ? evalImpulse(curve, t) : evalFollower(curve, t)),
+      lo,
+      hi,
+      32,
+    );
+  }
+  const keys = curve.keys;
+  if (keys.length === 0) return 0;
+
+  let sum = 0;
+  let a = lo;
+  // key 之前是首 key 的平台值、之后是末 key 的平台值（与 evalKeyframes 一致）。
+  const first = keys[0]!;
+  if (a < first.t) {
+    const end = Math.min(hi, first.t);
+    sum += first.v * (end - a);
+    a = end;
+  }
+  const last = keys[keys.length - 1]!;
+  let b = hi;
+  if (b > last.t) {
+    const begin = Math.max(a, last.t);
+    sum += last.v * (b - begin);
+    b = begin;
+  }
+  if (b <= a) return sum;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const k0 = keys[i]!;
+    const k1 = keys[i + 1]!;
+    const segLo = Math.max(a, k0.t);
+    const segHi = Math.min(b, k1.t);
+    if (segHi > segLo) sum += integralSegment(k0, k1, segLo, segHi);
+  }
+  return sum;
+}
+
+/** 段 `a → b` 在 `[t0, t1]` 上的积分（区间已钳进段内）。 */
+function integralSegment(a: Key, b: Key, t0: number, t1: number): number {
+  const span = b.t - a.t;
+  if (span <= 1e-9) return a.v * (t1 - t0);
+  const u0 = clamp01((t0 - a.t) / span);
+  const u1 = clamp01((t1 - a.t) / span);
+  switch (a.interp) {
+    case 'step':
+      return a.v * (t1 - t0);
+    case 'smooth': {
+      // ∫ smoothstep du = u³ − u⁴/2；dt = span·du。
+      const s = (u: number) => u * u * u - (u * u * u * u) / 2;
+      return a.v * (t1 - t0) + (b.v - a.v) * span * (s(u1) - s(u0));
+    }
+    case 'bezier':
+      return simpson((t) => bezierSegmentValue(a, b, t), t0, t1, 16);
+    default: {
+      const y0 = a.v + (b.v - a.v) * u0;
+      const y1 = a.v + (b.v - a.v) * u1;
+      return ((y0 + y1) / 2) * (t1 - t0);
+    }
+  }
+}
+
+/** 复合 Simpson。`n` 会被抬到偶数（Simpson 要求偶数个子区间）。 */
+function simpson(f: (t: number) => number, lo: number, hi: number, n: number): number {
+  const steps = n % 2 === 0 ? n : n + 1;
+  const h = (hi - lo) / steps;
+  let sum = f(lo) + f(hi);
+  for (let i = 1; i < steps; i++) sum += f(lo + i * h) * (i % 2 === 1 ? 4 : 2);
+  return (sum * h) / 3;
 }
 
 /* -------------------------------------------------------------- 工具 */

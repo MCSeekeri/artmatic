@@ -641,6 +641,36 @@ describe('段落标记（edit_sections）', () => {
   });
 });
 
+/**
+ * 轨道静音（v15）。语义与 UI 的喇叭按钮完全一致：**只关内嵌音轨，画面照常**。
+ * 音频轨不接受 muted —— 它的 `enabled` 已经是喇叭，两套开关只会让人误判。
+ */
+describe('轨道静音（set_track.muted）', () => {
+  it('视觉轨可静音：回显 true，enabled 与名字都不动', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const r = await ok(h.cp.setTrack(track, { muted: true }));
+    expect(r.muted).toBe(true);
+    expect(r.enabled).toBe(true);
+    const t = h.store.track(track)!;
+    expect(t.kind === 'visual' && t.muted).toBe(true);
+    // 回到有声
+    const back = await ok(h.cp.setTrack(track, { muted: false }));
+    expect(back.muted).toBe(false);
+    expect('muted' in h.store.track(track)!).toBe(false);
+  });
+
+  it('音频轨拒绝 muted（两个开关描述同一件事会更糟）', async () => {
+    const h = harness();
+    const audio = h.store.addTrack('audio');
+    expect(await code(h.cp.setTrack(audio, { muted: true }))).toBe('invalid-argument');
+    // 音频轨关声音走 enabled，回显里 muted 明确是 null（这条轨没有这个概念）
+    const r = await ok(h.cp.setTrack(audio, { enabled: false }));
+    expect(r.enabled).toBe(false);
+    expect(r.muted).toBeNull();
+  });
+});
+
 describe('片段视觉字段（set_clip_props 补齐）', () => {
   /** 造一条音频片段：`add_clip` 不支持 audio（素材导入不在 Agent 职责内）。 */
   function audioClip(h: Harness, end = 4): string {
@@ -716,6 +746,44 @@ describe('片段视觉字段（set_clip_props 补齐）', () => {
 
     const audioId = audioClip(h, 2);
     expect((await ok(h.cp.setClipProps(audioId, { srcIn: 0.5 }))).applied.srcIn).toBe(0.5);
+  });
+
+  it('speed：只用于视频、保持片段长度；倒放只能走曲线', async () => {
+    const h = harness();
+    h.store.commit('登记视频', (p) => {
+      p.assets['v1'] = { id: 'v1', kind: 'video', name: 'v', durationSec: 60 };
+    });
+    const video = await ok(
+      h.cp.addClip(visualTrackId(h), { kind: 'video', assetId: 'v1', srcIn: 0, start: 1, end: 5 }),
+    );
+    const r = await ok(h.cp.setClipProps(video.clipId, { speed: 2 }));
+    expect(r.applied.speed).toBe(2);
+    // 保持长度：回执里带着（可能被素材不足缩短的）终点
+    expect(r.applied.end).toBe(5);
+
+    // 静态速度必须为正 —— 倒放走 set_curve 的 speed
+    expect(await code(h.cp.setClipProps(video.clipId, { speed: -1 }))).toBe('invalid-argument');
+
+    await ok(
+      h.cp.setCurve(video.clipId, 'speed', {
+        keys: [
+          { t: 0, v: 2, interp: 'linear' },
+          { t: 2, v: -1, interp: 'linear' },
+        ],
+      }),
+    );
+    const curved = h.store.findClip(video.clipId)!.clip;
+    expect(curved.curves.speed?.keys[1]?.v).toBe(-1);
+
+    // 写常速会清掉曲线（否则「改了速度但画面没变」——静默无效）
+    await ok(h.cp.setClipProps(video.clipId, { speed: 1 }));
+    expect(h.store.findClip(video.clipId)!.clip.curves.speed).toBeUndefined();
+  });
+
+  it('speed 只用于视频：纯色片段报 invalid-argument', async () => {
+    const h = harness();
+    const solid = await ok(h.cp.addClip(visualTrackId(h), { kind: 'solid', color: '#111111', start: 0, end: 1 }));
+    expect(await code(h.cp.setClipProps(solid.clipId, { speed: 2 }))).toBe('invalid-argument');
   });
 
   it('key 只用于图片 / 视频，且能局部改参数、能关掉', async () => {

@@ -25,6 +25,8 @@ type Track = VisualTrack | SoundTrack        // 命名避开 WebAudio 的 AudioT
 interface VisualTrack {
   kind: 'visual'
   id: string; name: string; enabled: boolean
+  /** v15 轨道静音：只关内嵌音轨，画面照常。缺省 = 有声（音频轨没有这个字段）。 */
+  muted?: boolean
   clips: (SourceClip | EffectClip)[]          // 同轨不重叠，按 start 排序
 }
 interface SoundTrack {
@@ -117,6 +119,12 @@ interface Section {
   （`exporters/mixdown.ts`）都消费 `AudioSpan[]`，不要再各自遍历一遍工程。
 - 视频音轨的解码在 `engine/video-audio.ts`（只解使用区间、按 assetId 缓存），
   不属于 core。
+- **三种「不发声」在 `audioSpans` 里收口，别在消费方各判一次**（v15 补齐第三种）：
+  `track.enabled === false`（整层不在）、`VisualTrack.muted === true`（画面留着、
+  内嵌音轨不要）、`clip.audio.muted`（单条片段静音）。只有视觉轨有 `muted`：
+  音频轨的 `enabled` 本来就是喇叭语义，两套开关描述同一件事会让导出只看其中一个。
+  `videoAudioAssetIds` 必须跟着同一个判据 —— 漏了它只是「多解一段没人听的音轨」，
+  但漏了 `audioSpans` 就是「静音了导出还有声」。
 
 ### 段落标记（`Project.sections`，v8）
 
@@ -242,12 +250,33 @@ placement pass（`src/engine/placement.frag.ts`）。
 | 拖片段中部 | 整体平移，`srcIn` 不变 |
 | 拖左边界往右（裁掉 1s） | 长度 −1s，**`srcIn` +1s** |
 | 拖左边界往左 | 只有在 `srcIn > 0` 时才能扩 —— 素材头部没有更多内容 |
-| 视频 | 按 `speed` 折算：2× 的片段裁 1s 时间轴 = 素材 2s |
+| 视频 | 按 `speed` 折算：2× 的片段裁 1s 时间轴 = 素材 2s；**有速度曲线时是 ∫v**（见下节），不是 `Δ × speed` |
 | `trim` 吃掉邻居的**头部** | 邻居的 `srcIn` 跟着进 |
 | `push` 挤开邻居 | 邻居两端一起动 ⇒ `srcIn` **不能**动 |
 
 **`splitClipAt` 是同一族的第三处落点**：右半段必须补 `srcIn += atRel × speed`，
 否则切开后后半段从头重放。
+
+## 视频变速（`core/speed.ts`，v14）
+
+**素材内时间 = `srcIn + ∫ speed`，不是 `srcIn + Δt × speed`。** 速度一旦能打关键帧，
+乘法就只在常速时成立。唯一实现是 `core/speed.ts`：取帧（`engine/video-source.ts`）、
+导出混流 / 预览播放（`core/audio-plan.ts` 的消费方）、trim / 切分全对着它。
+各处自己积一遍的形态是「画面按曲线走、声音按平均速度走」。
+
+- 曲线键是 **`curves.speed`**，基值 `source.speed`（常速）。有曲线时基值不参与求值
+  （与 `opacity` / `transform.*` 同构）。`source.speed` **必须为正** —— 负值只能走曲线。
+- **负速度 = 倒放**：媒体时间往回走，`srcIn` 是**起点处**的素材时间（不是最小值），
+  所以可用素材在它**之前**。`sourceRangeOf` 返回区间极值（含折返点），音频解码范围与
+  「素材够不够」都读它。
+- `integralCurve`（`core/curve.ts`）：linear / step / smooth 闭式，bezier 复合 Simpson，
+  与求值共用同一份 `bezierSegmentValue`。反向区间返回负值。
+- 「保持片段长度」是 `ProjectStore.setClipSpeed` 的规则：改速度不动 `start` / `end`，
+  只有加速后需要的素材超过「`srcIn` 到素材末尾」时把片段缩到用完为止。
+- **内嵌音轨在速度 ≤ 0 的区间静音**（预览与导出同一条规则）：WebAudio 的
+  `playbackRate` 必须为正。`AudioSpan.reversed` 就是这条判据，别在消费方各判一次。
+- `earliestTrimStart` 在曲线下用基值估算是**保守近似**（曲线非匀速时允许拖到略早于
+  素材头部，那里呈现首帧）。这是取舍，不是待修的 bug。
 
 ## 工程时长与素材长度无关
 

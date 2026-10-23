@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { EXPORT_CHANNELS, EXPORT_SAMPLE_RATE, mixdown, toAudioBuffer } from '../../src/exporters/mixdown';
-import { newId, type AudioClip, type Project, type SoundTrack } from '../../src/core/schema';
+import {
+  newId,
+  type AudioClip,
+  type Project,
+  type SoundTrack,
+  type SourceClip,
+  type VisualTrack,
+} from '../../src/core/schema';
 import { DEMO_BPM } from '../../src/audio/demo-audio';
 
 /**
@@ -224,6 +231,37 @@ describe('mixdown', () => {
   it('全静音的工程 peak 为 0（UI 靠它提示「只有画面」）', () => {
     const m = mixdown(projectWith([audioClip(0, 1)], 1), () => dc(0, 48000))!;
     expect(m.peak).toBe(0);
+  });
+
+  /**
+   * 轨道静音（v15）在导出侧的效果：**这条轨的内嵌音轨整段不进混流**。
+   * 预览与导出读同一张 `audioSpans`，所以这条断言同时是「预览也听不到」的保证。
+   */
+  it('视觉轨 muted → 内嵌音轨不进导出（没有其它声音时整条音轨都不带）', () => {
+    const video: SourceClip = {
+      id: newId(),
+      kind: 'source',
+      start: 0,
+      end: 1,
+      label: 'v',
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'video', assetId: 'V', srcIn: 0, speed: 1 },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'cover',
+    };
+    const track: VisualTrack = { id: newId(), kind: 'visual', name: 'V1', enabled: true, clips: [video] };
+    const p = projectWith([], 1);
+    p.assets = { V: { id: 'V', kind: 'video', name: 'v', hasAudio: true } };
+    p.tracks.push(track);
+
+    const heard = mixdown(p, () => dc(0.5, 48000))!;
+    expect(heard.peak).toBeCloseTo(0.5, 3);
+
+    track.muted = true;
+    expect(mixdown(p, () => dc(0.5, 48000))).toBeNull();
   });
 });
 

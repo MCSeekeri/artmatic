@@ -23,6 +23,8 @@
  */
 
 import type { AnyClip, OverlapBehavior } from './schema';
+import { speedIntegralOf } from './speed';
+import type { BeatGrid } from './time';
 
 /** 最短片段长度（秒）：拖动 / 裁切都不会留下比这更短的碎片。 */
 export const MIN_CLIP_LENGTH = 0.05;
@@ -367,6 +369,11 @@ export function setTrimIn(clip: AnyClip, srcIn: number): void {
  *
  * 用户点名的交互就是这条：拖片段中部 = 整体平移（不改 srcIn），
  * 拖左边界 = 改长度**并且**改 srcIn，与所有剪辑软件一致。
+ *
+ * ⚠️ 有**速度曲线**时这里用基值 `speed` 估算，是**保守近似**：曲线在前半段
+ * 比基值快时，允许拖到「比素材头部更靠左」的位置，那一小段会呈现首帧
+ * （不崩、不越界）。精确下界要解 `∫v ≤ srcIn` 的根，收益不值得 —— 拖动界面
+ * 每帧都要算一次。
  */
 export function earliestTrimStart(clip: AnyClip): number {
   const ti = trimInOf(clip);
@@ -387,8 +394,15 @@ export function earliestTrimStart(clip: AnyClip): number {
  *
  * 拖动过程中同一片段会被结算很多次，所以这里按**每次的增量**累加，
  * 而不是从某个基准重算 —— 增量的含义是「这一次又裁掉了多少」。
+ *
+ * `grid` 只服务速度曲线：有曲线时增量是速度的**积分**，不是 `Δ × speed`
+ * （见 `core/speed.ts`）。缺省 = 常速，与改造前逐字节相同。
  */
-export function applyTrimIn<C extends AnyClip>(oldLane: C[], newLane: C[]): C[] {
+export function applyTrimIn<C extends AnyClip>(
+  oldLane: C[],
+  newLane: C[],
+  grid?: BeatGrid,
+): C[] {
   const prev = new Map(oldLane.map((c) => [c.id, c]));
   return newLane.map((clip) => {
     const before = prev.get(clip.id);
@@ -397,7 +411,10 @@ export function applyTrimIn<C extends AnyClip>(oldLane: C[], newLane: C[]): C[] 
     if (clip.end !== before.end) return clip;
     const ti = trimInOf(clip);
     if (!ti) return clip;
-    const delta = clip.start - before.start;
-    return withTrimIn(clip, Math.max(0, ti.srcIn + delta * ti.speed));
+    const moved =
+      clip.kind === 'source' && clip.source.type === 'video'
+        ? speedIntegralOf(clip, before.start, clip.start, grid)
+        : (clip.start - before.start) * ti.speed;
+    return withTrimIn(clip, Math.max(0, ti.srcIn + moved));
   });
 }

@@ -244,6 +244,8 @@ export function buildSceneSnapshot(project: Project, t: number, detail: SceneDet
       kind: tk.kind,
       name: tk.name,
       enabled: tk.enabled,
+      // 视觉轨总是带 muted（缺省 false）：模型不用猜「没给」是什么意思。
+      ...(tk.kind === 'visual' ? { muted: tk.muted === true } : {}),
       z: z[i] ?? null,
       clips: tk.clips.map(clipIdView),
     }));
@@ -268,6 +270,7 @@ export function buildSceneSnapshot(project: Project, t: number, detail: SceneDet
       kind: tk.kind,
       name: tk.name,
       enabled: tk.enabled,
+      muted: tk.muted === true,
       z: z[i] ?? null,
       clips: tk.clips.map((c, j) => clipViewFull(c, flags[j] ?? false)),
     };

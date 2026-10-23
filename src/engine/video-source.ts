@@ -52,6 +52,8 @@ import { buildStack, transitionSources, walkOps } from './stack';
 import { videoMediaFor, type VideoMedia } from './media-assets';
 import { planEviction } from './video-budget';
 import { getLimits, mbToBytes } from '../core/capacity';
+import { mediaTimeOf as mediaTimeAt } from '../core/speed';
+import type { BeatGrid } from '../core/time';
 import type { Project, SourceClip } from '../core/schema';
 
 /**
@@ -231,13 +233,16 @@ export interface VideoSourceManager {
   dispose(): void;
 }
 
-/** 片段的本地时间 → 素材内时间（秒）。与播放器 / mixdown 的 srcIn 语义一致。 */
-export function mediaTimeOf(clip: SourceClip, t: number): number {
+/**
+ * 片段的本地时间 → 素材内时间（秒）。与播放器 / mixdown 的 srcIn 语义一致。
+ *
+ * 变速（尤其速度曲线 / 倒放）的全部数学在 `core/speed.ts` —— 这里只是取帧器
+ * 的入口。**`grid` 不能省**：速度曲线可以锚到拍（`Curve.beatAnchor`），没有
+ * 网格就退回「相对片段起点」的解释，画面会整体错位一段。
+ */
+export function mediaTimeOf(clip: SourceClip, t: number, grid?: BeatGrid): number {
   if (clip.source.type !== 'video') return 0;
-  // 本地时间钳到 ≥ 0：转场预热会把片段求值到它 start 之前，
-  // 那里应当呈现首帧而不是负时间（与 algo 的 Math.max(0, …) 同规则）。
-  const local = Math.max(0, t - clip.start);
-  return clip.source.srcIn + local * clip.source.speed;
+  return mediaTimeAt(clip, t, grid);
 }
 
 export interface VideoProbe {
@@ -358,6 +363,11 @@ export interface VideoSourceOpts {
    * 没有它的话：预览停在某一帧时解码完成了，画面也不会更新。
    */
   onFrameReady?: () => void;
+  /**
+   * 当前工程的拍网格。速度曲线可以锚到拍，没有网格就解不出锚定曲线的
+   * 折返点（见 `core/speed.ts::speedAt`）。缺省 = 没有锚定曲线。
+   */
+  getGrid?: () => BeatGrid;
 }
 
 export function createVideoSourceManager(
@@ -637,7 +647,7 @@ export function createVideoSourceManager(
         counters.misses++;
         return null;
       }
-      const ts = mediaTimeOf(clip, t);
+      const ts = mediaTimeOf(clip, t, opts.getGrid?.());
       const w = uploadWidthFor(entry, renderW);
       // 每次取用都刷新这个素材的「新旧」：全局淘汰全靠它判断谁可以先放掉。
       entry.used = ++clock;
@@ -659,7 +669,7 @@ export function createVideoSourceManager(
       // 首次调用时 chain 就是元数据初始化那一段，await 它就等于等就绪
       await entry.chain;
       if (!entry.ready || entry.failure) return;
-      const ts = mediaTimeOf(clip, t);
+      const ts = mediaTimeOf(clip, t, opts.getGrid?.());
       const w = uploadWidthFor(entry, renderW);
       if (entry.frames.has(ts, w)) return;
       try {

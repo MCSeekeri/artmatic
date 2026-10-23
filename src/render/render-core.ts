@@ -130,7 +130,11 @@ export function createRenderCore(
   const video = createVideoSourceManager(
     renderer.kit,
     (src, w, h) => sources.uploadImage(src, w, h),
-    { onFrameReady: opts.onAlgoReady },
+    {
+      onFrameReady: opts.onAlgoReady,
+      // 速度曲线可以锚到拍：取帧要把网格带下去（见 core/speed.ts）。
+      getGrid: () => opts.getProject().beatGrid,
+    },
   );
   sources.setVideoResolver((clip, t) => video.frameFor(clip, t, renderer.kit.w));
 

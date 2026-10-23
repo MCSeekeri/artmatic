@@ -27,6 +27,8 @@
     labelWidth?: number;
     tipText?: string;
     ariaLabel?: string;
+    /** 变灰且不可操作（滑杆与数字框一起）。语义与原生 `disabled` 一致。 */
+    disabled?: boolean;
     /** 数字框宽度。默认 64（检查器口径），lab 传 62。 */
     numberWidth?: number;
     sliderTestid?: string;
@@ -43,6 +45,7 @@
     labelWidth,
     tipText,
     ariaLabel = label,
+    disabled = false,
     numberWidth = 64,
     sliderTestid,
     numberTestid,
@@ -58,6 +61,7 @@
     {step}
     {value}
     {ariaLabel}
+    {disabled}
     testid={sliderTestid}
     oninput={oninput}
     onchange={onchange}
@@ -69,6 +73,7 @@
     {step}
     width={numberWidth}
     {ariaLabel}
+    {disabled}
     testid={numberTestid}
     oninput={oninput}
     onchange={commit}

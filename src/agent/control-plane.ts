@@ -319,8 +319,8 @@ export interface AgentControlPlane {
   moveTrack(from: number, to: number): Promise<ControlResult<{ moved: boolean }>>;
   setTrack(
     trackId: string,
-    patch: { enabled?: boolean; name?: string },
-  ): Promise<ControlResult<{ changed: boolean; enabled: boolean; name: string }>>;
+    patch: { enabled?: boolean; name?: string; muted?: boolean },
+  ): Promise<ControlResult<{ changed: boolean; enabled: boolean; name: string; muted: boolean | null }>>;
   addClip(trackId: string, input: SourceClipInput): Promise<ControlResult<{ clipId: string; start: number; end: number }>>;
   addEffectClip(trackId: string, input: EffectClipInput): Promise<ControlResult<{ clipId: string }>>;
   removeClip(clipId: string): Promise<ControlResult<{ removed: string }>>;
@@ -1098,9 +1098,27 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           store.renameTrack(trackId, String(patch.name));
           changed = changed || store.version !== v0;
         }
+        if (patch.muted !== undefined) {
+          /*
+           * 轨道静音只存在于视觉轨：音频轨的 `enabled` 本来就是「这条轨出不出声」，
+           * 再开一个 muted 就会出现两个开关描述同一件事（而导出只看其中一个）。
+           * 直接拒绝，别让模型以为它设上了。
+           */
+          if (store.track(trackId)?.kind !== 'visual') {
+            throw new ControlFailure('invalid-argument', tr('agent.track.muteAudioTrack', { id: trackId }));
+          }
+          const v0 = store.version;
+          store.setTrackMuted(trackId, Boolean(patch.muted));
+          changed = changed || store.version !== v0;
+        }
         // 回显落库后的值（空名字会被 store 拒掉，这里给的就是真值）。
         const after = store.track(trackId);
-        return { changed, enabled: after?.enabled ?? false, name: after?.name ?? '' };
+        return {
+          changed,
+          enabled: after?.enabled ?? false,
+          name: after?.name ?? '',
+          muted: after?.kind === 'visual' ? after.muted === true : null,
+        };
       });
     },
 
@@ -1260,6 +1278,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           'label', 'fadeSec', 'blend', 'opacity', 'transform', 'fit', 'affectDepth', 'boundClipId',
           // 音频淡变 / 源入点 / 视觉效果（v3 补齐）
           'fadeIn', 'fadeOut', 'srcIn', 'key', 'quad', 'crop',
+          // 视频变速（v14）。常速，保持片段长度；倒放走 set_curve 的 `speed`。
+          'speed',
         ];
         const bad = Object.keys(patch).filter((k) => !allowed.includes(k));
         if (bad.length > 0) {
@@ -1276,6 +1296,20 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         }
         if (patch.srcIn !== undefined && !(isAudio || srcType === 'video')) {
           throw new ControlFailure('invalid-argument', tr('agent.clip.srcInNotMedia'));
+        }
+        /*
+         * 变速只对视频有意义。**负值在这里拒绝**：`source.speed` 是常速旋钮，
+         * 倒放走关键帧曲线（`set_curve` 的 `speed`，可以取负）—— 两个入口都
+         * 能倒放的话，「片段头一帧该显示哪一帧」会有两套解释。
+         */
+        if (patch.speed !== undefined) {
+          const v = Number(patch.speed);
+          if (srcType !== 'video') {
+            throw new ControlFailure('invalid-argument', tr('agent.clip.speedNotVideo'));
+          }
+          if (!Number.isFinite(v) || v <= 0) {
+            throw new ControlFailure('invalid-argument', tr('agent.clip.speedPositive'));
+          }
         }
         if (patch.key !== undefined && !(srcType === 'image' || srcType === 'video')) {
           throw new ControlFailure('invalid-argument', tr('agent.clip.mediaOnly', { field: 'key' }));
@@ -1361,15 +1395,17 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         }
 
         const hasFade = patch.fadeIn !== undefined || patch.fadeOut !== undefined;
-        const hasOther = Object.keys(patch).some((k) => k !== 'fadeIn' && k !== 'fadeOut');
+        const hasSpeed = patch.speed !== undefined;
+        const hasOther = Object.keys(patch).some((k) => k !== 'fadeIn' && k !== 'fadeOut' && k !== 'speed');
         const before = store.version;
         /*
-         * 淡变走 store 的钳制（`fadeIn + fadeOut ≤ 片段长度`），其余字段走 updateClip。
-         * 没有外层事务时两笔提交必须自己包一层：一次工具调用只该留一条撤销记录。
+         * 淡变 / 变速走 store 的专属方法（前者钳制淡区、后者要拿素材时长决定
+         * 片段是否缩短），其余字段走 updateClip。没有外层事务时多笔提交必须
+         * 自己包一层：一次工具调用只该留一条撤销记录。
          * `beginTx` 会**覆盖**已有快照，所以只在没有事务时包（会话层通常在整轮
          * 动作外面已经开了一个）。
          */
-        const wrap = hasFade && hasOther && !store.inTx;
+        const wrap = (hasFade || hasSpeed) && hasOther && !store.inTx;
         if (wrap) store.beginTx();
         try {
           if (hasFade) {
@@ -1378,6 +1414,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
               ...(patch.fadeOut === undefined ? {} : { fadeOut: Number(patch.fadeOut) }),
             });
           }
+          if (hasSpeed) store.setClipSpeed(clipId, Number(patch.speed));
           if (hasOther) {
             store.updateClip(clipId, label('set_clip_props'), (c) => {
               if (patch.label !== undefined) c.label = String(patch.label);
@@ -1459,10 +1496,19 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             case 'crop':
               applied.crop = after.kind === 'source' ? (after.crop ?? null) : null;
               break;
+            case 'speed':
+              applied.speed =
+                after.kind === 'source' && after.source.type === 'video' ? after.source.speed : null;
+              break;
             default:
               applied[key] = (after as unknown as Record<string, unknown>)[key];
           }
         }
+        /*
+         * 变速的**副作用**也要回显：素材不够时片段会被缩短（`setClipSpeed`
+         * 的规则）。只回 `speed` 的话，agent 会以为长度没变，下一句就说错。
+         */
+        if (hasSpeed) applied.end = after.end;
         return { changed: store.version !== before, applied };
       });
     },
@@ -2113,6 +2159,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         .map((p) => p.key);
       return [...SOURCE_KEYS, ...algoKeys];
     }
+    // 视频变速：`speed` 与 opacity / transform.* 同构，**允许负值**（倒放）。
+    if (clip.source.type === 'video') return [...SOURCE_KEYS, 'speed'];
     return SOURCE_KEYS;
   }
 

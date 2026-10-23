@@ -182,8 +182,13 @@ export function sourceRangeFor(project: Project, assetId: string): { start: numb
   let end = -Infinity;
   for (const span of audioSpans(project)) {
     if (span.assetId !== assetId) continue;
-    const t0 = Math.max(0, span.srcIn);
-    const t1 = t0 + Math.max(0, span.end - span.start) * (span.speed || 1);
+    /*
+     * 区间来自 `audio-plan` 的 `srcRange`（`core/speed.ts::sourceRangeOf` 算的
+     * 积分极值）。变速时它可能**比首尾两点更宽**：负速会让媒体时间往回走，
+     * 只算 `srcIn + dur × speed` 会漏掉折返那一段，表现为倒放段没声音。
+     */
+    const t0 = Math.max(0, span.srcRange?.from ?? span.srcIn);
+    const t1 = span.srcRange?.to ?? t0 + Math.max(0, span.end - span.start) * (span.speed || 1);
     start = Math.min(start, t0);
     end = Math.max(end, t1);
   }

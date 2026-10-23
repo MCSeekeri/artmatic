@@ -18,6 +18,8 @@
  */
 
 import type { Curve } from './curve';
+import { SPEED_CURVE_KEY, minSpeedOf, sourceRangeOf } from './speed';
+import type { BeatGrid } from './time';
 import type { AudioClip, Project, SourceClip } from './schema';
 
 /** 一条要混进最终波形的事件。时间一律是工程秒。 */
@@ -27,13 +29,28 @@ export interface AudioSpan {
   assetId: string;
   start: number;
   end: number;
-  /** 源内偏移（秒）。 */
+  /** 源内偏移（秒）= 片段起点处的素材时间。 */
   srcIn: number;
   /**
-   * 播放速率。1 = 原速。视频的 `speed` 也会走这一条（变调是已知近似，
-   * 见 `exporters/mixdown.ts` 的注释）。
+   * **基值**播放速率（1 = 原速）。有 `speedCurve` 时它只是曲线缺省值的来源；
+   * 实际速度按曲线求值（变调是已知近似，见 `exporters/mixdown.ts` 的注释）。
    */
   speed: number;
+  /**
+   * 速度曲线（视频内嵌音轨）。缺省 = 常速 `speed`。
+   * 与 `clip.curves.speed` 是同一份数据，`clipStart` 用 `start`。
+   */
+  speedCurve?: Curve;
+  /**
+   * 片段区间内出现过 ≤ 0 的速度（倒放）。
+   *
+   * WebAudio 的 `playbackRate` 必须为正，**预览与导出统一把这类内嵌音轨静音**
+   * —— 两条路走同一条规则，才不会出现「预览没声、导出有倒放声」。
+   * 要倒放声音请用独立的音频素材（未来）。
+   */
+  reversed?: boolean;
+  /** 这条 span 会读到的素材区间（`from ≤ to`）。负速时 `from` 可能小于 `srcIn`。 */
+  srcRange?: { from: number; to: number };
   /** 静态增益（dB）。0 = 原音量。 */
   gainDb: number;
   /** 头尾各淡多少秒（剪辑点防爆音，`ClipBase.fadeSec`）。 */
@@ -68,11 +85,18 @@ export function spanFromAudioClip(clip: AudioClip): AudioSpan {
  * 视频片段 → span。返回 null = 这条片段这一帧不出声（非 video / 已静音 / 素材
  * 明确没有音轨）。`asset` 可以缺失（工程里的悬空 assetId）：那种情况下仍给
  * span，播放侧解析不到 buffer 就跳过 —— 与音频片段缺素材同一条路。
+ *
+ * `grid` 只为速度曲线服务（它可以锚到拍）；缺省时锚定曲线会按非锚定解释。
  */
-export function spanFromVideoClip(clip: SourceClip, hasAudio: boolean | undefined): AudioSpan | null {
+export function spanFromVideoClip(
+  clip: SourceClip,
+  hasAudio: boolean | undefined,
+  grid?: BeatGrid,
+): AudioSpan | null {
   if (clip.source.type !== 'video' || !clip.source.assetId) return null;
   if (clip.audio?.muted) return null;
   if (hasAudio === false) return null;
+  const curve = clip.curves[SPEED_CURVE_KEY];
   return {
     id: `${clip.id}:embedded`,
     assetId: clip.source.assetId,
@@ -80,6 +104,9 @@ export function spanFromVideoClip(clip: SourceClip, hasAudio: boolean | undefine
     end: clip.end,
     srcIn: clip.source.srcIn ?? 0,
     speed: clip.source.speed ?? 1,
+    ...(curve ? { speedCurve: curve } : {}),
+    reversed: minSpeedOf(clip, grid) <= 0,
+    srcRange: sourceRangeOf(clip, grid),
     gainDb: clip.audio?.gainDb ?? 0,
     fadeSec: clip.fadeSec,
     fadeIn: clip.audio?.fadeIn ?? 0,
@@ -89,7 +116,13 @@ export function spanFromVideoClip(clip: SourceClip, hasAudio: boolean | undefine
   };
 }
 
-/** 工程 → 全部声音事件（按轨道顺序；混流本身与顺序无关）。 */
+/**
+ * 工程 → 全部声音事件（按轨道顺序；混流本身与顺序无关）。
+ *
+ * 两种「不发声」在这里收口，**不要**让消费方各判一次：
+ *   - `track.enabled === false`：这一层整个不在画面里，声音也不在；
+ *   - `track.muted === true`（仅视觉轨，v15）：画面留着、内嵌音轨不要。
+ */
 export function audioSpans(project: Project): AudioSpan[] {
   const spans: AudioSpan[] = [];
   for (const track of project.tracks) {
@@ -98,9 +131,10 @@ export function audioSpans(project: Project): AudioSpan[] {
       for (const clip of track.clips) spans.push(spanFromAudioClip(clip));
       continue;
     }
+    if (track.muted) continue;
     for (const clip of track.clips) {
       if (clip.kind !== 'source' || clip.source.type !== 'video') continue;
-      const span = spanFromVideoClip(clip, project.assets[clip.source.assetId]?.hasAudio);
+      const span = spanFromVideoClip(clip, project.assets[clip.source.assetId]?.hasAudio, project.beatGrid);
       if (span) spans.push(span);
     }
   }
@@ -116,7 +150,7 @@ export function audioSpans(project: Project): AudioSpan[] {
 export function videoAudioAssetIds(project: Project): string[] {
   const ids = new Set<string>();
   for (const track of project.tracks) {
-    if (!track.enabled || track.kind !== 'visual') continue;
+    if (!track.enabled || track.kind !== 'visual' || track.muted) continue;
     for (const clip of track.clips) {
       if (clip.kind !== 'source' || clip.source.type !== 'video') continue;
       if (spanFromVideoClip(clip, project.assets[clip.source.assetId]?.hasAudio)) ids.add(clip.source.assetId);

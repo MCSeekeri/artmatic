@@ -353,11 +353,15 @@ export const TOOLS = [
   {
     name: 'artmatic_set_track',
     kind: 'write',
-    description: '改轨道的开关或名字。**关掉一条轨 = 它的画面整条不进合成**，做 A/B 时很有用。',
+    description:
+      '改轨道的开关或名字。**关掉一条轨 = 它的画面整条不进合成**，做 A/B 时很有用。' +
+      'muted（仅视觉轨）= 只关这条轨上视频片段的内嵌音轨，画面照常，导出同样生效；' +
+      '音频轨没有 muted（它的 enabled 就是喇叭），传了会报 invalid-argument。',
     args: {
       trackId: ID('轨道'),
       enabled: F.boolean(),
       name: F.string(),
+      muted: F.boolean({ description: '仅视觉轨：只静音内嵌音轨，不影响画面。' }),
     },
   },
   {
@@ -449,7 +453,12 @@ export const TOOLS = [
       '改片段属性。可写：label / fadeSec / blend / opacity / transform / fit / affectDepth / boundClipId /' +
       ' fadeIn + fadeOut（仅音频，秒，fadeIn+fadeOut ≤ 片段长度）/ srcIn（音频 / 视频的源内偏移）/' +
       ' crop（{left,top,right,bottom} 0..1，只收可见窗口不缩放）/ quad（四角 [x,y]，null 关）/' +
-      ' key（{color,tolerance,softness,spill} 抠像，null 关）。null = 关掉那个效果。',
+      ' key（{color,tolerance,softness,spill} 抠像，null 关）/' +
+      ' speed（仅视频，正数倍速 0.05..100）。' +
+      'speed **保持片段长度**（同一段时间轴吃掉更多 / 更少素材），只有素材不够时才缩短' +
+      '（回执的 applied.end 是缩短后的终点）。它会清掉 speed 关键帧曲线 ——' +
+      '要变速动画或倒放（负值）请用 artmatic_set_curve 的 param:"speed"。' +
+      'null = 关掉那个效果。',
     args: {
       clipId: ID('片段'),
       patch: F.any({ required: true, description: '见 description 的白名单字段。' }),
@@ -487,7 +496,9 @@ export const TOOLS = [
     kind: 'write',
     description:
       '设 / 删一条关键帧曲线。param 的合法取值与片段类型有关，' +
-      '（源：opacity / transform.* / algo 的 range 参数；特效：`<instanceId>.<参数>`；音频：gain）。curve 传 null 即删除。',
+      '（源：opacity / transform.* / algo 的 range 参数；视频：speed（倍速，**负值 = 倒放**）；' +
+      '特效：`<instanceId>.<参数>`；音频：gain）。curve 传 null 即删除。' +
+      'speed 曲线下片段长度不变：负速区间把素材往回倒，内嵌音轨在速度 ≤ 0 时静音。',
     args: {
       clipId: ID('片段'),
       param: F.string({ required: true }),

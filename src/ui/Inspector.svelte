@@ -150,16 +150,27 @@
     });
   }
 
-  function effectParamProps(clip: AnyClip, inst: EffectInstance, p: RangeParam) {
-    const curveKey = `${inst.instanceId}.${p.key}`;
+  /**
+   * `KeyableField` 的一整套回调（曲线求值 / 打点 / 删点 / 锚拍 / 清曲线）。
+   *
+   * 抽出来是因为视频变速与特效参数用的是**同一套键约定**（`clip.curves[key]`）。
+   * 各写一份的形态是「特效的关键帧能开曲线编辑器、视频速度的不行」这种
+   * 静默的不一致。
+   */
+  function curveProps(
+    clip: AnyClip,
+    curveKey: string,
+    base: number,
+    onBase: (v: number) => void,
+  ) {
     return {
-      base: Number(inst.values[p.key] ?? p.defaultValue),
+      base,
       curve: clip.curves[curveKey],
       clipStart: clip.start,
       /* 编辑信号（跨剪切点两帧预览的自动模式用）。见 KeyableField 与 app-state。 */
       clipId: clip.id,
       curveKey,
-      onBase: (v: number) => setEffectParam(clip, inst, p.key, v),
+      onBase,
       onKey: (v: number, anchor: { beat: number } | null) =>
         upd(clip, tr('insp.keyframe'), (c) => upsertCurveKey(c, curveKey, v, appState.playT, anchor, appState.project.beatGrid)),
       onRemoveKey: (i: number) =>
@@ -177,6 +188,25 @@
           delete c.curves[curveKey];
         }),
     };
+  }
+
+  function effectParamProps(clip: AnyClip, inst: EffectInstance, p: RangeParam) {
+    return curveProps(clip, `${inst.instanceId}.${p.key}`, Number(inst.values[p.key] ?? p.defaultValue), (v) =>
+      setEffectParam(clip, inst, p.key, v),
+    );
+  }
+
+  /**
+   * 视频变速（`core/speed.ts`）。
+   *
+   * **基值走 store**：只有 store 知道素材时长，能在「加速后素材不够」时把片段
+   * 缩短（用户点名的那条规则）。曲线键 `speed` 与其它参数同构，允许负值 ——
+   * 负速 = 倒放，媒体时间往回走。
+   */
+  function videoSpeedProps(clip: SourceClip) {
+    return curveProps(clip, 'speed', clip.source.type === 'video' ? clip.source.speed : 1, (v) =>
+      appState.store.setClipSpeed(clip.id, v),
+    );
   }
 
   /**
@@ -611,12 +641,31 @@
         <div class="section-head">
           <span class="section-title">{tr('insp.audio')}</span>
         </div>
+        <!--
+          轨道已被静音时先说明一句：这一层怎么调都听不见。没有这句的话，
+          「片段没勾静音却还是没声」会被当成片段静音的 bug（而它其实是轨道的开关）。
+        -->
+        {#if found && found.track.kind === 'visual' && found.track.muted}
+          <p class="note" data-testid="video-track-muted">{tr('insp.audioTrackMuted')}</p>
+        {/if}
+        <!--
+          静音（v15）：只关这一条的内嵌音轨，画面照常（与轨道静音同一语义）。
+          关掉之后音量 / 淡变**变灰但仍显示** —— 藏起来会让人以为设置丢了，
+          而保留值才能在取消静音时原样恢复。
+        -->
+        <Checkbox
+          checked={!!clip.audio?.muted}
+          label={tr('insp.audioMuted')}
+          testid="insp-video-muted"
+          onchange={(v) => appState.store.setVideoAudioMuted(clip.id, v)}
+        />
         <NumericField
           label={tr('insp.audioGain')}
           min={-60}
           max={12}
           step={0.5}
           value={clip.audio?.gainDb ?? 0}
+          disabled={!!clip.audio?.muted}
           sliderTestid="insp-video-gain"
           numberTestid="insp-video-gain-num"
           oninput={(v) => appState.store.setClipGainDb(clip.id, v)}
@@ -628,6 +677,7 @@
             step={0.05}
             width={64}
             suffix="s"
+            disabled={!!clip.audio?.muted}
             testid="insp-video-fade-in"
             onchange={(v) => appState.store.setClipAudioFade(clip.id, 'in', v)}
           />
@@ -638,6 +688,7 @@
             step={0.05}
             width={64}
             suffix="s"
+            disabled={!!clip.audio?.muted}
             testid="insp-video-fade-out"
             onchange={(v) => appState.store.setClipAudioFade(clip.id, 'out', v)}
           />
@@ -683,6 +734,22 @@
             })}
         />
       </Field>
+
+      {#if clip.source.type === 'video'}
+        <!--
+          变速：基值 = 常速（正数），曲线可以取负 = 倒放（见 core/speed.ts）。
+          基值走 store —— 只有它拿得到素材时长，能在「加速后素材不够」时缩短片段。
+          有曲线时滑杆改的是播放头处那个关键帧（KeyableField 的契约）。
+        -->
+        {@const speedProps = videoSpeedProps(clip)}
+        <KeyableField
+          label={tr('insp.speed')}
+          min={clip.curves.speed ? -8 : 0.05}
+          max={8}
+          step={0.05}
+          {...speedProps}
+        />
+      {/if}
 
       <KeyableField label={tr('insp.opacity')} min={0} max={1} step={0.01} {...keyableProps(clip, 'opacity')} />
       <KeyableField label={tr('insp.posX')} min={0} max={1} step={0.005} {...keyableProps(clip, 'transform.x')} />

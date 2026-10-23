@@ -18,6 +18,7 @@
 import type { Project } from '../core/schema';
 import { audioClipGainAt } from '../core/audio-envelope';
 import { audioSpans } from '../core/audio-plan';
+import { evalCurve, integralCurve } from '../core/curve';
 
 /** 导出音频的统一采样率。48 kHz 是影视与 AAC 的通用值，浏览器也都支持。 */
 export const EXPORT_SAMPLE_RATE = 48000;
@@ -61,6 +62,12 @@ export function mixdown(
   for (const span of spans) {
     const buf = resolve(span.assetId);
     if (!buf) continue; // 素材缺失 / 视频音轨没解出来：跳过，不中断整条混流
+    /*
+     * 倒放区间（速度 ≤ 0）：静音。WebAudio 的 `playbackRate` 必须为正，而
+     * 预览与导出**必须同一条规则**（否则「预览没声、导出有倒放声」）。
+     * 见 `core/audio-plan.ts` 的 `reversed`。
+     */
+    if (span.reversed) continue;
     const clipDur = span.end - span.start;
     if (clipDur <= 0) continue;
 
@@ -70,24 +77,47 @@ export function mixdown(
     const srcRate = buf.sampleRate;
     const speed = Math.max(0.01, span.speed || 1);
     const channels = Math.max(1, buf.numberOfChannels);
+    /*
+     * 变速（速度曲线）的源位置 = `srcIn + ∫速度`（`core/speed.ts`）。
+     *
+     * 每 256 个样本用解析积分重新对齐一次，块内按块首速度推进：误差 < 0.1 ms，
+     * 而且是**块下标的函数**（不是「上次算到哪」的跨帧状态），所以同一份工程
+     * 导出两次逐样本相同。
+     */
+    const curve = span.speedCurve;
+    const block = 256;
+    let mediaSec = span.srcIn;
+    let blockSpeed = speed;
 
     for (let i = 0; i < len; i++) {
       const dst = startSample + i;
-      if (dst < 0 || dst >= total) continue; // 超出工程时长的部分不写
+      const tAbs = span.start + i / sampleRate;
 
-      /*
-       * 源位置：`srcIn + 片内秒数 × speed`，再乘**素材自己的采样率**。
-       *
-       * 这一处曾经写死用 `EXPORT_SAMPLE_RATE` 索引源 buffer，而 `decodeAudio`
-       * 产出的是 44.1 kHz 的 AudioBuffer —— 导出会比预览快 8.8%。视频音轨
-       * 还可能来自任意采样率，所以统一按 buf.sampleRate 映射、线性插值。
-       */
-      const srcPos = (span.srcIn + (i / sampleRate) * speed) * srcRate;
+      let srcPos: number;
+      if (curve) {
+        if (i % block === 0) {
+          mediaSec =
+            span.srcIn +
+            integralCurve(curve, span.start, tAbs, { grid: project.beatGrid, clipStart: span.start });
+          blockSpeed = evalCurve(curve, tAbs, { grid: project.beatGrid, clipStart: span.start });
+        }
+        srcPos = mediaSec * srcRate;
+        mediaSec += blockSpeed / sampleRate;
+      } else {
+        /*
+         * 常速：`srcIn + 片内秒数 × speed`，再乘**素材自己的采样率**。
+         *
+         * 这一处曾经写死用 `EXPORT_SAMPLE_RATE` 索引源 buffer，而 `decodeAudio`
+         * 产出的是 44.1 kHz 的 AudioBuffer —— 导出会比预览快 8.8%。视频音轨
+         * 还可能来自任意采样率，所以统一按 buf.sampleRate 映射、线性插值。
+         */
+        srcPos = (span.srcIn + (i / sampleRate) * speed) * srcRate;
+      }
       const i0 = Math.floor(srcPos);
+      if (dst < 0 || dst >= total) continue; // 超出工程时长的部分不写
       if (i0 < 0 || i0 >= buf.length) continue;
       const frac = srcPos - i0;
 
-      const tAbs = span.start + i / sampleRate;
       // 曲线 × 淡变（fadeSec + fadeIn/fadeOut）× 静态增益，只有一份实现。
       const g = audioClipGainAt(span, project.beatGrid, tAbs);
       if (g === 0) continue;

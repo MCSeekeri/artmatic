@@ -28,7 +28,7 @@ import type { MessageKey } from '../i18n/locales';
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 15;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -141,6 +141,14 @@ export interface VisualTrack extends TrackBase {
   kind: 'visual';
   /** 同轨不重叠，按 start 排序。 */
   clips: (SourceClip | EffectClip)[];
+  /**
+   * **轨道静音**（v15）：只关这一条轨上视频片段的内嵌音轨，画面照常。
+   *
+   * 与 `enabled` 刻意分开：`enabled` 是「这一层不出现在画面里」，它已经连带
+   * 关掉声音；静音是「画面留着、声音不要」—— 审片时最常见的操作。缺省 / false
+   * = 有声。音频轨不用这个字段（它的 `enabled` 本来就是喇叭语义）。
+   */
+  muted?: boolean;
 }
 
 export interface SoundTrack extends TrackBase {
@@ -566,6 +574,26 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 这些字段再保存，用户存好的预剪辑范围与入场转场就没了（静默数据丢失）。
    */
   12: (p) => ({ ...p, schemaVersion: 13 }),
+
+  /**
+   * v13 → v14：视频片段支持**变速关键帧**（`clip.curves.speed`，值可负 = 倒放）。
+   *
+   * **恒等迁移**：曲线本来就存在于 `curves` 里（v13 及更早已有这个容器），
+   * 没有任何要改写的东西。抬版本号的唯一目的仍然是让「新版存出的工程被旧版
+   * 打开」走 `versionTooNew` 明确报错 —— 旧版会静默忽略 `curves.speed` 再保存，
+   * 用户排好的变速与倒放整段消失（静默数据丢失，最难查的一类）。
+   */
+  13: (p) => ({ ...p, schemaVersion: 14 }),
+
+  /**
+   * v14 → v15：`VisualTrack` 新增可选的 `muted`（轨道静音，只关内嵌音轨）。
+   *
+   * **恒等迁移**：字段可选（缺省 = 有声），v14 的工程读进来天然合法。抬版本号
+   * 的唯一目的仍然是让「新版存出的工程被旧版打开」走 `versionTooNew` 明确报错
+   * —— 旧版会静默忽略 `muted` 再保存，用户静音掉的轨道在导出里又出声了
+   * （静默数据丢失，且只有听得出）。
+   */
+  14: (p) => ({ ...p, schemaVersion: 15 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -654,11 +682,18 @@ export function validateProject(raw: unknown): Project {
 
   // 循环变量刻意叫 tk 而不是 tr：`tr` 是翻译函数的专名（i18n/index.svelte.ts），
   // 同名会把下面那两次取词整成「tr is not a function」。
-  for (const tk of p.tracks as { kind: string; clips: unknown }[]) {
+  for (const tk of p.tracks as { kind: string; clips: unknown; muted?: unknown }[]) {
     if (tk.kind !== 'visual' && tk.kind !== 'audio') {
       throw new SchemaError(tr('err.schema.unknownTrackKind', { kind: String(tk.kind) }));
     }
     if (!Array.isArray(tk.clips)) throw new SchemaError(tr('err.schema.trackMissingClips'));
+    /*
+     * 轨道静音（v15）：只认 `true`。手改 JSON 写出 `"yes"` / `1` 时删字段回到
+     * 「有声」—— 与「静音」相比，「意外没声」更容易被当成 bug 报上来，而
+     * 「意外有声」多半就被当成自己忘了。音频轨不认这个字段（它的 `enabled`
+     * 已经是喇叭语义），留着会让两个开关描述同一件事。
+     */
+    if (tk.muted !== undefined && (tk.kind !== 'visual' || tk.muted !== true)) delete tk.muted;
     for (const c of tk.clips as AnyClip[]) validateClip(c, tk.kind);
   }
   /*
@@ -862,6 +897,14 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
        */
       const src2 = (c as SourceClip).source;
       if (src2?.type === 'video') {
+        /*
+         * 变速（v14）：`source.speed` 必须是**正**有限数 —— 倒放走
+         * `curves.speed`（关键帧可以取负）。坏值归 1，而不是让它一路穿透到
+         * `core/speed.ts`：NaN 会让这一层的素材时间全是 NaN，画面整块消失
+         * 且没有任何报错。
+         */
+        const sp = Number(src2.speed);
+        src2.speed = Number.isFinite(sp) && sp > 0 ? Math.min(100, Math.max(0.05, sp)) : 1;
         const va = (c as SourceClip).audio;
         if (va !== undefined) {
           if (!va || typeof va !== 'object' || Array.isArray(va)) {

@@ -129,6 +129,35 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - `detail:'full'` 的片段读回包含 `transitionIn` / `transitionOut` / `audio` /
   `linkedAudioId` / `gainDb` / `linkedVideoId` / `lockedTo`，写回端必须能原样吃回。
 
+## v14：视频变速（两个入口，别混）
+
+| 想做什么 | 走哪 |
+|---|---|
+| 整体快放 / 慢放（保持片段长度） | `set_clip_props({ speed })`，正数 0.05..100 |
+| 变速动画 / **倒放** | `set_curve(clipId, "speed", …)`，负值 = 倒放 |
+
+- 写常速会**清掉 `speed` 曲线**（曲线是求值的唯一真源，留着就是「改了值但画面没变」）。
+- 素材不够时片段会被缩短（用户点名的「除非因速度过快导致可用时长不足」），所以
+  回执里多一个 `applied.end` —— 只回 `speed` 会让模型下一句说错长度。
+- `getCapabilities().features.videoSpeed` 是模型唯一能看到「保持长度 / 负值只走曲线」
+  的地方；工具描述别只写区间。
+- 内嵌音轨在速度 ≤ 0 时**静音**（预览与导出同规则）。不要在工具描述里承诺「倒放有声」。
+
+## v15：静音（片段 + 轨道）
+
+| 想做什么 | 走哪 |
+|---|---|
+| 单条视频的嵌入音轨静音 | `set_clip_audio({ muted: true })` |
+| 整条视觉轨的声音静音（画面保留） | `set_track({ muted: true })` |
+
+- 两种静音都只关**声音**，画面照常，导出同样生效（预览 / 导出 / 预热表读同一张
+  `audioSpans`）。
+- 音频轨拒绝 `set_track.muted`（`invalid-argument`）：它的 `enabled` 就是喇叭。
+  「整条音频轨闭嘴」用 `set_track({ enabled: false })`。
+- 读回：`get_scene().tracks[].muted` 只在视觉轨上出现（**总是**给布尔，模型不用猜
+  缺省）；片段侧读 `clip.audio.muted`。`set_track` 的回执对音频轨给 `muted: null`
+  —— null 就是「这条轨没有这个概念」，不是 false。
+
 ## 能力清单（`getCapabilities`）
 
 - `detail:'ids'` 只给 id；`params` 给完整参数表（键 / 类型 / 区间 / 选项 / 默认值 /

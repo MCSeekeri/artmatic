@@ -123,6 +123,38 @@ describe('audioSpans：工程级筛选', () => {
   });
 });
 
+/**
+ * 轨道静音（v15）。**只关视频片段的内嵌音轨**，画面与独立音频都不受影响
+ * —— 这是它与 `enabled` 的分水岭，也是「审片时留画面去声音」的实现。
+ */
+describe('轨道静音', () => {
+  it('视觉轨 muted → 内嵌音轨不进表，独立音频照旧', () => {
+    const p = projectWith([videoClip(0, 2)], [audioClip(0, 1)]);
+    (p.tracks[0] as VisualTrack).muted = true;
+    expect(audioSpans(p).map((s) => s.assetId)).toEqual(['audio1']);
+  });
+
+  it('静音轨的素材不进预热表（不必解码音轨）', () => {
+    const p = projectWith([videoClip(0, 2)], []);
+    expect(videoAudioAssetIds(p)).toEqual(['video1']);
+    (p.tracks[0] as VisualTrack).muted = true;
+    expect(videoAudioAssetIds(p)).toEqual([]);
+  });
+
+  it('muted = false 与缺省等价', () => {
+    const p = projectWith([videoClip(0, 2)], []);
+    (p.tracks[0] as VisualTrack).muted = false;
+    expect(audioSpans(p)).toHaveLength(1);
+  });
+
+  it('轨道静音是**整条轨**：轨上两条视频片段一起不出声', () => {
+    const p = projectWith([videoClip(0, 1), videoClip(1, 2)], []);
+    expect(audioSpans(p)).toHaveLength(2);
+    (p.tracks[0] as VisualTrack).muted = true;
+    expect(audioSpans(p)).toEqual([]);
+  });
+});
+
 describe('gainDb 进唯一增益表达式', () => {
   it('-60 dB = 静音，0 dB = 1', () => {
     expect(dbToLinear(-60)).toBe(0);

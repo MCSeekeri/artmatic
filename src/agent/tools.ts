@@ -253,11 +253,16 @@ export const AGENT_TOOLS: ToolSpec[] = [
   },
   {
     name: 'set_track',
-    description: 'Enable/disable or rename a track. A disabled track contributes nothing to the frame.',
+    description:
+      'Enable/disable or rename a track. A disabled track contributes nothing to the frame.\n' +
+      'muted (visual tracks only) silences the EMBEDDED AUDIO of the video clips on that track ' +
+      'while the picture stays — it also applies to exports. Audio tracks reject muted: their ' +
+      '`enabled` already is the sound switch.',
     params: [
       req('trackId', 'string', 'Track id.'),
       p('enabled', 'boolean', 'Visibility.'),
       p('name', 'string', 'New name.'),
+      p('muted', 'boolean', 'Visual tracks only: mute the embedded audio, keep the picture.'),
     ],
     writes: true,
   },
@@ -372,6 +377,11 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'null removes it; a degenerate (zero-area) quad is rejected because it renders as nothing.\n' +
       '  key — image / video clips: chroma key { color: "#rrggbb", tolerance?, softness?, spill? } ' +
       '(0..1 each; omitted fields keep their current value). null removes it.\n' +
+      '  speed — video clips only, positive multiplier (1 = realtime, 2 = double speed, 0.05..100). ' +
+      'It KEEPS the clip length: the same timeline span now consumes more (or less) source; the clip ' +
+      'only shrinks when the source runs out (`applied.end` tells you the resulting end time). ' +
+      'Setting it clears any `speed` keyframe curve — use set_curve for animated / reverse playback ' +
+      '(negative values there mean REVERSE).\n' +
       'boundClipId (effect clips only) rebinds the chain to one source clip — null unbinds; it ' +
       'replaces affectDepth (they are mutually exclusive). ' +
       'Returns `applied` with the stored value of each field you sent (null = the effect is off).',
@@ -436,6 +446,10 @@ export const AGENT_TOOLS: ToolSpec[] = [
       '  - "<defId>.<key>" when only ONE instance of that effect exists in the chain,\n' +
       '    e.g. "blur.amount" (readable form; ambiguous defId returns both candidates)\n' +
       '  - "<key>" alone for a source param (opacity / transform.x / generator keys)\n' +
+      '  - "speed" for a VIDEO clip: playback speed multiplier, one curve unit = "x". Negative\n' +
+      '    values play the source BACKWARDS (reverse); the clip keeps its timeline span, so a\n' +
+      '    negative run rewinds the source and may run past its head (frames clamp to the first\n' +
+      '    one). Embedded audio is silent whenever the speed reaches <= 0.\n' +
       '  - "gain" for an audio clip\n' +
       'Not curvable => the error detail.allowed lists every legal key for that clip.',
     params: [

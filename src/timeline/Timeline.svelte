@@ -944,6 +944,17 @@
     ];
   }
 
+  /**
+   * 视觉轨上是否有视频片段 —— 只有它们带声音，喇叭按钮才有意义。
+   * 纯色 / 算法 / 图片 / 排版轨上放一个永远不生效的静音键只会占位。
+   */
+  function trackHasVideo(track: Track): boolean {
+    return (
+      track.kind === 'visual' &&
+      track.clips.some((c) => c.kind === 'source' && c.source.type === 'video')
+    );
+  }
+
   function trackMenuItems(track: Track, at?: number, prefix = 'add-'): MenuItem[] {
     return [
       ...clipItems(track, at, prefix),
@@ -1327,6 +1338,22 @@
               role="presentation"
               ondblclick={() => beginRename(track.id)}
             >{track.name}</span>
+          {/if}
+
+          {#if track.kind === 'visual' && trackHasVideo(track)}
+            <!--
+              轨道静音（v15）：只关这条轨的内嵌音轨，画面照常。
+              与左边的眼睛刻意分开 —— 「画面留着、声音不要」是审片时最常见的操作，
+              用眼睛关会让整层消失，改完还得再点回来。
+            -->
+            <IconButton
+              icon={track.muted ? 'volume-x' : 'volume-2'}
+              label={track.muted ? tr('tl.unmuteTrack') : tr('tl.muteTrack')}
+              size="sm"
+              active={!track.muted}
+              testid="track-muted"
+              onclick={() => appState.store.toggleTrackMuted(track.id)}
+            />
           {/if}
 
           <IconButton

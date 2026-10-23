@@ -17,6 +17,9 @@ export const timeline = {
   'tl.unmuteAudioTrack': '取消静音',
   'tl.hideTrack': '隐藏这条轨道',
   'tl.showTrack': '显示这条轨道',
+  /* 视觉轨的静音（v15）：只关视频片段的内嵌音轨，画面照常。 */
+  'tl.muteTrack': '静音这条轨道的声音',
+  'tl.unmuteTrack': '恢复这条轨道的声音',
 
   /* ------------------------------------------------ 菜单：新建片段 / 轨道操作 */
   'tl.addSolid': '纯色片段',

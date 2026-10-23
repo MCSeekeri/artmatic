@@ -545,3 +545,33 @@ describe('画面裁剪（SourceClip.crop，v10）', () => {
     expect(clip.crop).toEqual(crop);
   });
 });
+
+/**
+ * 轨道静音（v15）。判据只有两条：
+ *   1. v14 的工程升上来，`muted`（手改 JSON 带进去的）原样保留 —— 这是恒等迁移；
+ *   2. 坏值 / 音频轨上的 muted 被删 —— 「意外没声」比「意外有声」更容易被报成 bug，
+ *      但它同样是「数据说了一件事、程序做了另一件」。
+ */
+describe('schema v15：轨道静音', () => {
+  it('v14 → v15 恒等迁移：muted 原样保留', () => {
+    const p = defaultProject('mute');
+    p.tracks.push({ kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [], muted: true });
+    p.schemaVersion = 14;
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    expect((out.tracks[0] as { muted?: boolean }).muted).toBe(true);
+  });
+
+  it('只认 true；音频轨上的 muted 被删', () => {
+    const p = defaultProject('mute-bad');
+    p.tracks.push({ kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [] });
+    const visual = p.tracks[0] as unknown as Record<string, unknown>;
+    visual.muted = 'yes';
+    p.tracks.push({
+      kind: 'audio', id: newId(), name: 'A1', enabled: true, bus: 'master', clips: [], muted: true,
+    } as never);
+    const out = validateProject(JSON.parse(JSON.stringify(p)));
+    expect((out.tracks[0] as { muted?: boolean }).muted).toBeUndefined();
+    expect((out.tracks[1] as { muted?: boolean }).muted).toBeUndefined();
+  });
+});

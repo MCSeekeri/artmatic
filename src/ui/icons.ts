@@ -148,6 +148,8 @@ import Ungroup from '@lucide/svelte/icons/ungroup';
 import Upload from '@lucide/svelte/icons/upload';
 import Puzzle from '@lucide/svelte/icons/puzzle';
 import Video from '@lucide/svelte/icons/video';
+import Volume2 from '@lucide/svelte/icons/volume-2';
+import VolumeX from '@lucide/svelte/icons/volume-x';
 import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
 import Waypoints from '@lucide/svelte/icons/waypoints';
 import X from '@lucide/svelte/icons/x';
@@ -297,6 +299,8 @@ export const ICONS = {
   ungroup: Ungroup,
   upload: Upload,
   video: Video,
+  'volume-2': Volume2,
+  'volume-x': VolumeX,
   'wand-sparkles': WandSparkles,
   waypoints: Waypoints,
   puzzle: Puzzle,

@@ -13,6 +13,7 @@
 
 import { sampleAudioEnvelope } from '../core/audio-envelope';
 import { audioSpans } from '../core/audio-plan';
+import { evalCurve, integralCurve } from '../core/curve';
 import type { Project } from '../core/schema';
 
 export class AudioPlayer {
@@ -74,6 +75,11 @@ export class AudioPlayer {
       const buffer = this.buffers.get(span.assetId);
       if (!buffer) continue;
       if (fromT >= span.end) continue;
+      /*
+       * 倒放区间：静音。`playbackRate` 必须为正，而预览与导出必须同一条规则
+       * （见 `core/audio-plan.ts::reversed` 与 `exporters/mixdown.ts`）。
+       */
+      if (span.reversed) continue;
       const when = Math.max(0, span.start - fromT);
       const intoClip = Math.max(0, fromT - span.start);
       const remain = span.end - Math.max(fromT, span.start);
@@ -81,7 +87,7 @@ export class AudioPlayer {
       const speed = Math.max(0.01, span.speed || 1);
       const src = ctx.createBufferSource();
       src.buffer = buffer;
-      src.playbackRate.value = speed;
+      if (!span.speedCurve) src.playbackRate.value = speed;
       /*
        * 增益包络：采样「从片段内 intoClip 秒到结尾」这一段。
        *
@@ -98,8 +104,28 @@ export class AudioPlayer {
       /*
        * `start(when, offset, duration)` 的 offset / duration 都是**素材时间**
        * （秒，不受 playbackRate 影响），所以变速要自己乘过去。
+       *
+       * 有速度曲线时改为：offset 用**积分**算（`core/speed.ts` 的同一份数学），
+       * playbackRate 排成曲线（128 点，与增益包络同一手法），时长交给 `stop()`
+       * —— 曲线速率下 `start(…, duration)` 的素材时长不是常量。
        */
-      src.start(startAt + when, span.srcIn + intoClip * speed, remain * speed);
+      if (span.speedCurve) {
+        const curve = span.speedCurve;
+        const grid = project.beatGrid;
+        const points = 128;
+        const rates = new Float32Array(points);
+        for (let i = 0; i < points; i++) {
+          const tAbs = span.start + intoClip + (remain * i) / (points - 1);
+          rates[i] = Math.max(0.01, evalCurve(curve, tAbs, { grid, clipStart: span.start }));
+        }
+        src.playbackRate.setValueCurveAtTime(rates, startAt + when, remain);
+        const offset =
+          span.srcIn + integralCurve(curve, span.start, span.start + intoClip, { grid, clipStart: span.start });
+        src.start(startAt + when, Math.max(0, offset));
+        src.stop(startAt + when + remain);
+      } else {
+        src.start(startAt + when, span.srcIn + intoClip * speed, remain * speed);
+      }
       this.sources.push(src);
     }
     this.startCtxTime = startAt;

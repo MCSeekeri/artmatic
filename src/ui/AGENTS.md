@@ -220,6 +220,11 @@
   检查器烘焙入参 / 转场参数、lab 源 / 特效参数都用它；testid、宽度、tip 走 props。
   `KeyableField` 是它的超集（多了 ◆、曲线键列表、播放头处 key 的读写），不要把两者
   再合并成一份 props 爆炸的分派器。
+- **禁用态是一个 props，不是三处各写一遍**：`NumericField` / `Slider` / `NumberInput`
+  的 `disabled` 同义（滑杆与数字框一起变灰、不可拖、不可键入）。`Slider` 用
+  `aria-disabled` + `controls.css` 的 `.sld[aria-disabled='true']`，别在组件里另加
+  一个布尔量控制外观 —— 「数据层禁用了、看着还能点」已经被踩过一次（见 controls.css 里
+  `.sel` 那段注释）。
 - **全局错误兜底在 `ui/runtime-errors.svelte.ts`**：`main.ts` 最早安装，底栏
   `runtime-error` 段只显示计数，详情在 `runtime-error-modal`。同一条 message 2 秒内
   去重；只留最近 5 条错误 + 10 条 `console.error`。诊断文本包含版本 / URL / UA，

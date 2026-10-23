@@ -219,6 +219,11 @@ export interface TrackView {
   name: string;
   enabled: boolean;
   /**
+   * 轨道静音（v15，仅视觉轨）：只关这条轨上视频片段的内嵌音轨，画面照常。
+   * 视觉轨**总是**给这个键（缺省 false）；音频轨没有（它的 `enabled` 就是喇叭）。
+   */
+  muted?: boolean;
+  /**
    * z 序 = 视觉轨数 − 1 − 视觉轨下标（AGENTS §4.1）。音频轨是 `null`。
    *
    * 由控制平面算好给出：这个换算写反的表现是「特效完全无效且不报错」，
@@ -233,6 +238,8 @@ export interface TrackIdView {
   kind: 'visual' | 'audio';
   name: string;
   enabled: boolean;
+  /** 见 `TrackView.muted`。 */
+  muted?: boolean;
   z: number | null;
   clips: ClipIdView[];
 }
@@ -401,7 +408,29 @@ export interface Capabilities {
   features: {
     transitions: { sides: ('in' | 'out')[]; transparentSide: boolean; shadowedBy: 'out' };
     videoPreclip: { ranges: true; frameAccurate: true; activeRange: true };
-    videoAudio: { embeddedByDefault: true; detachToTrack: true; linkLock: true; gainDb: [number, number]; fades: true };
+    videoAudio: {
+      embeddedByDefault: true;
+      detachToTrack: true;
+      linkLock: true;
+      gainDb: [number, number];
+      fades: true;
+      /** v15：片段级静音（`set_clip_audio.muted`）。 */
+      muted: true;
+      /** v15：轨道级静音（`set_track.muted`），只对视觉轨有意义。 */
+      trackMute: 'visual tracks only';
+    };
+    /**
+     * 视频变速（v14）。`set_clip_props({ speed })` 改常速、保持片段长度；
+     * 曲线（`set_curve` 的 `speed`）可以取负 = 倒放。
+     */
+    videoSpeed: {
+      staticField: 'source.speed';
+      curveKey: 'speed';
+      range: [number, number];
+      negativeSpeed: 'curve-only';
+      keepsClipLength: true;
+      shrinksWhenSourceShort: true;
+    };
   };
 }
 

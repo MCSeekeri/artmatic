@@ -211,8 +211,14 @@ export const inspector = {
   'insp.transitionNotAdjacent': '与下一个片段之间有缝隙。转场需要两个片段紧邻；把片段拖到贴合即可生效。',
   'insp.transitionTooShort': '两侧片段太短，放不下转场。',
 
+  /* ------------------------------------------------ 视频变速 */
+  'insp.speed': '速度',
+  'insp.changeSpeed': '变速',
+
   /* ------------------------------------------------ 片段音频（v13） */
   'insp.audio': '音频',
+  'insp.audioMuted': '静音',
+  'insp.audioTrackMuted': '所在轨道已静音',
   'insp.audioGain': '音量',
   'insp.audioFadeIn': '渐入',
   'insp.audioFadeOut': '渐出',

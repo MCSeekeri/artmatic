@@ -89,6 +89,23 @@ export function animatableParams(clip: AnyClip): CurveParam[] {
     }
   }
 
+  /*
+   * 视频变速（v14）。允许负值（倒放），区间与检查器的 KeyableField 一致；
+   * 没有曲线时它就是 `source.speed` 的基值。
+   */
+  if (clip.kind === 'source' && clip.source.type === 'video') {
+    push({
+      key: 'speed',
+      label: tr('insp.speed'),
+      group: tr('curve.group.clip'),
+      min: -8,
+      max: 8,
+      step: 0.05,
+      base: clip.source.speed,
+      animatable: true,
+    });
+  }
+
   if (clip.kind === 'source' && clip.source.type === 'algo') {
     const def = getGenerator(clip.source.generator);
     const group = def ? resolveLabel(def.nameKey, tr) : tr('curve.group.algo');

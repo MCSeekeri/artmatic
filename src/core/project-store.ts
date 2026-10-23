@@ -41,6 +41,7 @@ import {
 } from './clips';
 import { clampTransitionDuration, transitionMaxDuration, type TransitionSide } from './transitions';
 import { evalCurve, type Curve } from './curve';
+import { SPEED_CURVE_KEY, speedIntegralOf } from './speed';
 import type { BeatGrid } from './time';
 import { CommandStack } from './commands';
 import { tr } from '../i18n/index.svelte';
@@ -252,6 +253,26 @@ export class ProjectStore {
     if (t) this.setTrackEnabled(id, !t.enabled);
   }
 
+  /**
+   * 轨道静音（v15，仅视觉轨）：只关视频片段的内嵌音轨，画面照常。
+   *
+   * 音频轨不接这一路 —— 它的 `enabled` 本来就是「这条轨出不出声」，再叠一个
+   * muted 会出现两个开关描述同一件事（而导出只看其中一个）。
+   */
+  setTrackMuted(id: string, muted: boolean): void {
+    this.commit(muted ? tr('tl.muteTrack') : tr('tl.unmuteTrack'), (p) => {
+      const t = p.tracks.find((x) => x.id === id);
+      if (!t || t.kind !== 'visual') return;
+      if (muted) t.muted = true;
+      else delete t.muted;
+    });
+  }
+
+  toggleTrackMuted(id: string): void {
+    const t = this.track(id);
+    if (t && t.kind === 'visual') this.setTrackMuted(id, !t.muted);
+  }
+
   /** 改名。空名字不写库（否则轨道会变成一个点不到的空行）。 */
   renameTrack(id: string, name: string): void {
     const next = name.trim();
@@ -449,7 +470,18 @@ export class ProjectStore {
       const delta = next - clip.start;
       if (delta === 0) return;
       const ti = trimInOf(clip);
-      if (ti) setTrimIn(clip, ti.srcIn + delta * ti.speed);
+      if (ti) {
+        /*
+         * 素材时间的增量是速度的**积分**（`core/speed.ts`）：有速度曲线时
+         * `Δ × speed` 会算错 —— 拖回来的内容与裁掉的内容对不上，而且只在
+         * 「曲线不是常数」时出现（画面错位，不报错）。
+         */
+        const moved =
+          clip.kind === 'source' && clip.source.type === 'video'
+            ? speedIntegralOf(clip, clip.start, next, this.project.beatGrid)
+            : delta * ti.speed;
+        setTrimIn(clip, ti.srcIn + moved);
+      }
       clip.start = next;
       this.syncLockedAudio(this.project, clipId);
       return;
@@ -511,7 +543,7 @@ export class ProjectStore {
       this.project.duration,
       this.project.overlapBehavior,
     ) as AnyClip[];
-    this.writeLane(track, applyTrimIn(before, lane));
+    this.writeLane(track, applyTrimIn(before, lane, this.project.beatGrid));
     // trim / push 都可能改动锁定视频的几何（push 会把它挤开）。
     this.syncLockedAudio(this.project, clipId);
     return true;
@@ -720,7 +752,16 @@ export class ProjectStore {
         if (c.id === clipId) return { ...c, curves: leftCurves };
         if (c.start === at) {
           const right = { ...c, curves: rightCurves };
-          return ti ? withTrimIn(right as AnyClip, ti.srcIn + atRel * ti.speed) : right;
+          if (!ti) return right;
+          /*
+           * 右半段的起点要前进「切点之前消耗掉的素材」—— 有速度曲线时是
+           * 积分而不是 `atRel × speed`（见 `core/speed.ts`）。
+           */
+          const consumed =
+            clip.kind === 'source' && clip.source.type === 'video'
+              ? speedIntegralOf(clip, clip.start, at, p.beatGrid)
+              : atRel * ti.speed;
+          return withTrimIn(right as AnyClip, ti.srcIn + consumed);
         }
         return c;
       }) as typeof track.clips;
@@ -781,6 +822,40 @@ export class ProjectStore {
     this.commit(label, () => {
       const found = this.findClip(clipId);
       if (found) fn(found.clip);
+    });
+  }
+
+  /**
+   * 视频片段的**常速**（`source.speed`）。1 = 原速，负值不接受 —— 倒放走
+   * `curves.speed`（关键帧可以取负，见 `core/speed.ts`）。
+   *
+   * **保持片段长度**：变速改的是「同样的时间轴长度里塞多少素材」，不是
+   * 片段本身。唯一的例外是素材不够 —— 加快后需要的素材超过「`srcIn` 到素材
+   * 末尾」，片段就只能缩到用完为止（用户点名的「因速度过快导致可用时长不足」）。
+   * 慢放不会缩：需要更少素材。
+   *
+   * 写入时**清掉速度曲线**：曲线是求值的唯一真源，留着它会让「改了速度但
+   * 画面没变」（静默无效）—— 那比报错难查得多。
+   */
+  setClipSpeed(clipId: string, speed: number): void {
+    const v = Number(speed);
+    if (!Number.isFinite(v) || v <= 0) return;
+    const next = Math.min(100, Math.max(0.05, v));
+    this.commit(tr('insp.changeSpeed'), () => {
+      const clip = this.findClip(clipId)?.clip;
+      if (!clip || clip.kind !== 'source' || clip.source.type !== 'video') return;
+      if (clip.source.speed === next && !clip.curves[SPEED_CURVE_KEY]) return;
+      delete clip.curves[SPEED_CURVE_KEY];
+      clip.source.speed = next;
+
+      const durationSec = this.project.assets[clip.source.assetId]?.durationSec;
+      if (typeof durationSec === 'number' && durationSec > 0) {
+        const available = Math.max(0, durationSec - clip.source.srcIn);
+        const maxLen = available / next;
+        if (clip.end - clip.start > maxLen) {
+          clip.end = clip.start + Math.max(MIN_CLIP_LENGTH, maxLen);
+        }
+      }
     });
   }
 

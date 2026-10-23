@@ -246,6 +246,7 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             await control.setTrack(String(args.trackId ?? ''), {
               ...(typeof args.enabled === 'boolean' ? { enabled: args.enabled } : {}),
               ...(typeof args.name === 'string' ? { name: args.name } : {}),
+              ...(typeof args.muted === 'boolean' ? { muted: args.muted } : {}),
             }),
           );
 
