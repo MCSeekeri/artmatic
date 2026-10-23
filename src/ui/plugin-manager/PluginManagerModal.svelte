@@ -18,6 +18,10 @@
   import { tr } from '../../i18n/index.svelte';
   import { buildPluginRows, summaryText } from './plugin-panel-model';
   import { beginImport, removePlugin, setPluginEnabled, type PickedPlugin } from '../plugin-actions';
+  import {
+    hookRegistryRevision,
+    typoHookFailures,
+  } from '../../typography/hook-registry';
 
   interface Props {
     onclose: () => void;
@@ -27,7 +31,10 @@
   const rows = $derived.by(() => {
     // 依赖插件集合的版本号 —— 少了这一行，导入/移除之后列表不会重算。
     appState.pluginRevision;
-    return buildPluginRows(appState.plugins.list(), tr);
+    // 运行期钩子失败是另一份状态（不进 LoadedPlugin）：打开/保存/渲染时
+    // 被拒绝的钩子记在 hook-registry 里，同样要在这里可见。
+    void hookRegistryRevision();
+    return buildPluginRows(appState.plugins.list(), tr, typoHookFailures());
   });
   const summary = $derived(summaryText(rows, tr));
 
@@ -96,6 +103,14 @@
         {#if row.issues.length > 0}
           <ul class="issues" data-testid="plugin-issues">
             {#each row.issues as text, i (i)}
+              <li>{text}</li>
+            {/each}
+          </ul>
+        {/if}
+
+        {#if row.runtimeIssues.length > 0}
+          <ul class="issues" data-testid="plugin-hook-issues">
+            {#each row.runtimeIssues as text, i (i)}
               <li>{text}</li>
             {/each}
           </ul>

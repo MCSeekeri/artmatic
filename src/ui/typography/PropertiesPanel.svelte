@@ -64,6 +64,15 @@ import ColorField from '../controls/ColorField.svelte';
   const theme = $derived(themeById(editorState.doc?.theme, appState.project.customThemes));
 
   /**
+   * 当前文档启用的脚本条数。**只读提示**：脚本是文档级的，不属于「选中了
+   * 哪个元素」，所以这里不提供任何编辑入口（在「脚本」选项卡里改）。
+   */
+  const scriptCount = $derived.by(() => {
+    void appState.version;
+    return (editorState.doc?.scripts ?? []).filter((s) => s.enabled).length;
+  });
+
+  /**
    * 颜色 → 可显示的值（配色方案引用解析成真实 hex）。
    *
    * 取色卡不认 `@accent1`，不解析就会把色块画成黑色 —— 看起来像「颜色被
@@ -1228,6 +1237,15 @@ import ColorField from '../controls/ColorField.svelte';
           />
         </Field>
         <p class="props-note">{tr('typo.propGlyphStrokeHint')}</p>
+      {/if}
+
+      {#if scriptCount > 0}
+        <p class="props-note" data-testid="typo-props-script">
+          {tr('typo.scriptControls', { n: scriptCount })}
+          {#if !appState.runTypoScripts}
+            · {tr('typo.scriptOffBadge')}
+          {/if}
+        </p>
       {/if}
     </div>
   {/if}

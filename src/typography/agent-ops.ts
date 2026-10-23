@@ -52,6 +52,7 @@ import {
   type TypographyGroup,
 } from './document';
 import { coerceRuns, hasSpanOverrides, plainTextOf, runsFromText } from './rich-text';
+import { sanitizeScripts, type TypographyScript } from './script/model';
 import {
   ANIM_PRESETS,
   createCustomAnimation,
@@ -1416,6 +1417,8 @@ export function docView(
   elements: unknown[];
   groups?: unknown[];
   fonts?: { family: string; format: string }[];
+  /** `ids` 档给数量，`full` 档给完整脚本表（可原样写回）。 */
+  scripts?: unknown;
 } {
   /*
    * 字段兜底（`?? []`）不是防御性冗余：`fonts` / `elements` 在**类型上是必填**，
@@ -1434,6 +1437,8 @@ export function docView(
         name: e.name,
         frame: { ...e.frame },
       })),
+      // ids 档只给数量：一段脚本两三百行，探路阶段不需要它的正文。
+      scripts: (doc.scripts ?? []).length,
     };
   }
   return {
@@ -1444,7 +1449,26 @@ export function docView(
     elements: elements.map(elementView),
     groups: groupList(doc).map((g) => ({ ...g })),
     fonts: (doc.fonts ?? []).map((f) => ({ family: f.family, format: f.format })),
+    // 完整脚本表：字段名与 `sanitizeScripts` 的输入一致，读回可以直接写回。
+    scripts: scriptsView(doc),
   };
+}
+
+/** 单条脚本的读回形状（可原样写回 `typo_set_scripts` / `typo_replace_doc`）。 */
+export function scriptView(s: TypographyScript): Record<string, unknown> {
+  return {
+    id: s.id,
+    name: s.name,
+    code: s.code,
+    enabled: s.enabled,
+    ...(s.targets?.length ? { targets: [...s.targets] } : {}),
+    ...(s.needs?.length ? { needs: [...s.needs] } : {}),
+  };
+}
+
+/** 整份脚本表的读回形状。 */
+export function scriptsView(doc: TypographyDocument): Record<string, unknown>[] {
+  return (doc.scripts ?? []).map(scriptView);
 }
 
 /* --------------------------------------------------------------- 整份替换 */
@@ -1479,7 +1503,16 @@ export interface CoerceReport {
  * 不接受它的话，「读回来 → 直接写回」这条被文档承诺的路径会每次都报一个
  * `clipId` 未知键 —— 模型会以为自己写错了什么。
  */
-const DOC_KEYS = new Set(['clipId', 'size', 'background', 'elements', 'fonts', 'groups', 'theme']);
+const DOC_KEYS = new Set([
+  'clipId',
+  'size',
+  'background',
+  'elements',
+  'fonts',
+  'groups',
+  'theme',
+  'scripts',
+]);
 const ELEMENT_KEYS = new Set([
   'id', 'kind', 'name', 'frame', 'blend', 'opacity', 'visible', 'locked', 'animations',
   'shadows', 'blur', 'groupId', 'transform3d',
@@ -1519,6 +1552,24 @@ export function coerceDocument(
     w: Math.max(2, Math.round(finite(sizeRaw.w, fallback.size.w))),
     h: Math.max(2, Math.round(finite(sizeRaw.h, fallback.size.h))),
   };
+  /*
+   * 脚本表：
+   *  - `scripts === undefined` → **保留原脚本**（老客户端 / 精简写入不该把
+   *    用户写的代码抹掉；与 `animations` 同一类「读回再写回必须无损」）；
+   *  - `scripts: []` → 显式清空；
+   *  - 其余 → 过 `sanitizeScripts`（永不抛，坏条目进 droppedKeys）。
+   */
+  let scripts: TypographyScript[] | undefined = fallback.scripts;
+  if (raw.scripts !== undefined) {
+    if (Array.isArray(raw.scripts)) {
+      const sanitized = sanitizeScripts(raw.scripts);
+      scripts = sanitized.scripts;
+      if (report) report.droppedKeys.push(...sanitized.dropped);
+    } else {
+      report?.droppedKeys.push('scripts');
+    }
+  }
+
   const doc: TypographyDocument = {
     size,
     background: coercePaint(raw.background, { kind: 'none' }),
@@ -1526,6 +1577,7 @@ export function coerceDocument(
     fonts: [],
     groups: [],
     ...(typeof raw.theme === 'string' ? { theme: raw.theme } : {}),
+    ...(scripts && scripts.length ? { scripts } : {}),
   };
 
   const style0 = defaultTextStyle(size);

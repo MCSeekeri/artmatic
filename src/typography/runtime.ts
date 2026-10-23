@@ -35,7 +35,8 @@ import { frameKeyFor, rasterKeyForDoc } from './cache-key';
 import type { TypographyDocument } from './document';
 import type { TypographyTheme } from './theme';
 import type { FontProvider } from './font-provider';
-import type { TextBackendRegistry } from './rasterizer';
+import type { RasterRequest, TextBackendRegistry } from './rasterizer';
+import { hasRenderTypoHooks } from './hook-registry';
 
 /**
  * 条目数的**次级**上限：只防「一帧一个新键」那种抖动，容量主要由字节预算管
@@ -68,6 +69,16 @@ export interface TypographyRuntimeOptions {
   onReady: () => void;
   /** 取当前工程 fps。用回调而不是字段，避免「忘了同步」这一类 bug。 */
   fps: () => number;
+  /**
+   * 工程种子（`Project.seed`）。脚本的 `ctx.rand(i)` 由它派生。
+   * 函数而不是数字：切工程后这里必须读到新工程的那份。
+   */
+  projectSeed: () => number;
+  /**
+   * 脚本总开关（UiPrefs.runTypoScripts）。**函数**：偏好改了立刻生效，
+   * 不需要重建 runtime；键里的模式盐也跟着变（见 `keyFor`）。
+   */
+  scriptsEnabled: () => boolean;
 }
 
 export class TypographyRuntime {
@@ -153,12 +164,12 @@ export class TypographyRuntime {
       return { tex: hit.tex, w: hit.w, h: hit.h };
     }
 
-    this.schedule(key, doc, size.w, size.h, localSec);
+    this.schedule(key, doc, size.w, size.h, localSec, clip.end - clip.start);
 
     // 预览缺帧时用同一个文档+尺寸下最近烘焙好的那一帧顶上，避免「隔一帧消失一帧」。
     // 导出不走这条（prewarmFrame 已逐帧 await，必命中）。
     if (!this.exportMode) {
-      const sizeKey = key.slice(0, key.lastIndexOf('|'));
+      const sizeKey = sizeKeyOf(key);
       const fb = this.latest.get(sizeKey);
       if (fb) {
         const e = this.entries.get(fb);
@@ -174,7 +185,12 @@ export class TypographyRuntime {
 
   private keyFor(doc: TypographyDocument, localSec: number, w: number, h: number): string {
     const localFrame = Math.round(localSec * this.opts.fps());
-    return rasterKeyForDoc(doc, w, h, frameKeyFor(doc, localFrame));
+    const scripts = this.opts.scriptsEnabled();
+    const hooks = hasRenderTypoHooks();
+    return rasterKeyForDoc(doc, w, h, frameKeyFor(doc, localFrame, scripts, hooks), {
+      scriptsActive: scripts,
+      hooksActive: hooks,
+    });
   }
 
   /**
@@ -211,21 +227,46 @@ export class TypographyRuntime {
 
   /* ------------------------------------------------------------ 异步烘焙 */
 
-  private schedule(key: string, doc: TypographyDocument, w: number, h: number, localSec: number): void {
+  /**
+   * 一份光栅化请求。三处调用（异步 / 导出预热 / 单帧烘焙）共用它 ——
+   * 每处各拼一份的形态是「预览跑脚本、导出不跑」这类最难发现的差异。
+   */
+  private requestFor(
+    doc: TypographyDocument,
+    w: number,
+    h: number,
+    localSec: number,
+    duration: number,
+  ): RasterRequest {
+    return {
+      doc,
+      width: w,
+      height: h,
+      localSec,
+      fps: this.opts.fps(),
+      duration,
+      seed: this.opts.projectSeed(),
+      scriptsActive: this.opts.scriptsEnabled(),
+      resolveImage: this.resolveImage,
+      isImageOffline: this.isImageOffline,
+      offlineLabel: this.offlineLabel,
+      customThemes: this.customThemes(),
+    };
+  }
+
+  private schedule(
+    key: string,
+    doc: TypographyDocument,
+    w: number,
+    h: number,
+    localSec: number,
+    duration: number,
+  ): void {
     if (this.inflight.has(key)) return;
     this.inflight.add(key);
     const backend = this.backends.pick();
     void backend
-      .rasterize({
-        doc,
-        width: w,
-        height: h,
-        localSec,
-        resolveImage: this.resolveImage,
-        isImageOffline: this.isImageOffline,
-        offlineLabel: this.offlineLabel,
-        customThemes: this.customThemes(),
-      })
+      .rasterize(this.requestFor(doc, w, h, localSec, duration))
       .then((canvas) => {
         this.upload(key, canvas, w, h);
         this.inflight.delete(key);
@@ -286,7 +327,7 @@ export class TypographyRuntime {
         hit.used = ++this.clock;
         return;
       }
-      jobs.push(this.bakeNow(key, doc, size.w, size.h, localSec));
+      jobs.push(this.bakeNow(key, doc, size.w, size.h, localSec, clip.end - clip.start));
     };
     walkOps(buildStack(project, t), (op) => {
       if (op.type === 'source') bake(op.source.clip);
@@ -305,22 +346,14 @@ export class TypographyRuntime {
     w: number,
     h: number,
     localSec: number,
+    duration: number,
   ): Promise<void> {
     if (this.inflight.has(key)) return;
     this.inflight.add(key);
     try {
       const canvas = await this.backends
         .pick()
-        .rasterize({
-        doc,
-        width: w,
-        height: h,
-        localSec,
-        resolveImage: this.resolveImage,
-        isImageOffline: this.isImageOffline,
-        offlineLabel: this.offlineLabel,
-        customThemes: this.customThemes(),
-      });
+        .rasterize(this.requestFor(doc, w, h, localSec, duration));
       this.upload(key, canvas, w, h);
     } catch (err) {
       console.error('[typo] 预热失败', err);
@@ -341,25 +374,20 @@ export class TypographyRuntime {
     }
   }
 
-  /** 强制光栅化一张（「烘焙为 PNG 素材」用），不经过缓存。 */
+  /**
+   * 强制光栅化一张（「烘焙为 PNG 素材」/ 舞台的实时预览用），不经过缓存。
+   *
+   * `duration` 缺省按 `localSec` 兜底：调用方（测试钩子 / 烘焙）不一定知道
+   * 片段长度，而脚本的 `ctx.duration` 不能是 0（模板会拿它做归一化）。
+   */
   async rasterizeOnce(
     doc: TypographyDocument,
     width: number,
     height: number,
     localSec: number,
+    duration = Math.max(1, localSec),
   ): Promise<HTMLCanvasElement> {
-    return this.backends
-      .pick()
-      .rasterize({
-        doc,
-        width,
-        height,
-        localSec,
-        resolveImage: this.resolveImage,
-        isImageOffline: this.isImageOffline,
-        offlineLabel: this.offlineLabel,
-        customThemes: this.customThemes(),
-      });
+    return this.backends.pick().rasterize(this.requestFor(doc, width, height, localSec, duration));
   }
 
   enterExportMode(): void {
@@ -425,13 +453,14 @@ export class TypographyRuntime {
     const entry: CacheEntry = { tex, w: canvas.width, h: canvas.height, bytes, used: ++this.clock };
     this.entries.set(key, entry);
     // 记成该「文档+尺寸」的最近一帧，供 resolve 在缺帧时回退（见 latest 的说明）。
-    this.latest.set(key.slice(0, key.lastIndexOf('|')), key);
+    this.latest.set(sizeKeyOf(key), key);
 
     // 预算：导出期只限条目数（历史对顺序导出没用），预览期按机器的 `textRasterMB`。
     // 两边的条目上限都由「这一帧要画的层数」兜底 —— 见 `exportKeep` 与 `protectedKeys`。
     this.evict(
       this.exportMode ? this.exportKeep : MAX_RASTER_ENTRIES,
       this.exportMode ? 0 : mbToBytes(getLimits().textRasterMB),
+      key,
     );
   }
 
@@ -442,9 +471,31 @@ export class TypographyRuntime {
    * 保画面。若因此仍然超额，就把 `overBudget` 置位并**停手** —— 让它在 `stats()`
    * 里可见，而不是继续删到画面缺层。走到这一步表示机器能力与工程规模不匹配，
    * 该调 `textRasterMB` 或降排版层数，不该由淘汰逻辑替用户决定「哪一层可以消失」。
+   *
+   * `justUploaded` 必须保住：光栅化是**先落地、后渲染**，`resolve` 要到
+   * `renderFrame` 里才 `markLive`。导出时 `live` / `livePrev` 还停在前两帧上，
+   * 于是「刚落地的那一帧」成了唯一可淘汰的条目 —— 被删掉之后 `resolve` 必然
+   * miss，这一帧的排版层整层缺席（导出成片纯黑）；而且 resolve 还会再排一次
+   * 光栅化，串行链上白白多烘一张。
    */
-  private evict(maxEntries: number, maxBytes: number): void {
-    const keep = this.protectedKeys();
+  private evict(maxEntries: number, maxBytes: number, justUploaded?: string): void {
+    let keep: Set<string>;
+    if (this.exportMode && justUploaded) {
+      /*
+       * 导出**上传**时：屏幕上看的是前两帧，`live` / `livePrev` 保护不到
+       * 刚落地的这一帧 —— 只剩它可淘汰，就是黑帧的成因。此刻唯一必须
+       * 保住的就是它（导出是顺序的，历史没有保留价值）。
+       */
+      keep = new Set([justUploaded]);
+    } else {
+      /*
+       * 其余时机（预览上传 / 进退出导出态）仍然按「在屏层不参与淘汰」：
+       * `enterExportMode` 会先做一次清历史，但**不许删到在屏层**——那时
+       * `prewarmFrame` 还没跑，删掉就只能等下一帧重新烘。
+       */
+      keep = new Set(this.protectedKeys());
+      if (justUploaded) keep.add(justUploaded);
+    }
     this.overBudget = false;
     while (this.entries.size > maxEntries || (maxBytes > 0 && this.totalBytes() > maxBytes)) {
       let victimKey: string | null = null;
@@ -477,4 +528,17 @@ function clampInt(v: number, max: number): number {
   const n = Math.round(v);
   if (!Number.isFinite(n) || n < 1) return 1;
   return Math.min(n, max);
+}
+
+/**
+ * 缓存键里的「文档 + 尺寸」前缀（`docHash|WxH`）。
+ *
+ * **不能再用 `lastIndexOf('|')` 切**：键现在是
+ * `docHash|WxH|frame|salt`，切最后一个分隔符得到的是「某一帧」，
+ * `latest` 会退化成每帧一条记录 —— 缺帧回退失效（隔帧闪烁）且 Map 无限涨。
+ */
+function sizeKeyOf(key: string): string {
+  const parts = key.split('|');
+  // 文档 + 尺寸 + 模式盐：切开关之后不能拿上一个模式的图顶上。
+  return `${parts[0] ?? ''}|${parts[1] ?? ''}|${parts[3] ?? ''}`;
 }

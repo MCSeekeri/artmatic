@@ -13,9 +13,10 @@
   import LayersPanel from './LayersPanel.svelte';
   import AnimationPanel from './AnimationPanel.svelte';
   import PropertiesPanel from './PropertiesPanel.svelte';
+  import ScriptPanel from './ScriptPanel.svelte';
   import { tr } from '../../i18n/index.svelte';
 
-  type TabId = 'layers' | 'anim' | 'props';
+  type TabId = 'layers' | 'anim' | 'props' | 'script';
 
   let tab = $state<TabId>('layers');
 
@@ -23,6 +24,7 @@
     { id: 'layers', label: tr('typo.layers'), testid: 'typo-tab-layers' },
     { id: 'anim', label: tr('typo.animPane'), testid: 'typo-tab-anim' },
     { id: 'props', label: tr('typo.props'), testid: 'typo-tab-props' },
+    { id: 'script', label: tr('typo.scriptPane'), testid: 'typo-tab-script' },
   ];
 </script>
 
@@ -48,8 +50,10 @@
       <LayersPanel />
     {:else if tab === 'anim'}
       <AnimationPanel />
-    {:else}
+    {:else if tab === 'props'}
       <PropertiesPanel />
+    {:else}
+      <ScriptPanel />
     {/if}
   </div>
 </aside>

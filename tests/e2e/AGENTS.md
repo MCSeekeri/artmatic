@@ -68,3 +68,8 @@
 4. 等异步烘焙要**从 Node 侧**轮询（`waitForSourceReady`）；在 page 里忙轮询会把 worker
    回包饿死。
 5. **昂贵的性能类测试只从导出路径量**（见 `src/algos/AGENTS.md`）。
+6. **判断「文档脚本 / 插件 render 钩子」的效果只走 `typoRasterize`**（不经过
+   compositor / GPU）。合成链上有已知的边界采样竞态，逐像素相等在那里是偶发的；
+   脚本的承诺是「同一 t 同结果」，要在光栅化这一层断言（见
+   `tests/e2e/typography-script.spec.ts`）。开关用 `appState.setRunTypoScripts()`，
+   测完关回去 —— 偏好会写 localStorage，残留会污染后续用例。

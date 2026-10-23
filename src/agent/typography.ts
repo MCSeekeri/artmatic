@@ -37,6 +37,8 @@ import {
 import type { MessageKey } from '../i18n/locales';
 import { CUSTOM_CSS_ERROR_KEYS } from '../typography/animation';
 import { coerceRuns } from '../typography/rich-text';
+import { sanitizeScripts } from '../typography/script/model';
+import { checkScriptSyntax } from '../typography/script/compile';
 import {
   isKnownTheme,
   mergeThemeColors,
@@ -54,6 +56,7 @@ import {
   coerceDocument,
   docView,
   elementViewById,
+  scriptsView,
   findTextDoc,
   groupSelection,
   groupView,
@@ -440,6 +443,48 @@ export function setElementAnimation(
     setAnimOp(el, input, mode);
   });
   return { changed, element: viewOf(store, clipId, elementId) };
+}
+
+/**
+ * 整表替换文档级脚本（`typo_set_scripts`）。
+ *
+ * **校验前置**：坏 id / 超长 / 未知 needs 直接拒绝，不做「尽力而为」——
+ * 脚本写坏了只会表现成「画面没变化」，那是模型最难自查的一类失败。
+ * 语法用编译检查（只编译、不执行）：执行会带来副作用，写入前的闸门不能
+ * 顺便跑用户的代码。
+ */
+export function setScripts(
+  store: ProjectStore,
+  clipId: string,
+  raw: unknown,
+): { scripts: Record<string, unknown>[] } {
+  requireDoc(store, clipId);
+  if (!Array.isArray(raw)) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.scriptsNotArray'));
+  }
+  const sanitized = sanitizeScripts(raw);
+  if (sanitized.dropped.length) {
+    throw new ControlFailure(
+      'invalid-argument',
+      tr('agent.typo.scriptInvalid', { detail: sanitized.dropped.join(', ') }),
+      { dropped: sanitized.dropped },
+    );
+  }
+  for (const script of sanitized.scripts) {
+    const check = checkScriptSyntax(script.code);
+    if (!check.ok) {
+      throw new ControlFailure(
+        'invalid-argument',
+        tr('agent.typo.scriptSyntax', { name: script.name, detail: check.detail }),
+        { scriptId: script.id },
+      );
+    }
+  }
+  withDoc(store, clipId, 'agent:typo_set_scripts', (d) => {
+    if (sanitized.scripts.length) d.scripts = sanitized.scripts;
+    else delete d.scripts;
+  });
+  return { scripts: scriptsView(requireDoc(store, clipId)) };
 }
 
 export function setText(

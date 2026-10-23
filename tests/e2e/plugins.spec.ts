@@ -29,6 +29,7 @@ type PluginInfo = {
   enabled: boolean;
   effectCount: number;
   generatorCount: number;
+  hookCount?: number;
   issues: { code: string; path?: string; detail?: string }[];
   failure: { code: string; detail: string } | null;
 };
@@ -52,6 +53,16 @@ type PageApi = {
     renderer: { onSeek: () => void };
     renderFrame: (t: number) => void;
     readPixels: () => { data: number[]; w: number; h: number };
+    store: {
+      project: { tracks: { kind: string; clips: unknown[] }[] };
+      commit: (label: string, fn: (p: { tracks: { kind: string; clips: unknown[] }[] }) => void) => void;
+    };
+    typoRasterize: (
+      doc: unknown,
+      w: number,
+      h: number,
+      t: number,
+    ) => Promise<{ w: number; h: number; ink: number; sum: number; hash: string }>;
   };
 };
 
@@ -402,5 +413,140 @@ test.describe('插件：缺失降级', () => {
     // 而且那条引用现在**真的生效**了（幽灵片段套的是 paint-red）。
     const red = await renderAndMeasure(page);
     expect(red.r, '补载之后特效应当立即恢复').toBeGreaterThan(200);
+  });
+});
+
+/* ------------------------------------------------ 排版文档钩子（apiVersion 2） */
+
+/** 一个只带排版钩子的插件：open 把背景改成绿色，render 改成蓝色。 */
+function typoHookPlugin(id: string): string {
+  return `
+export const plugin = {
+  format: 'artmatic-plugin',
+  apiVersion: 2,
+  id: ${JSON.stringify(id)},
+  name: 'Typo Hooks',
+  license: 'MIT',
+  typography: {
+    hooks: [
+      {
+        id: 'open-bg',
+        name: 'Open: green background',
+        phase: 'open',
+        run(doc) {
+          return { ...doc, background: { kind: 'solid', color: '#00ff00' } };
+        },
+      },
+      {
+        id: 'render-hide',
+        name: 'Render: hide every element',
+        phase: 'render',
+        run(doc) {
+          return { ...doc, elements: doc.elements.map((e) => ({ ...e, visible: false })) };
+        },
+      },
+    ],
+  },
+};
+`;
+}
+
+/** 一条白色矩形 —— render 钩子会把它藏起来（墨迹从有到 0，方向明确）。 */
+function hookDoc() {
+  return {
+    size: { w: 640, h: 360 },
+    background: { kind: 'none' },
+    elements: [
+      {
+        kind: 'shape',
+        id: 'band',
+        name: 'band',
+        frame: { x: 0, y: 12, w: 640, h: 48, rot: 0 },
+        blend: 'normal',
+        opacity: 1,
+        visible: true,
+        locked: false,
+        animations: [],
+        shape: 'rect',
+        fill: { kind: 'solid', color: '#ffffff' },
+        stroke: null,
+      },
+    ],
+    fonts: [],
+  };
+}
+
+test.describe('插件：排版文档钩子', () => {
+  test.beforeEach(async ({ page }) => boot(page));
+
+  test('render 钩子影响出图；open 钩子在打开工程时改写文档', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+
+    await attach(page);
+    await plantPlugin(page, 'hooks.js', typoHookPlugin('e2e-hooks'));
+
+    // 工程里放一条文本片段：open 钩子要有东西可改。
+    await page.evaluate(({ doc }) => {
+      const A = (window as never as PageApi).__artmatic;
+      A.store.commit('e2e: add text clip', (p) => {
+        const track = p.tracks.find((t) => t.kind === 'visual');
+        if (!track) return;
+        track.clips.push({
+          kind: 'source',
+          id: 'hook-txt',
+          start: 0,
+          end: 1,
+          label: 'hooks',
+          fadeSec: 0,
+          curves: {},
+          source: { type: 'text', doc },
+          blend: 'normal',
+          opacity: 1,
+          transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+          fit: 'contain',
+        });
+      });
+    }, { doc: hookDoc() });
+    /*
+     * 控制组：插件还没被挂载（只有文件躺在目录里），光栅化应当画得出那条白带。
+     * 少了这一步，下面的「ink = 0」可能只是「文档本来就是空的」。
+     */
+    const before = await page.evaluate(async (doc) => {
+      const A = (window as never as PageApi).__artmatic;
+      return A.typoRasterize(doc, 640, 360, 0);
+    }, hookDoc());
+    expect(before.ink).toBeGreaterThan(0);
+
+    await save(page);
+    await reopen(page);
+
+    const info = (await pluginList(page))[0]!;
+    expect(info.status, '钩子只在合成文档上跑不通才会失败').toBe('ok');
+    expect(info.hookCount).toBe(2);
+    expect(info.issues).toEqual([]);
+
+    // ① render 钩子：光栅化前把所有元素藏掉 ⇒ 白带消失。
+    const shot = await page.evaluate(async (doc) => {
+      const A = (window as never as PageApi).__artmatic;
+      return A.typoRasterize(doc, 640, 360, 0);
+    }, hookDoc());
+    expect(shot.ink).toBe(0);
+
+    // ② open 钩子：重开后的文档背景已经是绿的（且没有静默丢掉元素）。
+    const bg = await page.evaluate(() => {
+      type ClipLike = { source?: { type?: string; doc?: { background?: { color?: string } } } };
+      const A = (window as never as PageApi).__artmatic as unknown as {
+        store: { project: { tracks: { clips: ClipLike[] }[] } };
+      };
+      for (const t of A.store.project.tracks) {
+        for (const c of t.clips) {
+          if (c.source?.type === 'text') return c.source.doc?.background?.color ?? null;
+        }
+      }
+      return null;
+    });
+    expect(bg).toBe('#00ff00');
+    expect(errors, `不该有未捕获异常：${errors.join(' | ')}`).toEqual([]);
   });
 });

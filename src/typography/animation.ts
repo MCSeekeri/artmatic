@@ -748,9 +748,20 @@ function cssAttrEscape(s: string): string {
   return s.replace(/["\\]/g, (m) => `\\${m}`);
 }
 
-/** 文档是否含时间变化的内容 —— 决定光栅化缓存键要不要带帧号。 */
-export function docIsAnimated(doc: TypographyDocument): boolean {
-  return doc.elements.some((e) => e.animations.length > 0);
+/**
+ * 文档是否含时间变化的内容 —— 决定光栅化缓存键要不要带帧号。
+ *
+ * 脚本只在**总开关打开**时才算「会随时间变化」：
+ *  - 关掉时脚本一条都不执行，画面与没有脚本的文档逐像素相同 ⇒ 按静态缓存
+ *    （不然一张标题卡会每帧重烘一遍，白烧 200ms/帧）；
+ *  - 打开时每帧都可能不同 ⇒ 帧号进键。
+ *
+ * 两种模式在缓存键里各有盐（见 `cache-key.ts::rasterKey`），所以切换开关
+ * 不会命中对方烘出来的图。
+ */
+export function docIsAnimated(doc: TypographyDocument, scriptsActive = false): boolean {
+  if (doc.elements.some((e) => e.animations.length > 0)) return true;
+  return scriptsActive && (doc.scripts ?? []).some((s) => s.enabled && s.code.trim().length > 0);
 }
 
 /* ------------------------------------------------------------ 构造 */

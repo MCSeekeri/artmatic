@@ -68,3 +68,23 @@
 - **新增一类可被插件扩展的东西**（比如将来的转场）要一次做齐三件：
   注册表双层化 + 标签放宽成 `Label` + 校验分支。少任何一件的表现都是
   「插件里写了、但界面上/画面上没有」。
+- **排版文档钩子（`typography.hooks`，API v2）**：
+  - 三个阶段：`open`（读工程后、上屏前，只改内存）/ `save`（写盘前，改**副本**）/
+    `render`（每次光栅化前，只作用于本次出图）。`render` 是唯一拿得到
+    `t / frame / fps / duration` 的阶段，必须是纯函数。
+  - **输入是深拷贝 + 冻结**（`frozenHookInput`）：钩子改输入会抛，而不是悄悄改掉
+    store 里那份。
+  - **输出必须是完整文档**，过 `coerceDocument`。抛错 / 返回非对象 / 出现未知键
+    ⇒ **整条拒绝、保留原文档**，原因进 `hook-registry` 的 failures（面板可见）。
+    绝不「尽力而为写半截」——那会让工程再也打不开。
+  - 挂载时在合成文档上真跑一次，跑不通的钩子从注册表剔除（`hook-failed`，
+    与 `compile-failed` 同口径）。它不需要 GL，所以不像着色器那样等 `attachKit`。
+  - **注册表是第二张双层表**（`typography/hook-registry.ts`，id =
+    `${pluginId}/${localId}`）：`install / verify / disable / enable / remove /
+    release` 都要同步注册与注销。漏一处 = 停用的插件还在改文档。
+  - **打开工程的挂载顺序有讲究**：插件必须在 `adoptProject` **之前**挂一次
+    （引用计数用临时键 `open:<k>`），否则 `open` 钩子没有插件可用；`adoptProject`
+    之后用工程 id 正式挂载，再释放临时键。放早了会卸载重导（代码执行两次）。
+  - `PLUGIN_API_VERSION = 2`；声明钩子却写 `apiVersion: 1` **拒收**——装上了但
+    钩子永远不被调用，是最难查的一类。
+  - 钩子只会被**已经装了的插件**提供：它不是给工程文件注入代码的通道。

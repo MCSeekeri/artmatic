@@ -59,6 +59,13 @@ import {
 } from '../project/plugins';
 import { pluginFileName } from '../project/layout';
 import type { FsDirHandle } from '../project/fs';
+import {
+  frozenHookInput,
+  registerPluginTypoHooks,
+  unregisterPluginTypoHooks,
+} from '../typography/hook-registry';
+import { createTextElement, createTypographyDocument } from '../typography/document';
+import type { TypoHookDef } from '../typography/hook-types';
 import { importPluginModule } from './loader';
 import { findMissingPlugins, type MissingPluginRef } from './missing';
 import {
@@ -103,6 +110,8 @@ export interface LoadedPlugin {
   /** 真正进了注册表的条目数（编译失败的已剔除）。 */
   effectCount: number;
   generatorCount: number;
+  /** 真正进了注册表的排版文档钩子数（校验失败的已剔除）。 */
+  hookCount: number;
   /** 被降级 / 被丢掉的条目，以及加载失败的原因。 */
   issues: PluginIssue[];
   failure: PluginFailure | null;
@@ -123,6 +132,7 @@ interface PluginRecord {
   /** 实际进了注册表的那部分。停用 / 重新启用时用它重放。 */
   registeredEffects: PluginEffectInput[];
   registeredGenerators: PluginGeneratorInput[];
+  registeredHooks: TypoHookDef[];
   holders: Set<string>;
 }
 
@@ -279,10 +289,51 @@ export class PluginHost {
     rec.info.status = this.statusOf(rec);
   }
 
+  /**
+   * 文档钩子校验：在一份**合成小文档**上真跑一次，抛错 / 返回不是对象的
+   * 直接剔除（与 `compile-failed` 同口径）。
+   *
+   * 它不需要 GL，所以不像着色器那样等 `attachKit`：插件一挂上就能给出结论。
+   * 输入用 `frozenHookInput`，与运行期完全一致 —— 只读输入下会抛的钩子
+   * 必须在**挂载时**就暴露，而不是等用户打开某个工程时才炸。
+   */
+  private verifyHooks(rec: PluginRecord): void {
+    const ok: TypoHookDef[] = [];
+    if (rec.registeredHooks.length) {
+      const sample = createTypographyDocument({ w: 640, h: 360 });
+      sample.elements.push(createTextElement(sample.size, { text: 'Hook check' }));
+      for (const hook of rec.registeredHooks) {
+        try {
+          const out = hook.run(frozenHookInput(sample), { phase: hook.phase });
+          if (
+            out !== undefined &&
+            out !== null &&
+            (typeof out !== 'object' ||
+              Array.isArray(out) ||
+              typeof (out as { then?: unknown }).then === 'function')
+          ) {
+            throw new Error('hook must return a document object or undefined');
+          }
+          ok.push(hook);
+        } catch (err) {
+          rec.info.issues.push({
+            code: 'hook-failed',
+            path: `typography:${hook.id}`,
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    registerPluginTypoHooks(rec.info.id, ok);
+    rec.registeredHooks = ok;
+    rec.info.hookCount = ok.length;
+    rec.info.status = this.statusOf(rec);
+  }
+
   private statusOf(rec: PluginRecord): PluginStatus {
     if (!rec.info.enabled) return 'disabled';
     if (rec.info.failure) return 'failed';
-    if (rec.info.effectCount + rec.info.generatorCount === 0) return 'failed';
+    if (rec.info.effectCount + rec.info.generatorCount + rec.info.hookCount === 0) return 'failed';
     return rec.info.issues.length > 0 ? 'partial' : 'ok';
   }
 
@@ -453,6 +504,7 @@ export class PluginHost {
     const id = rec.info.id;
     registerPluginEffects(id, rec.registeredEffects);
     registerPluginGenerators(id, rec.registeredGenerators);
+    registerPluginTypoHooks(id, rec.registeredHooks);
     this.verify(rec);
     rec.info.status = this.statusOf(rec);
   }
@@ -460,6 +512,7 @@ export class PluginHost {
   private unregister(pluginId: string): void {
     unregisterPlugin(pluginId);
     unregisterPluginGenerators(pluginId);
+    unregisterPluginTypoHooks(pluginId);
   }
 
   /* --------------------------------------------------------- 内部 */
@@ -527,6 +580,7 @@ export class PluginHost {
         status: 'ok',
         effectCount: eff.added.length,
         generatorCount: gen.added.length,
+        hookCount: 0,
         issues: [
           ...warnings,
           ...eff.issues.map((i) => ({ code: 'bad-def' as const, path: `effects:${i.id}`, detail: i.code })),
@@ -537,11 +591,14 @@ export class PluginHost {
       },
       registeredEffects: manifest.effects,
       registeredGenerators: manifest.generators,
+      registeredHooks: manifest.hooks,
       holders: new Set(),
     };
     this.records.set(id, rec);
 
-    // 有 Kit 就立刻校验；没有就留给 `attachKit` 补做。
+    // 文档钩子不依赖 GL：挂载时就在合成文档上跑一次，坏钩子直接剔除。
+    this.verifyHooks(rec);
+    // 有 Kit 就立刻校验着色器；没有就留给 `attachKit` 补做。
     if (this.kit) this.verify(rec);
     rec.info.status = this.statusOf(rec);
     return rec;
@@ -577,12 +634,14 @@ export class PluginHost {
         status: opts.failure ? 'failed' : 'disabled',
         effectCount: 0,
         generatorCount: 0,
+        hookCount: 0,
         issues: [],
         failure: opts.failure,
         verified: true,
       },
       registeredEffects: [],
       registeredGenerators: [],
+      registeredHooks: [],
       holders: new Set(),
     };
   }

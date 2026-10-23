@@ -25,6 +25,8 @@ import { resolveLabel } from '../i18n/label';
 import { tr } from '../i18n/index.svelte';
 import { BUILTIN_THEMES, THEME_SLOTS, themeDisplayName, themeIds, type TypographyTheme } from '../typography/theme';
 import { ANIM_PRESETS } from '../typography/animation';
+import { SCRIPT_LIMITS } from '../typography/script/model';
+import { SCRIPT_TEMPLATES } from '../typography/script/templates';
 import { SVG_GENERATORS, defaultsOf } from '../typography/svg-gen/registry';
 import { shapeParamSupport } from '../typography/shapes';
 import {
@@ -384,6 +386,92 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
         'as everything else, so they render in exports too. The read-back shape (what ' +
         '`get_typography_doc` returns, `iterations` instead of `loop`) is accepted verbatim, so a ' +
         'document can be read, edited and written back without losing animations.',
+    },
+    scripts: {
+      fields: ['id', 'name', 'code', 'enabled', 'targets', 'needs'],
+      form:
+        '`code` is the body of a SYNCHRONOUS function; `ctx` is in scope (do not write `(ctx) => {}`). ' +
+        'Statements only — `return` is allowed but its value is ignored (a Promise is rejected).',
+      context: {
+        t: 'seconds, local to the clip (negative during the first half of a transition)',
+        frame: 'round(t * fps)',
+        fps: 'project fps',
+        duration: 'clip duration in seconds',
+        w: 'document width in px',
+        h: 'document height in px',
+        seed: 'project seed (pass it to derive your own noise)',
+      },
+      element: {
+        'el(id)': 'handle for one element, or null if it is not rendered',
+        'els(kind?)': 'handles for every visible element (optionally filtered by kind)',
+        style: 'style({ "css-property": "value" }) — numbers are stringified; null removes',
+        transform:
+          'transform({ x, y, rotate, scale, skew }) — x/y in document px, rotate/skew in DEGREES, ' +
+          'scale number or { x, y }; composed INSIDE the element animation layer',
+        opacity: 'opacity(0..1)',
+        visible: 'visible(boolean)',
+        attr: 'attr(name, value) on the content node (svg / text box / image wrapper)',
+        path:
+          'path(d) — shape:"svg" only; the string uses the pathUnit of that element ' +
+          '(percent = 0..100 authored box, px = element box)',
+        var: 'var("--name", value) — CSS custom property (must start with --)',
+        canvas:
+          'canvas() — the 2D context of the pre-built canvas of the element (needs:["canvas"]), ' +
+          'already cleared and reset for this frame; null if the element has no canvas',
+        box: 'box() — { x, y, w, h, rot } of the unrotated element frame in document px',
+        d: 'the AUTHORED path string of a shape:"svg" element (null otherwise)',
+      },
+      chars: {
+        length: 'one entry per character (newlines included); empty unless needs:["chars"]',
+        index: '0-based index and `count` (total characters in that element)',
+        char: 'the character itself (read-only)',
+        style: 'style(decls) on that character span',
+        transform: 'transform({ x, y, rotate, scale, skew }) on that character span',
+        opacity: 'opacity(0..1) on that character span',
+      },
+      helpers: {
+        'rand(i)': 'deterministic random in [0,1) — same frame + script + i gives the same value',
+        'ease(name, x)': 'name: linear | in | out | in-out; x is clamped to 0..1',
+        clamp: 'clamp(v, min, max)',
+        lerp: 'lerp(a, b, k)',
+        smoothstep: 'smoothstep(edge0, edge1, x)',
+        'morph(a, b, k)': 'interpolates two SVG `d` strings (equal segment counts are resampled)',
+        hsl: 'hsl(h, s, l) -> "hsl(h s% l%)"',
+        log: 'log(...) — only reaches the console when script debugging is on',
+      },
+      needs: {
+        chars:
+          'builds one inline-block span per character for the targeted text elements; ' +
+          'this disables ligatures/kerning there and PAUSES while that text is being edited',
+        canvas:
+          'inserts a 2D canvas sized to the element, painted UNDER the element content',
+        targets:
+          'needs apply to `targets` (element ids) only; omit targets = every element. ' +
+          'needs never limits ctx.el(id) — it only decides which DOM extras are built.',
+      },
+      limits: {
+        maxScripts: SCRIPT_LIMITS.maxScripts,
+        maxCodeChars: SCRIPT_LIMITS.maxCodeChars,
+        maxTotalCodeChars: SCRIPT_LIMITS.maxTotalCodeChars,
+        maxWritesPerFrame: SCRIPT_LIMITS.maxWrites,
+        softMs: SCRIPT_LIMITS.softMs,
+        hardMs: SCRIPT_LIMITS.hardMs,
+      },
+      templates: SCRIPT_TEMPLATES.map((t) => ({
+        id: t.id,
+        name: resolveLabel(t.labelKey, tr) || t.labelKey,
+        needs: [...t.needs],
+      })),
+      running:
+        'Scripts are OFF by default (a global user preference): while off the document renders ' +
+        'EXACTLY as if it had no scripts, and exports contain no script effects. Do not claim the ' +
+        'effect is visible — tell the user to enable "run typography scripts", then re-render.',
+      rules:
+        'Stateless per frame: the same t must produce the same pixels (backwards seeking replays ' +
+        'from scratch; nothing accumulates). Math.random / Date.now / performance.now / fetch / ' +
+        'timers / storage are shadowed and throw. No await, no async, no node creation, no layout ' +
+        'reads, no network or files. Scripts only change the presentation layer — they never write ' +
+        'documents, z-order, groups or colors.',
     },
     layoutOps: ['align', 'distribute', 'grid', 'row', 'column'],
     alignAxes: [

@@ -90,6 +90,11 @@
   let fontScale = $state<FontScale>(theme.fontScale);
   let scheme = $state<ShortcutScheme>(appState.shortcutScheme);
   let mascot = $state(appState.mascotEnabled);
+  /**
+   * 排版脚本总开关。**默认关**，且它是「这台机器跑不跑工程带来的代码」，
+   * 所以进 UI 偏好、不进工程（见 `UiPrefs.runTypoScripts`）。
+   */
+  let runScripts = $state(appState.runTypoScripts);
 
   /* ------------------------------------------------------------ 已更改标记 */
 
@@ -104,6 +109,7 @@
   const fontScaleChanged = $derived(fontScale !== theme.fontScale);
   const schemeChanged = $derived(scheme !== appState.shortcutScheme);
   const mascotChanged = $derived(mascot !== appState.mascotEnabled);
+  const runScriptsChanged = $derived(runScripts !== appState.runTypoScripts);
   /** 主题色的比较：预设比 id，自定义比 hex（用户可能在两者间来回切）。 */
   const accentChanged = $derived(
     accent.kind !== theme.accent.kind ||
@@ -214,6 +220,8 @@
     if (fontScaleChanged) theme.setFontScale(fontScale);
     if (schemeChanged) appState.setShortcutScheme(scheme);
     if (mascotChanged) appState.setMascotEnabled(mascot);
+    // 脚本开关会换掉光栅化缓存键的模式盐，setter 内部会 touch 一次重画。
+    if (runScriptsChanged) appState.setRunTypoScripts(runScripts);
 
     onclose();
   }
@@ -562,6 +570,27 @@
             />
           </div>
         </div>
+
+        <!--
+          脚本总开关。文案刻意直白（「任意代码 / 运行在主页面」）—— 这是
+          排版脚本唯一的信任边界，弱化它等于骗人。默认关。
+        -->
+        <div class="set-row">
+          <span class="set-lbl">
+            {#if runScriptsChanged}<i class="star" title={tr('app.changedMark')} aria-hidden="true">*</i>{/if}
+            {tr('typo.scriptPane')}
+          </span>
+          <div class="set-ctl">
+            <Checkbox
+              checked={runScripts}
+              label={tr('typo.scriptEnabled')}
+              tipText={tr('typo.scriptEnabledHint')}
+              testid="setting-run-typo-scripts"
+              onchange={(v) => (runScripts = v)}
+            />
+          </div>
+        </div>
+        <p class="set-note">{tr('typo.scriptRisk')}</p>
       {/if}
     </div>
   </div>

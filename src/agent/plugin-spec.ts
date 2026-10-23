@@ -359,6 +359,42 @@ same runs). Style keys are \`fontFamily\`, \`fontSize\` (px), \`fontWeight\`,
 missing key inherits the element style. Send \`runs\` to \`typo_update_element\` (or
 in a new element) to replace the whole list — \`text\` is the plain-text shorthand.
 
+## Document scripts (per-frame JS)
+
+\`doc.scripts\` is optional; array order is execution order:
+\`[{ id, name, code, enabled, targets?, needs? }]\`. \`typo_set_scripts({ clipId, scripts })\`
+replaces the whole array (one undo entry); \`scripts: []\` clears it and omitting
+the field keeps the existing scripts. \`get_typography_doc({detail:'full'})\`
+returns it verbatim, so read → edit → write back is lossless.
+
+\`code\` is the body of a SYNCHRONOUS function; \`ctx\` is in scope:
+
+\`\`\`js
+const el = ctx.el('element-id');        // null if not rendered
+if (el) { el.opacity(ctx.ease('out', Math.min(1, ctx.t))); el.transform({ y: 24 }); }
+\`\`\`
+
+- Time: \`ctx.t\` (seconds, local to the clip), \`ctx.frame\`, \`ctx.fps\`, \`ctx.duration\`,
+  \`ctx.w\`/\`ctx.h\` (document px), \`ctx.seed\`.
+- Elements: \`ctx.el(id)\`, \`ctx.els(kind?)\`. Handle: \`style(decls)\`, \`transform({x,y,rotate,scale,skew})\`
+  (translate px, rotate DEGREES), \`opacity\`, \`visible\`, \`attr(name,value)\`,
+  \`path(d)\` (SVG shapes; \`pathUnit\` tells you the coordinate space), \`var(name,value)\`,
+  \`canvas()\` (2D context, cleared each frame), \`box()\`, \`d\` (authored path).
+- Per character: \`ctx.chars(elId)\` returns \`[{ index, count, char, style, transform, opacity }]\`.
+  It is empty unless the script declares \`needs:['chars']\` for that element.
+- Pure helpers: \`ctx.rand(i)\` (deterministic per frame+script+i), \`ease('linear'|'in'|'out'|'in-out', x)\`,
+  \`clamp\`, \`lerp\`, \`smoothstep\`, \`morph(pathA, pathB, k)\`, \`hsl(h,s,l)\`, \`log(...)\`.
+- \`needs\`: \`'chars'\` builds per-character spans (typing in that text pauses the effect);
+  \`'canvas'\` inserts a 2D canvas sized to the element. \`targets\` limits those extras
+  to the listed element ids (default: every element).
+- Rules: NO state between frames (same \`t\` must give the same pixels), no
+  \`Math.random\` / \`Date.now\` / network / timers (they are shadowed), no \`await\`,
+  no DOM nodes of your own. Limits: 8 scripts, 20k chars each, 64k total,
+  5k writes/frame, 12ms hard budget per script.
+- **Scripts only run when the user has enabled them** (a global preference, off by
+  default). While off the document renders exactly as if it had no scripts, so do
+  not use a script when the effect must be visible without asking the user first.
+
 Geometry: call \`typo_measure\` when text may overflow its frame, elements may
 collide, or something may sit outside the canvas. It reports measured text
 content height, clipped overflow, pairwise intersections and per-element

@@ -18,6 +18,7 @@ import type { LoadedPlugin, PluginFailure } from '../../plugins/host';
 import type { PluginIssue, PluginIssueCode } from '../../plugins/manifest';
 import type { MessageVars } from '../../i18n/format';
 import type { MessageKey } from '../../i18n/locales';
+import type { TypoHookFailure, TypoHookPhase } from '../../typography/hook-registry';
 
 export type Translate = (key: MessageKey, vars?: MessageVars) => string;
 
@@ -37,6 +38,14 @@ const ISSUE_KEY: Record<PluginIssueCode, MessageKey> = {
   'read-failed': 'pl.issue.readFailed',
   'compile-failed': 'pl.issue.compileFailed',
   'dropped-uniform': 'pl.issue.droppedUniform',
+  'bad-hook': 'pl.issue.badHook',
+  'hook-failed': 'pl.issue.hookFailed',
+};
+
+const HOOK_PHASE_KEY: Record<TypoHookPhase, MessageKey> = {
+  open: 'pl.hookPhase.open',
+  render: 'pl.hookPhase.render',
+  save: 'pl.hookPhase.save',
 };
 
 const DEF_ISSUE_KEY: Record<PluginDefIssue['code'], MessageKey> = {
@@ -81,6 +90,8 @@ export interface PluginRow {
   tone: PluginTone;
   /** 已翻译的问题行（含失败原因）。可能为空。 */
   issues: string[];
+  /** 运行期钩子失败（打开 / 保存 / 渲染时被拒绝的那几次）。 */
+  runtimeIssues: string[];
   enabled: boolean;
   /** 停用时的额外说明（它为什么没有名字）。 */
   disabledNote: string | null;
@@ -113,6 +124,7 @@ function countsOf(p: LoadedPlugin, tr: Translate): string {
   const parts: string[] = [];
   if (p.effectCount > 0) parts.push(tr('pl.countEffects', { n: p.effectCount }));
   if (p.generatorCount > 0) parts.push(tr('pl.countGenerators', { n: p.generatorCount }));
+  if (p.hookCount > 0) parts.push(tr('pl.countHooks', { n: p.hookCount }));
   return parts.join(' · ');
 }
 
@@ -122,11 +134,24 @@ function countsOf(p: LoadedPlugin, tr: Translate): string {
  * 顺序沿用宿主给的顺序（按 id 排序）：插件之间没有优先级，按 id 排是唯一
  * 稳定的顺序 —— 用「导入时间」的话，两次打开同一个工程顺序会不一样。
  */
-export function buildPluginRows(plugins: readonly LoadedPlugin[], tr: Translate): PluginRow[] {
+export function buildPluginRows(
+  plugins: readonly LoadedPlugin[],
+  tr: Translate,
+  hookFailures: readonly TypoHookFailure[] = [],
+): PluginRow[] {
   return plugins.map((p) => {
     const issues = p.failure
       ? [tr(FAILURE_KEY[p.failure.code], { detail: p.failure.detail })]
       : p.issues.map((i) => issueText(i, tr));
+    const runtimeIssues = hookFailures
+      .filter((f) => f.key.startsWith(`${p.id}/`))
+      .map((f) =>
+        tr('pl.hookRuntime', {
+          phase: tr(HOOK_PHASE_KEY[f.phase]),
+          detail: f.detail,
+          n: f.repeats,
+        }),
+      );
     return {
       id: p.id,
       name: p.name ?? p.id,
@@ -135,6 +160,7 @@ export function buildPluginRows(plugins: readonly LoadedPlugin[], tr: Translate)
       statusLabel: tr(STATUS_KEY[p.status]),
       tone: STATUS_TONE[p.status],
       issues,
+      runtimeIssues,
       enabled: p.enabled,
       // 停用时不导入它 ⇒ 读不到名字与描述。这个空白必须解释，否则看起来像加载坏了。
       disabledNote: p.enabled || p.name ? null : tr('pl.disabledNotice'),

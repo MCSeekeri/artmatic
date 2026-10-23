@@ -56,6 +56,7 @@ import {
 } from '../project/handles';
 import { ProjectStore } from '../core/project-store';
 import { migrateProject } from '../core/schema';
+import { runProjectDocHooks } from '../typography/hook-registry';
 import { createBlankProject, createDemoProject, DEMO_ASSET_ID } from '../core/demo-project';
 import { renderDemoAudio } from '../audio/demo-audio';
 import { decodeAudio, computeWaveform } from '../audio/decode';
@@ -123,8 +124,25 @@ export async function newProject(demo = false): Promise<void> {
 /** 打开一份工程并把它**挂到选项卡上**（原来是替换当前那份，现在是多开）。 */
 async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boolean> {
   appState.projectBusy = true;
+  /** 插件在 adopt 之前挂载用的临时引用键；adopt 之后必须放掉。 */
+  let openHolder: string | null = null;
   try {
     const res = await openProject(dir);
+
+    const k = key ?? (await keyForHandle(raw, dir.name));
+    if (raw) await putHandle(k, raw);
+
+    /*
+     * 插件必须在 **adoptProject 之前**挂一次：`open` 钩子要改写的是
+     * 「刚读出来、还没上屏」的文档，而那时代码只能来自工程目录里的插件。
+     *
+     * 引用计数用一个临时 holder key（`open:<k>`），adopt 之后马上释放；
+     * 真正的 holder 仍由下面的 `mountPlugins(proj.id, dir)` 接上。第二次
+     * `mountFromDirectory` 遇到已加载的健康记录会直接复用（不重新 import）。
+     */
+    openHolder = `open:${k}`;
+    await appState.plugins.mountFromDirectory(dir, openHolder);
+    const hooked = runProjectDocHooks(res.project, 'open', { seed: res.project.seed });
 
     // 先把素材读回来，再登记 —— 读盘失败时不会在顶栏留下一个半成品 tab。
     const store = new ProjectStore(res.project);
@@ -132,9 +150,6 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     const loaded = await assetStore.loadFrom(dir, res.ledger, res.project);
     // linked 素材的句柄不在工程目录里：从 IndexedDB 接回来（失败只影响那一条）。
     await resolveLocalHandles(assetStore);
-
-    const k = key ?? (await keyForHandle(raw, dir.name));
-    if (raw) await putHandle(k, raw);
 
     const proj = appState.adoptProject({
       store,
@@ -168,6 +183,14 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
      * 上面那个 try/catch 的语义。
      */
     await appState.mountPlugins(proj.id, dir);
+    // 真正的 holder 已经接上；临时引用到这里才能放（放早了插件会被卸载再重导）。
+    if (openHolder) {
+      appState.plugins.release(openHolder);
+      openHolder = null;
+    }
+    if (hooked.appliedHooks > 0) {
+      appState.flash(tr('pl.hookOpened', { n: hooked.changedClips }), 'success');
+    }
 
     appState.recentProjects = rememberProject({
       key: k,
@@ -186,6 +209,7 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     }
     return true;
   } catch (e) {
+    if (openHolder) appState.plugins.release(openHolder);
     appState.flash(tr('err.io.openFailed', { detail: msg(e) }), 'error');
     return false;
   } finally {
@@ -279,12 +303,23 @@ async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<b
   appState.projectBusy = true;
   try {
     const ledger = await p.assets.buildLedger();
+    /*
+     * `save` 钩子改的是**将要写盘的副本**（`runProjectDocHooks` 内部克隆），
+     * store 与撤销栈一个字都不动。钩子失败时返回原工程，保存照常继续 ——
+     * 插件不能因为自己写坏了就把用户的保存卡住。
+     */
+    const hooked = runProjectDocHooks(p.store.project, 'save', {
+      seed: p.store.project.seed,
+    });
     const report = await saveProject({
       dir,
-      project: p.store.project,
+      project: hooked.project,
       ledger,
       openFor: (id) => p.assets.open(id),
     });
+    if (hooked.appliedHooks > 0) {
+      appState.flash(tr('pl.hookSaved', { n: hooked.changedClips }), 'success');
+    }
 
     // 让素材仓记住「这些字节确实在 assets/ 里」：之后移除时才知道有没有文件可保留。
     p.assets.markPersisted(report.persistedAssets);

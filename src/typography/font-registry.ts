@@ -46,6 +46,14 @@ export interface FontFaceSource {
   mime: string;
   /** ensure() 阶段备好的 data URL（P7 的子集化产物也放这里）。 */
   dataUrl: string | null;
+  /**
+   * `dataUrl` 对应的**字形集键**。
+   *
+   * 没有它的时候，`prepareDataUrl` 每次 ensure 都会重新 base64 一遍：子集化
+   * 命中缓存了，但 `dataUrlFor()` 仍然 O(字节数)。woff2（不可子集化）或整量
+   * 回退时这是每帧几十到上百毫秒 —— 而 ensure 是**每次光栅化**都调的。
+   */
+  dataUrlKey?: string;
   loaded: boolean;
   /**
    * 随软件分发的内置字体。它们**保证**在包内（打包产物里的资源），所以
@@ -211,7 +219,10 @@ export class FontRegistry implements FontProvider {
   /** 清掉所有已备好的 data URL 与子集缓存（切开关后必须调，否则读到旧值）。 */
   invalidatePrepared(): void {
     this.subsetCache.clear();
-    for (const face of this.faces.values()) face.dataUrl = null;
+    for (const face of this.faces.values()) {
+      face.dataUrl = null;
+      face.dataUrlKey = undefined;
+    }
     this.inflight.clear();
   }
 
@@ -274,8 +285,25 @@ export class FontRegistry implements FontProvider {
     const existing = this.faces.get(id);
     if (existing) {
       // 同 id 重复注册：更新字节来源，不产生第二条。
+      const bytesChanged = spec.bytes !== null && existing.bytes !== spec.bytes;
+      const urlChanged = spec.url !== null && existing.url !== spec.url;
       if (spec.bytes) existing.bytes = spec.bytes;
       if (spec.url) existing.url = spec.url;
+      if (bytesChanged || urlChanged) {
+        /*
+         * 换了字节就必须把「已备好的表现」全部作废：data URL / 子集缓存 /
+         * loaded 标志。漏掉任何一项的表现都是「换了字体文件，画面还是旧的」，
+         * 而且刷新也未必恢复（子集缓存按 face id 命中）。
+         */
+        existing.dataUrl = null;
+        existing.dataUrlKey = undefined;
+        existing.loaded = false;
+        existing.failed = false;
+        const prefix = `${existing.id}|`;
+        for (const key of this.subsetCache.keys()) {
+          if (key.startsWith(prefix)) this.subsetCache.delete(key);
+        }
+      }
       return existing;
     }
     const face: FontFaceSource = {
@@ -494,6 +522,12 @@ export class FontRegistry implements FontProvider {
     // glyphs 由 collectGlyphs 产出，已经是**排序去重**过的 —— 所以
     // 「打字顺序不同」不会产生不同的键，缓存才稳。
     const key = `${face.id}|${fnv1a(glyphs)}`;
+    // 同一个字形集不必重新 base64：ensure 是每次光栅化都调的，而
+    // dataUrlFor 的开销与字节数成正比（woff2 / 回退整量时可达上百毫秒/帧）。
+    if (face.dataUrl && face.dataUrlKey === key) {
+      this.subsetStats.cacheHits += 1;
+      return;
+    }
     const hit = this.subsetCache.get(key);
     let bytes: Uint8Array;
     if (hit) {
@@ -507,7 +541,10 @@ export class FontRegistry implements FontProvider {
         // 子集化失败（字体损坏 / wasm 取不到）不该让整条链路挂掉 ——
         // 退回整体内联，代价是慢，但结果是对的。
         console.warn(`[typo] ${face.id} 子集化失败，退回整体内联`, err);
-        if (!face.dataUrl) face.dataUrl = dataUrlFor(new Uint8Array(face.bytes), face.mime);
+        if (!face.dataUrl || face.dataUrlKey !== key) {
+          face.dataUrl = dataUrlFor(new Uint8Array(face.bytes), face.mime);
+          face.dataUrlKey = key;
+        }
         return;
       }
       this.subsetStats.computed += 1;
@@ -517,6 +554,7 @@ export class FontRegistry implements FontProvider {
       this.subsetCache.set(key, bytes);
     }
     face.dataUrl = dataUrlFor(bytes, face.mime);
+    face.dataUrlKey = key;
   }
 
   private async loadFace(face: FontFaceSource): Promise<void> {

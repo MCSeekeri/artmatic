@@ -67,6 +67,20 @@
     );
   });
 
+  /**
+   * 文档带脚本、但总开关关着 —— 图层行要标出来。
+   *
+   * 不标的话用户看到的是「工程里写了脚本、画面却是死的」，而唯一的线索
+   * 藏在右侧第四个选项卡里。判据是「有启用的脚本且总开关关」，停用的
+   * 单条脚本不算（那是用户自己关的）。
+   */
+  const scriptOff = $derived.by(() => {
+    void appState.version;
+    void appState.runTypoScripts;
+    const list = editorState.doc?.scripts ?? [];
+    return list.some((s) => s.enabled) && !appState.runTypoScripts;
+  });
+
   const groupNameById = $derived.by<Map<string, string>>(() => {
     void appState.version;
     const doc = editorState.doc;
@@ -355,6 +369,15 @@
           {:else}
             <span class="name" role="presentation" ondblclick={(e) => startRename(row, e)}>{row.el.name || row.el.kind}</span>
           {/if}
+          {#if scriptOff}
+            <span
+              class="script-off"
+              title={tr('typo.scriptOffBadge')}
+              data-testid="typo-layer-script-off"
+            >
+              <Icon name="code" size={10} />
+            </span>
+          {/if}
           <span class="acts">
             <button
               type="button"
@@ -479,6 +502,15 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* 「脚本未运行」标记：只提示，不占位（悬停才有 title 全文）。 */
+  .script-off {
+    display: grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    color: var(--warning);
+    flex: none;
   }
   /* 行内改名框：占住名称那一格，外观尽量贴近原来的文字，避免行高跳动。 */
   .name-input {

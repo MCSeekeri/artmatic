@@ -22,6 +22,7 @@ import { themeRef } from './theme';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 import type { ShapeGenState } from './svg-gen/types';
+import type { TypographyScript } from './script/model';
 
 /**
  * 元素动画的类型定义在 animation.ts —— 那边需要 TypographyDocument，两边
@@ -829,6 +830,18 @@ export interface TypographyDocument {
    * （缺省语义明确的可选字段不进 SCHEMA_VERSION）。
    */
   theme?: string;
+  /**
+   * 文档级脚本表（见 `script/model.ts`）。**可选**：缺省 = 没有脚本。
+   *
+   * 与 `groups` / `theme` 同一条约定：语义明确的可选字段**不抬**
+   * `SCHEMA_VERSION`，老工程逐字节不变。脚本只影响渲染，不进元素模型 ——
+   * 因此它也不会改变 z 序、分组、配色或导出流程。
+   *
+   * 执行顺序 = 数组顺序。总开关在 UI 偏好（默认关），不在文档里：
+   * 「这份工程带不带脚本」是内容，「这台机器跑不跑脚本」是用户的信任选择，
+   * 后者不该随工程同步给别人。
+   */
+  scripts?: TypographyScript[];
 }
 
 /** 层级调整操作。与 geometry.ts 无关，所以放在文档模型这边。 */
@@ -840,6 +853,13 @@ export type ZOrderOp = 'front' | 'back' | 'forward' | 'backward';
  * 都依赖 document.ts，把常量放这里可以避免它们互相 import。
  */
 export const EL_ID_ATTR = 'data-el-id';
+
+/** 脚本层的标记：动画层之内、内容之外的最后一层包装（见 render-dom.ts）。 */
+export const SCRIPT_LAYER_ATTR = 'data-script-layer';
+/** 逐字 span 的序号（`needs:['chars']` 时才存在）。 */
+export const SCRIPT_CHAR_ATTR = 'data-ch';
+/** 脚本 Canvas 的标记（`needs:['canvas']` 时才存在）。 */
+export const SCRIPT_CANVAS_ATTR = 'data-script-canvas';
 
 /** 文档**根**节点的标记。`syncDocDom` 靠它把「外层容器」和「文档根」区分开。 */
 export const DOC_ROOT_ATTR = 'data-typo-doc';

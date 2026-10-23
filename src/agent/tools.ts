@@ -830,6 +830,33 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'typo_set_scripts',
+    description:
+      'Replace the whole per-frame script list of a typography document (one undo entry; array ' +
+      'order = execution order). [] clears it; omitting the field elsewhere keeps it.\n' +
+      'Each entry: { id?, name?, code, enabled?, targets?, needs? }.\n' +
+      'code is the body of a SYNCHRONOUS function with `ctx` in scope:\n' +
+      '  ctx.t / ctx.frame / ctx.fps / ctx.duration / ctx.w / ctx.h / ctx.seed\n' +
+      '  ctx.el(id) / ctx.els(kind?) -> handle: style(decls), transform({x,y,rotate,scale,skew}),\n' +
+      '    opacity(v), visible(b), attr(name,value), path(d), var(name,value), canvas(), box(), d\n' +
+      '  ctx.chars(elId) -> per-character handles (needs:["chars"])\n' +
+      '  ctx.rand(i), ctx.ease(name,x), ctx.clamp/lerp/smoothstep, ctx.morph(dA,dB,k), ctx.hsl, ctx.log\n' +
+      'transform: x/y in document px, rotate in DEGREES. path(d) applies to shape:"svg" elements and ' +
+      'uses that element\'s pathUnit. canvas() returns a 2D context sized to the element (needs:["canvas"]).\n' +
+      'Rules: stateless per frame (same t must give the same pixels), no Math.random / Date.now / ' +
+      'timers / fetch (shadowed), no await, no DOM nodes of your own. Limits: 8 scripts, 20k chars ' +
+      'each, 64k total, 5k writes per frame, 12 ms hard budget per script. Read ' +
+      'get_typography_capabilities().scripts for the full API, limits and examples.\n' +
+      'IMPORTANT: scripts only run after the user enables the global preference (off by default). ' +
+      'While off the document renders exactly as if it had no scripts — tell the user to enable ' +
+      'them instead of assuming the effect is visible.',
+    params: [
+      OPT_CLIP_ID,
+      req('scripts', 'json', 'Array of script objects (schema above); [] clears the list.'),
+    ],
+    writes: true,
+  },
+  {
     name: 'typo_measure',
     description:
       'Measure a typography document WITHOUT rendering: per-element frame, measured text content ' +
@@ -1046,8 +1073,9 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'failing the whole call — check the returned `dropped` count. Keys/fields that were not ' +
       'recognised come back in `droppedKeys` (e.g. "elements[2].colour"); animation entries that ' +
       'failed validation come back in `droppedAnimations` (e.g. "elements[2].animations[0]") — ' +
-      'nothing is silently normalised away. Animations (preset, keys AND custom css) and inline ' +
-      'runs are preserved, so a document read with detail:full can be edited and written straight back.',
+      'nothing is silently normalised away. Animations (preset, keys AND custom css), inline runs ' +
+      'and `scripts` (omit the field to keep them) are preserved, so a document read with ' +
+      'detail:full can be edited and written straight back.',
     params: [OPT_CLIP_ID, req('doc', 'json', 'A complete TypographyDocument.')],
     writes: true,
   },

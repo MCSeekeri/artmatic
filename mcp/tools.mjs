@@ -935,6 +935,28 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_typo_set_scripts',
+    kind: 'write',
+    description:
+      '整表替换排版文档的**逐帧脚本**（一笔撤销；数组顺序即执行顺序；[] 清空，省略字段则保留）。' +
+      '每条 = { id?, name?, code, enabled?, targets?, needs? }。code 是**同步函数体**，ctx 在作用域内：' +
+      'ctx.t / frame / fps / duration / w / h / seed；ctx.el(id) / els(kind?) → style(decls) /' +
+      ' transform({x,y,rotate,scale,skew})（x/y 文档 px，rotate 角度）/ opacity / visible / attr /' +
+      ' path(d)（shape:"svg"，坐标系看该元素 pathUnit）/ var(name,value) / canvas()（2D，需 needs:["canvas"]）' +
+      ' / box() / d；ctx.chars(elId) → 逐字句柄（需 needs:["chars"]）；纯函数 rand(i) / ease /' +
+      ' clamp / lerp / smoothstep / morph(a,b,k) / hsl / log。' +
+      '禁止：跨帧状态、Math.random / Date.now / 定时器 / 网络 / await。' +
+      '结构需求：needs:["chars"] 生成逐字 span（编辑该文本时暂停），"canvas" 在元素内插 2D 画布。' +
+      '限制：8 条 / 单条 2 万字符 / 总计 6.4 万 / 每帧 5 千次写 / 单脚本 12ms。' +
+      '完整 API 见 get_typography_capabilities().scripts。' +
+      '⚠️ 脚本默认不运行（全局偏好），关闭时画面与没有脚本完全一致 —— 必须提示用户去开启，' +
+      '不要假定效果已经可见。',
+    args: {
+      clipId: F.string(),
+      scripts: F.any({ required: true, description: '脚本对象数组；[] 清空。' }),
+    },
+  },
+  {
     name: 'artmatic_typo_measure',
     kind: 'read',
     description:

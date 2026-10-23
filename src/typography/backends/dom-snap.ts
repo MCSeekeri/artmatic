@@ -20,8 +20,10 @@
 import { snapdom } from '@zumer/snapdom';
 import { animationSpecs, bakeAnimations } from '../bake-animation';
 import type { FontProvider } from '../font-provider';
+import { runTypoHooks } from '../hook-registry';
 import { ensureDocImagesFx } from '../image-fx';
 import { buildDocDom } from '../render-dom';
+import { runScripts } from '../script/run';
 import type { RasterRequest, TextRasterizer } from '../rasterizer';
 
 export class DomSnapRasterizer implements TextRasterizer {
@@ -68,18 +70,36 @@ export class DomSnapRasterizer implements TextRasterizer {
   }
 
   private async rasterizeOne(req: RasterRequest): Promise<HTMLCanvasElement> {
+    /*
+     * 插件渲染钩子：**只作用于本次出图**，不写 store、不进缓存键的文档哈希
+     * （缓存键用源文档 + 帧号 + 模式盐，钩子是确定性的，所以同一键必然
+     * 产出同一张图）。
+     *
+     * 必须在 buildDocDom 之前 —— 钩子返回的是一份文档，不是 DOM 补丁。
+     * 失败时 `runTypoHooks` 保留原文档（见 hook-registry.ts 第 1 条纪律）。
+     */
+    const hooked = runTypoHooks('render', req.doc, {
+      t: req.localSec,
+      frame: Math.round(req.localSec * req.fps),
+      fps: req.fps,
+      duration: req.duration,
+      seed: req.seed,
+    });
+    const doc = hooked.doc;
+
     // ADR-003 规则 ③：字体没就绪就截图，首帧会用回落字体量度。
-    await this.fonts.ensure(req.doc);
+    await this.fonts.ensure(doc);
 
     /*
      * 图片的抠图 / 四角是 CPU 处理的（见 typography/image-fx.ts），必须先等完。
      * 不等的话截图拿到的是**原图**，而这条产物会按正确的缓存键存下来 ——
      * 表现是「导出没抠图，而且刷新也不恢复」。
      */
-    await ensureDocImagesFx(req.doc, req.resolveImage);
+    await ensureDocImagesFx(doc, req.resolveImage);
 
-    const root = buildDocDom(req.doc, {
+    const root = buildDocDom(doc, {
       forRaster: true,
+      scriptsActive: req.scriptsActive,
       resolveImage: req.resolveImage,
       isImageOffline: req.isImageOffline,
       offlineLabel: req.offlineLabel,
@@ -88,7 +108,21 @@ export class DomSnapRasterizer implements TextRasterizer {
     this.host.replaceChildren(root);
     try {
       // 必须挂进文档之后才能 seek（脱离文档的元素拿不到 CSSAnimation）。
-      bakeAnimations(root, animationSpecs(req.doc), req.localSec);
+      bakeAnimations(root, animationSpecs(doc), req.localSec);
+      /*
+       * 脚本在烘焙之后跑：它写的是**脚本层**（动画层之内），所以能读到
+       * 动画之后的最终布局，又不会把动画的 transform 顶掉。
+       * 同一个函数也用于舞台 —— 两条路径的求值顺序因此不可能分家。
+       */
+      runScripts({
+        doc,
+        root,
+        localSec: req.localSec,
+        fps: req.fps,
+        duration: req.duration,
+        seed: req.seed,
+        active: req.scriptsActive,
+      });
 
       const localFonts = this.fonts.localFonts(req.doc);
       const result = await snapdom(root, {

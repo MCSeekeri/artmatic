@@ -29,6 +29,9 @@ import {
   paintNeedsDefs,
   strokePaintDefId,
   runsWrapperStyle,
+  scriptCanvasStyle,
+  scriptCharStyle,
+  scriptLayerStyle,
   shapePaintAttrs,
   spanStyle,
   textBoxStyle,
@@ -46,6 +49,9 @@ import {
   GROUP_ID_ATTR,
   RUNS_SIG_ATTR,
   RUNS_WRAP_ATTR,
+  SCRIPT_CANVAS_ATTR,
+  SCRIPT_CHAR_ATTR,
+  SCRIPT_LAYER_ATTR,
   SPAN_ATTR,
   normalizeStops,
   type ImageElement,
@@ -58,6 +64,11 @@ import {
   type TypographyElement,
   type TypographyGroup,
 } from './document';
+import {
+  scriptNeedsByElement,
+  scriptSignature,
+  type ElementScriptNeeds,
+} from './script/model';
 import { shapeGeometry } from './shapes';
 import { ensureImageFx, fxKey, imageCanvasFor, imageNeedsFx } from './image-fx';
 import { OFFLINE_BG, OFFLINE_ICON_PATHS, OFFLINE_INK } from '../core/offline-media';
@@ -91,6 +102,12 @@ export interface BuildDocOptions {
    */
   editingId?: string | null;
   /**
+   * 脚本总开关（UiPrefs.runTypoScripts）。false = **不做结构预处理**：
+   * 不铺逐字 span、不插 canvas。舞台与光栅化必须传同一个值，否则
+   * 「编辑器里逐字、导出时整段」这类差异没有任何报错。
+   */
+  scriptsActive?: boolean;
+  /**
    * 图片元素的抠图 / 四角处理**异步完成**时调用（见 `typography/image-fx.ts`）。
    *
    * 舞台必须传（DOM 不会自己重绘）；光栅化那条路不用它 —— 它在截图前
@@ -116,15 +133,34 @@ const OFFLINE_ATTR = 'data-typo-offline';
  * 走 syncDocDom 就地更新样式。重建的代价不只是 CPU —— 它会**丢掉正在编辑的
  * contenteditable 的选区**，用户打到一半字光标就飞了。
  */
-export function docSignature(doc: TypographyDocument | null): string {
+export function docSignature(
+  doc: TypographyDocument | null,
+  opts: { scriptsActive?: boolean; editingId?: string | null } = {},
+): string {
   if (!doc) return '';
+  /*
+   * 脚本的 `needs` / `targets` 与「当前正在编辑哪个文本」都会改变 DOM 结构
+   * （逐字 span 在有 / 无之间切换），所以必须进签名 —— 否则加了脚本之后
+   * 舞台不会重建，逐字永远不出现，而且没有任何报错。
+   */
+  const scriptsActive = opts.scriptsActive ?? true;
+  const scriptPart = scriptsActive ? scriptSignature(doc) : '-';
+  /*
+   * `editingId` 只在「真的会有逐字 span」时才进签名。无条件带上它会让
+   * 每次双击进编辑都重建整棵 DOM —— 那是所有没有脚本的工程的白白回归。
+   */
+  const needsChars =
+    scriptsActive && (doc.scripts ?? []).some((s) => s.enabled && s.needs?.includes('chars'));
+  const editPart = needsChars ? `#e${opts.editingId ?? ''}` : '';
   return (
     doc.elements
       .map(
         (e) =>
           `${e.id}:${e.kind}:${e.visible ? 1 : 0}:${e.animations.map((a) => a.id).join(',')}:${e.groupId ?? ''}`,
       )
-      .join('|') + `#g${(doc.groups ?? []).map((g) => g.id).join(',')}`
+      .join('|') +
+    `#g${(doc.groups ?? []).map((g) => g.id).join(',')}` +
+    `#s${scriptPart}${editPart}`
   );
 }
 
@@ -138,6 +174,8 @@ export function buildDocDom(doc: TypographyDocument, opts: BuildDocOptions = {})
    * 缓存住会造成「A 文档的颜色跑进 B 文档」这种极难查的串味。
    */
   const theme = themeById(doc.theme, opts.customThemes);
+  // 脚本关闭时一条结构预处理都不做（逐字 span 会断开连字，没必要白付代价）。
+  const needs = opts.scriptsActive === false ? new Map<string, ElementScriptNeeds>() : scriptNeedsByElement(doc);
   const root = document.createElement('div');
   root.className = 'typo-doc';
   root.setAttribute(DOC_ROOT_ATTR, '1');
@@ -171,7 +209,7 @@ export function buildDocDom(doc: TypographyDocument, opts: BuildDocOptions = {})
         if (shell) root.appendChild(shell);
       }
     }
-    const node = buildElement(el, opts, theme);
+    const node = buildElement(el, opts, theme, needs.get(el.id));
     if (node) root.appendChild(node);
   }
   return root;
@@ -196,6 +234,7 @@ function buildElement(
   el: TypographyElement,
   opts: BuildDocOptions,
   theme: TypographyTheme,
+  needs?: ElementScriptNeeds,
 ): HTMLElement | null {
   const shell = document.createElement('div');
   shell.className = `typo-el typo-el-${el.kind}`;
@@ -218,10 +257,51 @@ function buildElement(
     cursor = layer;
   }
 
-  const content = buildContent(el, opts, theme);
+  /*
+   * 脚本层：动画层之内、内容之外。**永远存在**（一个空 div），
+   * 这样「有没有脚本」不改变 DOM 层级，syncDocDom 的遍历只有一条路径；
+   * 逐字 span / canvas 才是按需的（它们有真实的排版代价）。
+   */
+  const scriptLayer = document.createElement('div');
+  scriptLayer.className = 'typo-script';
+  scriptLayer.setAttribute(SCRIPT_LAYER_ATTR, '1');
+  applyDecls(scriptLayer, scriptLayerStyle());
+  cursor.appendChild(scriptLayer);
+  cursor = scriptLayer;
+
+  if (needs?.canvas) appendScriptCanvas(scriptLayer, el);
+
+  const content = buildContent(el, opts, theme, needs?.chars === true);
   if (!content) return null;
   cursor.appendChild(content);
   return shell;
+}
+
+/** 脚本 Canvas：铺满元素框，**先于内容** append（内容画在它上面）。 */
+function appendScriptCanvas(layer: HTMLElement, el: TypographyElement): void {
+  const cv = document.createElement('canvas');
+  cv.setAttribute(SCRIPT_CANVAS_ATTR, '1');
+  cv.width = Math.max(1, Math.round(el.frame.w));
+  cv.height = Math.max(1, Math.round(el.frame.h));
+  applyDecls(cv, scriptCanvasStyle());
+  layer.appendChild(cv);
+}
+
+/**
+ * 元素框变了就跟着改 canvas 的 backing store。
+ *
+ * 只在尺寸真的变化时写：`cv.width = cv.width` 是**清空**画布（也是
+ * `script/api.ts` 每帧重置状态用的手法），每帧无条件写会让脚本画的内容
+ * 在 `syncDocDom` 之后被抹掉 —— 顺序上脚本确实在 sync 之后，但没必要
+ * 依赖这个顺序去赌。
+ */
+function syncScriptCanvas(layer: HTMLElement, el: TypographyElement): void {
+  const cv = layer.querySelector<HTMLCanvasElement>(`canvas[${SCRIPT_CANVAS_ATTR}]`);
+  if (!cv) return;
+  const w = Math.max(1, Math.round(el.frame.w));
+  const h = Math.max(1, Math.round(el.frame.h));
+  if (cv.width !== w) cv.width = w;
+  if (cv.height !== h) cv.height = h;
 }
 
 /**
@@ -245,6 +325,7 @@ function buildContent(
   el: TypographyElement,
   opts: BuildDocOptions,
   theme: TypographyTheme,
+  perChar = false,
 ): Element | null {
   if (el.kind === 'text') {
     const box = document.createElement('div');
@@ -257,7 +338,11 @@ function buildContent(
     // 顺序只影响「同一属性谁覆盖谁」——这里没有重叠的键，但保持「填充 → 描边」
     // 的阅读顺序，与图形那边的 fill → stroke 一致。
     applyDecls(box, glyphStrokeStyle(el.glyphStroke, theme));
-    applyRuns(box, el.runs, theme);
+    // 正在编辑的那个文本不铺逐字 span：编辑态要让 contenteditable 自己
+    // 维护节点，逐字效果在编辑期间暂停（面板上有一行说明）。
+    applyRuns(box, el.runs, theme, {
+      perChar: perChar && opts.editingId !== el.id,
+    });
     if (!opts.forRaster) {
       // 舞台上的双击进入编辑由编辑器自己接管（设置 contenteditable）。
       // 这里只标出可编辑意图，不直接开 —— 否则选择手势会被文本框吃掉。
@@ -443,10 +528,12 @@ export function syncDocDom(host: HTMLElement, doc: TypographyDocument, opts: Bui
     if (id) shells.set(id, el);
   }
 
+  const needs =
+    opts.scriptsActive === false ? new Map<string, ElementScriptNeeds>() : scriptNeedsByElement(doc);
   for (const el of doc.elements) {
     const shell = shells.get(el.id);
     if (!shell) continue; // 结构差异由 docSignature 触发重建，这里不做增删
-    syncElement(shell, el, opts, theme);
+    syncElement(shell, el, opts, theme, needs.get(el.id));
   }
 }
 
@@ -501,18 +588,25 @@ function syncElement(
   el: TypographyElement,
   opts: BuildDocOptions,
   theme: TypographyTheme,
+  needs?: ElementScriptNeeds,
 ): void {
   applyDecls(shell, elementStyle(el, theme));
   // 与 buildElement 同一份声明：就地同步时切回「无填充」由它复位。
   if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
 
-  // 钻进动画层，停在内容节点上。
+  // 钻进动画层，停在脚本层（老 DOM 没有脚本层时直接停在内容节点上）。
   let cursor: Element | null = shell.firstElementChild;
   for (let i = 0; i < el.animations.length; i++) {
     const layer = cursor as HTMLElement | null;
     if (!layer || !layer.hasAttribute(ANIM_ID_ATTR)) return;
     applyDecls(layer, animLayerStyle());
     cursor = layer.firstElementChild;
+  }
+  const scriptLayer = cursor as HTMLElement | null;
+  if (scriptLayer?.hasAttribute(SCRIPT_LAYER_ATTR)) {
+    applyDecls(scriptLayer, scriptLayerStyle());
+    syncScriptCanvas(scriptLayer, el);
+    cursor = scriptLayer.firstElementChild;
   }
   const content = cursor as HTMLElement | null;
   if (!content) return;
@@ -532,8 +626,11 @@ function syncElement(
      * 判据是**内容签名**：签名没变就一个节点都不动（打字时属于这一类），
      * 变了才重建（应用了行内格式属于这一类，编辑器随后把光标还原）。
      */
-    const sig = runsSignature(el.runs);
-    if (content.getAttribute(RUNS_SIG_ATTR) !== sig) applyRuns(content, el.runs, theme);
+    const perChar = opts.scriptsActive !== false && needs?.chars === true && !editing;
+    const sig = runsSignature(el.runs) + (perChar ? ':c' : '');
+    if (content.getAttribute(RUNS_SIG_ATTR) !== sig) {
+      applyRuns(content, el.runs, theme, { perChar });
+    }
     applyEditingState(content, editing);
     return;
   }
@@ -824,7 +921,12 @@ export function sortedStops(stops: PaintStop[]): PaintStop[] {
  * 没有覆盖的段**也**包一层 span：结构统一之后读回来不必分情况，
  * 而「有没有覆盖」这件事本来就写在 `SPAN_ATTR` 里。
  */
-export function applyRuns(box: HTMLElement, runs: readonly TextRun[], theme?: TypographyTheme): void {
+export function applyRuns(
+  box: HTMLElement,
+  runs: readonly TextRun[],
+  theme?: TypographyTheme,
+  opts: { perChar?: boolean } = {},
+): void {
   /*
    * 文本段装在**一个内层盒子**里，不是直接挂在 `.typo-text` 下。
    *
@@ -852,15 +954,45 @@ export function applyRuns(box: HTMLElement, runs: readonly TextRun[], theme?: Ty
   }
   const target = wrap;
   target.replaceChildren();
+  const perChar = opts.perChar === true;
+  let charIndex = 0;
   for (const run of runs) {
-    const span = document.createElement('span');
-    span.setAttribute(SPAN_ATTR, JSON.stringify(run.style ?? {}));
-    applyDecls(span, spanStyle(run.style, theme));
-    span.textContent = run.text;
-    target.appendChild(span);
+    if (!perChar) {
+      const span = document.createElement('span');
+      span.setAttribute(SPAN_ATTR, JSON.stringify(run.style ?? {}));
+      applyDecls(span, spanStyle(run.style, theme));
+      span.textContent = run.text;
+      target.appendChild(span);
+      continue;
+    }
+
+    /*
+     * 逐字：**按码点**切（`Array.from`），不是按 UTF-16 码元 —— 否则 emoji
+     * 会被切成两个各占一个 span 的半个代理对，两个 span 都渲染成方块。
+     *
+     * 换行写成 `<br data-ch>`：它保留「一个字符」的下标语义（与
+     * `serializeRuns` / `plainIndex` 的口径一致），但不参与 transform
+     * （br 没有盒子）—— 逐字动画落在可见字形上。
+     */
+    for (const ch of Array.from(run.text)) {
+      if (ch === '\n') {
+        const br = document.createElement('br');
+        br.setAttribute(SCRIPT_CHAR_ATTR, String(charIndex++));
+        target.appendChild(br);
+        continue;
+      }
+      const span = document.createElement('span');
+      span.setAttribute(SPAN_ATTR, JSON.stringify(run.style ?? {}));
+      span.setAttribute(SCRIPT_CHAR_ATTR, String(charIndex++));
+      applyDecls(span, spanStyle(run.style, theme));
+      applyDecls(span, scriptCharStyle());
+      span.textContent = ch;
+      target.appendChild(span);
+    }
   }
   // 必须和模型签名一致：下一次同步据此判断「不用重建」。
-  box.setAttribute(RUNS_SIG_ATTR, runsSignature(runs));
+  // `:c` 区分逐字 / 按段两种形态，否则切开关时签名相同、节点不重建。
+  box.setAttribute(RUNS_SIG_ATTR, runsSignature(runs) + (perChar ? ':c' : ''));
 }
 
 /**

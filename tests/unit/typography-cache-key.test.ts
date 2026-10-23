@@ -89,12 +89,23 @@ describe('docHash', () => {
 });
 
 describe('rasterKey', () => {
-  it('格式稳定：docHash|WxH|frame', () => {
-    expect(rasterKey({ docHash: 'abcd1234', w: 960, h: 540, frame: 12 })).toBe('abcd1234|960x540|12');
+  it('格式稳定：docHash|WxH|frame|模式盐', () => {
+    expect(rasterKey({ docHash: 'abcd1234', w: 960, h: 540, frame: 12 })).toBe(
+      'abcd1234|960x540|12|s0h0',
+    );
   });
 
   it('静态文档（frame = null）用 - 占位', () => {
-    expect(rasterKey({ docHash: 'abcd1234', w: 960, h: 540, frame: null })).toBe('abcd1234|960x540|-');
+    expect(rasterKey({ docHash: 'abcd1234', w: 960, h: 540, frame: null })).toBe(
+      'abcd1234|960x540|-|s0h0',
+    );
+  });
+
+  it('脚本 / 插件钩子的模式盐进键 —— 切开关不会命中旧图', () => {
+    const off = rasterKey({ docHash: 'x', w: 100, h: 100, frame: 1 });
+    const scripts = rasterKey({ docHash: 'x', w: 100, h: 100, frame: 1, scriptsActive: true });
+    const hooks = rasterKey({ docHash: 'x', w: 100, h: 100, frame: 1, hooksActive: true });
+    expect(new Set([off, scripts, hooks]).size).toBe(3);
   });
 
   it('尺寸进键 —— 预览与导出的缓存天然分离', () => {

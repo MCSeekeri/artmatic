@@ -70,6 +70,31 @@
 
 ---
 
+## 脚本页签（`ScriptPanel.svelte`）
+
+- 入口是右侧第 4 个页签「脚本」，**不要再往 Ribbon 加按钮**（Ribbon 只放稳定
+  控件集，见本文件开头）。脚本是**文档级**的，属性面板只放一行只读提示
+  「受 N 条脚本控制」，那一条是就地同步的状态，不是操作入口。
+- 代码编辑走**草稿 + 失焦提交**（`onblur` → `editorState.commit`）：每个字符一次
+  commit 会把撤销栈灌满（一次 Ctrl+Z 只退一个字母）。同时保留「检查语法」按钮
+  （只编译不执行），错误消息显示在按钮旁。
+- 总开关直接写 `appState.setRunTypoScripts()`（UI 偏好）；`ScriptPanel` 自己不存
+  第二份。关闭时面板顶部有说明、图层行有 `code` 标记、元素属性底部显示
+  「脚本未运行」——三处都要在，少一处就会出现「脚本写了但没人知道它没跑」。
+- **列表派生必须返回浅拷贝**（`scripts` 里对每条脚本 `{...s}` + 拷贝数组字段）。
+  `doc.scripts[i]` 是原地改的普通对象：直接把它交给 `$derived` / `{#each}`，
+  版本号变了、派生重跑了，但引用没变 ⇒ Svelte 按 `===` 认为「不用更新」，
+  新增/删除脚本要等下一次交互才刷新。同样的坑在 `LayersPanel` 文件头写着。
+  依赖要显式读 `appState.version`，不要只依赖 `doc`（它每次重算还是同一对象）。
+- 代码框的草稿同步**看焦点**（`codeFocused`）：同步 effect 在每次版本变化时都会
+  重跑，不挡住会在打字途中被库里的旧代码覆盖。同一条脚本的其它字段（启停 /
+  needs / 目标）变化时不要碰草稿，只在「选中换了 / 代码被外部改了」时替换。
+- 运行诊断从 `script/diagnostics.ts` 订阅（模块级表，不进文档）；`$effect` 里
+  `subscribeScriptDiagnostics` 的清理必须返回，否则切页签后还在累加计数。
+- 脚本写入会改变**结构**（`needs` / `targets` / 逐字 span），所以
+  `TypographyEditor` 的 `signature` 必须带 `scriptsActive` 与 `editingId`；
+  改 `docSignature` 的入参时两处（build / sync）一起改。
+
 ## Ribbon 布局与取色入口
 
 - **Ribbon 的弹层必须是 `position: fixed`**（`controls/popover.ts` 的纯函数定位）。

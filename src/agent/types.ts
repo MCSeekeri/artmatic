@@ -517,6 +517,42 @@ export interface TypographyCapabilities {
     /** `typo_set_animation` 的 `at` / `keys[].at` 单位说明。 */
     note: string;
   };
+  /**
+   * 文档级脚本（每帧求值）。
+   *
+   * **这是模型唯一能知道 `ctx` 形状的地方**：没有它，模型只能凭「应该有个
+   * setOpacity 吧」猜 API，而猜错的表现是「脚本写进去了、画面没变化」。
+   */
+  scripts: {
+    /** 写入字段（`typo_set_scripts({ scripts })` 里每条脚本的字段）。 */
+    fields: string[];
+    /** 代码形态（函数体 / 同步）。 */
+    form: string;
+    /** `ctx` 上的只读字段与单位。 */
+    context: Record<string, string>;
+    /** `ctx.el(id)` 返回的句柄方法。 */
+    element: Record<string, string>;
+    /** `ctx.chars(elId)` 返回的逐字句柄。 */
+    chars: Record<string, string>;
+    /** 纯函数助手。 */
+    helpers: Record<string, string>;
+    /** 结构预处理声明与它带来的副作用。 */
+    needs: Record<string, string>;
+    limits: {
+      maxScripts: number;
+      maxCodeChars: number;
+      maxTotalCodeChars: number;
+      maxWritesPerFrame: number;
+      softMs: number;
+      hardMs: number;
+    };
+    /** 内置模板（id + 展示名 + 需要的结构）。 */
+    templates: { id: string; name: string; needs: string[] }[];
+    /** **总开关默认关**这条事实（模型必须转告用户，而不是以为效果已经生效）。 */
+    running: string;
+    /** 确定性 / 无状态 / 禁止项。 */
+    rules: string;
+  };
   /** 程序化 SVG 生成器（22 个）。 */
   generators: TypographyGeneratorCapability[];
   themes: { id: string; name: string; builtin: boolean }[];
@@ -726,6 +762,8 @@ export interface AgentLoadedPlugin {
   status: 'ok' | 'partial' | 'failed' | 'disabled';
   effectCount: number;
   generatorCount: number;
+  /** 排版文档钩子数（apiVersion 2）。 */
+  hookCount?: number;
   issues: PluginIssueView[];
   verified: boolean;
   failure?: { code: string; detail: string } | null;
@@ -738,6 +776,8 @@ export interface PluginTryResult {
   /** 已进注册表的**限定 id**（`${pluginId}/${localId}`）。 */
   effects: string[];
   generators: string[];
+  /** 已进注册表的文档钩子限定 id（`${pluginId}/${localId}`）。 */
+  hooks: string[];
   issues: PluginIssueView[];
   /** 有没有跑过真 GL 编译校验。false = 预览还没装配，稍后重试。 */
   verified: boolean;
@@ -752,6 +792,8 @@ export interface PluginInfoView {
   status: AgentLoadedPlugin['status'];
   effectCount: number;
   generatorCount: number;
+  /** 排版文档钩子数（apiVersion 2 才有）。 */
+  hookCount: number;
   issues: PluginIssueView[];
   /** 磁盘上的文件名。null = 只在内存里（还没安装 / 工程没目录）。 */
   fileName: string | null;

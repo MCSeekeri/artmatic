@@ -427,3 +427,29 @@ test('双击组行的非名称区域仍展开/折叠；双击名称区是改名'
   await page.getByTestId('layer-rename-input').press('Enter');
   await expect(group.locator('.name')).toHaveText('我的组');
 });
+
+/**
+ * 脚本列表的刷新是**派生值身份**问题：脚本对象是原地改的，`$derived` 若返回
+ * 同一批引用，Svelte 会按 `===` 认定「没变」。表现是新增/删除后列表不动，
+ * 直到点一下别的东西。`ScriptPanel` 因此必须返回浅拷贝。
+ */
+test('脚本页签：新增 / 删除脚本后列表立刻刷新', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await page.getByTestId('typo-tab-script').click();
+  await expect(page.getByTestId('typo-script-panel')).toBeVisible();
+
+  const rows = page.getByTestId('typo-script-row');
+  await expect(rows).toHaveCount(0);
+
+  await page.getByTestId('typo-script-add').click();
+  await expect(rows).toHaveCount(1);
+  await page.getByTestId('typo-script-add').click();
+  await expect(rows).toHaveCount(2);
+
+  await page.getByTestId('typo-script-remove').first().click();
+  await expect(rows).toHaveCount(1);
+  await page.getByTestId('typo-script-remove').first().click();
+  await expect(rows).toHaveCount(0);
+});

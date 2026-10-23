@@ -139,6 +139,7 @@ import TextAlignEnd from '@lucide/svelte/icons/text-align-end';
 import TextAlignJustify from '@lucide/svelte/icons/text-align-justify';
 import TextAlignStart from '@lucide/svelte/icons/text-align-start';
 import Timer from '@lucide/svelte/icons/timer';
+import Code from '@lucide/svelte/icons/code';
 import Trash from '@lucide/svelte/icons/trash';
 import Triangle from '@lucide/svelte/icons/triangle';
 import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -291,6 +292,7 @@ export const ICONS = {
   'text-align-justify': TextAlignJustify,
   'text-align-start': TextAlignStart,
   timer: Timer,
+  code: Code,
   trash: Trash,
   triangle: Triangle,
   'triangle-alert': TriangleAlert,

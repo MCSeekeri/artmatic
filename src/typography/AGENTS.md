@@ -131,7 +131,7 @@
   会把代理对切碎）。
 - **光栅化缓存键 = `docHash(doc) | WxH | frame`**。`docHash` **只哈希 `clip.source.doc`**，
   不掺 `store.version` —— 否则改一下无关片段的名字就把所有排版缓存击穿了。
-  **静态文档（`docIsAnimated === false`）的帧号是 `null`** ⇒ 尺寸相同就永远命中同一条缓存
+  **静态文档（`docIsAnimated === false`，含「有脚本但总开关关着」）的帧号是 `null`** ⇒ 尺寸相同就永远命中同一条缓存
   （带帧号会让一张标题卡每帧重做一遍，而且**看不出来**，只是慢）。
   **默认不做预烘焙 PNG 序列**：1080p 一帧 RGBA = 8.3 MB，150 帧 = 1.24 GB；逐帧按需光栅 +
   LRU 常驻只需 1–2 张纹理。内存预算：`MAX_RASTER_EDGE = 4096`，预览 48 MB / 32 条，
@@ -385,6 +385,43 @@
 4. `tests/unit/svg-gen.test.ts` 会自动扫到它（注册表驱动），不需要逐条加测试。
 
 ---
+
+## 文档脚本（`script/`）
+
+`TypographyDocument.scripts?: TypographyScript[]` —— 文档级、每帧求值的 JS 表现层。
+硬约束的落点（违反任一条都会静默出错）：
+
+- **默认不运行**：总开关是 `UiPrefs.runTypoScripts`（false）。关闭时不执行、
+  画面与「没有脚本」逐像素相同；`docIsAnimated(doc, false)` 也返回 false
+  （否则一张标题卡会每帧重烘）。
+- **缓存键必须带模式盐**：`docHash|WxH|frame|s{0,1}h{0,1}`。没有盐时切换开关会
+  直接命中旧图（表现是「打开了脚本，画面没变」）。`runtime.ts::sizeKeyOf` 不能用
+  `lastIndexOf('|')` 切 —— 切出来的是「某一帧」，缺帧回退会失效。
+- **回滚日志，不是整层快照**（`script/baseline.ts`）：整段写回 `style.cssText` 会
+  打掉 `syncDocDom` 每帧写的内联样式。只记自己改过的属性/属性名，且回滚前比对
+  当前值是否仍是自己写的。
+- **脚本层永远是内容之外的一层**（`shell > .typo-anim* > .typo-script > content`）：
+  外壳 transform 被 `frame.rot` 占用、动画层被 CSS 动画占用，脚本再写会顶掉它们。
+- **无状态**：同一 `t` 两次求值必须逐像素相同；倒退 seek 不累积。粒子/反应扩散
+  这类需要累积的效果**不在支持范围**（要以闭式函数写，或未来接 sim 快照）。
+  `Math.random` / `Date.now` / 定时器在编译期被遮蔽 —— 但这是确定性与误用防护，
+  **不是安全边界**；真正的边界是默认关闭 + 界面告知。
+- **`needs` 是结构预处理声明**：`'chars'` 生成逐字 span（inline-block ⇒ 断连字；
+  编辑该文本时暂停），`'canvas'` 插 2D canvas（**WebGL canvas 在 snapDOM 里是空白**）。
+  `needs` / `targets` / `editingId` 都进 `docSignature`，否则加完脚本舞台不重建。
+- **校验前置、不进 doc 的诊断**：运行错误 / 耗时 / 超预算在
+  `script/diagnostics.ts`（模块级表），不进文档（跑一下就脏工程）。
+- **缓存淘汰必须保住「刚落地的那一条」**：光栅化是「先 upload、后 render」，
+  `resolve` 要到 `renderFrame` 里才 `markLive`。导出期 `live` / `livePrev` 还停在
+  前两帧上，若不显式保护 `justUploaded`，淘汰会把这一帧刚烘好的纹理当成最旧的
+  删掉 → `resolve` miss → 排版层整层缺席（成片纯黑），而且还会再排一次光栅化。
+  `evict(max, bytes, justUploaded)` 的第三个参数就是这条不变量。
+- **`ensure(doc)` 是每次光栅化都调的**：字体 data URL 必须按「字形集键」缓存
+  （`face.dataUrlKey`）。只缓存子集字节、每帧重新 base64 的话，woff2（不可子集化）
+  或整量回退时每帧要付几十到上百毫秒 —— 带脚本的文档每帧都要烘，这一项会直接
+  把导出拖慢一个数量级。
+- **插件文档钩子**在 `hook-registry.ts`：三层阶段 `open` / `save` / `render`，
+  输入冻结深拷贝、输出过 `coerceDocument`，**失败保留原文档**。
 
 ## 脱机媒体占位符（素材不存在时画什么）
 

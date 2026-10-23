@@ -7,16 +7,18 @@ the page realm, but execution happens later, inside the renderer).
 ```js
 export const plugin = {
   format: 'artmatic-plugin',
-  apiVersion: 1,
+  apiVersion: 2,
   id: 'my-plugin',                 // [a-z0-9][a-z0-9._-]*, <= 64
   name: 'My plugin',
   author: 'you', version: '1.0.0', license: 'MIT',
   effects: [ /* see section 3 */ ],
   generators: [ /* see section 4 */ ],
+  typography: { hooks: [ /* see section 6 - requires apiVersion 2 */ ] },
 };
 ```
 
-`effects` and `generators` may be omitted, but at least one must be non-empty.
+`effects`, `generators` and `typography.hooks` may all be omitted, but at least
+one of them must be non-empty. `apiVersion: 1` still loads; hooks require `2`.
 Every `id` inside the arrays is **local**; the host exposes it as
 `"<plugin id>/<local id>"`. Use local ids inside the source, qualified ids when
 you call `artmatic_add_effect` / `artmatic_add_clip`.
@@ -132,7 +134,47 @@ to an integer index yourself and write it with `uniform1i`, as section 5 shows.
 - `half`, `input`, `output`, `filter` are reserved words in GLSL ES 3.00. Do not
   use them as variable names.
 
-## 6. Workflow
+## 6. Typography document hooks (`apiVersion: 2`)
+
+A hook rewrites a typography document at one of three moments:
+
+```js
+typography: {
+  hooks: [
+    {
+      id: 'brand-footer',            // local id, same rules as effect ids
+      name: 'Add brand footer',
+      phase: 'open',                 // 'open' | 'save' | 'render'
+      run(doc, ctx) {
+        // doc is a DEEP-FROZEN copy: mutate a clone, never the input.
+        // ctx = { phase, clipId?, t?, frame?, fps?, duration?, seed? }
+        // Return a complete TypographyDocument, or undefined to leave it alone.
+        return doc;
+      },
+    },
+  ],
+}
+```
+
+- `open` runs after the project is read and **before** its tab is shown. The
+  rewritten document is only in memory (never written to disk by this hook).
+- `save` runs on a **copy of the project that is about to be written**. The
+  editor keeps showing the original document; the file on disk is the rewritten
+  one.
+- `render` runs before every rasterization of a text clip (preview and export
+  share this path). It is applied only to that one frame — never written back.
+  It is the only phase that gets `t` / `frame` / `fps` / `duration`, so it must
+  be a pure function of those values plus `doc`.
+- The return value goes through the same strict document parser the agent uses:
+  unknown fields, invalid elements, or a thrown error make the hook **fail
+  closed** — the original document is kept and the plugin panel shows the
+  reason. There is no partial write.
+- Hooks run in registration order (plugin load order). Input is frozen; a hook
+  that tries to mutate it throws and is rejected.
+- Hooks are validated once at load with a synthetic document. A hook that throws
+  there is removed from the registry (`hook-failed`).
+
+## 7. Workflow
 
 1. `artmatic_plugin_try({ id, name, source })` - validates the manifest, imports
    the module and compiles every shader with the **real** GL context. Returns
@@ -147,10 +189,10 @@ to an integer index yourself and write it with `uniform1i`, as section 5 shows.
    `<project>/plugins/<id>.js`. Without a project directory the plugin stays in
    memory for this session only.
 
-## 7. Minimal checklist before calling `plugin_try`
+## 8. Minimal checklist before calling `plugin_try`
 
-- [ ] `format: 'artmatic-plugin'`, `apiVersion: 1`, lowercase `id`
-- [ ] at least one effect or generator
+- [ ] `format: 'artmatic-plugin'`, `apiVersion: 1` (or `2` with hooks), lowercase `id`
+- [ ] at least one effect, generator or typography hook
 - [ ] every `params[].key` is unique and matches a `u_<key>` used in `setUniforms`
 - [ ] fragment does **not** redeclare any uniform from the shared head
 - [ ] `setUniforms` writes every parameter (otherwise the parameter is dead)

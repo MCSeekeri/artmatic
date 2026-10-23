@@ -247,6 +247,57 @@ export function animLayerStyle(): CssDecls {
   };
 }
 
+/**
+ * 脚本层：**动画层之内、内容之外**。
+ *
+ * 为什么单独一层而不是直接写在外壳上：外层 transform 被 `frame.rot` 与 CSS
+ * 动画占用，脚本再写 transform 会把它们顶掉（「加了旋转之后动画位置全乱」）。
+ * 单独一层让三者**复合**，也让撤销日志只包住脚本自己的写入。
+ */
+export function scriptLayerStyle(): CssDecls {
+  return {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    width: '100%',
+    height: '100%',
+    'transform-origin': '50% 50%',
+    'box-sizing': 'border-box',
+  };
+}
+
+/**
+ * 逐字 span。`inline-block` 是 transform 的前提（inline 元素不产生盒子，
+ * 写 transform 没有任何效果）；`white-space: pre` 保住空格 —— 否则
+ * 「A B」拆成三个 span 之后中间那个空格会被折叠掉。
+ *
+ * 代价：inline-block 会断开连字与跨字距的字偶间距。所以它**只在脚本显式
+ * 声明 `needs:['chars']` 且总开关打开时**才出现（见 render-dom.ts），
+ * 关掉脚本时排版与原来逐像素一致。
+ */
+export function scriptCharStyle(): CssDecls {
+  return {
+    display: 'inline-block',
+    'white-space': 'pre',
+    'will-change': 'transform, opacity',
+  };
+}
+
+/** 脚本 Canvas：铺满元素框，位于内容之下（先 append）。 */
+export function scriptCanvasStyle(): CssDecls {
+  return {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    width: '100%',
+    height: '100%',
+    display: 'block',
+    'pointer-events': 'none',
+  };
+}
+
+
+
 /* ------------------------------------------------------------ 文本 */
 
 /**

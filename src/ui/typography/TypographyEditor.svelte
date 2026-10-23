@@ -61,6 +61,7 @@
   import AgentDrawer from '../agent/AgentDrawer.svelte';
   import { ASSET_DRAG_MIME, poolItemById, type PoolItem } from '../media-pool';
   import { animationSpecs, seekAnimations } from '../../typography/bake-animation';
+  import { runScripts } from '../../typography/script/run';
   import { keyframeBodyOf } from '../../typography/animation';
   import CustomCssModal from './CustomCssModal.svelte';
   import ThemeEditorModal from './ThemeEditorModal.svelte';
@@ -137,7 +138,12 @@
 
   const signature = $derived.by(() => {
     void appState.version;
-    return docSignature(doc);
+    // 脚本的结构预处理（逐字 span / canvas）与「正在编辑哪个文本」都会改变
+    // DOM，必须进签名；否则加完脚本舞台不重建，逐字永远不出现。
+    return docSignature(doc, {
+      scriptsActive: appState.runTypoScripts,
+      editingId: editorState.editingTextId,
+    });
   });
 
   /**
@@ -409,6 +415,12 @@
     return clip ? stageTime - clip.start : 0;
   });
 
+  /** 片段时长（脚本的 `ctx.duration`；`0` 会让模板里的归一化变成 NaN）。 */
+  const clipDuration = $derived.by(() => {
+    const clip = editorState.clip;
+    return clip ? Math.max(0.001, clip.end - clip.start) : 1;
+  });
+
   /**
    * 时间量化到整帧，供光栅预览当依赖用。
    * 直接用 localSec 会让播放时每帧重烘一张全尺寸位图（每帧几十毫秒）。
@@ -458,6 +470,8 @@
     paperEl.replaceChildren(
       buildDocDom(d, {
         resolveImage: resolveImageAsset,
+        scriptsActive: appState.runTypoScripts,
+        editingId: editorState.editingTextId,
         isImageOffline: (id) => appState.isAssetOffline(id),
         offlineLabel: tr('pool.offline'),
         customThemes: appState.project.customThemes ?? [],
@@ -479,6 +493,7 @@
     // 注意传的是 `.paper` 这个**外层容器**：syncDocDom 自己会往下找文档根。
     syncDocDom(root, d, {
       editingId: editorState.editingTextId,
+      scriptsActive: appState.runTypoScripts,
       resolveImage: resolveImageAsset,
       isImageOffline: (id) => appState.isAssetOffline(id),
       offlineLabel: tr('pool.offline'),
@@ -487,6 +502,20 @@
     });
     restoreCaretIfNeeded();
     seekAnimations(root, animationSpecs(d), ls);
+    /*
+     * 与光栅化**同一个函数、同一个顺序**（烘焙动画 → 跑脚本）。
+     * 舞台没有 rAF 循环：`localSec` 一变这个 effect 就重跑，求值是同步的，
+     * 所以画面上不会出现「脚本慢了一帧」的错位。
+     */
+    runScripts({
+      doc: d,
+      root,
+      localSec: ls,
+      fps: appState.store.project.fps,
+      duration: clipDuration,
+      seed: appState.store.project.seed,
+      active: appState.runTypoScripts,
+    });
   });
 
   /**
@@ -555,7 +584,7 @@
     let cancelled = false;
     const ls = localSec;
     void runtime
-      .rasterizeOnce(d, d.size.w, d.size.h, ls)
+      .rasterizeOnce(d, d.size.w, d.size.h, ls, clipDuration)
       .then((canvas) => {
         if (cancelled) return;
         // canvas 的固有尺寸是**文档像素**（d.size.w × d.size.h），而 host 是按

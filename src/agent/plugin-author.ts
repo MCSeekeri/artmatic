@@ -23,6 +23,7 @@
 import { isValidPluginSegment } from '../core/plugin-id';
 import { listEffects } from '../effects/registry';
 import { listGenerators } from '../algos/registry';
+import { listTypoHooks } from '../typography/hook-registry';
 import { tr } from '../i18n/index.svelte';
 import { ControlFailure } from './types';
 import type { AgentPluginHost, PluginInfoView, PluginIssueView, PluginTryResult } from './types';
@@ -59,10 +60,15 @@ function mergeIssues(...lists: PluginIssueView[][]): PluginIssueView[] {
 }
 
 /** 这个插件注册进注册表的**限定 id**（`${pluginId}/${localId}`）。 */
-function qualifiedIds(pluginId: string): { effects: string[]; generators: string[] } {
+function qualifiedIds(pluginId: string): {
+  effects: string[];
+  generators: string[];
+  hooks: string[];
+} {
   return {
     effects: listEffects().filter((e) => e.pluginId === pluginId).map((e) => e.id),
     generators: listGenerators().filter((g) => g.pluginId === pluginId).map((g) => g.id),
+    hooks: listTypoHooks().filter((h) => h.pluginId === pluginId).map((h) => h.key),
   };
 }
 
@@ -76,6 +82,7 @@ function infoOf(host: AgentPluginHost, pluginId: string): PluginInfoView | null 
     status: info.status,
     effectCount: info.effectCount,
     generatorCount: info.generatorCount,
+    hookCount: info.hookCount ?? 0,
     issues: mergeIssues(info.issues),
     fileName: info.fileName,
     draft: false,
@@ -152,6 +159,7 @@ export async function tryPlugin(opts: {
     status,
     effects: registered.effects,
     generators: registered.generators,
+    hooks: registered.hooks,
     issues,
     verified: info?.verified ?? false,
     draft: true,
@@ -166,6 +174,8 @@ export interface InstallResult {
   persisted: boolean;
   effects: string[];
   generators: string[];
+  /** 已注册的文档钩子限定 id。 */
+  hooks: string[];
 }
 
 export async function installPlugin(opts: {
@@ -209,7 +219,13 @@ export async function installPlugin(opts: {
   if (persisted) host.markPersisted(pluginId, `${pluginId}.js`);
 
   const registered = qualifiedIds(pluginId);
-  return { pluginId, persisted, effects: registered.effects, generators: registered.generators };
+  return {
+    pluginId,
+    persisted,
+    effects: registered.effects,
+    generators: registered.generators,
+    hooks: registered.hooks,
+  };
 }
 
 /* --------------------------------------------------------------- 丢弃 / 移除 */

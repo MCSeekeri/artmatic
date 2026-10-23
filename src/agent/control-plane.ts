@@ -523,6 +523,16 @@ export interface AgentControlPlane {
     animation: unknown,
     mode?: 'replace' | 'add',
   ): Promise<ControlResult<{ changed: boolean; element: TypographyElementView }>>;
+  /**
+   * 整表替换文档级脚本（每帧求值）。`[]` = 清空。
+   *
+   * 与动画一样是文档数据的一部分；**总开关在 UI 偏好里**（默认关），
+   * 控制平面不替用户打开它。
+   */
+  setTypographyScripts(
+    clipId: string | undefined,
+    scripts: unknown,
+  ): Promise<ControlResult<{ scripts: Record<string, unknown>[] }>>;
   setTypographyText(
     clipId: string | undefined,
     elementId: string,
@@ -2850,6 +2860,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'updateTypographyElement'
     | 'updateTypographyElements'
     | 'setTypographyAnimation'
+    | 'setTypographyScripts'
     | 'setTypographyText'
     | 'removeTypographyElement'
     | 'reorderTypographyElement'
@@ -2879,6 +2890,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         const store = beforeWrite();
         const id = typoClipId(clipId);
         return typo.setElementAnimation(store, id, elementId, resolveBeatKeys(store, input), mode ?? 'replace');
+      });
+    },
+    async setTypographyScripts(clipId, scripts) {
+      return run(() => {
+        const store = beforeWrite();
+        return typo.setScripts(store, typoClipId(clipId), scripts);
       });
     },
 

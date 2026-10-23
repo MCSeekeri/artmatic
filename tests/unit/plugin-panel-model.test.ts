@@ -34,6 +34,7 @@ function plugin(overrides: Partial<LoadedPlugin> = {}): LoadedPlugin {
     status: 'ok',
     effectCount: 1,
     generatorCount: 0,
+    hookCount: 0,
     issues: [],
     failure: null,
     verified: true,

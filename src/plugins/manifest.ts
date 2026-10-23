@@ -56,6 +56,12 @@ import type { ParamDef } from '../effects/types';
 import type { AlgoSetUniforms } from '../algos/shader-lib';
 import { normalizeLabel, type Label } from '../i18n/label';
 import { isValidPluginSegment } from '../core/plugin-id';
+import {
+  TYPO_HOOK_PHASES,
+  type TypoHookDef,
+  type TypoHookPhase,
+  type TypoHookRun,
+} from '../typography/hook-types';
 
 /** 清单里的格式标记。写错一律拒收（避免把别的 JSON 当插件喂进来）。 */
 export const PLUGIN_FORMAT = 'artmatic-plugin';
@@ -66,7 +72,7 @@ export const PLUGIN_FORMAT = 'artmatic-plugin';
  * 插件写更高的版本 = 它用了宿主还没有的能力，**必须拒收**而不是「尽力而为」——
  * 半个插件挂上去的表现是「某些参数拨了没反应」，那比明确拒收难查十倍。
  */
-export const PLUGIN_API_VERSION = 1;
+export const PLUGIN_API_VERSION = 2;
 
 /* ------------------------------------------------------------- 问题码 */
 
@@ -100,7 +106,11 @@ export type PluginIssueCode =
   /** 着色器编不过（真 GL 编译回答的，不在校验层猜）。 */
   | 'compile-failed'
   /** 着色器声明了某个 uniform 但从没读过它 —— 那个参数拨了不会有反应。 */
-  | 'dropped-uniform';
+  | 'dropped-uniform'
+  /** 文档钩子的结构不合法（缺字段 / 阶段不认识 / run 不是函数）。 */
+  | 'bad-hook'
+  /** 文档钩子在挂载校验时抛错（在合成文档上真跑了一次）。 */
+  | 'hook-failed';
 
 export interface PluginIssue {
   code: PluginIssueCode;
@@ -141,6 +151,13 @@ export interface PluginManifest {
   license: string | null;
   effects: PluginEffectDef[];
   generators: PluginGeneratorDef[];
+  /**
+   * 排版文档钩子（打开 / 保存 / 渲染前改写 doc）。
+   *
+   * 清单里写在 `typography.hooks`；校验后拍平成这个数组 —— 运行期只按
+   * `phase` 查表，不需要「typography 还可能有别的字段」这层中间结构。
+   */
+  hooks: TypoHookDef[];
 }
 
 export type ValidateResult =
@@ -342,6 +359,69 @@ function checkShader(raw: unknown, path: string): PluginIssue[] {
   return out;
 }
 
+/* ----------------------------------------------------- 文档钩子 */
+
+/**
+ * 校验 `typography.hooks`。
+ *
+ * 只查**结构**（id / name / phase / run）：钩子真正做什么由运行期回答，
+ * 能不能跑由 `PluginHost.verify()` 在合成文档上真跑一次回答 —— 与着色器
+ * 「结构在这里、编译在那里」是同一条分工。
+ */
+function checkHooks(raw: unknown): { issues: PluginIssue[]; hooks: TypoHookDef[] } {
+  const issues: PluginIssue[] = [];
+  const hooks: TypoHookDef[] = [];
+  if (raw === undefined) return { issues, hooks };
+  if (!isObject(raw)) {
+    issues.push({ code: 'bad-hook', path: 'typography', detail: 'not-object' });
+    return { issues, hooks };
+  }
+  const list = raw.hooks ?? [];
+  if (!Array.isArray(list)) {
+    issues.push({ code: 'bad-hook', path: 'typography.hooks', detail: 'not-array' });
+    return { issues, hooks };
+  }
+  const seen = new Set<string>();
+  for (const [i, item] of list.entries()) {
+    const at = `typography.hooks[${i}]`;
+    if (!isObject(item)) {
+      issues.push({ code: 'bad-hook', path: at, detail: 'not-object' });
+      continue;
+    }
+    const id = str(item.id);
+    if (!id || !isValidPluginSegment(id)) {
+      issues.push({ code: 'bad-hook', path: at, detail: `id:${String(item.id ?? '')}` });
+      continue;
+    }
+    if (seen.has(id)) {
+      issues.push({ code: 'duplicate-id', path: at, detail: id });
+      continue;
+    }
+    const name = normalizeLabel(item.name);
+    if (!name) {
+      issues.push({ code: 'bad-hook', path: at, detail: 'name' });
+      continue;
+    }
+    const phase = str(item.phase);
+    if (!phase || !(TYPO_HOOK_PHASES as readonly string[]).includes(phase)) {
+      issues.push({ code: 'bad-hook', path: at, detail: `phase:${String(item.phase ?? '')}` });
+      continue;
+    }
+    if (typeof item.run !== 'function') {
+      issues.push({ code: 'bad-hook', path: at, detail: 'run' });
+      continue;
+    }
+    seen.add(id);
+    hooks.push({
+      id,
+      name,
+      phase: phase as TypoHookPhase,
+      run: item.run as TypoHookRun,
+    });
+  }
+  return { issues, hooks };
+}
+
 /* ------------------------------------------------------- 主入口 */
 
 /**
@@ -491,8 +571,23 @@ export function validateManifest(raw: unknown): ValidateResult {
     });
   }
 
+  const hookCheck = checkHooks(raw.typography);
+  issues.push(...hookCheck.issues);
+  const hooks = hookCheck.hooks;
+
   if (issues.length > 0) return { ok: false, issues };
-  if (effects.length === 0 && generators.length === 0) {
+  /*
+   * 文档钩子是 **API v2** 才有的能力。声明了钩子却写着 apiVersion 1 的插件
+   * 必须拒收：宿主会以为自己能跑，而钩子从来不会被调用 —— 那是「装上了、
+   * 什么都没发生」，最难查的一类。
+   */
+  if (hooks.length > 0 && apiVersion < 2) {
+    return {
+      ok: false,
+      issues: [{ code: 'bad-api-version', path: 'typography.hooks', detail: 'requires-v2' }],
+    };
+  }
+  if (effects.length === 0 && generators.length === 0 && hooks.length === 0) {
     return { ok: false, issues: [{ code: 'no-defs' }] };
   }
 
@@ -509,6 +604,7 @@ export function validateManifest(raw: unknown): ValidateResult {
       license: optionalText(raw.license),
       effects,
       generators,
+      hooks,
     },
   };
 }

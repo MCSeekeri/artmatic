@@ -96,6 +96,8 @@ export const plugins = {
   'pl.issue.compileFailed': '「{path}」的着色器编不过，已从这个插件里剔除：{detail}',
   'pl.issue.droppedUniform':
     '「{path}」声明了 uniform `{detail}` 但着色器从没读过它 —— 那个参数不会有反应。',
+  'pl.issue.badHook': '文档钩子「{path}」不合法：{detail}。',
+  'pl.issue.hookFailed': '文档钩子「{path}」在合成文档上跑不通，已剔除：{detail}',
   // 注册批次返回的 def 级码（host 塞在 detail 里，面板再翻一层）
   'pl.def.missingId': '缺少 id',
   'pl.def.duplicateId': 'id 与同一个插件里的另一条重复',
@@ -108,6 +110,15 @@ export const plugins = {
     '这个文件没有导出插件对象（需要一句 `export const plugin` 或 `export default`，值是一个对象）。',
   'pl.fail.invalidManifest': '插件清单不合法。',
   'pl.fail.readFailed': '文件读不出来（{detail}）',
+
+  /* ---------------------------------------------------- 文档钩子（排版） */
+  'pl.countHooks': '{n} 个文档钩子',
+  'pl.hookPhase.open': '打开时',
+  'pl.hookPhase.render': '渲染时',
+  'pl.hookPhase.save': '保存时',
+  'pl.hookRuntime': '{phase}改写被拒绝（{detail}，已发生 {n} 次）。原文档保留。',
+  'pl.hookOpened': '插件在打开时改写了 {n} 个排版片段。',
+  'pl.hookSaved': '插件在保存时改写了 {n} 个排版片段（写盘的是改写后的副本，编辑器里仍是原样）。',
 
   /* ------------------------------------------------------------ 说明 */
   'pl.note.scope': '插件属于这个工程：换一个工程标签页就是另一套插件。',

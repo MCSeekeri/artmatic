@@ -558,6 +558,14 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             ),
           );
 
+        case 'typo_set_scripts':
+          return unwrap(
+            await control.setTypographyScripts(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              args.scripts ?? [],
+            ),
+          );
+
         case 'typo_set_text':
           return unwrap(
             await control.setTypographyText(

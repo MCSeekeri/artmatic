@@ -50,6 +50,36 @@ export function totalFrames(): number {
 }
 
 /**
+ * 工程里有没有**会跑**的排版脚本（单条启用 + 有代码）。
+ *
+ * 导出前拿它和总开关比一次：开关关着时导出的是「没有脚本的静态版」，
+ * 而用户点的是「导出这段片子」—— 那是**静默改变产物**，必须挡下来并说明。
+ */
+export function hasRunnableTypoScripts(): boolean {
+  const p = appState.store.project;
+  for (const track of p.tracks) {
+    if (track.kind !== 'visual') continue;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'source' || clip.source.type !== 'text') continue;
+      if ((clip.source.doc.scripts ?? []).some((s) => s.enabled && s.code.trim())) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 脚本开关的导出闸门。返回 true = 挡下了这一单。
+ *
+ * 不在这里「自动帮用户打开」：跑别人的代码必须是一次显式选择
+ * （面板上有「开启并继续」按钮，见 `ExportModal`）。
+ */
+function blockedByTypoScripts(): boolean {
+  if (!hasRunnableTypoScripts() || appState.runTypoScripts) return false;
+  appState.flash(tr('typo.scriptExportWarn'), 'error');
+  return true;
+}
+
+/**
  * 本机是否**存在** WebCodecs。
  *
  * 这只是第一层：真正能不能编 H.264 还要看 profile / level（无硬编的机器只有
@@ -298,6 +328,7 @@ export async function samplePngFrameBytes(t: number, onlyTrackId?: string): Prom
  */
 export async function exportMp4(name?: string, onlyTrackId?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
+  if (blockedByTypoScripts()) return;
   if (!mp4Supported()) {
     appState.flash(tr('err.export.noWebCodecs'), 'error');
     return;
@@ -374,6 +405,7 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
 /** 导出 PNG 序列（zip）。重复调用是空操作。 */
 export async function exportPngSequence(name?: string, onlyTrackId?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
+  if (blockedByTypoScripts()) return;
   await saveBeforeExport();
   if (appState.exportProgress !== null) return;
 
@@ -509,6 +541,7 @@ export async function exportGif(
   opts: GifOptions,
   onlyTrackId?: string,
 ): Promise<void> {
+  if (blockedByTypoScripts()) return;
   if (appState.exportProgress !== null) return;
   await saveBeforeExport();
   if (appState.exportProgress !== null) return;

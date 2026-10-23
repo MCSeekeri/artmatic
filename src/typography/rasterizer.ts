@@ -25,6 +25,19 @@ export interface RasterRequest {
   height: number;
   /** 片段内本地时间（秒）。静态文档传 0。 */
   localSec: number;
+  /**
+   * 工程 fps / 片段时长 / 工程种子 —— 脚本的 `ctx.frame`、`ctx.duration`、
+   * `ctx.rand` 全部由它们派生。**必须与预览同源**：`TypographyRuntime`
+   * 从 store 读，光栅化后端不自己猜。
+   */
+  fps: number;
+  duration: number;
+  seed: number;
+  /**
+   * 脚本总开关。false = 一条脚本都不执行（画面按文档原样渲染），
+   * 并且缓存键走静态模式（见 `cache-key.ts` 的模式盐）。
+   */
+  scriptsActive: boolean;
   /** 图片素材 → URL。 */
   resolveImage?: (assetId: string) => string | null;
   /** 图片素材是不是「脱机」的（引用不存在）→ 画面给占位符。 */

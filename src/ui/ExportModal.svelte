@@ -30,6 +30,7 @@
     exportPngSequence,
     fmtSize,
     gifPlan,
+    hasRunnableTypoScripts,
     probeMp4Availability,
     samplePngFrameBytes,
     totalFrames,
@@ -126,6 +127,16 @@
     };
   });
   const mp4Blocked = $derived(mp4.kind === 'no-webcodecs' || mp4.kind === 'no-h264');
+
+  /**
+   * 工程带脚本、总开关却关着 —— 导出的是一份**没有脚本效果的静态版**。
+   * 这里必须显式提示并给一键开启：静默出一份不一样的片子是最坏的一类错。
+   */
+  const scriptWarn = $derived.by(() => {
+    void appState.version;
+    void appState.runTypoScripts;
+    return !appState.runTypoScripts && hasRunnableTypoScripts();
+  });
   const mp4Size = $derived.by(() => {
     void appState.version;
     return fmtSize(estimateMp4Bytes());
@@ -227,6 +238,19 @@
       <Button label={tr('common.cancel')} variant="outline" testid="export-cancel" onclick={cancelExport} />
     </div>
   {:else}
+    {#if scriptWarn}
+      <div class="exp-script-warn" data-testid="export-script-warn">
+        <span>{tr('typo.scriptExportWarn')}</span>
+        <Button
+          label={tr('typo.scriptExportEnable')}
+          variant="outline"
+          size="sm"
+          testid="export-script-enable"
+          onclick={() => appState.setRunTypoScripts(true)}
+        />
+      </div>
+    {/if}
+
     <!--
       Track filter applies to all three formats, so it sits above the GIF-only
       params. Audio tracks are deliberately absent: audio is handled separately,
@@ -522,6 +546,24 @@
     font-size: var(--fs-xs);
     line-height: 1.4;
     text-align: center;
+  }
+  /* 脚本未开启的导出警告：是一整行可操作提示（含「开启并继续」），不是注解。 */
+  .exp-script-warn {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: var(--sp-2) 0 0;
+    padding: 4px var(--sp-2);
+    background: color-mix(in srgb, var(--warning) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+    border-radius: var(--radius-sm);
+    color: var(--warning);
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+  }
+  .exp-script-warn span {
+    flex: 1;
+    min-width: 0;
   }
   /* 软件编码提示：是警告不是错误（能导，只是慢），所以用 warning 色。 */
   .exp-hint-soft {

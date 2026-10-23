@@ -158,6 +158,9 @@ async function dispatch(name, args, extra) {
         ]),
       );
 
+    case 'artmatic_typo_set_scripts':
+      return unwrap(await bridge.call('setTypographyScripts', [args.clipId, args.scripts]));
+
     case 'artmatic_typo_set_text':
       return unwrap(await bridge.call('setTypographyText', [args.clipId, args.elementId, args.text]));
 

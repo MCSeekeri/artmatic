@@ -55,10 +55,24 @@ export interface RasterKeyInput {
   h: number;
   /** 静态文档传 null；动画文档传片段内帧号。 */
   frame: number | null;
+  /**
+   * 模式盐：脚本总开关 / 插件渲染钩子是否参与。
+   *
+   * 同一份文档在「脚本关」下烘出来的图与「脚本开」下完全不同，而两者的
+   * `docHash` 一模一样 —— 没有盐的话切换开关会直接命中旧图（表现是
+   * 「打开了脚本，画面没有任何变化」）。`latest` 回退按最后一个 `|`
+   * 之前的片段分组，盐放在最后不影响它。
+   */
+  scriptsActive?: boolean;
+  hooksActive?: boolean;
+}
+
+function modeSalt(i: RasterKeyInput): string {
+  return `${i.scriptsActive ? 's1' : 's0'}${i.hooksActive ? 'h1' : 'h0'}`;
 }
 
 export function rasterKey(i: RasterKeyInput): string {
-  return `${i.docHash}|${i.w}x${i.h}|${i.frame ?? '-'}`;
+  return `${i.docHash}|${i.w}x${i.h}|${i.frame ?? '-'}|${modeSalt(i)}`;
 }
 
 /** 由文档直接算键。 */
@@ -67,14 +81,30 @@ export function rasterKeyForDoc(
   w: number,
   h: number,
   frame: number | null,
+  mode: { scriptsActive?: boolean; hooksActive?: boolean } = {},
 ): string {
-  return rasterKey({ docHash: docHash(doc), w, h, frame });
+  return rasterKey({
+    docHash: docHash(doc),
+    w,
+    h,
+    frame,
+    scriptsActive: mode.scriptsActive,
+    hooksActive: mode.hooksActive,
+  });
 }
 
 /**
  * 该文档此刻应当用哪个帧号进缓存键。
  * 静态文档返回 null → 尺寸相同就永远命中同一条缓存。
+ *
+ * 插件渲染钩子会让**每一帧的文档都可能不同**，所以它同样按动画文档处理
+ * （否则逐帧改写的文档会被静态键缓存住，画面停在第一次烘出来的那张）。
  */
-export function frameKeyFor(doc: TypographyDocument, frame: number): number | null {
-  return docIsAnimated(doc) ? frame : null;
+export function frameKeyFor(
+  doc: TypographyDocument,
+  frame: number,
+  scriptsActive = false,
+  hooksActive = false,
+): number | null {
+  return docIsAnimated(doc, scriptsActive) || hooksActive ? frame : null;
 }

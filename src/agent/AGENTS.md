@@ -219,6 +219,24 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   `elements[2].colour`），静默归一化会让模型照着一份自己以为对的文档继续做。
   同理 `docView` 的 `full` 对缺 `fonts` / `elements` 的旧文档必须兜底（曾经整档崩 `internal`）。
 
+## 排版文档脚本（`doc.scripts`）
+
+- 工具：`typo_set_scripts({ clipId, scripts })` 整表替换（一笔撤销，数组顺序 = 执行
+  顺序）；`[]` 清空，**省略字段保留**（与 `animations` 同一条无损往返纪律）。
+  `get_typography_doc({detail:'full'})` 带 `scripts`；`typo_replace_doc` 省略时保留。
+- **能力清单是 API 的唯一真源**：`get_typography_capabilities().scripts` 给
+  `ctx` 字段 / 元素与逐字句柄 / 纯函数 / `needs` / 上限 / 模板 / `running` / `rules`。
+  改 `ctx` 的任何方法都必须同时改这里与 `mcp/tools.mjs` 的 `typo_set_scripts` 描述。
+- 写入前**编译检查**（`checkScriptSyntax`，只编译不执行）：语法错误在改动之前抛
+  `invalid-argument`，带脚本名与引擎消息。结构错误（重复 id / 未知 needs / 超长）
+  也拒绝而不是 `sanitize` 后静默降级 —— 降级的表现是「回执说成功、画面没变化」。
+- **不要承诺效果已经可见**：脚本总开关默认关（`UiPrefs.runTypoScripts`），关闭时
+  画面与没有脚本逐像素相同。`scripts.running` 就是写给模型看的那句话。
+- `scripts` 是可选字段 ⇒ 不抬 `SCHEMA_VERSION`；但 `coerceDocument` 的 `DOC_KEYS`
+  必须包含它，否则整份替换会把它当未知键丢掉。
+- 诊断（编译失败 / 运行错误 / 超预算）不进文档，在 `typography/script/diagnostics.ts`；
+  工具回执不返回它们（本轮不把运行期状态混进读形状）。
+
 ## 插件作者面
 
 - 两级：`plugin_try`（内存载入 + 真 GL 编译，可预览）→ `plugin_install`（写盘）。

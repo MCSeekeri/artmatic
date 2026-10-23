@@ -139,6 +139,17 @@ interface UiPrefs {
   /** 右侧「图层 / 动画」面板宽度。 */
   typoPanelWidth: number;
   /**
+   * **运行排版文档里的脚本**（默认关）。
+   *
+   * 这是排版脚本唯一的信任边界：工程是内容，脚本是随内容带来的任意代码。
+   * 关着时脚本一条都不执行、画面按文档原样渲染（面板会标「脚本未运行」），
+   * 导出也不会偷偷带上脚本效果。
+   *
+   * 存 UI 偏好而不是工程：换台机器 / 换个人打开同一份工程时，**跑不跑代码
+   * 应该由这台机器上的人决定**，不该跟着工程文件走。
+   */
+  runTypoScripts: boolean;
+  /**
    * 检查器里的「缩放 X / Y」是否联动。默认**联动**（true），勾「分离 XY」后
    * 变成两个独立轴。存 UI 偏好而不是工程：它描述的是「怎么调参数」的习惯，
    * 与这一份工程的内容无关（同吸附档位）。
@@ -233,6 +244,8 @@ function loadUiPrefs(): UiPrefs {
     typoPanelWidth: TYPO_PANEL_W.default,
     timelineHeight: TRACKS_H.default,
     scaleLinked: true,
+    // **默认关**：脚本是工程带进来的任意代码，不能「打开即执行」。
+    runTypoScripts: false,
   };
   try {
     const raw = localStorage.getItem(UI_KEY);
@@ -267,6 +280,8 @@ function loadUiPrefs(): UiPrefs {
       typoPanelWidth: clampTypoPanelWidth(Number(p.typoPanelWidth) || fallback.typoPanelWidth),
       timelineHeight: clampTimelineHeight(Number(p.timelineHeight) || fallback.timelineHeight),
       scaleLinked: typeof p.scaleLinked === 'boolean' ? p.scaleLinked : fallback.scaleLinked,
+      runTypoScripts:
+        typeof p.runTypoScripts === 'boolean' ? p.runTypoScripts : fallback.runTypoScripts,
     };
   } catch {
     return fallback;
@@ -597,6 +612,8 @@ class AppState {
   typoGrid = $state<TypoGridPrefs>({ ...DEFAULT_TYPO_GRID });
   /** 右侧「图层 / 动画」面板宽度（可拖）。 */
   typoPanelWidth = $state<number>(TYPO_PANEL_W.default);
+  /** 运行排版文档里的脚本（默认关，见 `UiPrefs.runTypoScripts`）。 */
+  runTypoScripts = $state<boolean>(false);
   /** 轨道区高度（可拖；与两个抽屉宽度同一套「实例值 + setter」纪律）。 */
   timelineHeight = $state<number>(TRACKS_H.default);
   /**
@@ -681,6 +698,20 @@ class AppState {
     if (this.typoPanelWidth === next) return;
     this.typoPanelWidth = next;
     this.persistUi();
+  }
+
+  /**
+   * 开关排版脚本。
+   *
+   * `store.touch()` 不能省：光栅化缓存键里的模式盐跟着变，但**已经烘好的
+   * 纹理还在缓存里**，不 bump version 的话预览与舞台都不会重画 ——
+   * 表现是「打开了脚本开关，画面没有任何变化」。
+   */
+  setRunTypoScripts(on: boolean): void {
+    if (this.runTypoScripts === on) return;
+    this.runTypoScripts = on;
+    this.persistUi();
+    if (this.projects.length) this.store.touch();
   }
 
   /* ---------------------------------------------------------- 打开的工程 */
@@ -1759,6 +1790,7 @@ class AppState {
     this.typoPanelWidth = prefs.typoPanelWidth;
     this.timelineHeight = prefs.timelineHeight;
     this.scaleLinked = prefs.scaleLinked;
+    this.runTypoScripts = prefs.runTypoScripts;
   }
 
   /**
@@ -1941,6 +1973,7 @@ class AppState {
       typoPanelWidth: this.typoPanelWidth,
       timelineHeight: this.timelineHeight,
       scaleLinked: this.scaleLinked,
+      runTypoScripts: this.runTypoScripts,
     });
   }
 
@@ -2222,6 +2255,8 @@ class AppState {
     this.textRaster = new TypographyRuntime(core.kit, this.textBackends, this.fonts, {
       onReady: () => this.store.touch(),
       fps: () => this.store.project.fps,
+      projectSeed: () => this.store.project.seed,
+      scriptsEnabled: () => this.runTypoScripts,
     });
     this.sources.setTextResolver(this.textRaster.resolve);
     // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。

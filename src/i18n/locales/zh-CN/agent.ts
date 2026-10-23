@@ -192,6 +192,9 @@ export const agent = {
   'agent.typo.widthTooLarge': '排版画布过大（{w}×{h}，上限 {max} 边长）',
   'agent.typo.distributeMin': 'distribute 至少需要 3 个元素',
   'agent.typo.badCols': 'cols 必须 ≥ 1',
+  'agent.typo.scriptsNotArray': 'scripts 必须是数组（[] 表示清空）',
+  'agent.typo.scriptInvalid': '脚本不合法：{detail}',
+  'agent.typo.scriptSyntax': '脚本「{name}」有语法错误：{detail}',
 
   /* ------------------------------------------------------------ 插件 */
   'agent.plugin.badId': '插件 id「{id}」不合法：必须是 [a-z0-9][a-z0-9._-]*，长度 ≤ 64',
@@ -425,6 +428,7 @@ export const agent = {
   'agent.toolName.typoUpdateElement': '修改排版元素',
   'agent.toolName.typoUpdateElements': '批量修改排版元素',
   'agent.toolName.typoSetAnimation': '设置元素动画',
+  'agent.toolName.typoSetScripts': '设置文档脚本',
   'agent.toolName.typoMeasure': '测量排版几何',
   'agent.toolName.typoSetText': '修改文字',
   'agent.toolName.typoRemoveElement': '删除排版元素',
