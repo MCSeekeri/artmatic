@@ -196,7 +196,7 @@ describe('sceneVersion', () => {
 /* ------------------------------------------------ 元素动画（Agent 反馈 10） */
 
 describe('元素动画', () => {
-  it('预设动画落库，读回时给完整字段（不是只有 kind+duration）', async () => {
+  it('预设动画落库成结构化轨道，读回时给完整字段（不是只有 kind+duration）', async () => {
     const h = harness();
     const clipId = await textClip(h);
     const el = await ok(h.cp.addTypographyElement(clipId, { kind: 'text', text: 'T' }));
@@ -205,18 +205,24 @@ describe('元素动画', () => {
       h.cp.setTypographyAnimation(clipId, el.elementId, { preset: 'slide-in-up', duration: 0.8, loop: 'infinite' }),
     );
     const anims = (r.element as { animations?: Record<string, unknown>[] }).animations ?? [];
-    expect(anims).toHaveLength(1);
-    expect(anims[0]!.kind).toBe('preset');
-    expect(anims[0]!.preset).toBe('slide-in-up');
+    // slide-in-up 动 transform.translateY + opacity ⇒ **每条一个属性**。
+    expect(anims.map((a) => [a.kind, a.prop])).toEqual([
+      ['tracks', 'y'],
+      ['tracks', 'opacity'],
+    ]);
+    expect(anims[0]!.keys).toEqual([
+      { t: 0, v: 80, ease: null },
+      { t: 0.8, v: 0, ease: null },
+    ]);
     expect(anims[0]!.duration).toBeCloseTo(0.8, 6);
     expect(anims[0]!.iterations).toBe('infinite');
   });
 
-  it('keys 的 { beat } 按工程 BPM 换算成 0..1（120BPM ⇒ 一拍 0.5s）', async () => {
+  it('旧式 keys 的 { beat } 按工程 BPM 换算成绝对秒（120BPM ⇒ 一拍 0.5s）', async () => {
     const h = harness();
     const clipId = await textClip(h);
     const el = await ok(h.cp.addTypographyElement(clipId, { kind: 'text', text: 'T' }));
-    // 工程默认 120BPM / offset 0；动画时长 1s ⇒ beat 1 = 0.5s = at 0.5。
+    // 工程默认 120BPM / offset 0；动画时长 1s ⇒ beat 1 = 0.5s。
     await ok(
       h.cp.setTypographyAnimation(clipId, el.elementId, {
         duration: 1,
@@ -227,9 +233,14 @@ describe('元素动画', () => {
       }),
     );
     const doc = await ok(h.cp.getTypographyDoc(clipId, 'full'));
-    const anim = (doc.elements[0] as { animations?: { css?: string }[] }).animations?.[0];
-    expect(anim?.css).toContain('0%{opacity:0}');
-    expect(anim?.css).toContain('50%{opacity:1}');
+    const anim = (doc.elements[0] as { animations?: { kind?: string; prop?: string; keys?: unknown }[] })
+      .animations?.[0];
+    expect(anim?.kind).toBe('tracks');
+    expect(anim?.prop).toBe('opacity');
+    expect(anim?.keys).toEqual([
+      { t: 0, v: 0, ease: null },
+      { t: 0.5, v: 1, ease: null },
+    ]);
   });
 
   it('预设名拼错时报 invalid-argument（不静默忽略）', async () => {

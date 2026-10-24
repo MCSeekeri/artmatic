@@ -493,6 +493,20 @@ export interface TypographyCapabilities {
    */
   animations: {
     presets: { id: string; duration: number; easing: string; params?: Record<string, number> }[];
+    /**
+     * 结构化轨道（首选形态）：一条动画一个属性、关键帧存相对片段起点的绝对秒。
+     *
+     * 这张表是模型唯一能知道「`t` 不是 0..1」的地方 —— 缺了它，模型会拿旧的
+     * `at` 口径往里填，而错位的表现只有「动得不对」，不报错。
+     */
+    tracks: {
+      form: string;
+      prop: string;
+      channels: { id: string; unit: string; identity: number }[];
+      keys: { t: string; v: string; ease: string };
+      derived: string;
+      valueGate: string;
+    };
     easings: string[];
     directions: string[];
     fills: string[];

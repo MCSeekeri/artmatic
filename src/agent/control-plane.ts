@@ -787,21 +787,33 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   }
 
   /**
-   * 动画关键帧的 `at` 允许写 `{ beat: n }`：读工程 BPM 换算成动画进度。
+   * 动画关键帧允许写 `{ beat: n }`：读工程 BPM 换算成秒 / 进度。
    *
-   * 换算只在这里发生（文档模型不认识拍号，`typography/` 只收 0..1）——
-   * 与 `core/curve.ts` 的 `beatAnchor` 同一条纪律：不要在数据里物化秒。
+   * 两种时间口径都要管：
+   *  - 旧式 `keys[].at`（0..1 进度）→ `timeAtBeat / duration`；
+   *  - 结构化轨道 `keys[].t`（**相对片段起点的绝对秒**）→ `timeAtBeat − clip.start`。
+   *
+   * 换算只在这里发生（文档模型不认识拍号）—— 与 `core/curve.ts` 的 `beatAnchor`
+   * 同一条纪律：不要在数据里物化拍号。
    */
-  function resolveBeatKeys(store: ProjectStore, input: unknown): unknown {
+  function resolveBeatKeys(store: ProjectStore, input: unknown, clipStart = 0): unknown {
     if (!isRecord(input) || !Array.isArray(input.keys)) return input;
     const duration = Number(input.duration) > 0 ? Number(input.duration) : 0.6;
     const grid = store.project.beatGrid;
     const keys = input.keys.map((k) => {
-      if (!isRecord(k) || !isRecord(k.at)) return k;
-      const beat = Number(k.at.beat);
-      if (!Number.isFinite(beat)) return k;
-      const sec = timeAtBeat(beat, grid);
-      return { ...k, at: Math.max(0, Math.min(1, sec / duration)) };
+      if (!isRecord(k)) return k;
+      if (isRecord(k.at)) {
+        const beat = Number(k.at.beat);
+        if (!Number.isFinite(beat)) return k;
+        const sec = timeAtBeat(beat, grid);
+        return { ...k, at: Math.max(0, Math.min(1, sec / duration)) };
+      }
+      if (isRecord(k.t)) {
+        const beat = Number(k.t.beat);
+        if (!Number.isFinite(beat)) return k;
+        return { ...k, t: Math.max(0, timeAtBeat(beat, grid) - clipStart) };
+      }
+      return k;
     });
     return { ...input, keys };
   }
@@ -2972,7 +2984,15 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return run(() => {
         const store = beforeWrite();
         const id = typoClipId(clipId);
-        return typo.setElementAnimation(store, id, elementId, resolveBeatKeys(store, input), mode ?? 'replace');
+        // `t` 是相对片段起点的秒，拍换算要用片段起点把工程绝对时间折回来。
+        const clipStart = store.findClip(id)?.clip.start ?? 0;
+        return typo.setElementAnimation(
+          store,
+          id,
+          elementId,
+          resolveBeatKeys(store, input, clipStart),
+          mode ?? 'replace',
+        );
       });
     },
     async setTypographyScripts(clipId, scripts) {

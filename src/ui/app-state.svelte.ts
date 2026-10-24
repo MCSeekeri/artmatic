@@ -136,8 +136,11 @@ interface UiPrefs {
    * 不必再回到这里补三处（fallback / normalize / persist）。
    */
   typoGrid: TypoGridPrefs;
-  /** 右侧「图层 / 动画」面板宽度。 */
+  /** 右侧「图层 / 元素属性」面板宽度。 */
   typoPanelWidth: number;
+  /** 预览下方关键帧面板的高度（可上下拖）与展开状态。 */
+  typoKfHeight: number;
+  typoKfOpen: boolean;
   /**
    * **运行排版文档里的脚本**（默认关）。
    *
@@ -168,6 +171,19 @@ export const TYPO_PANEL_W = { min: 140, max: 420, default: 208 } as const;
 export function clampTypoPanelWidth(w: number): number {
   if (!Number.isFinite(w)) return TYPO_PANEL_W.default;
   return Math.min(TYPO_PANEL_W.max, Math.max(TYPO_PANEL_W.min, Math.round(w)));
+}
+
+/**
+ * 关键帧面板高度档位（px）。
+ *
+ * 下限 96 = 顶栏 + 标尺 + 两条轨道（再矮就只剩标题，拖它没有意义）；
+ * 上限 360 = 面板再高就会把画布压到看不清字 —— 而看字是排版编辑器的本职。
+ */
+export const TYPO_KF_H = { min: 96, max: 360, default: 168 } as const;
+
+export function clampTypoKfHeight(h: number): number {
+  if (!Number.isFinite(h)) return TYPO_KF_H.default;
+  return Math.min(TYPO_KF_H.max, Math.max(TYPO_KF_H.min, Math.round(h)));
 }
 
 /** 轨道区高度档位（px）。下限保证轨道头与片段仍可读，上限给预览留活路。 */
@@ -242,6 +258,8 @@ function loadUiPrefs(): UiPrefs {
     mascotEnabled: false,
     typoGrid: { ...DEFAULT_TYPO_GRID },
     typoPanelWidth: TYPO_PANEL_W.default,
+    typoKfHeight: TYPO_KF_H.default,
+    typoKfOpen: true,
     timelineHeight: TRACKS_H.default,
     scaleLinked: true,
     // **默认关**：脚本是工程带进来的任意代码，不能「打开即执行」。
@@ -278,6 +296,8 @@ function loadUiPrefs(): UiPrefs {
         typeof p.mascotEnabled === 'boolean' ? p.mascotEnabled : fallback.mascotEnabled,
       typoGrid: normalizeTypoGrid(p.typoGrid, fallback.typoGrid),
       typoPanelWidth: clampTypoPanelWidth(Number(p.typoPanelWidth) || fallback.typoPanelWidth),
+      typoKfHeight: clampTypoKfHeight(Number(p.typoKfHeight) || fallback.typoKfHeight),
+      typoKfOpen: typeof p.typoKfOpen === 'boolean' ? p.typoKfOpen : fallback.typoKfOpen,
       timelineHeight: clampTimelineHeight(Number(p.timelineHeight) || fallback.timelineHeight),
       scaleLinked: typeof p.scaleLinked === 'boolean' ? p.scaleLinked : fallback.scaleLinked,
       runTypoScripts:
@@ -610,8 +630,11 @@ class AppState {
   typoAlignTarget = $state<'canvas' | 'selection'>('canvas');
   /** 网格 / 画幅线框。整块作为一个偏好项存，避免每加一个开关就改四处持久化代码。 */
   typoGrid = $state<TypoGridPrefs>({ ...DEFAULT_TYPO_GRID });
-  /** 右侧「图层 / 动画」面板宽度（可拖）。 */
+  /** 右侧「图层 / 元素属性」面板宽度（可拖）。 */
   typoPanelWidth = $state<number>(TYPO_PANEL_W.default);
+  /** 关键帧面板高度（可上下拖）与展开状态。 */
+  typoKfHeight = $state<number>(TYPO_KF_H.default);
+  typoKfOpen = $state<boolean>(true);
   /** 运行排版文档里的脚本（默认关，见 `UiPrefs.runTypoScripts`）。 */
   runTypoScripts = $state<boolean>(false);
   /** 轨道区高度（可拖；与两个抽屉宽度同一套「实例值 + setter」纪律）。 */
@@ -697,6 +720,19 @@ class AppState {
     const next = clampTypoPanelWidth(w);
     if (this.typoPanelWidth === next) return;
     this.typoPanelWidth = next;
+    this.persistUi();
+  }
+
+  setTypoKfHeight(h: number): void {
+    const next = clampTypoKfHeight(h);
+    if (this.typoKfHeight === next) return;
+    this.typoKfHeight = next;
+    this.persistUi();
+  }
+
+  setTypoKfOpen(open: boolean): void {
+    if (this.typoKfOpen === open) return;
+    this.typoKfOpen = open;
     this.persistUi();
   }
 
@@ -1788,6 +1824,8 @@ class AppState {
     this.mascotEnabled = prefs.mascotEnabled;
     this.typoGrid = prefs.typoGrid;
     this.typoPanelWidth = prefs.typoPanelWidth;
+    this.typoKfHeight = prefs.typoKfHeight;
+    this.typoKfOpen = prefs.typoKfOpen;
     this.timelineHeight = prefs.timelineHeight;
     this.scaleLinked = prefs.scaleLinked;
     this.runTypoScripts = prefs.runTypoScripts;
@@ -1971,6 +2009,8 @@ class AppState {
       mascotEnabled: this.mascotEnabled,
       typoGrid: this.typoGrid,
       typoPanelWidth: this.typoPanelWidth,
+      typoKfHeight: this.typoKfHeight,
+      typoKfOpen: this.typoKfOpen,
       timelineHeight: this.timelineHeight,
       scaleLinked: this.scaleLinked,
       runTypoScripts: this.runTypoScripts,

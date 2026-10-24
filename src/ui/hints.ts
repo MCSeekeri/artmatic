@@ -42,7 +42,11 @@ export type HintTarget =
   | { kind: 'clip'; id: string }
   | { kind: 'rows' }
   | { kind: 'ruler' }
-  | { kind: 'track' };
+  | { kind: 'track' }
+  /** 排版编辑器的关键帧时间轴：轨道区（拖动 = 框选）。 */
+  | { kind: 'kf' }
+  /** 同上，标尺（拖动 = 播放头）。 */
+  | { kind: 'kfRuler' };
 
 /** 场景快照。全是**值**，不是 store —— 纯函数才好测。 */
 export interface HintContext {
@@ -136,7 +140,11 @@ export function hoverHint(target: HintTarget | null, ctx: HintContext): Hint | n
    * `pointerleave` —— 指针「还挂在」一个已经看不见的片段上。少这一句，排版页的
    * 底栏会一直报「F2 重命名 / Del 删除」，而那边根本没有片段这个概念。
    */
-  if (!target || ctx.view !== 'timeline') return null;
+  if (!target) return null;
+  // 关键帧时间轴反过来：它只在排版页存在。轨道与标尺是两套手势，别混说。
+  if (target.kind === 'kf') return ctx.view === 'typography' ? KF_HINT : null;
+  if (target.kind === 'kfRuler') return ctx.view === 'typography' ? KF_RULER_HINT : null;
+  if (ctx.view !== 'timeline') return null;
   switch (target.kind) {
     case 'clip': {
       if (!ctx.selectedIds.includes(target.id)) {
@@ -166,6 +174,28 @@ export function hoverHint(target: HintTarget | null, ctx: HintContext): Hint | n
       return TRACK_HINT;
   }
 }
+
+/**
+ * 关键帧轨道区：拖动 = **框选**（与片段编辑器一致，不是擦洗），双击补帧。
+ *
+ * 「双击加帧」原来写在面板顶栏里，那是**位置固定的说明文字** —— 一条只在
+ * 指针真的落在轨道上时才成立的操作提示，属于底栏。
+ */
+const KF_HINT: Hint = {
+  text: 'typo.kfAddKeyHint',
+  actions: [
+    { keysKey: 'sc.key.dragEmpty', labelKey: 'typo.kfMarquee' },
+    { keysKey: 'sc.key.ctrlWheel', labelKey: 'hint.zoomTimeline' },
+  ],
+};
+
+/** 关键帧标尺：拖动 = 播放头（与片段编辑器的标尺同一套手势）。 */
+const KF_RULER_HINT: Hint = {
+  actions: [
+    shortcutOf('sc.scrub'),
+    { keysKey: 'sc.key.ctrlWheel', labelKey: 'hint.zoomTimeline' },
+  ],
+};
 
 /** 轨道行空白。三件事按「最可能想做的」排：框选 → 新建 → 拖文件进来。 */
 const ROWS_HINT: Hint = {

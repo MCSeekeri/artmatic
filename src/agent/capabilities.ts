@@ -25,6 +25,7 @@ import { resolveLabel } from '../i18n/label';
 import { tr } from '../i18n/index.svelte';
 import { BUILTIN_THEMES, THEME_SLOTS, themeDisplayName, themeIds, type TypographyTheme } from '../typography/theme';
 import { ANIM_PRESETS } from '../typography/animation';
+import { ANIM_CHANNELS, CHANNEL_META } from '../typography/animation-tracks';
 import { SCRIPT_LIMITS } from '../typography/script/model';
 import { SCRIPT_TEMPLATES } from '../typography/script/templates';
 import { SVG_GENERATORS, defaultsOf } from '../typography/svg-gen/registry';
@@ -358,6 +359,34 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
         easing: typeof p.easing === 'string' ? p.easing : 'cubic-bezier',
         ...(p.params ? { params: p.params } : {}),
       })),
+      /*
+       * 结构化轨道（首选形态）。这张表必须写形状与单位：模型不会说「做不到」，
+       * 它会拿 `at` 当秒用、或者把两个属性塞进一条动画（后写的那个静默无效）。
+       */
+      tracks: {
+        form: '{ prop, keys: [{ t, v, ease? }], loop?, easing?, direction?, fill? }',
+        prop:
+          'x | y | sx | sy | rot | opacity | blur, or ANY CSS property name in kebab-case ' +
+          '("letter-spacing", "clip-path", "color", "transform"). ONE animation animates ONE ' +
+          'property — to make properties start at different times, send several animations ' +
+          '(mode:"add"); never animate the same property twice on one element.',
+        channels: ANIM_CHANNELS.map((id) => ({
+          id,
+          unit: CHANNEL_META[id].unit,
+          identity: CHANNEL_META[id].identity,
+        })),
+        keys: {
+          t: 'ABSOLUTE SECONDS from the clip start (not 0..1, not frames) or { beat: n }',
+          v: 'number for channels (px / factor / degrees / 0..1), raw CSS string for any other property',
+          ease: 'easing of the segment starting at this key (keyword or [x1,y1,x2,y2]); omit to inherit',
+        },
+        derived:
+          'delay = first key, duration = last key − first key. Passing delay / duration does not ' +
+          'change the timing of a track (move the keys instead).',
+        valueGate:
+          'custom property values reject ; { } < > url( and !important (they would escape the ' +
+          "element's style rule); custom property names must be kebab-case and cannot be animation-*",
+      },
       easings: ['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'cubic-bezier(x1,y1,x2,y2)'],
       directions: ['normal', 'reverse', 'alternate', 'alternate-reverse'],
       fills: ['none', 'forwards', 'backwards', 'both'],
@@ -379,13 +408,15 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
           'motion — do not approximate a 3D flip with scale.',
       },
       note:
-        '`duration` / `delay` are SECONDS. `keys[].at` is 0..1 of the animation (not seconds, ' +
-        'not frames); `{ beat: n }` is also accepted and is converted with the project BPM. ' +
-        'Key props: x / y are px offsets, sx / sy are scale factors, rot is DEGREES, blur is px, ' +
-        'opacity is 0..1. Animations live in the document and are evaluated by the same clock ' +
-        'as everything else, so they render in exports too. The read-back shape (what ' +
-        '`get_typography_doc` returns, `iterations` instead of `loop`) is accepted verbatim, so a ' +
-        'document can be read, edited and written back without losing animations.',
+        '`duration` / `delay` are SECONDS. Two time units exist and they are NOT the same: the ' +
+        'structured form (`prop` + `keys[]`) uses `t` = ABSOLUTE seconds from the clip start, ' +
+        'while the legacy `keys[].at` is 0..1 of the animation. `{ beat: n }` is accepted in both ' +
+        'and is converted with the project BPM. Key props: x / y are px offsets, sx / sy are scale ' +
+        'factors, rot is DEGREES, blur is px, opacity is 0..1. Animations live in the document and ' +
+        'are evaluated by the same clock as everything else, so they render in exports too. The ' +
+        'read-back shape (what `get_typography_doc` returns: `prop` + `keys`, `iterations` instead ' +
+        'of `loop`) is accepted verbatim, so a document can be read, edited and written back ' +
+        'without losing animations.',
     },
     scripts: {
       fields: ['id', 'name', 'code', 'enabled', 'targets', 'needs'],

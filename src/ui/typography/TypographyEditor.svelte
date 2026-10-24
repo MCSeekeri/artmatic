@@ -24,6 +24,8 @@
   import QuadEditLayer from './QuadEditLayer.svelte';
   import NodeEditor from './NodeEditor.svelte';
   import SidePanel from './SidePanel.svelte';
+  import KeyframePanel from './KeyframePanel.svelte';
+  import { kfPanel } from './keyframe-panel-state.svelte';
   import CanvasSizePopover from './CanvasSizePopover.svelte';
   import BackgroundLayer from './BackgroundLayer.svelte';
   import { bgPreview } from './background-preview.svelte';
@@ -113,6 +115,8 @@
   let panning = $state(false);
   /** 右栏宽度拖曳中（与检查器一致：拖动中分隔条保持高亮）。 */
   let panelResizing = $state(false);
+  /** 关键帧面板高度拖曳中。 */
+  let kfResizing = $state(false);
   /** 右键菜单的屏幕坐标。null = 关着。 */
   let ctxMenu = $state<{ x: number; y: number } | null>(null);
 
@@ -353,6 +357,19 @@
     return only.kind === 'preset' ? only.preset : null;
   });
 
+  /**
+   * Ribbon 的时序控件操作哪一条动画：**关键帧面板里选中的那条**优先。
+   *
+   * 一个元素可以有多条（一条一个属性），全改会把「位移 0.4s、淡入 0s」的编排
+   * 一键抹平成同一套时序。
+   */
+  const activeAnim = $derived.by(() => {
+    void appState.version;
+    const all = selection.flatMap((e) => e.animations);
+    const id = kfPanel.animId;
+    return (id ? all.find((a) => a.id === id) : null) ?? all[0] ?? null;
+  });
+
   const tabs = $derived.by(() => {
     void appState.version;
     void appState.typoAlignTarget;
@@ -367,7 +384,7 @@
         localFontFamilies: appState.localFontFamilies,
         supportsLocalFonts: appState.supportsLocalFonts,
         activePreset,
-        anim: selection.flatMap((e) => e.animations)[0] ?? null,
+        anim: activeAnim,
         onOpenCustomCss: () => (customCssOpen = true),
         onOpenIconPicker: () => (iconPickerOpen = true),
         onOpenGenPicker: () => (genPickerOpen = true),
@@ -876,6 +893,28 @@
   }
 
   /**
+   * 关键帧面板高度拖曳：面板在预览**下方**，指针往上移 ⇒ 面板变高，所以是减。
+   * （与右侧竖把手方向相反，见 ui/AGENTS.md 里「方向都是边界跟随光标」那条。）
+   */
+  function startKfDrag(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = appState.typoKfHeight;
+    kfResizing = true;
+    const onMove = (ev: PointerEvent): void => {
+      appState.setTypoKfHeight(startH - (ev.clientY - startY));
+    };
+    const onUp = (): void => {
+      kfResizing = false;
+      window.removeEventListener('pointermove', onMove);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointercancel', onUp, { once: true });
+  }
+
+  /**
    * 按在**选择框**上。
    *
    * 选择框会吞掉 pointerdown（拖整块选区靠它），所以「再单击一次进入组合」
@@ -1338,6 +1377,7 @@
   <div
     class="main"
     class:resizing={panelResizing}
+    class:kfresizing={kfResizing}
     style:--typo-panel-w={`${appState.typoPanelWidth}px`}
     style:--typo-pool-w={appState.mediaPoolOpen || appState.agentOpen
       ? `${appState.mediaPoolWidth}px`
@@ -1354,6 +1394,12 @@
       <MediaPoolDrawer />
     {/if}
 
+    <!--
+      中间列 = 预览 + 关键帧面板（纵向 flex）。
+      包一层是刻意的：给 `.main` 加一行会让 `.split` 与右栏都要显式 `grid-row`，
+      而「每一列都必须显式定位」这条教训（见 .main 的 CSS 注释）就是这么来的。
+    -->
+    <div class="center">
     <!-- role="presentation" 与 Timeline 的 .rows 一致：这是指针手势面，不是语义容器。 -->
     <div
       class="viewport"
@@ -1526,6 +1572,18 @@
           />
         {/if}
       </div>
+    </div>
+
+    <div
+      class="kf-split"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={tr('typo.kfDrag')}
+      data-testid="typo-kf-split"
+      onpointerdown={startKfDrag}
+    ></div>
+
+    <KeyframePanel />
     </div>
 
     <div
@@ -1765,8 +1823,33 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .viewport {
+  /* 中间列：预览（吃满剩余高度）+ 横向把手 + 关键帧面板。 */
+  .center {
     grid-column: 2;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+  /*
+   * 面板在预览**下方**：指针往上移 ⇒ 面板变高（`startKfDrag` 里是减）。
+   * 命中区 4px、hover / 拖动中实心主题色 —— 与右侧竖把手同一套。
+   */
+  .kf-split {
+    flex: none;
+    height: 4px;
+    cursor: row-resize;
+    background: transparent;
+  }
+  .kf-split:hover,
+  .kfresizing .kf-split {
+    background: var(--accent);
+  }
+  .kfresizing {
+    user-select: none;
+  }
+  .viewport {
+    flex: 1 1 auto;
     position: relative;
     overflow: auto;
     min-height: 0;

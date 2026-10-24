@@ -401,7 +401,8 @@ describe('整份替换：未知键与动画', () => {
     );
     const anims = out.elements[0]!.animations;
     expect(anims).toHaveLength(1);
-    expect(anims[0]!.kind).toBe('preset');
+    // 预设**展开成结构化轨道**（一条动画一个属性），不是留一个只读的 preset 条目。
+    expect(anims[0]!.kind).toBe('tracks');
     expect(anims[0]!.duration).toBeCloseTo(0.4, 6);
   });
 
@@ -473,14 +474,79 @@ describe('动画原语', () => {
   it('setAnimation：replace 覆盖，add 叠加，null 清空', () => {
     const d = doc();
     const el = addTextElement(d, { text: 'x' });
+    // fade-in 只动 opacity、shake 只动 x ⇒ 各一条轨道。`pop` 会动 sx+sy（两条），
+    // 用它会把「replace 后还剩几条」这件事和轨道拆分混在一起。
     setAnimation(el, { preset: 'fade-in' });
     expect(el.animations).toHaveLength(1);
     setAnimation(el, { preset: 'shake' }, 'add');
     expect(el.animations).toHaveLength(2);
-    setAnimation(el, { preset: 'pop' });
+    setAnimation(el, { preset: 'fade-in' });
     expect(el.animations).toHaveLength(1);
     setAnimation(el, null);
     expect(el.animations).toHaveLength(0);
+  });
+
+  it('旧式 keys 按属性拆成多条轨道：sx / sy 缺一条时互相补齐', () => {
+    const d = doc();
+    const el = addTextElement(d, { text: 'x' });
+    setAnimation(el, {
+      keys: [
+        { at: 0, opacity: 0, sx: 0.5 },
+        { at: 1, opacity: 1, sx: 1 },
+      ],
+      duration: 0.4,
+    });
+    expect(el.animations.map((a) => (a.kind === 'tracks' ? a.prop : a.kind)).sort()).toEqual([
+      'opacity',
+      'sx',
+      'sy',
+    ]);
+    const sx = el.animations.find((a) => a.kind === 'tracks' && a.prop === 'sx');
+    expect(sx && sx.kind === 'tracks' && sx.keys.map((k) => k.v)).toEqual([0.5, 1]);
+  });
+
+  it('结构化轨道形态：prop + 绝对秒，多条 = 异步', () => {
+    const parsed = parseAnimationInput({
+      prop: 'y',
+      keys: [
+        { t: 0.4, v: 60 },
+        { t: 1, v: 0, ease: [0.2, 0, 0.2, 1] },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const a = parsed.animation;
+    expect(a.kind).toBe('tracks');
+    if (a.kind !== 'tracks') return;
+    expect(a.delay).toBeCloseTo(0.4, 6);
+    expect(a.duration).toBeCloseTo(0.6, 6);
+    expect(a.keys[1]!.ease).toEqual([0.2, 0, 0.2, 1]);
+  });
+
+  it('结构化轨道读回能被原样写回（prop / 绝对秒 / 逐段 easing 都不丢）', () => {
+    const first = parseAnimationInput({
+      prop: 'opacity',
+      keys: [
+        { t: 0, v: 0, ease: 'ease-in' },
+        { t: 0.6, v: 1 },
+      ],
+      loop: 'infinite',
+      direction: 'alternate',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const again = parseAnimationInput(animationView(first.animation));
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.animation.kind).toBe('tracks');
+    if (again.animation.kind !== 'tracks') return;
+    expect(again.animation.prop).toBe('opacity');
+    expect(again.animation.keys).toEqual([
+      { t: 0, v: 0, ease: 'ease-in' },
+      { t: 0.6, v: 1 },
+    ]);
+    expect(again.animation.iterations).toBe(Infinity);
+    expect(again.animation.direction).toBe('alternate');
   });
 
   it('自定义 CSS：裸 keyframes 体与「块 + 简写」两种写法都收', () => {

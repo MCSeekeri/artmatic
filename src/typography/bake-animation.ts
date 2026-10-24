@@ -19,9 +19,8 @@ import type { TypographyDocument } from './document';
 
 export type AnimValueSnapshot = {
   el: HTMLElement;
-  transform: string;
-  opacity: string;
-  filter: string;
+  /** CSS 属性名（kebab-case）→ 该时刻的计算值。 */
+  values: Map<string, string>;
 };
 
 /** 文档里所有动画：id → 定义。 */
@@ -66,11 +65,59 @@ export function seekAnimations(
   }
 }
 
+/**
+ * `getKeyframes()` 里不是 CSS 属性的键（WAAPI 的元数据）。
+ * 漏掉一个的后果：它会被当成属性名去读计算值，读回空串（无害），但值是对象时
+ * 会拼出 `[object Object]` 写进内联样式。
+ */
+const KEYFRAME_META_KEYS = new Set(['offset', 'computedOffset', 'easing', 'composite']);
+
+/** WAAPI 的键名是 camelCase（`letterSpacing`），CSS 侧一律 kebab-case。 */
+function cssPropName(key: string): string | null {
+  if (KEYFRAME_META_KEYS.has(key)) return null;
+  // `--*` 自定义属性没有大小写折叠，原样透传（注册过的属性会被内插，未注册的是离散）。
+  if (key.startsWith('--')) return key;
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(key)) return null;
+  return key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
+}
+
+/**
+ * 这一层上**实际会被插值的 CSS 属性名**（并集）。
+ *
+ * 为什么不能写死 transform/opacity/filter：那两个枚举来自预设与 agent 的
+ * `keys` 生成器（它们只产这三样），而手写 CSS 通道**属性名不受限**
+ * （`parseCustomCss` 只校验关键帧选择器）。一旦用户写了 `color` / `clip-path`，
+ * 写死的快照就会漏掉它 —— 停掉动画后该属性回落到基础样式值，
+ * 表现是「预览会动、导出不动，且不报错」。
+ */
+function animatedProps(layer: HTMLElement): string[] {
+  const out = new Set<string>();
+  for (const a of layer.getAnimations()) {
+    // `Animation.effect` 的类型是 AnimationEffect，getKeyframes 只在 KeyframeEffect 上。
+    const effect = a.effect as KeyframeEffect | null;
+    if (!effect || typeof effect.getKeyframes !== 'function') continue;
+    for (const frame of effect.getKeyframes()) {
+      for (const key of Object.keys(frame)) {
+        // 该帧没写这个属性时 WAAPI 给 null（计算值），跳过不算「被插值」的证据。
+        if ((frame as Record<string, unknown>)[key] === null) continue;
+        const prop = cssPropName(key);
+        if (prop) out.add(prop);
+      }
+    }
+  }
+  return [...out];
+}
+
 /** 读一遍即将被烘焙掉的属性。 */
 function snapshot(layers: HTMLElement[]): AnimValueSnapshot[] {
   return layers.map((el) => {
     const cs = getComputedStyle(el);
-    return { el, transform: cs.transform, opacity: cs.opacity, filter: cs.filter };
+    const values = new Map<string, string>();
+    for (const prop of animatedProps(el)) {
+      const value = cs.getPropertyValue(prop);
+      if (value) values.set(prop, value);
+    }
+    return { el, values };
   });
 }
 
@@ -98,9 +145,7 @@ export function bakeAnimations(
   const snaps = snapshot(layers);
   for (const s of snaps) s.el.style.animation = 'none';
   for (const s of snaps) {
-    if (s.transform && s.transform !== 'none') s.el.style.transform = s.transform;
-    if (s.opacity) s.el.style.opacity = s.opacity;
-    if (s.filter && s.filter !== 'none') s.el.style.filter = s.filter;
+    for (const [prop, value] of s.values) s.el.style.setProperty(prop, value);
   }
   return snaps;
 }

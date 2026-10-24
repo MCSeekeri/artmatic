@@ -25,10 +25,11 @@ import {
 } from '../typography/theme';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
+import { migrateProjectAnimations } from '../typography/animation-migrate';
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -652,6 +653,30 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
       return changed ? { ...track, clips } : raw;
     });
     return { ...p, tracks: next, schemaVersion: 16 };
+  },
+
+  /**
+   * v16 → v17：排版元素动画从 `preset` / `custom`（CSS 文本）转成结构化轨道
+   * （`kind: 'tracks'`）。
+   *
+   * **真迁移**：关键帧面板只编辑结构化轨道，旧形态读进来在面板里就是一行
+   * 「只读 + 转换」—— 用户打开旧工程会发现自己的动画改不了。所以在这里一次
+   * 转干净（用户 2026-10-24 拍板「打开即迁移」）。
+   *
+   * 转换本身是纯函数（`typography/animation-migrate.ts`），与渲染共用同一套
+   * `@keyframes` 解析与属性闸门。**转换后 `docHash` 会变** ⇒ 旧的光栅缓存自然
+   * 失效；那是会话级 LRU，代价是旧工程首次打开时重烘几帧。
+   */
+  16: (p) => {
+    const { project, report } = migrateProjectAnimations(p);
+    if (report.dropAnimations.length || report.dropProps.length) {
+      // 只报 id 与属性名，不打印整份文档（那会淹没控制台，也不该把用户内容写进日志）。
+      console.warn('[schema] v17 排版动画迁移丢弃了部分内容', {
+        animations: report.dropAnimations,
+        props: report.dropProps,
+      });
+    }
+    return { ...project, schemaVersion: 17 };
   },
 };
 

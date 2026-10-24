@@ -1,28 +1,28 @@
 <script lang="ts">
   /**
-   * SidePanel — 右侧面板的选项卡壳（图层 / 动画）。
+   * SidePanel — 右侧面板的选项卡壳（图层 / 元素属性 / 脚本）。
    *
-   * 两者**共用同一个位置**、用选项卡切换，而不是并排两个面板：
+   * 三者**共用同一个位置**、用选项卡切换，而不是并排：
    * 它们回答的是同一类问题（「这个元素现在是什么状态」），而右侧的宽度
-   * 是稀缺的 —— 并排会把舞台挤到只剩一半。PPT 的「选择窗格 / 动画窗格」
-   * 也是这么放的。
+   * 是稀缺的 —— 并排会把舞台挤到只剩一半。
+   *
+   * **动画不在这里**：它需要一条与时间对齐的横轴，塞进两百多像素宽的侧栏
+   * 只能退回「一根 0.6 秒的条」。关键帧面板在预览下方（`KeyframePanel`）。
    *
    * 选项卡状态放在这里而不是 editorState：它只是「我眼下看哪一栏」，
    * 既不该进撤销栈，也不该进工程文件。
    */
   import LayersPanel from './LayersPanel.svelte';
-  import AnimationPanel from './AnimationPanel.svelte';
   import PropertiesPanel from './PropertiesPanel.svelte';
   import ScriptPanel from './ScriptPanel.svelte';
   import { tr } from '../../i18n/index.svelte';
 
-  type TabId = 'layers' | 'anim' | 'props' | 'script';
+  type TabId = 'layers' | 'props' | 'script';
 
   let tab = $state<TabId>('layers');
 
   const TABS: { id: TabId; label: string; testid: string }[] = [
     { id: 'layers', label: tr('typo.layers'), testid: 'typo-tab-layers' },
-    { id: 'anim', label: tr('typo.animPane'), testid: 'typo-tab-anim' },
     { id: 'props', label: tr('typo.props'), testid: 'typo-tab-props' },
     { id: 'script', label: tr('typo.scriptPane'), testid: 'typo-tab-script' },
   ];
@@ -48,8 +48,6 @@
   <div class="body">
     {#if tab === 'layers'}
       <LayersPanel />
-    {:else if tab === 'anim'}
-      <AnimationPanel />
     {:else if tab === 'props'}
       <PropertiesPanel />
     {:else}

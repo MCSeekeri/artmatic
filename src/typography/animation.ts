@@ -15,6 +15,16 @@
  */
 
 import type { TypographyDocument } from './document';
+import {
+  applyTrackTiming,
+  type TrackEase,
+  channelDeclaration,
+  normalizeKeys,
+  trackSpan,
+  type AnimChannel,
+  type TracksAnimation,
+  type TrackKey,
+} from './animation-tracks';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
@@ -100,7 +110,14 @@ export interface CustomAnimation extends AnimTiming {
   animation?: string;
 }
 
-export type ElementAnimation = PresetAnimation | CustomAnimation;
+export type ElementAnimation = PresetAnimation | CustomAnimation | TracksAnimation;
+
+/**
+ * 结构化轨道（`kind: 'tracks'`）是**编辑器的主模型**：一条动画一个属性、
+ * 关键帧存绝对秒、每段可单独设缓动。定义与纯函数在 `animation-tracks.ts`，
+ * 这里只负责把它发射成 CSS（与 preset / custom 同一条出口）。
+ */
+export type { AnimChannel, TracksAnimation, TrackKey };
 
 /* ------------------------------------------------------------ 预设表 */
 
@@ -263,6 +280,8 @@ export function isValidCustomCss(css: string): boolean {
 /** 交给编辑器预填的**可编辑文本**：单 body 原样，多动画 = 块 + 简写。 */
 export function keyframeBodyOf(anim: ElementAnimation): string {
   if (anim.kind === 'preset') return presetKeyframes(anim.preset, anim.params);
+  // 结构化轨道：给出它真正会跑的那份体（含逐段缓动），手写 CSS 弹窗据此可编辑。
+  if (anim.kind === 'tracks') return trackFrames(anim)?.body ?? '';
   if (anim.animation) return `${anim.css}\nanimation: ${anim.animation};`.trim();
   return sanitizeCustomCss(anim.css);
 }
@@ -457,6 +476,17 @@ function parseMultiCss(s: string): CustomCssParse {
 }
 
 /**
+ * 抽出（已清洗的）CSS 里所有 `@keyframes` 块。解析失败返回空数组。
+ *
+ * 给迁移用：`custom` 条目里那些块要逐帧拆成结构化轨道。扫描器只有一份实现
+ * （`scanCssBlocks`），不要在迁移里另写一个「差不多的」解析器 —— 两处分家的
+ * 形态是「编辑器能保存、迁移看不懂」。
+ */
+export function keyframeBlocksOf(css: string): { name: string; body: string }[] {
+  return scanCssBlocks(css).keyframes;
+}
+
+/**
  * 解析编辑器里的一段自定义 CSS。纯函数。
  *
  * 判别：顶层不含 `@` 规则、也没有 `animation:` 声明 → **旧单 body 形态**
@@ -601,7 +631,7 @@ export function parseAnimationShorthand(s: string): ShorthandParse {
  *  - 预设 / 旧单 body 自定义 → 一条，延迟取 timing 字段（与旧行为逐字一致）。
  *  - 多动画自定义 → 逐条取自简写，各有自己的时长与延迟。
  *
- * 烘焙 seek 与动画窗格都读它，保证「预览看到几条」与「时间轴画几条」一致。
+ * 烘焙 seek 与关键帧面板都读它，保证「预览看到几条」与「面板画几条」一致。
  */
 export function customSubAnimations(anim: ElementAnimation): ParsedAnimPart[] {
   const fallback: ParsedAnimPart = {
@@ -617,9 +647,17 @@ export function customSubAnimations(anim: ElementAnimation): ParsedAnimPart[] {
 
 /* ------------------------------------------------------------ 样式表生成 */
 
-function easingCss(e: Easing): string {
+/**
+ * 缓动 → CSS 值。三种形态：关键字原文、`cubic-bezier(...)` 四元组、`steps(n, jump)`。
+ *
+ * 只认这三种（没有自由字符串）：值会被拼进唯一那份 `<style>`，放行任意文本等于
+ * 给了一条注入通道（与属性名闸门同一条理由）。
+ */
+export function easingCss(e: TrackEase): string {
   if (typeof e === 'string') return e;
-  return `cubic-bezier(${e.map((n) => round(n, 4)).join(',')})`;
+  if (Array.isArray(e)) return `cubic-bezier(${e.map((n) => round(n, 4)).join(',')})`;
+  const n = Math.max(1, Math.round(e.steps));
+  return `steps(${n}${e.jump ? `,${e.jump}` : ''})`;
 }
 
 function iterationsCss(n: number): string {
@@ -705,6 +743,58 @@ function rewriteNames(shorthand: string, names: Map<string, string>): string {
     .join(', ');
 }
 
+/* ------------------------------------------------------ 结构化轨道（tracks） */
+
+/**
+ * 结构化轨道 → 关键帧体（不含 `@keyframes` 外壳）。纯函数。
+ *
+ * 两件事在这里定死：
+ *  1. **百分比归一化**：`offset = (t − delay) / span`，`delay = 第一帧`。
+ *     面板上的「1.2s」与 CSS 上的「50%」是同一个东西的两种坐标。
+ *  2. **逐段缓动写进帧块**：`animation-timing-function` 在关键帧块内作用于
+ *     「本帧 → 下一帧」，与 `core/curve.ts` 的出向 `interp` 同义。末帧不写
+ *     （它没有下一段）。
+ */
+function trackFrames(anim: TracksAnimation): { body: string; delay: number; span: number } | null {
+  const keys = normalizeKeys(anim.keys);
+  if (keys.length === 0) return null;
+  const { delay, duration } = trackSpan(keys);
+  const first = channelDeclaration(anim.prop, keys[0]!.v);
+  if (!first) return null;
+  // 单帧：整段时间都是这个值。只写 0% 也能用，但 0%,100% 更不容易被后续工具误读。
+  if (keys.length === 1) return { body: `0%,100%{${first}}`, delay, span: 0 };
+
+  const frames: string[] = [];
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]!;
+    const decl = i === 0 ? first : channelDeclaration(anim.prop, key.v);
+    if (!decl) return null;
+    /*
+     * 所有帧挤在同一刻（span ≈ 0）时百分比会全是 0 —— 那种 `@keyframes`
+     * 没有插值区间，浏览器会**整条丢掉**（表现是「动画保存成功、就是不跑」）。
+     * 退化成 0→100 同值，至少是确定的。
+     */
+    const pct = i === 0 ? 0 : duration <= 1e-6 ? 100 : round(((key.t - delay) / duration) * 100, 4);
+    const decls = [decl];
+    if (i < keys.length - 1 && key.ease) decls.push(`animation-timing-function:${easingCss(key.ease)}`);
+    frames.push(`${pct}%{${decls.join(';')}}`);
+  }
+  return { body: frames.join(''), delay, span: duration };
+}
+
+function emitTracks(anim: TracksAnimation): EmittedCustom | null {
+  const out = trackFrames(anim);
+  if (!out) return null;
+  const name = animationName(anim);
+  return {
+    keyframes: [{ name, body: out.body }],
+    // 简写走**同一个** animationShorthand：时长/延迟取派生值，其余（easing /
+    // iterations / direction / fill）原样来自条目。两处各拼一遍的形态是
+    // 「面板说 0.6s、实际跑 2s」。
+    animation: animationShorthand({ ...anim, delay: out.delay, duration: Math.max(1e-3, out.span) }),
+  };
+}
+
 /**
  * 生成整篇文档所需的 `<style>` 内容：@keyframes 块 + 每个动画的绑定规则。
  *
@@ -727,8 +817,8 @@ export function animationStyleSheet(doc: TypographyDocument): string {
 
   for (const el of doc.elements) {
     for (const anim of el.animations) {
-      if (anim.kind === 'custom') {
-        const emitted = emitCustom(anim);
+      if (anim.kind === 'custom' || anim.kind === 'tracks') {
+        const emitted = anim.kind === 'custom' ? emitCustom(anim) : emitTracks(anim);
         if (!emitted) continue;
         for (const k of emitted.keyframes) pushFrame(k.name, k.body);
         rules.push(`[${ANIM_ID_ATTR}="${cssAttrEscape(anim.id)}"]{animation:${emitted.animation}}`);
@@ -793,4 +883,21 @@ export function createCustomAnimation(
   const anim: CustomAnimation = { ...defaultTiming(), ...timing, id, kind: 'custom', css };
   if (animation) anim.animation = animation;
   return anim;
+}
+
+/**
+ * 新建一条结构化轨道。
+ *
+ * `keys[].t` 是**绝对秒**；这里立刻过一遍 `applyTrackTiming`，所以 `delay` /
+ * `duration` 从创建那一刻就与关键帧一致 —— 不存在「面板画在一处、Ribbon 显示
+ * 另一处」的中间态。
+ */
+export function createTracksAnimation(
+  id: string,
+  prop: AnimChannel | (string & {}),
+  keys: TrackKey[],
+  over: Partial<AnimTiming> = {},
+): TracksAnimation {
+  const anim: TracksAnimation = { ...defaultTiming(), ...over, id, kind: 'tracks', prop, keys };
+  return applyTrackTiming(anim);
 }

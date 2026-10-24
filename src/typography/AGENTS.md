@@ -32,18 +32,38 @@
   （`#6f64ef`）服务的是面板路径（人先看见再改色），agent 往往「先搭骨架再上色」——
   一块默认紫会把画面染成它没打算要的样子。这条默认值必须同时出现在
   `get_typography_capabilities().units.defaults` 里。
-- **元素动画是文档模型的一部分**（`ElementAnimation[]`，`animation.ts`），agent 侧
-  入口是 `agent-ops.ts::parseAnimationInput` / `animationFromInput` / `setAnimation` +
-  `typo_set_animation` / `typo_add_element.animation`。四条不能破：
-  1. `keys[].at` 在文档层只认 0..1 —— `{beat:n}` 的换算在控制平面（那里才有 BPM）。
-  2. 生成的 `@keyframes` 体**每一帧都写全被用到的属性**（缺的取恒等值），
+- **元素动画是文档模型的一部分**（`ElementAnimation[]`，`animation.ts`）。
+  三种 `kind` 并存，但**编辑器只产 `tracks`**：
+  - `tracks`（主模型，`animation-tracks.ts`）：**一条动画 = 一个属性**，关键帧存
+    **绝对秒（相对片段起点）**，每帧可带出向 `ease`（关键字 / `[x1,y1,x2,y2]` /
+    `{ steps: n, jump }`，发射时统一由 `animation.ts::easingCss` 拼成 CSS 值）。
+    想让几个属性异步起落就发**多条**
+    动画，各带自己的 `animation-delay`。同一元素**不许两条动画动同一属性**（同层互相
+    覆盖、嵌套层矩阵相乘，语义都不可预期）——UI 拒绝，`applyPreset` 按 prop 替换。
+  - `preset` / `custom`：旧形态，只在打开旧工程（v17 迁移）或 agent 的 `css` 入参时出现。
+    渲染层必须继续支持（`animationStyleSheet` 三条分支），面板对它们显示只读行。
+
+  agent 侧入口是 `agent-ops.ts::parseAnimationInput` / `animationsFromInput` /
+  `setAnimation` + `typo_set_animation` / `typo_add_element.animation`。五条不能破：
+  1. **时间单位有两套**：`tracks.keys[].t` 是绝对秒；旧式 `keys[].at` 才认 0..1。
+     `{beat:n}` 的换算在控制平面（那里才有 BPM 与 clip.start），文档层只收秒。
+     两种口径混用不会报错，只会「动得不对」。
+  2. 旧式 `keys` 生成的 `@keyframes` 体**每一帧都写全被用到的属性**（缺的取恒等值），
      否则 CSS 会从元素基础样式插值（基础样式里有用户自己的旋转 → 动画会「先歪一下」）。
+     `tracks` 一条只有一个属性，这条不适用。
   3. `typo_replace_doc` 必须把 `animations` 一起搬过去。整份替换顺手清掉动画，
      表现是「文档还在、动的东西没了」，且没有任何提示。
   4. **手写 CSS 与 UI 是同一条路**：agent 的 `css` 入参必须过 `parseCustomCss`，
      失败时把 `CustomCssError`（经 `CUSTOM_CSS_ERROR_KEYS` 翻译）回给模型。
      读回形状（`animationView`）必须能被 `parseAnimationInput` 原样读回 ——
      否则「读一遍再写回」会静默丢掉自定义动画、把无限循环变成 1 次。
+  5. **预设与旧数据都展开成轨道**（`animation-migrate.ts::presetToTracks` /
+     `customToTracks`，由 `core/schema.ts` 的 v17 迁移与 `agent-ops` 共用）。
+     `transform` 能无歧义拆 translate/scale/rotate 就拆通道，拆不动就整条存成
+     原始属性轨道（**宁可不可编辑也不要改画面**）；拆出来的每个通道都在**所有帧**
+     补恒等值 —— CSS 里「这帧没写 transform」是「从基础样式插值」，不是「保持上一帧」。
+  6. **任意属性要过闸**：属性名 `^(--)?[A-Za-z][A-Za-z0-9-]*$`、值拒 `; { } < > url( !important`。
+     它们会被拼进唯一那份 `<style>`，一个 `}` 就能闭合 `[data-anim-id]` 规则。
 - **四条实现规则**（不遵守会静默出错）：
   1. **字体子集化，按字形集哈希缓存**。不做这条每帧上百毫秒，做了是毫秒级。
      字形集只在打字时变化，命中率极高。
@@ -54,6 +74,10 @@
   4. **动画状态要烘焙，不要指望库读懂**：WAAPI seek → 把计算值写进内联样式 →
      停掉 animation → 再截图。（WAAPI 的 seek 实测误差为 0，所以 CSS 动画可以帧精确导出，
      但必须走烘焙路径。）
+     **快照的属性名单来自 `effect.getKeyframes()` 的并集，不是写死三个**：手写 CSS
+     可以动 `visibility` / `letter-spacing` / `clip-path`，写死的名单漏掉它们时
+     表现是「预览会动、导出不动、不报错」（2026-10-24 修）。顺序不变：**先读计算值、
+     再 `animation='none'`、最后逐个 `setProperty`** —— 反过来会被动画的计算值盖掉。
 - **元素级 3D 是「参数 → CSS 字符串」，不是矩阵**（`document.ts::Transform3D` +
   `css.ts::transform3dCss`，面板在「元素属性」的 3D 分节）。三条纪律：
   1. **变换顺序固定**：`perspective → translate3d → rotateX → rotateY → rotateZ →

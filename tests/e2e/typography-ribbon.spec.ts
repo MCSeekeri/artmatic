@@ -994,17 +994,15 @@ test('右键菜单：复制 / 粘贴作用于当前选择集', async ({ page }) 
   expect((await readDoc(page)).elements).toHaveLength(2);
 });
 
-test('动画窗格：与图层面板共用位置，选项卡切换；挂上动画后能列出并预览', async ({ page }) => {
+test('动画窗格已删除；Ribbon 的预设展开成属性轨道，关键帧面板列得出', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);
   await openEditor(page, clipId);
 
-  await page.getByTestId('typo-tab-anim').click();
-  await expect(page.getByTestId('typo-anim-pane')).toBeVisible();
-  await expect(page.getByTestId('typo-anim-row')).toHaveCount(0);
+  // 只读的「动画」选项卡整体删掉了 —— 动画现在住预览下方的关键帧面板。
+  await expect(page.getByTestId('typo-tab-anim')).toHaveCount(0);
+  await expect(page.getByTestId('typo-kf-panel')).toBeVisible();
 
-  // 回到图层加一个动画，再回动画窗格 —— 它必须列出来。
-  await page.getByTestId('typo-tab-layers').click();
   const el = (await page.locator('.paper [data-el-id]').first().boundingBox())!;
   await page.mouse.click(el.x + el.width / 2, el.y + el.height / 2);
   await expect(page.getByTestId('typo-selection')).toBeVisible();
@@ -1013,23 +1011,12 @@ test('动画窗格：与图层面板共用位置，选项卡切换；挂上动�
   await page.getByTestId('typo-anim-preset').click();
   await page.getByTestId('typo-anim-option-slide-in-left').click();
 
-  await page.getByTestId('typo-tab-anim').click();
-  await expect(page.getByTestId('typo-anim-row')).toHaveCount(1);
-  await expect(page.getByTestId('typo-anim-entry')).toHaveCount(1);
-
-  // 「从头预览」= 把播放头挪到动画开始之前并起播。
-  // 「从头预览」= 把播放头挪到动画开始之前并起播。断言 playing 而不是 playT：
-  // 这段动画的 delay 是 0，秒数不一定非零，但「有没有真的在播」是确定的。
-  await page.getByTestId('typo-anim-preview').click();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as never as { __artmatic: { appState: { playing: boolean } } }).__artmatic.appState
-            .playing,
-      ),
-    )
-    .toBe(true);
+  // slide-in-left 动 translateX + opacity ⇒ **两条轨道**（一条动画一个属性），
+  // 每条两根关键帧。
+  await expect(page.getByTestId('typo-kf-track')).toHaveCount(2);
+  await expect(page.getByTestId('typo-kf-lane')).toHaveCount(2);
+  await expect(page.getByTestId('typo-kf-key')).toHaveCount(4);
+  await expect(page.getByTestId('typo-kf-clock')).toBeVisible();
 });
 
 test('右栏宽度可拖曳', async ({ page }) => {

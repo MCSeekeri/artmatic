@@ -813,14 +813,29 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'typo_set_animation',
     description:
-      'Attach / replace / clear an element animation (the same CSS animation system the editor ' +
+      'Attach / replace / clear element animations (the same CSS animation system the editor ' +
       'uses — it renders in exports too, driven by the project clock).\n' +
-      'animation is ONE of:\n' +
+      'PREFERRED form (structured track):\n' +
+      '  { prop: "<channel | css-property>", keys: [ { t, v, ease? }, ... ], loop?, easing?, ' +
+      'direction?, fill? }\n' +
+      'ONE animation animates ONE property. prop is x | y | sx | sy | rot | opacity | blur, or any ' +
+      'CSS property name in kebab-case ("letter-spacing", "clip-path", "color", "transform"). ' +
+      'keys[].t is ABSOLUTE SECONDS from the clip start (not 0..1 and not frames); { beat: n } is ' +
+      'also accepted. keys[].v is a number (x/y px, sx/sy factor, rot degrees, opacity 0..1, blur ' +
+      'px) or a raw CSS string for custom properties. keys[].ease is the easing of the segment that ' +
+      'STARTS at that key (keyword or [x1,y1,x2,y2]); omit it to inherit the animation easing. ' +
+      'delay / duration are DERIVED from the first and last key (passing them changes nothing). ' +
+      'To stagger properties, send SEVERAL animations with mode:"add" — each one becomes its own ' +
+      'CSS animation with its own delay, so opacity and movement can start at different times. ' +
+      'Do not animate the same property twice on one element.\n' +
+      'Other accepted forms:\n' +
       '  { css: "<@keyframes blocks + animation shorthand>", duration?, delay?, loop?, easing?, ' +
       'direction?, fill? }\n' +
-      '  { preset: "<name>", duration?, delay?, loop?, easing?, direction?, fill?, params? }\n' +
+      '  { preset: "<name>", duration?, delay?, loop?, easing?, direction?, fill?, params? } ' +
+      '(expands into structured tracks)\n' +
       '  { keys: [ { at, opacity?, x?, y?, sx?, sy?, rot?, blur? }, ... ], duration?, delay?, ' +
-      'loop?, easing? }\n' +
+      'loop?, easing? }  (legacy: at is 0..1 or { beat: n }; expands into one animation per ' +
+      'property, t = delay + at * duration)\n' +
       'css is the editor\'s "custom animation" syntax: one or more `@keyframes name{…}` blocks plus ' +
       'ONE top-level `animation: name 1s ease 0s 1 normal both;` (comma-separate several). A bare ' +
       'keyframes body (`from{opacity:0}to{opacity:1}`) still works and takes its timing from ' +
@@ -829,13 +844,12 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'Rejected (with the exact reason): top-level selectors, @import / @charset / @namespace, tags.\n' +
       'Preset names: call get_typography_capabilities().animations.presets (e.g. fade-in, ' +
       'slide-in-up, zoom-in, pop, spin, pulse, shake, blur-in).\n' +
-      'keys[]: at is 0..1 of the animation, or { beat: n } (converted with the project BPM). ' +
-      'x / y are px offsets, sx / sy scale, rot in DEGREES, blur in px, opacity 0..1. 2..20 keys.\n' +
+      'x / y are px offsets, sx / sy scale, rot in DEGREES, blur in px, opacity 0..1. 2..20 keys. ' +
       'duration / delay are SECONDS. loop: "once" | "infinite" | number.\n' +
-      'Pass animation:null to remove every animation from the element. mode:"add" stacks a ' +
-      'second animation instead of replacing (each one gets its own wrapper, so fade + shake ' +
-      'compose). Returns the stored element with the full animation list (css included, so it ' +
-      'can be edited and sent back verbatim).',
+      'Pass animation:null to remove every animation from the element. mode:"add" stacks ' +
+      'animations instead of replacing (each one gets its own wrapper, so fade + shake compose). ' +
+      'Returns the stored element with the full animation list (prop + keys included, so it can be ' +
+      'edited and sent back verbatim).',
     params: [
       OPT_CLIP_ID,
       ELEMENT_ID,

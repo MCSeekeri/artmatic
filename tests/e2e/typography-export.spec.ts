@@ -108,6 +108,25 @@ function animatedDoc() {
   return doc;
 }
 
+/** 手写 CSS 动 `visibility`（不在旧的三个属性里），守住烘焙的动态快照。 */
+function blinkDoc() {
+  const doc = bandDoc();
+  doc.elements[0]!.animations = [
+    {
+      id: 'blink',
+      kind: 'custom',
+      css: 'from{visibility:hidden}to{visibility:visible}',
+      delay: 0,
+      duration: 0.6,
+      iterations: 1,
+      easing: 'linear',
+      direction: 'normal',
+      fill: 'both',
+    },
+  ] as never;
+  return doc;
+}
+
 function projectWith(doc: unknown, duration = 0.2) {
   return {
     schemaVersion: 2,
@@ -293,6 +312,38 @@ test('光栅化本身确定：同参数同结果，动画真的被 seek 到 t �
   expect(result.a3.ink).toBeGreaterThan(0); // opacity 0.5
   expect(result.a9.hash).toBe(result.s1.hash); // 已结束，回到终态（与静态文档相同）
   expect(result.a3.hash).not.toBe(result.s1.hash);
+});
+
+/**
+ * 烘焙必须覆盖**关键帧里出现的所有属性**，不只是 transform / opacity / filter。
+ *
+ * 手写 CSS 的属性名不受限（`parseCustomCss` 只校验关键帧选择器），而旧实现的
+ * 快照写死了那三个 —— `visibility` / `letter-spacing` / `clip-path` 这类会被漏掉：
+ * 停掉动画后它们回落到基础样式值，表现是**预览会动、导出不动、且不报错**。
+ *
+ * 为什么用 `visibility` 而不是 `color`：排版元素的颜色都有自己的显式来源
+ * （形状走 SVG `fill` 属性、文字走 `.typo-text` 的 `background-clip:text`），
+ * 动画层上的 `color` 根本不参与绘制 —— 拿它测只会得到「改不改都一样」的假绿。
+ * `visibility` 没有任何别处会写，只能来自动画 ⇒ 漏了一定看得见。
+ */
+test('烘焙覆盖任意属性：手写 CSS 动 visibility，导出也跟着变', async ({ page }) => {
+  await BOOT(page);
+
+  const result = await page.evaluate(
+    async ({ still, animated }) => {
+      const A = (window as never as { __artmatic: TypoHooks }).__artmatic;
+      const t0 = await A.typoRasterize(animated, 640, 360, 0);
+      const t6 = await A.typoRasterize(animated, 640, 360, 0.6);
+      const base = await A.typoRasterize(still, 640, 360, 0);
+      return { t0, t6, base };
+    },
+    { still: bandDoc(), animated: blinkDoc() },
+  );
+
+  expect(result.base.ink).toBeGreaterThan(0);
+  expect(result.t0.ink, 't=0 时动画把它藏了，导出也必须藏').toBe(0);
+  // 动画结束回到常态：与「没有动画」的同一份文档逐像素相同。
+  expect(result.t6.hash).toBe(result.base.hash);
 });
 
 /**

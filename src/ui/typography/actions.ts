@@ -50,10 +50,20 @@ import {
 import {
   createCustomAnimation,
   createPresetAnimation,
+  createTracksAnimation,
   parseCustomCss,
   type AnimPreset,
   type AnimTiming,
+  type TracksAnimation,
 } from '../../typography/animation';
+import {
+  applyTrackTiming,
+  identityValue,
+  sampleKeys,
+  type TrackEase,
+} from '../../typography/animation-tracks';
+import { presetToTracks } from '../../typography/animation-migrate';
+import { kfPanel } from './keyframe-panel-state.svelte';
 import { hasImageAsset, putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
 import { defaultKeySettings, identityQuad, type KeySettings } from '../../core/image-fx';
 import {
@@ -229,6 +239,43 @@ function onlyImage(doc: TypographyDocument) {
 
 function anyElement(doc: TypographyDocument): TypographyElement[] {
   return writable(doc);
+}
+
+/** 新加一条属性轨道时的默认跨度（秒）。太短会让人以为「没生效」。 */
+const DEFAULT_TRACK_SEC = 0.6;
+
+/** 按 id 找一条结构化轨道并就地改它（找不到 = 什么都不做）。 */
+function eachTrack(
+  doc: TypographyDocument,
+  animId: string,
+  fn: (a: TracksAnimation) => void,
+): void {
+  for (const el of doc.elements) {
+    const a = el.animations.find((x) => x.id === animId);
+    if (a && a.kind === 'tracks') fn(a);
+  }
+}
+
+/**
+ * 结构化轨道的时序是**派生的**（`delay = 第一帧`、`duration = 末帧 − 首帧`），
+ * 所以 Ribbon 上改这两个数不能直接写字段：
+ *   · 改 `delay` = **整条轨道平移**（关键帧之间的相对编排不变）；
+ *   · 改 `duration` = **只挪最后一帧**（用户 2026-10-24 定的口径）。
+ * 其余（loop / easing / direction / fill）是普通字段，直接合并。
+ */
+function retimeTrack(anim: TracksAnimation, patch: Partial<AnimTiming>): TracksAnimation {
+  const { delay, duration, ...rest } = patch;
+  let keys = anim.keys.map((k) => ({ ...k }));
+  if (delay !== undefined) {
+    const shift = delay - anim.delay;
+    keys = keys.map((k) => ({ ...k, t: Math.max(0, k.t + shift) }));
+  }
+  if (duration !== undefined && keys.length > 0) {
+    const base = delay !== undefined ? Math.max(0, delay) : anim.delay;
+    const last = keys[keys.length - 1]!;
+    keys[keys.length - 1] = { ...last, t: Math.max(base + 1e-3, base + Math.max(1e-3, duration)) };
+  }
+  return applyTrackTiming({ ...anim, ...rest, keys });
 }
 
 /**
@@ -889,6 +936,25 @@ export interface TypographyActions {
   /** 写入手写 keyframes 体。返回 false 表示代码非法（未写入）。 */
   applyCustomCss(css: string): boolean;
   clearAnimations(): void;
+
+  /* 关键帧（结构化轨道，一条动画一个属性） */
+  /**
+   * 给选中元素加一条属性轨道。`atSec` 缺省 = 片段起点；同一属性已有时不重复加
+   * （返回时调用方自己按 prop 找回那条）。
+   */
+  addTrack(prop: string, initial?: number | string, atSec?: number): void;
+  removeTrack(animId: string): void;
+  /** 在 `t` 处插一帧；`v` 缺省 = 该时刻的插值（浮动轨道取恒等值）。 */
+  addKey(animId: string, t: number, v?: number | string): void;
+  setKeyValue(animId: string, t: number, v: number | string): void;
+  /** 精确改一帧的时刻（拖动走 `moveKey`，那是手势、不拍快照）。 */
+  setKeyTime(animId: string, t: number, nextT: number): void;
+  setKeyEase(animId: string, t: number, ease: TrackEase | null): void;
+  /** 缓动浮层拖动中的实时写入（不进撤销栈，松手由手势结算）。 */
+  liveKeyEase(animId: string, t: number, ease: TrackEase | null): void;
+  /** 拖动关键帧：手势里调（`live`，不 commit）。 */
+  moveKey(animId: string, t: number, nextT: number): void;
+  removeKey(animId: string, t: number): void;
 
   /* 字体 */
   importFont(): void;
@@ -2114,8 +2180,20 @@ export function createTypographyActions(): TypographyActions {
     applyPreset(preset) {
       editorState.commit(tr('typo.undo.addAnim'), (doc) => {
         for (const el of anyElement(doc)) {
-          const anim = createPresetAnimation(preset, newId());
-          el.animations = [...el.animations, anim];
+          const incoming = presetToTracks(createPresetAnimation(preset, newId()), {
+            dropAnimations: [],
+            dropProps: [],
+          });
+          /*
+           * 预设动到的属性**替换**同属性轨道。
+           *
+           * 同一元素上两条同属性动画：同层会互相覆盖（后写的赢），嵌套层会把矩阵
+           * 乘起来 —— 两种都不是用户想要的；面板里还会出现两行同名属性。
+           */
+          const keep = el.animations.filter(
+            (a) => !incoming.some((t) => a.kind === 'tracks' && a.prop === t.prop),
+          );
+          el.animations = [...keep, ...incoming];
         }
       });
     },
@@ -2127,9 +2205,15 @@ export function createTypographyActions(): TypographyActions {
     },
 
     setAnimTiming(patch) {
+      // 面板里选中的那条优先；没选就保持旧行为（改选中元素的全部动画）。
+      const target = kfPanel.animId;
       editorState.commit(tr('typo.undo.animTiming'), (doc) => {
         for (const el of anyElement(doc)) {
-          el.animations = el.animations.map((a) => ({ ...a, ...patch }));
+          el.animations = el.animations.map((a) => {
+            if (target && a.id !== target) return a;
+            if (a.kind !== 'tracks') return { ...a, ...patch };
+            return retimeTrack(a, patch);
+          });
         }
       });
     },
@@ -2140,9 +2224,11 @@ export function createTypographyActions(): TypographyActions {
       // 支持旧单 body 与「多个 @keyframes 块 + 逗号分隔 animation 简写」两种形态。
       const parsed = parseCustomCss(css);
       if (!parsed.ok) return false;
+      const target = kfPanel.animId;
       editorState.commit(tr('typo.undo.customAnim'), (doc) => {
         for (const el of anyElement(doc)) {
-          const prev = el.animations[0];
+          const at = target ? el.animations.findIndex((a) => a.id === target) : -1;
+          const prev = at >= 0 ? el.animations[at] : el.animations[0];
           // 继承上一段动画的时序，否则用户手写一段 keyframes 之后时长会跳回
           // 默认的 0.6s，「只是改了下缓动」变成了「动画变快了」。
           // （多动画简写自带每条时序，这里的字段只服务于旧单 body 形态。）
@@ -2157,10 +2243,116 @@ export function createTypographyActions(): TypographyActions {
               }
             : {};
           if (parsed.animation) over.animation = parsed.animation;
-          el.animations = [createCustomAnimation(newId(), parsed.css, over)];
+          const custom = createCustomAnimation(newId(), parsed.css, over);
+          // 命中选中的轨道就替换它，否则**追加**一条（手写 CSS 是逃生舱，
+          // 不该顺手清掉用户已经排好的其它属性轨道）。
+          el.animations =
+            at >= 0 ? el.animations.map((a, i) => (i === at ? custom : a)) : [...el.animations, custom];
         }
       });
       return true;
+    },
+
+    /* ------------------------------------------------ 关键帧（结构化轨道） */
+
+    addTrack(prop, initial, atSec) {
+      const at = Math.max(0, atSec ?? 0);
+      editorState.commit(tr('typo.undo.addAnimTrack'), (doc) => {
+        for (const el of anyElement(doc)) {
+          // 同一属性只允许一条轨道（见 applyPreset 的注释）。
+          if (el.animations.some((a) => a.kind === 'tracks' && a.prop === prop)) continue;
+          const v = initial ?? identityValue(prop);
+          /*
+           * 起手两根**零变化**的帧：一是给用户一根可抓的时长（单帧轨道只有 1ms，
+           * 拖起来像没反应），二是值相同 ⇒ 画面不变，不会「加个属性就把元素挪走」。
+           */
+          el.animations = [
+            ...el.animations,
+            createTracksAnimation(newId(), prop, [
+              { t: at, v },
+              { t: at + DEFAULT_TRACK_SEC, v },
+            ]),
+          ];
+        }
+      });
+    },
+
+    removeTrack(animId) {
+      editorState.commit(tr('typo.undo.removeAnimTrack'), (doc) => {
+        for (const el of anyElement(doc)) {
+          el.animations = el.animations.filter((a) => a.id !== animId);
+        }
+      });
+    },
+
+    addKey(animId, t, v) {
+      const at = Math.max(0, t);
+      editorState.commit(tr('typo.undo.addKey'), (doc) => {
+        eachTrack(doc, animId, (a) => {
+          a.keys = [...a.keys, { t: at, v: v ?? sampleKeys(a.keys, at) }];
+          applyTrackTiming(a);
+        });
+      });
+    },
+
+    setKeyValue(animId, t, v) {
+      editorState.commit(tr('typo.undo.keyValue'), (doc) => {
+        eachTrack(doc, animId, (a) => {
+          const k = a.keys.find((x) => Math.abs(x.t - t) < 1e-6);
+          if (k) k.v = v;
+        });
+      });
+    },
+
+    setKeyTime(animId, t, nextT) {
+      const at = Math.max(0, nextT);
+      editorState.commit(tr('typo.undo.keyMove'), (doc) => {
+        eachTrack(doc, animId, (a) => {
+          const k = a.keys.find((x) => Math.abs(x.t - t) < 1e-6);
+          if (!k) return;
+          k.t = at;
+          applyTrackTiming(a);
+        });
+      });
+    },
+
+    setKeyEase(animId, t, ease) {
+      editorState.commit(tr('typo.undo.keyEase'), (doc) => {
+        eachTrack(doc, animId, (a) => {
+          const k = a.keys.find((x) => Math.abs(x.t - t) < 1e-6);
+          if (k) k.ease = ease;
+        });
+      });
+    },
+
+    liveKeyEase(animId, t, ease) {
+      editorState.live((doc) => {
+        eachTrack(doc, animId, (a) => {
+          const k = a.keys.find((x) => Math.abs(x.t - t) < 1e-6);
+          if (k) k.ease = ease;
+        });
+      });
+    },
+
+    moveKey(animId, t, nextT) {
+      // 拖动中每帧都走 live（不拍快照）：一帧一条撤销记录的形态是「拖完要按 60 次撤销」。
+      editorState.live((doc) => {
+        eachTrack(doc, animId, (a) => {
+          const k = a.keys.find((x) => Math.abs(x.t - t) < 1e-6);
+          if (!k) return;
+          k.t = Math.max(0, nextT);
+          applyTrackTiming(a);
+        });
+      });
+    },
+
+    removeKey(animId, t) {
+      editorState.commit(tr('typo.undo.removeKey'), (doc) => {
+        eachTrack(doc, animId, (a) => {
+          a.keys = a.keys.filter((x) => Math.abs(x.t - t) > 1e-6);
+          applyTrackTiming(a);
+        });
+      });
     },
 
     loadLocalFonts() {

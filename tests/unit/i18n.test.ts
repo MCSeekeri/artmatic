@@ -179,6 +179,12 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
   // Worker 侧回包，只会进 bake-client.ts 的 console.error。
   'algos/bake.worker.ts': ['未知生成器 ${msg.genId}'],
   /*
+   * v16→v17 迁移的丢弃报告：只进 console.warn（带动画 id / 属性名，不打印文档），
+   * 用户界面看不到。留它是为了让「打开旧工程后动画少了一半」有迹可循 ——
+   * 静默丢弃正是这一迁移最贵的失败形态。
+   */
+  'core/schema.ts': ['[schema] v17 排版动画迁移丢弃了部分内容'],
+  /*
    * 错误体里的中文关键词：腾讯 / 百度的「余额不足」提示本来就是中文，它们是
    * **匹配模式**而不是界面文案 —— 不进 `tr()`，用户看到的是 `agent.llm.balance`。
    */

@@ -930,16 +930,26 @@ export const TOOLS = [
     kind: 'write',
     description:
       '设置 / 替换 / 清除元素动画（与编辑器同一套 CSS 动画，导出里同样生效）。' +
-      'animation = { css } 或 { preset, duration?, delay?, loop?, easing? } 或 ' +
-      '{ keys:[{ at, opacity?, x?, y?, sx?, sy?, rot?, blur? }], duration?, delay?, easing? }。' +
+      '**首选**结构化轨道：{ prop, keys:[{ t, v, ease? }], loop?, easing? } ——' +
+      '一条动画只动一个属性。prop = x | y | sx | sy | rot | opacity | blur，或任意 CSS 属性名' +
+      '（kebab-case：letter-spacing / clip-path / color / transform）。' +
+      't 是**相对片段起点的绝对秒**（不是 0..1、不是帧号），也接受 { beat: n }；' +
+      'v 是数字（x/y 为 px、sx/sy 为倍数、rot 为度、opacity 0..1、blur 为 px）或任意属性的原始字符串；' +
+      'ease 是「从本帧到下一帧」那一段的缓动（关键字或 [x1,y1,x2,y2]），不填则继承条目 easing。' +
+      'delay / duration 由第一帧与最后一帧派生（传了也不改变时序）。' +
+      '要让几个属性错开起落，就发多条动画（mode:"add"）—— 每条各自是一条 CSS 动画、各有各的 delay；' +
+      '同一元素不要对同一属性发两条。' +
+      '其余形态照旧：{ css } / { preset, duration?, delay?, loop?, easing? } / ' +
+      '{ keys:[{ at, opacity?, x?, y?, sx?, sy?, rot?, blur? }], duration?, delay?, easing? }' +
+      '（旧式：at 为 0..1 或 { beat:n }，会按属性拆成多条轨道，t = delay + at × duration）。' +
       'css 是编辑器「自定义动画」的语法：一个或多个 @keyframes 块 + 一条顶层 ' +
       'animation: 名字 时长 …;（多条用逗号分隔）；只填 keyframes 体（from{…}to{…}）也可，' +
       '时序取 duration / delay / loop / easing。任何可动的 CSS 属性都能写（3D 旋转 / clip-path /' +
       ' 颜色 / 背景位移…），名字按元素命名空间化。顶层选择器 / @import / @charset / @namespace ' +
       '会被拒绝并给出具体原因。' +
-      'at 为 0..1 或 { beat: n }；duration / delay 单位秒；loop: "once" | "infinite" | 数字。' +
+      'duration / delay 单位秒；loop: "once" | "infinite" | 数字。' +
       '预设名见 get_typography_capabilities().animations.presets。animation:null 清空，' +
-      'mode:"add" 叠加第二条。',
+      'mode:"add" 叠加一条。',
     args: {
       clipId: F.string(),
       elementId: F.string({ required: true }),

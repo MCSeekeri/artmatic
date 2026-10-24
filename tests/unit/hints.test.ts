@@ -151,6 +151,22 @@ describe('悬停：其它目标', () => {
     expect(hoverHint({ kind: 'track' }, ctx)).toBeNull();
   });
 
+  it('关键帧：轨道上拖动 = 框选，标尺上拖动 = 播放头（与片段编辑器同一套手势）', () => {
+    const typo = { ...base, view: 'typography' as const };
+    const lanes = hoverHint({ kind: 'kf' }, typo);
+    expect(lanes?.text).toBe('typo.kfAddKeyHint');
+    expect(labelsOf(lanes)).toEqual(['typo.kfMarquee', 'hint.zoomTimeline']);
+    expect(keysOf(lanes!)).not.toContain('sc.key.rulerDrag');
+
+    const ruler = hoverHint({ kind: 'kfRuler' }, typo);
+    expect(labelsOf(ruler)).toEqual(['sc.scrub', 'hint.zoomTimeline']);
+    expect(keysOf(ruler!)).toContain('sc.key.rulerDrag');
+
+    // 只在排版页成立（时间轴视图里没有这块面板）。
+    expect(hoverHint({ kind: 'kf' }, base)).toBeNull();
+    expect(hoverHint({ kind: 'kfRuler' }, base)).toBeNull();
+  });
+
   it('轨道头：排序 / 改名 / 菜单（三条都没有别的出口）', () => {
     expect(labelsOf(hoverHint({ kind: 'track' }, base))).toEqual([
       'tl.moveTrack',

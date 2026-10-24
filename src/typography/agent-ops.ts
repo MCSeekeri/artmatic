@@ -57,13 +57,22 @@ import {
   ANIM_PRESETS,
   createCustomAnimation,
   createPresetAnimation,
+  createTracksAnimation,
   isPresetId,
   parseCustomCss,
   type AnimTiming,
   type CustomCssError,
   type Easing,
   type ElementAnimation,
+  type TrackKey,
 } from './animation';
+import {
+  identityValue,
+  type AnimChannel,
+  type StepEase,
+  type TrackEase,
+} from './animation-tracks';
+import { presetToTracks, type MigrationReport } from './animation-migrate';
 import { boundsOf, distribute, alignElements, toRects, type AlignAxis, type Rect } from './geometry';
 import { groupElements, groupList, pruneGroups, reorderSelection, ungroupElements } from './groups';
 import { buildFromSpec, generatorById, mergeParams } from './svg-gen/registry';
@@ -506,9 +515,10 @@ export function applyAnimations(el: TypographyElement, input: AnimationCarrier, 
   const parsed: ElementAnimation[] = [];
   for (const item of raw) {
     if (item === null) continue;
-    const anim = animationFromInput(item);
-    if (!anim) throw new Error('invalid animation input');
-    parsed.push(anim);
+    // 一条输入可能展开成多条轨道（旧式 keys 的每个属性一条），所以是数组。
+    const anims = animationsFromInput(item);
+    if (!anims) throw new Error('invalid animation input');
+    parsed.push(...anims);
   }
   if (parsed.length === 0) return false;
   el.animations = append ? [...(el.animations ?? []), ...parsed] : parsed;
@@ -528,9 +538,9 @@ export function setAnimation(
     el.animations = [];
     return true;
   }
-  const anim = animationFromInput(input);
-  if (!anim) throw new Error('invalid animation input');
-  el.animations = mode === 'add' ? [...(el.animations ?? []), anim] : [anim];
+  const anims = animationsFromInput(input);
+  if (!anims) throw new Error('invalid animation input');
+  el.animations = mode === 'add' ? [...(el.animations ?? []), ...anims] : anims;
   return true;
 }
 
@@ -1080,7 +1090,7 @@ export function setTheme(doc: TypographyDocument, id: string | null): void {
 
 /* --------------------------------------------------------------- 动画 */
 
-/** 关键帧输入（`at` 为 0..1 的动画进度；beat 由调用方先换算成进度）。 */
+/** 旧式关键帧输入（`at` 为 0..1 的动画进度；beat 由调用方先换算成进度）。 */
 export interface AnimationKeysInput {
   at: number;
   opacity?: number;
@@ -1093,14 +1103,42 @@ export interface AnimationKeysInput {
 }
 
 /**
+ * 结构化轨道的关键帧输入。
+ *
+ * `t` 是**相对片段起点的绝对秒**（与编辑器面板、文档模型同口径）——
+ * 旧式的 `at`（0..1 进度）仍然收，但它只描述「一条动画内部的相对位置」，
+ * 表达不了「位移 0.4s 才起步、淡入从 0s 开始」这种异步。
+ */
+export interface AnimationTrackKeyInput {
+  t: number;
+  /** 数值通道 number（px / 倍 / 度 / 0..1）；任意属性原始字符串。 */
+  v: number | string;
+  /**
+   * 出向缓动（本帧 → 下一帧）：关键字 / `[x1,y1,x2,y2]` /
+   * `{ steps: 4, jump: 'end' }` / 原文 `"steps(4, end)"`。`null` = 跟随条目 easing。
+   */
+  ease?: string | number[] | { steps: number; jump?: string } | null;
+}
+
+/** 一条结构化轨道：**一个属性** + 一串绝对秒关键帧。 */
+export interface AnimationTrackInput {
+  /** 通道（x / y / sx / sy / rot / opacity / blur）或任意 CSS 属性名。 */
+  prop: string;
+  keys: AnimationTrackKeyInput[];
+}
+
+/**
  * 动画输入（`typo_set_animation` 的 `animation` 参数，与 `typo_add_element` 的
  * 同名子字段同构）。三种形态，**按优先级**：
  *
  *  - `css: '…'`（手写 CSS：一个或多个 `@keyframes` 块 + 一条 `animation` 简写；
  *    旧形态「只填一个 keyframes 体」也接受）。与编辑器弹窗同一套校验
  *    （`parseCustomCss`），所以两侧写出来的动画在文档里完全同构。
- *  - `keys: [{ at, opacity, x, y, sx, sy, rot, blur }]`（生成一条 keyframes 体）
- *  - `preset: 'fade-in' | 'slide-in-left' | ...`（内置 14 个）
+ *  - `{ prop, keys: [{ t, v, ease? }] }`（结构化轨道：**一条动画一个属性**，
+ *    `t` 是绝对秒。想让几个属性异步起落就发**多条**动画，各带自己的时间）
+ *  - `keys: [{ at, opacity, x, y, sx, sy, rot, blur }]`（旧式：按属性**拆成多条**
+ *    轨道，`t = delay + at × duration` —— 与它当年逐字等价）
+ *  - `preset: 'fade-in' | 'slide-in-left' | ...`（内置 14 个，同样展开成轨道）
  *
  * 都走项目已有的 CSS 动画系统（`typography/animation.ts`）：预览与导出对同一条
  * 动画求同一个时间，因此**动画在导出里是真的**，不是只在预览里演一遍。
@@ -1129,7 +1167,10 @@ export interface AnimationInput {
   fill?: string;
   /** 预设参数（slide 的 dist / zoom 的 z0,z1 / blur 的 blur）。 */
   params?: Record<string, number>;
-  keys?: AnimationKeysInput[];
+  /** 结构化轨道形态：`prop` + `keys[].t`（绝对秒）。 */
+  prop?: string;
+  /** 旧式形态：`keys[].at`（0..1）；两者按「有没有 `prop` / 有没有 `t`」判别。 */
+  keys?: AnimationKeysInput[] | AnimationTrackKeyInput[];
 }
 
 const EASING_IDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
@@ -1214,8 +1255,108 @@ export function keyframesFromKeys(keys: readonly AnimationKeysInput[]): string |
  * 动画名」需要改的地方完全不同，只报一句「入参非法」等于让它瞎试）。
  */
 export type AnimationParse =
-  | { ok: true; animation: ElementAnimation }
+  | {
+      ok: true;
+      /** 第一条（读接口兼容用）；多条轨道时用 `animations`。 */
+      animation: ElementAnimation;
+      animations: ElementAnimation[];
+    }
   | { ok: false; reason?: CustomCssError };
+
+/** `"steps(4, end)"` 的解析。合法性只在这一处定义（面板与 agent 同一条）。 */
+const STEPS_RE = /^steps\(\s*(\d{1,3})\s*(?:,\s*(jump-start|jump-end|jump-none|jump-both|start|end)\s*)?\)$/i;
+
+function stepsOf(raw: unknown): StepEase | undefined {
+  if (isRecord(raw)) {
+    const n = Number(raw.steps);
+    if (!Number.isFinite(n) || n < 1) return undefined;
+    const jump = typeof raw.jump === 'string' ? raw.jump : undefined;
+    if (jump && !STEPS_RE.test(`steps(1,${jump})`)) return undefined;
+    return { steps: Math.min(999, Math.round(n)), ...(jump ? { jump: jump as StepEase['jump'] } : {}) };
+  }
+  if (typeof raw === 'string') {
+    const m = STEPS_RE.exec(raw.trim());
+    if (!m) return undefined;
+    const steps = Math.round(Number(m[1]));
+    if (!(steps >= 1)) return undefined;
+    return { steps, ...(m[2] ? { jump: m[2].toLowerCase() as StepEase['jump'] } : {}) };
+  }
+  return undefined;
+}
+
+/** 缓动输入 → `TrackEase`。`null` = 用条目自己的；`undefined` = 非法。 */
+function easeOf(raw: unknown): TrackEase | null | undefined {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'string' && EASING_IDS.has(raw)) return raw as Easing;
+  if (Array.isArray(raw) && raw.length === 4 && raw.every((n) => Number.isFinite(Number(n)))) {
+    return raw.map(Number) as [number, number, number, number];
+  }
+  // 阶梯：对象 `{ steps: 4, jump: 'end' }` 或原文 `"steps(4, end)"` 都收。
+  const step = stepsOf(raw);
+  if (step) return step;
+  return undefined;
+}
+
+/**
+ * 结构化轨道的关键帧数组。
+ *
+ * 两种时间都收：`t`（绝对秒）优先，缺 `t` 时用 `at`（0..1）按条目的
+ * `delay + at × duration` 换算 —— 模型常常「照旧例填 at」，直接拒掉只会让它
+ * 在下一轮换个写法再试，而它永远猜不到「这里要的是绝对秒」。
+ */
+function parseTrackKeys(raw: unknown[], timing: Partial<AnimTiming>): TrackKey[] | null {
+  if (raw.length < 2 || raw.length > MAX_ANIM_KEYS) return null;
+  const delay = timing.delay ?? 0;
+  const duration = timing.duration ?? 0.6;
+  const out: TrackKey[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) return null;
+    const absolute = Number(item.t);
+    const t = Number.isFinite(absolute)
+      ? Math.max(0, absolute)
+      : delay + Math.max(0, Math.min(1, finite(item.at, 0))) * duration;
+    const v = item.v;
+    if (typeof v !== 'string' && !Number.isFinite(Number(v))) return null;
+    const ease = easeOf(item.ease);
+    if (ease === undefined) return null;
+    out.push({ t, v: typeof v === 'string' ? v : Number(v), ...(ease ? { ease } : {}) });
+  }
+  return out;
+}
+
+/**
+ * 旧式 `keys`（一个数组里同时给 opacity / x / y / …）→ **每个属性一条轨道**。
+ *
+ * 时间换算 `t = delay + at × duration` 与它当年的 `@keyframes` 百分比逐字等价。
+ * `sx` / `sy` 缺一条时按另一条补齐（旧实现里 `scale(sx, sy ?? sx)` 就是这个语义），
+ * 否则「只传 sx」会从「等比缩放」变成「只缩 X」。
+ */
+function tracksFromLegacyKeys(
+  keys: AnimationKeysInput[],
+  timing: Partial<AnimTiming>,
+): ElementAnimation[] {
+  const delay = timing.delay ?? 0;
+  const duration = timing.duration ?? 0.6;
+  const at = (k: AnimationKeysInput): number => delay + Math.max(0, Math.min(1, k.at)) * duration;
+  const props: AnimChannel[] = ['opacity', 'x', 'y', 'sx', 'sy', 'rot', 'blur'];
+  const want = new Set<AnimChannel>();
+  for (const prop of props) if (keys.some((k) => k[prop] !== undefined)) want.add(prop);
+  if (want.has('sx') || want.has('sy')) {
+    want.add('sx');
+    want.add('sy');
+  }
+  const out: ElementAnimation[] = [];
+  for (const prop of props) {
+    if (!want.has(prop)) continue;
+    const trackKeys: TrackKey[] = keys.map((k) => {
+      const raw =
+        prop === 'sx' ? (k.sx ?? k.sy) : prop === 'sy' ? (k.sy ?? k.sx) : k[prop];
+      return { t: at(k), v: raw === undefined ? identityValue(prop) : (raw as number) };
+    });
+    out.push(createTracksAnimation(newId(), prop, trackKeys, timing));
+  }
+  return out;
+}
 
 export function parseAnimationInput(raw: unknown): AnimationParse {
   if (!isRecord(raw)) return { ok: false };
@@ -1224,6 +1365,8 @@ export function parseAnimationInput(raw: unknown): AnimationParse {
   if (input.css !== undefined && typeof input.css !== 'string') return { ok: false };
   const timing = timingOf(input);
   if (!timing) return { ok: false };
+  const single = (animations: ElementAnimation[]): AnimationParse =>
+    animations.length ? { ok: true, animation: animations[0]!, animations } : { ok: false };
 
   if (typeof input.css === 'string') {
     let text = input.css;
@@ -1238,17 +1381,25 @@ export function parseAnimationInput(raw: unknown): AnimationParse {
     }
     const parsed = parseCustomCss(text);
     if (!parsed.ok) return { ok: false, reason: parsed.reason };
-    return {
-      ok: true,
-      animation: createCustomAnimation(newId(), parsed.css, {
+    return single([
+      createCustomAnimation(newId(), parsed.css, {
         ...timing,
         ...(parsed.animation ? { animation: parsed.animation } : {}),
       }),
-    };
+    ]);
+  }
+
+  // 结构化轨道：`prop` 决定「这条动画动的是哪个属性」。
+  if (typeof input.prop === 'string' && Array.isArray(input.keys)) {
+    const keys = parseTrackKeys(input.keys, timing);
+    const prop = input.prop.trim();
+    if (!keys || !prop) return { ok: false };
+    return single([createTracksAnimation(newId(), prop, keys, timing)]);
   }
 
   if (Array.isArray(input.keys) && input.keys.length > 0) {
-    const keys: AnimationKeysInput[] = input.keys
+    // 走到这里说明没有 `prop`（上面那条已经消费了带 prop 的形态），所以是旧式字段。
+    const keys: AnimationKeysInput[] = (input.keys as AnimationKeysInput[])
       .filter(isRecord)
       .map((k) => ({
         at: finite(k.at, 0),
@@ -1260,29 +1411,39 @@ export function parseAnimationInput(raw: unknown): AnimationParse {
         ...(k.rot === undefined ? {} : { rot: finite(k.rot, 0) }),
         ...(k.blur === undefined ? {} : { blur: finite(k.blur, 0) }),
       }));
-    const body = keyframesFromKeys(keys);
-    if (!body) return { ok: false };
-    return { ok: true, animation: createCustomAnimation(newId(), body, timing) };
+    // 单帧列表当年就是非法的（没有插值区间），保持这条口径。
+    if (keys.length < 2 || keys.length > MAX_ANIM_KEYS) return { ok: false };
+    return single(tracksFromLegacyKeys(keys, timing));
   }
 
   if (typeof input.preset === 'string' && isPresetId(input.preset)) {
     const def = ANIM_PRESETS.find((d) => d.id === input.preset);
     const params = { ...(def?.params ?? {}), ...(input.params ?? {}) };
-    return {
-      ok: true,
-      animation: createPresetAnimation(input.preset, newId(), {
+    // 预设**直接展开成轨道**：面板只编辑结构化数据，留一个 preset kind 会让
+    // 「刚加的动画改不了值」成为常态（用户 2026-10-24 定的「打开即迁移」同理）。
+    const report: MigrationReport = { dropAnimations: [], dropProps: [] };
+    const tracks = presetToTracks(
+      createPresetAnimation(input.preset, newId(), {
         ...timing,
         ...(Object.keys(params).length ? { params } : {}),
       }),
-    };
+      report,
+    );
+    return single(tracks);
   }
   return { ok: false };
 }
 
-/** 输入 → 动画条目。不合法返回 null（调用方负责报错，不写半截数据）。 */
+/** 输入 → 动画条目（多条轨道时取第一条）。不合法返回 null。 */
 export function animationFromInput(raw: unknown): ElementAnimation | null {
   const parsed = parseAnimationInput(raw);
   return parsed.ok ? parsed.animation : null;
+}
+
+/** 输入 → **全部**动画条目（一条输入可能展开成多个属性轨道）。 */
+export function animationsFromInput(raw: unknown): ElementAnimation[] | null {
+  const parsed = parseAnimationInput(raw);
+  return parsed.ok ? parsed.animations : null;
 }
 
 /**
@@ -1298,6 +1459,15 @@ export function animationView(a: ElementAnimation): Record<string, unknown> {
     kind: a.kind,
     ...(a.kind === 'preset' ? { preset: a.preset, ...(a.params ? { params: a.params } : {}) } : {}),
     ...(a.kind === 'custom' ? { css: a.css, ...(a.animation ? { animation: a.animation } : {}) } : {}),
+    // 结构化轨道：**原样**给出 `prop` + 绝对秒关键帧，`parseAnimationInput` 能读回。
+    // `ease` 显式写 null（缺省 = 继承条目 easing）—— 省略它读回时也等价，但显式
+    // 更容易让模型看出「这一段是默认缓动」。
+    ...(a.kind === 'tracks'
+      ? {
+          prop: a.prop,
+          keys: a.keys.map((k) => ({ t: k.t, v: k.v, ease: k.ease ?? null })),
+        }
+      : {}),
     duration: a.duration,
     delay: a.delay,
     iterations: a.iterations === Infinity ? 'infinite' : a.iterations,
@@ -1594,7 +1764,7 @@ export function coerceDocument(
     if (Array.isArray(item.animations)) {
       for (const [ai, rawAnim] of item.animations.entries()) {
         const parsed = parseAnimationInput(rawAnim);
-        if (parsed.ok) animations.push(parsed.animation);
+        if (parsed.ok) animations.push(...parsed.animations);
         else report?.droppedAnimations.push(`elements[${at}].animations[${ai}]`);
       }
     }
