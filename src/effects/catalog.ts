@@ -131,6 +131,13 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   'motion-blur': { base: 'scroll', descKey: 'fx.desc.motionBlur', category: 'blur' },
   'motion-mask': { base: 'scroll', descKey: 'fx.desc.motionMask', category: 'blur' },
   'neon-edges': { base: 'mandel', descKey: 'fx.desc.neonEdges', category: 'style', overlay: true },
+  'nested-shrink': {
+    base: 'grid',
+    descKey: 'fx.desc.nestedShrink',
+    category: 'geometry',
+    // 默认只叠一层，卡片上就是一个「画中画」；三层才读出「一层套一层」这件事。
+    previewParams: { count: 3, scale: 0.72 },
+  },
   'optical-flow': { base: 'scroll', descKey: 'fx.desc.opticalFlow', category: 'style' },
   petri: { base: 'photo', descKey: 'fx.desc.petri', category: 'style' },
   'pixel-shifter': { base: 'mandel', descKey: 'fx.desc.pixelShifter', category: 'glitch' },

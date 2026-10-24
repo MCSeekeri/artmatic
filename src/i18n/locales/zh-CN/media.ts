@@ -144,6 +144,17 @@ export const media = {
   'fx.zoom': '缩放',
   'fx.zoom.amount': '缩放量',
 
+  'fx.nestedShrink': '缩小居中',
+  'fx.nestedShrink.mode': '步进方式',
+  'fx.nestedShrink.modeRatio': '等比步进',
+  'fx.nestedShrink.modeInset': '等距步进',
+  'fx.nestedShrink.scale': '缩小比例',
+  'fx.nestedShrink.inset': '每层内缩',
+  'fx.nestedShrink.count': '重复次数',
+  'fx.nestedShrink.decay': '衰减幅度',
+  'fx.nestedShrink.offsetX': 'X 偏移',
+  'fx.nestedShrink.offsetY': 'Y 偏移',
+
   'fx.circleWarp': '圆筒变形',
   'fx.circleWarp.radius': '半径',
   'fx.circleWarp.width': '横向压缩',

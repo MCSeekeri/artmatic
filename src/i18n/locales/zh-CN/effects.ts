@@ -84,6 +84,7 @@ export const effects = {
   'fx.desc.motionBlur': '把运动摊成时间上的拖影。',
   'fx.desc.motionMask': '按运动的多少抠出一张遮罩。',
   'fx.desc.neonEdges': '给轮廓描上霓虹。',
+  'fx.desc.nestedShrink': '把缩小后的画面一层层叠在正中间。',
   'fx.desc.opticalFlow': '沿光流把像素拖成线。',
   'fx.desc.petri': '培养皿里的反应扩散。',
   'fx.desc.pixelShifter': '按行或列整体挪动。',
