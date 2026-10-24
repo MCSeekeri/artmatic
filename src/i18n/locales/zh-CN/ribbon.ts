@@ -33,10 +33,11 @@ export const ribbon = {
   'rib.group.align': '对齐',
   'rib.group.order': '层级',
   'rib.group.edit': '编辑',
+  'rib.group.formatCopy': '复制格式',
+  'rib.group.animCopy': '复制动画',
   'rib.group.shapes': '图形',
   'rib.group.media': '图片',
   'rib.group.presets': '预设',
-  'rib.group.timing': '时序',
   'rib.group.fill': '填充',
   'rib.group.stroke': '描边',
   'rib.group.shape': '形状',
@@ -178,6 +179,10 @@ export const ribbon = {
   'rib.lock': '锁定',
   'rib.hide': '隐藏',
 
+  /* ------------------------------------------------ 格式刷 / 动画刷 */
+  'rib.formatPainter': '格式刷',
+  'rib.animPainter': '动画刷',
+
   /* ------------------------------------------------ 插入 */
   'rib.shape': '形状',
   'rib.pickShape': '选择形状…',
@@ -189,32 +194,6 @@ export const ribbon = {
   /* ------------------------------------------------ 动画 → 预设 */
   'rib.pickAnim': '选择预设…',
   'rib.clearAnim': '清除动画',
-
-  /* ------------------------------------------------ 动画 → 时序 */
-  'rib.animDelay': '延迟',
-  'rib.animDuration': '时长',
-  'rib.animIterations': '次数',
-  'rib.iter1': '1 次',
-  'rib.iter2': '2 次',
-  'rib.iter3': '3 次',
-  'rib.iter5': '5 次',
-  'rib.iterLoop': '循环',
-  'rib.animEasing': '缓动',
-  'rib.easingLinear': '匀速',
-  'rib.easingEase': '默认',
-  'rib.easingEaseIn': '渐快',
-  'rib.easingEaseOut': '渐慢',
-  'rib.easingEaseInOut': '两端缓',
-  'rib.animDirection': '方向',
-  'rib.dirNormal': '正向',
-  'rib.dirReverse': '反向',
-  'rib.dirAlternate': '往复',
-  'rib.dirAlternateReverse': '往复（反）',
-  'rib.animFill': '填充',
-  'rib.fillNone': '不保留',
-  'rib.fillForwards': '保留终态',
-  'rib.fillBackwards': '保留初态',
-  'rib.fillBoth': '两端都保留',
 
   /* ------------------------------------------------ 动画 → 编辑 */
   'rib.customCss': '自定义 CSS',

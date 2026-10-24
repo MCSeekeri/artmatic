@@ -99,6 +99,18 @@ class TypographyEditorState {
    */
   quadEditId = $state<string | null>(null);
 
+  /**
+   * **格式刷 / 动画刷**的待落点态。null = 没启用。
+   *
+   * 启用后下一次点击舞台上的元素 = 「把 sourceId 的格式 / 动画刷给它」，而不是
+   * 普通选择（见 TypographyEditor 的 onStageDown）。`sticky` = 双击启用的连续模
+   * 式：刷完一个继续等下一个；单击启用的只生效一次。
+   *
+   * 与 `nodeEditId` 同属「编辑器模式」，但它**不是**只在单选时成立 —— 连续模式下
+   * 刷过的目标会成为当前选择集，而源元素保持不变。
+   */
+  painter = $state<{ kind: 'format' | 'animation'; sourceId: string; sticky: boolean } | null>(null);
+
   /** 处于顶点 / 控制点编辑态的那个图形元素（不是图形就当作没有）。 */
   get nodeEdit(): ShapeElement | null {
     const id = this.nodeEditId;
@@ -309,6 +321,7 @@ class TypographyEditorState {
     this.nodeEditId = null;
     this.quadEditId = null;
     this.enteredGroupId = null;
+    this.painter = null;
   }
 
   close(): void {
@@ -321,6 +334,7 @@ class TypographyEditorState {
     this.nodeEditId = null;
     this.quadEditId = null;
     this.enteredGroupId = null;
+    this.painter = null;
     appState.registerGestureCancel(null);
   }
 
@@ -364,6 +378,8 @@ class TypographyEditorState {
     this.nodeEditId = null;
     this.quadEditId = null;
     this.enteredGroupId = null;
+    // 「点空白处」= 取消刷子（用户明确要求的取消方式之一）。
+    this.painter = null;
     this.stopEditing();
   }
 

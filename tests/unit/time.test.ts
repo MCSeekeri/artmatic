@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  KEY_SNAP_UNITS,
   beatAtTime,
   beatDur,
   frameAtTime,
   snapBeat,
+  snapKeyTime,
   snapStepBeats,
   snapToleranceSec,
   snapTime,
@@ -71,6 +73,42 @@ describe('吸附（唯一一张 SNAP_MODES 表）', () => {
     expect(snapToleranceSec('bar', grid)).toBeCloseTo(1, 10); // 4 拍 × 0.5s / 2
     expect(snapToleranceSec('beat', grid)).toBeCloseTo(0.25, 10);
     expect(snapToleranceSec('frame', grid, 30)).toBeCloseTo(1 / 60, 10);
+  });
+});
+
+describe('关键帧吸附单位（与时间轴网格吸附分表）', () => {
+  it('四档都在表里，且各自带标签键', () => {
+    expect(Object.keys(KEY_SNAP_UNITS).sort()).toEqual(['beat', 'frame', 'sec', 'tenth']);
+    for (const u of Object.values(KEY_SNAP_UNITS)) {
+      expect(u.labelKey).toMatch(/^typo\.kfSnap/);
+      expect(u.hintKey).toMatch(/^typo\.kfSnapTo/);
+    }
+  });
+
+  it('拍 = 吸到拍网格（offset 被尊重）', () => {
+    // offset = 1.5s、120BPM ⇒ 0.5s 一拍：第 0 拍在 1.5s、第 2 拍在 2.5s。
+    expect(snapKeyTime(1.7, 'beat', grid)).toBeCloseTo(1.5, 10);
+    expect(snapKeyTime(2.3, 'beat', grid)).toBeCloseTo(2.5, 10);
+  });
+
+  it('秒 / 0.1 秒：与 BPM 无关', () => {
+    expect(snapKeyTime(2.26, 'sec', grid)).toBe(2);
+    expect(snapKeyTime(2.74, 'sec', grid)).toBe(3);
+    expect(snapKeyTime(2.26, 'tenth', grid)).toBeCloseTo(2.3, 10);
+    expect(snapKeyTime(2.74, 'tenth', grid)).toBeCloseTo(2.7, 10);
+  });
+
+  it('帧：步长 1/fps，与拍网格无关', () => {
+    // 0.51s @ 30fps → 第 15 帧（0.5s）；@ 25fps → 第 13 帧（0.52s）。
+    expect(snapKeyTime(0.51, 'frame', grid, 30)).toBeCloseTo(0.5, 10);
+    expect(snapKeyTime(0.51, 'frame', { ...grid, bpm: 90 }, 25)).toBeCloseTo(13 / 25, 10);
+  });
+
+  it('吸附结果落在刻度上（幂等）', () => {
+    for (const unit of ['beat', 'sec', 'tenth', 'frame'] as const) {
+      const once = snapKeyTime(3.317, unit, grid, 30);
+      expect(snapKeyTime(once, unit, grid, 30)).toBeCloseTo(once, 10);
+    }
   });
 });
 

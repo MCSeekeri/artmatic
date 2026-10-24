@@ -48,6 +48,14 @@ export function handleTypographyKey(e: KeyboardEvent): void {
     }
 
     case e.key === 'Escape': {
+      /*
+       * 格式刷 / 动画刷是最外层的模式：先收起刷子，**不动选择集** ——
+       * 用户按 Esc 是「不刷了」，源元素还该是选中的（否则得重新选一次）。
+       */
+      if (editorState.painter) {
+        editorState.painter = null;
+        return;
+      }
       if (editorState.editingTextId) {
         editorState.editingTextId = null;
         return;

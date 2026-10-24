@@ -87,6 +87,45 @@ export function snapToleranceSec(mode: SnapMode, g: BeatGrid, fps = 30): number 
   return (snapStepBeats(mode, g.beatsPerBar) * beatDur(g)) / 2;
 }
 
+/**
+ * **关键帧**的吸附单位（按住 Shift 拖关键帧时对齐到哪种刻度）。
+ *
+ * 与 `SNAP_MODES` 分表，因为两者回答的不是同一个问题：那张表是**时间轴网格**
+ * 的口径，网格线画的就是它（小节 / 拍 / 半拍）；关键帧面板的网格是「秒刻度 +
+ * 拍线」，它需要的是「对齐到秒 / 0.1 秒 / 帧」这类与拍无关的刻度。硬塞进
+ * `SNAP_MODES` 会让时间轴的下拉多出两档而网格并不会跟着变 —— 正是那张表
+ * 注释里记着的 splitter 双表事故的形态。
+ */
+export const KEY_SNAP_UNITS = {
+  beat: { labelKey: 'typo.kfSnapBeat', hintKey: 'typo.kfSnapToBeat' },
+  sec: { labelKey: 'typo.kfSnapSec', hintKey: 'typo.kfSnapToSec' },
+  tenth: { labelKey: 'typo.kfSnapTenth', hintKey: 'typo.kfSnapToTenth' },
+  frame: { labelKey: 'typo.kfSnapFrame', hintKey: 'typo.kfSnapToFrame' },
+} as const satisfies Record<string, { labelKey: MessageKey; hintKey: MessageKey }>;
+
+export type KeySnapUnit = keyof typeof KEY_SNAP_UNITS;
+
+/**
+ * 把（绝对）时间吸到关键帧面板选定的刻度。
+ *
+ * 一律在**绝对秒**上做：拍网格带 offset、帧号是 `t = frame / fps`（硬约束 1.1），
+ * 拿片段内的相对秒去吸会得到「同一个位置在不同片段里对齐到不同刻度」。
+ */
+export function snapKeyTime(t: number, unit: KeySnapUnit, g: BeatGrid, fps = 30): number {
+  switch (unit) {
+    case 'sec':
+      return Math.round(t);
+    case 'tenth':
+      return Math.round(t * 10) / 10;
+    case 'frame': {
+      const rate = Math.max(1, fps);
+      return Math.round(t * rate) / rate;
+    }
+    default:
+      return timeAtBeat(Math.round(beatAtTime(t, g)), g);
+  }
+}
+
 /** 帧号 ↔ 秒：唯一时钟是 t = frame / fps（硬约束 1.1）。 */
 export function timeAtFrame(frame: number, fps: number): number {
   return frame / fps;

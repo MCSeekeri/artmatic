@@ -28,27 +28,25 @@ const MULTI_ANIM = 'pulse 1s ease-in-out infinite, glow 2s linear 0.5s';
 const MULTI_TEXT = `${MULTI_CSS.replace(/@keyframes (\w+)/g, '@keyframes $1 ')}\nanimation: ${MULTI_ANIM};`;
 
 describe('animationCurrentTimeMs', () => {
-  it('延迟之前钳到 0，不产生负的 currentTime', () => {
-    const a = fadeIn();
-    expect(animationCurrentTimeMs(a, 0)).toBe(0);
-    expect(animationCurrentTimeMs(a, 0.1)).toBe(0);
-    expect(animationCurrentTimeMs(a, 0.1999)).toBe(0);
-  });
-
-  it('过了延迟之后是「本地时间 - 延迟」的毫秒数', () => {
-    const a = fadeIn();
-    expect(animationCurrentTimeMs(a, 0.2)).toBe(0);
-    expect(animationCurrentTimeMs(a, 0.7)).toBeCloseTo(500, 6);
-    expect(animationCurrentTimeMs(a, 1.2)).toBeCloseTo(1000, 6);
+  it('就是本地时间的毫秒数（不减 delay）', () => {
+    expect(animationCurrentTimeMs(0)).toBe(0);
+    expect(animationCurrentTimeMs(0.5)).toBeCloseTo(500, 6);
+    expect(animationCurrentTimeMs(3.25)).toBeCloseTo(3250, 6);
   });
 
   it('片段起点之前（localSec 为负）也是 0，不抛错', () => {
-    expect(animationCurrentTimeMs(fadeIn(), -3)).toBe(0);
+    expect(animationCurrentTimeMs(-3)).toBe(0);
   });
 
-
-  it('只依赖 delay（多动画简写里逐条取各自的延迟）', () => {
-    expect(animationCurrentTimeMs({ delay: 0.5 }, 1)).toBeCloseTo(500, 6);
+  /*
+   * 延迟只许出现一次。CSS 简写里已经写了 `animation-delay`，那是 effect timing
+   * 的一部分（`currentTime` 的时间轴从动画开始算，包含延迟）；seek 时再减一次
+   * 就是 2×delay —— 3s 才该开始的元素 6s 才动，而且延迟期被钳在首帧，不报错。
+   */
+  it('延迟只算一遍：简写带 delay，seek 到 delay 时 currentTime 正是它的毫秒数', () => {
+    const a = createPresetAnimation('slide-in-up', 'a1', { delay: 3, duration: 0.5 });
+    expect(animationShorthand(a)).toContain(' 3s ');
+    expect(animationCurrentTimeMs(3)).toBeCloseTo(3000, 6);
   });
 });
 

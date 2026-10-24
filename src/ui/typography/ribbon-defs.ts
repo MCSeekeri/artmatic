@@ -32,7 +32,7 @@ import {
   type TypographyTheme,
 } from '../../typography/theme';
 import type { MessageKey } from '../../i18n/locales';
-import { ANIM_PRESETS, type AnimTiming } from '../../typography/animation';
+import { ANIM_PRESETS } from '../../typography/animation';
 import { GRID_LIMITS, type TypoGridPrefs } from '../../typography/grid';
 import {
   SHAPE_PRESETS,
@@ -92,8 +92,6 @@ export interface TypographyRibbonInput {
   supportsLocalFonts: boolean;
   /** 当前激活的动画预设（若选中元素只挂了一个预设动画）。 */
   activePreset: string | null;
-  /** 选中元素上第一个动画的时序（时序控件的显示值来源）。 */
-  anim: AnimTiming | null;
   /** 打开「自定义 CSS」弹窗（界面状态，所以由编辑器提供）。 */
   onOpenCustomCss: () => void;
   /** 打开「插入图标」选择器（同上）。 */
@@ -144,6 +142,13 @@ export interface TypographyRibbonInput {
   quadEditing: boolean;
   /** 当前打开的图片浮层（按钮的激活态；null = 都关着）。 */
   imageTool: ImageToolId | null;
+  /**
+   * 当前启用的刷子（`editorState.painter?.kind`）。按钮的激活态靠它。
+   *
+   * 与 `nodeEditing` / `quadEditing` 同一条理由：Ribbon 表是纯函数，
+   * 状态从外面喂进来，不让它自己去读 `editorState`。
+   */
+  painter: 'format' | 'animation' | null;
 }
 
 const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
@@ -340,9 +345,6 @@ export function buildTypographyTabs(
         ? (group.fill.stops[0]?.color ?? DEFAULT_PAINT_A)
         : DEFAULT_PAINT_A;
 
-  /** 时序控件的显示值：取选中元素上的第一个动画。 */
-  const anim: AnimTiming | null = selection.flatMap((e) => e.animations)[0] ?? null;
-
   /**
    * 当前配色方案（「设计」选项卡的数据源）。
    *
@@ -362,6 +364,31 @@ export function buildTypographyTabs(
       label: tr('rib.home'),
       order: 0,
       groups: [
+        {
+          /*
+           * 格式刷：**最左侧**（用户指定），单独成组。塞进「字体」组里会让它
+           * 挂在「字体」这个组名下 —— 刷的是填充/描边/圆角/图片处理，不是字。
+           *
+           * 单击 = 刷一次（再点一次取消）；**双击** = 连续刷（用户要求的两种模式）。
+           * `canPaint` 在已启用时恒为 true：连续模式下选区会跟着目标走，若按
+           * 「必须单选一个元素」判可用，刷完第一个按钮就自己灰掉了。
+           */
+          id: 'format-copy',
+          label: tr('rib.group.formatCopy'),
+          items: [
+            {
+              kind: 'toggle',
+              id: 'format-painter',
+              label: tr('rib.formatPainter'),
+              icon: 'paintbrush',
+              testid: 'typo-format-painter',
+              active: input.painter === 'format',
+              disabled: !a.canPaint('format'),
+              onchange: () => a.togglePainter('format', false),
+              ondblclick: () => a.togglePainter('format', true),
+            },
+          ],
+        },
         {
           id: 'font',
           label: tr('rib.group.font'),
@@ -1219,6 +1246,27 @@ export function buildTypographyTabs(
       order: 3,
       groups: [
         {
+          /*
+           * 动画刷：**最左侧**（用户指定）。与格式刷同一套交互（单击一次 /
+           * 双击连续 / 再点一下或点空白取消），只是刷的内容换成动画条目。
+           */
+          id: 'anim-copy',
+          label: tr('rib.group.animCopy'),
+          items: [
+            {
+              kind: 'toggle',
+              id: 'anim-painter',
+              label: tr('rib.animPainter'),
+              icon: 'paintbrush-vertical',
+              testid: 'typo-anim-painter',
+              active: input.painter === 'animation',
+              disabled: !a.canPaint('animation'),
+              onchange: () => a.togglePainter('animation', false),
+              ondblclick: () => a.togglePainter('animation', true),
+            },
+          ],
+        },
+        {
           id: 'presets',
           label: tr('rib.group.presets'),
           items: [
@@ -1247,101 +1295,6 @@ export function buildTypographyTabs(
               testid: 'typo-anim-clear',
               disabled: none,
               onselect: () => a.clearAnimations(),
-            },
-          ],
-        },
-        {
-          id: 'anim-timing',
-          label: tr('rib.group.timing'),
-          items: [
-            {
-              kind: 'number',
-              id: 'anim-delay',
-              label: tr('rib.animDelay'),
-              testid: 'typo-anim-delay',
-              value: anim?.delay ?? 0,
-              min: 0,
-              step: 0.05,
-              precision: 2,
-              suffix: 's',
-              disabled: !anim,
-              onchange: (v) => a.setAnimTiming({ delay: v }),
-            },
-            {
-              kind: 'number',
-              id: 'anim-duration',
-              label: tr('rib.animDuration'),
-              testid: 'typo-anim-duration',
-              value: anim?.duration ?? 0.6,
-              min: 0.01,
-              step: 0.05,
-              precision: 2,
-              suffix: 's',
-              disabled: !anim,
-              onchange: (v) => a.setAnimTiming({ duration: v }),
-            },
-            {
-              kind: 'select',
-              id: 'anim-iterations',
-              label: tr('rib.animIterations'),
-              testid: 'typo-anim-iterations',
-              value: anim ? (anim.iterations === Infinity ? 'inf' : String(anim.iterations)) : '1',
-              disabled: !anim,
-              options: [
-                { value: '1', label: tr('rib.iter1') },
-                { value: '2', label: tr('rib.iter2') },
-                { value: '3', label: tr('rib.iter3') },
-                { value: '5', label: tr('rib.iter5') },
-                { value: 'inf', label: tr('rib.iterLoop') },
-              ],
-              onchange: (v) =>
-                a.setAnimTiming({ iterations: v === 'inf' ? Infinity : Number(v) }),
-            },
-            {
-              kind: 'select',
-              id: 'anim-easing',
-              label: tr('rib.animEasing'),
-              testid: 'typo-anim-easing',
-              value: typeof anim?.easing === 'string' ? anim.easing : 'ease',
-              disabled: !anim,
-              options: [
-                { value: 'linear', label: tr('rib.easingLinear') },
-                { value: 'ease', label: tr('rib.easingEase') },
-                { value: 'ease-in', label: tr('rib.easingEaseIn') },
-                { value: 'ease-out', label: tr('rib.easingEaseOut') },
-                { value: 'ease-in-out', label: tr('rib.easingEaseInOut') },
-              ],
-              onchange: (v) => a.setAnimTiming({ easing: v as AnimTiming['easing'] }),
-            },
-            {
-              kind: 'select',
-              id: 'anim-direction',
-              label: tr('rib.animDirection'),
-              testid: 'typo-anim-direction',
-              value: anim?.direction ?? 'normal',
-              disabled: !anim,
-              options: [
-                { value: 'normal', label: tr('rib.dirNormal') },
-                { value: 'reverse', label: tr('rib.dirReverse') },
-                { value: 'alternate', label: tr('rib.dirAlternate') },
-                { value: 'alternate-reverse', label: tr('rib.dirAlternateReverse') },
-              ],
-              onchange: (v) => a.setAnimTiming({ direction: v as AnimTiming['direction'] }),
-            },
-            {
-              kind: 'select',
-              id: 'anim-fill',
-              label: tr('rib.animFill'),
-              testid: 'typo-anim-fill',
-              value: anim?.fill ?? 'both',
-              disabled: !anim,
-              options: [
-                { value: 'none', label: tr('rib.fillNone') },
-                { value: 'forwards', label: tr('rib.fillForwards') },
-                { value: 'backwards', label: tr('rib.fillBackwards') },
-                { value: 'both', label: tr('rib.fillBoth') },
-              ],
-              onchange: (v) => a.setAnimTiming({ fill: v as AnimTiming['fill'] }),
             },
           ],
         },

@@ -549,6 +549,19 @@ export interface AgentControlPlane {
     clipId: string | undefined,
     scripts: unknown,
   ): Promise<ControlResult<{ scripts: Record<string, unknown>[] }>>;
+  /**
+   * 把**一个元素**的格式 / 动画刷到一批目标上（编辑器「格式刷 / 动画刷」的同一路径）。
+   *
+   * `what:'format'` = 填充 / 描边 / 圆角 / 文本样式 / 图片处理 / 阴影与虚化；
+   * `what:'animation'` = **整份替换**动画条目（不是追加）。目标没有的字段静默跳过。
+   * 返回真的改了几个（0 = 本来就一样）。
+   */
+  copyTypographyStyle(
+    clipId: string | undefined,
+    sourceId: string,
+    targetIds: string[],
+    what?: 'format' | 'animation',
+  ): Promise<ControlResult<{ changed: number; elements: TypographyElementView[] }>>;
   setTypographyText(
     clipId: string | undefined,
     elementId: string,
@@ -2956,6 +2969,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'updateTypographyElements'
     | 'setTypographyAnimation'
     | 'setTypographyScripts'
+    | 'copyTypographyStyle'
     | 'setTypographyText'
     | 'removeTypographyElement'
     | 'reorderTypographyElement'
@@ -2999,6 +3013,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return run(() => {
         const store = beforeWrite();
         return typo.setScripts(store, typoClipId(clipId), scripts);
+      });
+    },
+    async copyTypographyStyle(clipId, sourceId, targetIds, what) {
+      return run(() => {
+        const store = beforeWrite();
+        return typo.copyElementStyle(store, typoClipId(clipId), sourceId, targetIds, what ?? 'format');
       });
     },
 

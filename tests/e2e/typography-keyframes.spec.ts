@@ -20,6 +20,7 @@ async function boot(page: Page): Promise<void> {
 interface Hooks {
   store: {
     project: {
+      fps: number;
       tracks: {
         clips: {
           id: string;
@@ -39,6 +40,8 @@ interface AnimShape {
   prop?: string;
   delay: number;
   duration: number;
+  /** `Infinity` 过不了 evaluate 的序列化，读它要单独的布尔断言。 */
+  iterations?: number;
   keys?: { t: number; v: number | string; ease?: unknown }[];
 }
 
@@ -310,4 +313,250 @@ test('不同属性 = 两条独立动画，各带自己的 animation-delay', asyn
   expect(doc.elements[0]!.animations.map((a) => a.prop).sort()).toEqual(['opacity', 'y']);
   // 40% 处落点 ⇒ 第二条约 2s 起（片段多长由片段决定，所以只断「明显晚于 0」）。
   expect(doc.elements[0]!.animations.find((a) => a.prop === 'y')!.delay).toBeGreaterThan(0.5);
+});
+
+/** 当前编辑片段的起止（算「每秒多少像素」要用它）。 */
+async function clipSpan(page: Page): Promise<{ start: number; end: number }> {
+  return page.evaluate(() => {
+    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    const id = A.appState.activeTypoClipId;
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) if (c.id === id) return { start: c.start, end: c.end };
+    }
+    throw new Error(`找不到当前片段（activeTypoClipId=${id}）`);
+  });
+}
+
+/** 加两条属性轨道（opacity + y），各带两根零变化帧。 */
+async function addTwoTracks(page: Page): Promise<void> {
+  await page.getByTestId('typo-kf-add-prop').click();
+  await page.getByTestId('typo-kf-prop-select').click();
+  await page.getByTestId('typo-kf-prop-y').click();
+  await page.getByTestId('typo-kf-add-prop').click();
+  await expect(page.getByTestId('typo-kf-lane')).toHaveCount(2);
+}
+
+test('框选之后拖任意一帧：整组一起走，一笔撤销', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await addTwoTracks(page);
+
+  // 框选整个轨道区 → 两条轨道共 4 帧全选中。
+  const lanes = (await page.getByTestId('typo-kf-lanes').boundingBox())!;
+  await page.mouse.move(lanes.x + 2, lanes.y + 2);
+  await page.mouse.down();
+  await page.mouse.move(lanes.x + lanes.width * 0.9, lanes.y + lanes.height - 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(page.locator('[data-testid="typo-kf-key"].on')).toHaveCount(4);
+
+  const count = async (): Promise<number[][]> =>
+    (await readDoc(page)).elements[0]!.animations.map((a) => a.keys!.map((k) => k.t));
+  const before = await count();
+
+  /*
+   * 按下的这一帧**已经在选择集里** ⇒ 拖着整组走。这条以前是坏的：按下会把
+   * 选择重置成单帧，于是框选完只能一帧一帧挪。
+   */
+  const key = page.getByTestId('typo-kf-key').nth(1);
+  const box = (await key.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  const after = await count();
+  const deltas = after.flatMap((ts, i) => ts.map((t, j) => t - before[i]![j]!));
+  expect(deltas).toHaveLength(4);
+  for (const d of deltas) expect(d).toBeCloseTo(deltas[0]!, 3);
+  expect(deltas[0]!).toBeGreaterThan(0.05);
+  // 相对间距不变（整组平移，不是各自夹到边界）。
+  expect(after[0]![1]! - after[0]![0]!).toBeCloseTo(before[0]![1]! - before[0]![0]!, 3);
+
+  // 一笔撤销回到拖动前（拖动中每帧都 commit 的形态是「按 60 次才回得去」）。
+  await page.keyboard.press('Control+z');
+  const undone = await count();
+  for (let i = 0; i < before.length; i++) {
+    for (let j = 0; j < before[i]!.length; j++) {
+      expect(undone[i]![j]!).toBeCloseTo(before[i]![j]!, 3);
+    }
+  }
+});
+
+test('Shift 吸附的单位可选：0.1 秒 / 帧各自落在自己的刻度上', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-kf-add-prop').click();
+  expect(await keyTimes(page)).toEqual([0, 0.6]);
+
+  const span = await clipSpan(page);
+  const lane = (await page.getByTestId('typo-kf-lane').first().boundingBox())!;
+  const pxPerSec = lane.width / (span.end - span.start);
+  const fps = await page.evaluate(
+    () => (window as never as { __artmatic: Hooks }).__artmatic.store.project.fps,
+  );
+
+  /** 把第二帧（0.6s）往右拖到 0.664s 附近 —— 三档吸附的落点各不相同。 */
+  const dragTo = async (target: number): Promise<void> => {
+    const key = page.getByTestId('typo-kf-key').nth(1);
+    const box = (await key.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.keyboard.down('Shift');
+    await page.mouse.down();
+    await page.mouse.move(
+      box.x + box.width / 2 + (target - 0.6) * pxPerSec,
+      box.y + box.height / 2,
+      { steps: 6 },
+    );
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+  };
+
+  // 默认「拍」；换成「0.1 秒」。
+  await expect(page.getByTestId('typo-kf-snap-unit')).toContainText('拍');
+  await page.getByTestId('typo-kf-snap-unit').click();
+  await page.getByTestId('typo-kf-snap-tenth').click();
+  await expect(page.getByTestId('typo-kf-snap-unit')).toContainText('0.1 秒');
+  await dragTo(0.664);
+  expect((await keyTimes(page))[1]!).toBeCloseTo(0.7, 2);
+  await page.keyboard.press('Control+z');
+
+  // 换成「帧」：落在整帧上，且**不在** 0.1 秒的格点上（30fps 下 0.7s 也是整帧，
+  // 所以必须两边都断，否则这条测试分不出「帧」与「0.1 秒」）。
+  await page.getByTestId('typo-kf-snap-unit').click();
+  await page.getByTestId('typo-kf-snap-frame').click();
+  await dragTo(0.664);
+  const t = (await keyTimes(page))[1]!;
+  expect(Math.abs(t * fps - Math.round(t * fps))).toBeLessThan(1e-3);
+  expect(Math.abs(t * 10 - Math.round(t * 10))).toBeGreaterThan(0.05);
+});
+
+test('轨道行可开关循环（iterations → infinite）', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-kf-add-prop').click();
+
+  const loop = page.getByTestId('typo-kf-loop');
+  await expect(loop).toHaveCount(1);
+  await expect(loop).toHaveAttribute('aria-pressed', 'false');
+  await loop.click();
+  await expect(loop).toHaveAttribute('aria-pressed', 'true');
+
+  const loops = async (): Promise<boolean> =>
+    page.evaluate(() => {
+      const A = (window as never as { __artmatic: Hooks }).__artmatic;
+      const id = A.appState.activeTypoClipId;
+      for (const t of A.store.project.tracks) {
+        for (const c of t.clips) {
+          if (c.id === id && c.source?.doc) return c.source.doc.elements[0]!.animations[0]!.iterations === Infinity;
+        }
+      }
+      return false;
+    });
+  expect(await loops()).toBe(true);
+  // 文档字段只是意图，真正生效的是计算样式。
+  const count = await page
+    .locator('.paper [data-anim-id]')
+    .first()
+    .evaluate((n) => getComputedStyle(n).animationIterationCount);
+  expect(count).toBe('infinite');
+
+  await loop.click();
+  await expect(loop).toHaveAttribute('aria-pressed', 'false');
+  expect(await loops()).toBe(false);
+});
+
+/**
+ * 延迟只许算一遍。
+ *
+ * `delay` 已经写进 CSS 简写的 `animation-delay`（effect timing 的一部分），而
+ * WAAPI 的 `currentTime` 时间轴**包含**它。seek 时再按 `localSec - delay` 换算
+ * 就等于 2×delay —— 0.4s 才该开始的元素 0.8s 才动，且延迟期被 fill 停在首帧，
+ * 不报错、不闪。这条断言读的是**舞台的计算 transform**（用户看到的那个）。
+ *
+ * 延迟取 0.4s 而不是秒级：`appState.seek()` 会把 t 夹进工程时长，而新建片段的
+ * 起点在 demo 工程靠后处（2s 之后的时刻会被夹住，测出来的是夹取而不是求值）。
+ */
+test('动画延迟只算一遍：0.4s 起的轨道在 0.65s 已走一半（不是 1.05s）', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  /*
+   * 造一条与手工拖出来同形的轨道：0.4s 有第一帧、0.9s 到末帧（delay = 0.4s）。
+   * 走控制平面而不是直接改文档 —— `delay` / `duration` 由写入路径从 keys 派生，
+   * 那正是被算两遍的值。
+   */
+  const { start } = await page.evaluate(async (id) => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          project: {
+            tracks: {
+              clips: { id: string; start: number; source?: { doc?: { elements: { id: string }[] } } }[];
+            }[];
+          };
+        };
+        control: {
+          setTypographyAnimation: (
+            clipId: string,
+            elementId: string,
+            input: unknown,
+          ) => Promise<{ ok: boolean; error?: { message?: string } }>;
+        };
+      };
+    }).__artmatic;
+    let clip: { start: number; source?: { doc?: { elements: { id: string }[] } } } | undefined;
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) if (c.id === id) clip = c;
+    }
+    const elementId = clip?.source?.doc?.elements[0]?.id;
+    if (!clip || !elementId) throw new Error('当前排版文档里没有元素');
+    const r = await A.control.setTypographyAnimation(id, elementId, {
+      prop: 'y',
+      keys: [
+        { t: 0.4, v: 0 },
+        { t: 0.9, v: -100 },
+      ],
+      easing: 'linear',
+    });
+    if (!r.ok) throw new Error(`typo_set_animation 失败：${r.error?.message ?? ''}`);
+    return { start: clip.start };
+  }, clipId);
+
+  await expect(page.locator('.paper [data-anim-id]')).toHaveCount(1);
+
+  /** seek 到片段内 localSec，读舞台上那层动画的 translateY。 */
+  const translateYAt = (localSec: number): Promise<number> =>
+    page.evaluate(
+      ({ t }) =>
+        new Promise<number>((resolve, reject) => {
+          const A = (window as never as { __artmatic: { appState: { seek: (t: number) => void } } })
+            .__artmatic;
+          A.appState.seek(t);
+          requestAnimationFrame(() => {
+            const layer = document.querySelector<HTMLElement>('.paper [data-anim-id]');
+            if (!layer) return reject(new Error('舞台上没有动画层'));
+            const tf = getComputedStyle(layer).transform;
+            resolve(tf === 'none' ? 0 : new DOMMatrixReadOnly(tf).m42);
+          });
+        }),
+      { t: start + localSec },
+    );
+
+  // 延迟期停在首帧（fill: backwards）。
+  expect(await translateYAt(0.35)).toBeCloseTo(0, 1);
+  /*
+   * 关键一条：延迟过半时必须**已经走了一半**。老实现再减一次 delay
+   * （`currentTime = (localSec − delay)·1000`），这里会读到 0 —— 起点被推到 2×delay。
+   */
+  expect(await translateYAt(0.65)).toBeCloseTo(-50, 0);
+  expect(await translateYAt(0.9)).toBeCloseTo(-100, 0);
+  // 老实现「翻倍」后的落点：修复后必须早就是末帧。
+  expect(await translateYAt(1.65)).toBeCloseTo(-100, 0);
 });

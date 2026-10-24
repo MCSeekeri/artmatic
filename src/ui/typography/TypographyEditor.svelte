@@ -83,9 +83,11 @@
   import type { IconInsert } from '../../typography/icon-shapes';
   import { cloneAsCustomTheme, themeById } from '../../typography/theme';
   import { newId } from '../../core/schema';
-  import { SNAP_PX, hitTest, hitTestAll, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
+  import { SNAP_PX, hitTestAll, hitTestFirst, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
+  import { isOpaqueAt } from './hit-area';
   import { gridSpacing } from '../../typography/grid';
   import { groupById } from '../../typography/groups';
+  import { statusHint } from '../status-hint.svelte';
   import { tr } from '../../i18n/index.svelte';
 
   const { clipId }: { clipId: string } = $props();
@@ -475,19 +477,6 @@
     return only.kind === 'preset' ? only.preset : null;
   });
 
-  /**
-   * Ribbon 的时序控件操作哪一条动画：**关键帧面板里选中的那条**优先。
-   *
-   * 一个元素可以有多条（一条一个属性），全改会把「位移 0.4s、淡入 0s」的编排
-   * 一键抹平成同一套时序。
-   */
-  const activeAnim = $derived.by(() => {
-    void appState.version;
-    const all = selection.flatMap((e) => e.animations);
-    const id = kfPanel.animId;
-    return (id ? all.find((a) => a.id === id) : null) ?? all[0] ?? null;
-  });
-
   const tabs = $derived.by(() => {
     void appState.version;
     void appState.typoAlignTarget;
@@ -502,7 +491,6 @@
         localFontFamilies: appState.localFontFamilies,
         supportsLocalFonts: appState.supportsLocalFonts,
         activePreset,
-        anim: activeAnim,
         onOpenCustomCss: () => (customCssOpen = true),
         onOpenIconPicker: () => (iconPickerOpen = true),
         onOpenGenPicker: () => (genPickerOpen = true),
@@ -523,6 +511,7 @@
         onImageQuad: toggleImageQuad,
         quadEditing: !!editorState.quadEditId,
         imageTool,
+        painter: editorState.painter?.kind ?? null,
       },
       actions,
     );
@@ -536,16 +525,16 @@
   });
 
   /**
-   * 舞台的时钟（绝对秒）。
+   * 舞台的时钟（绝对秒）= 工程播放头。
    *
-   * 平时跟随工程播放头 `appState.playT`；背景预览在**局部播放 / 拖动进度条**时
-   * （`bgPreview.at` 非 null）改由它驱动。这样元素动画与底图看的是同一个时刻。
-   * **绝不去推 `appState.playT`** —— 那是时间轴的播放头，另一份状态。
+   * **只有一份**：底栏进度条、关键帧面板的播放头、时间轴播放头、元素动画、底图
+   * 取帧读的都是 `appState.playT`（硬约束 1.1）。这里曾经有过一份「局部预览时间」
+   * 盖住它，后果是「拖底栏滑块，关键帧面板的播放头不动」—— 看着是同一个播放头，
+   * 实际是两份状态。
    */
   const stageTime = $derived.by(() => {
     void appState.playT;
-    void bgPreview.at;
-    return bgPreview.at ?? appState.playT;
+    return appState.playT;
   });
 
   /** 片段内本地时间 —— 舞台上的 CSS 动画就是被它 seek 的（唯一时钟仍是 t）。 */
@@ -869,23 +858,22 @@
     return c ? Math.max(0.001, c.end - c.start) : 1;
   });
 
-  /** 进度条读数：局部预览时间（片段内秒），夹进 [0, clipDur]。 */
+  /** 进度条读数：播放头在片段内的位置（秒），夹进 [0, clipDur]。 */
   const bgLocalSec = $derived.by(() => {
     void appState.playT;
-    void bgPreview.at;
     const c = editorState.clip;
     if (!c) return 0;
     return Math.min(clipDur, Math.max(0, stageTime - c.start));
   });
 
   /**
-   * 拖动进度条 / 播放共用的「seek 到 localSec」。
-   * 一次调用同时更新底图与动画（两者都读 `bgPreview.at`）。
+   * 拖动进度条 = 拖**工程播放头**（关键帧面板与时间轴同步跟着走）。
+   * 底图与舞台动画都读同一个 `playT`，所以一次 seek 三者一起变。
    */
   function seekBgLocal(sec: number): void {
     const c = editorState.clip;
     if (!c) return;
-    bgPreview.seekLocal(c.start + sec);
+    bgPreview.seekTo(c.start + sec);
   }
 
   function toggleBgPlay(): void {
@@ -969,12 +957,48 @@
     };
   }
 
+  /**
+   * 指针下最上层的元素。
+   *
+   * 不只是「外接框命中」：图形元素还要过一遍像素级的实心判定（`isOpaqueAt`），
+   * 于是面积很大的中空图形（圆环 / 方框 / 星形）**中间透的区域会让位给下一层**
+   * —— 之前那种情况下层元素根本点不到，只能靠 Alt 轮询。
+   *
+   * 两处容差（都是「屏幕 px 换算成文档单位」，与缩放无关的手感）：
+   *  · `HIT_SLOP_PX` 放宽**外接框**判定 —— 细线的框只有一两像素，压在边缘外侧
+   *    一点点也该算在它旁边；
+   *  · `isOpaqueAt` 内部撒探针做**模糊判定** —— 框里很大一片不在墨迹上时
+   *    （旋转过的细长条）仍然点得中。
+   *
+   * 文本 / 图片不过闸（它们的框就是它们的身份），所以这条对它们零代价。
+   */
+  const HIT_SLOP_PX = 3;
+
   function hitAt(e: { clientX: number; clientY: number }) {
     const p = toDoc(e);
-    return hitTest(editorState.selectableRects, p.x, p.y);
+    const slop = HIT_SLOP_PX / Math.max(0.01, zoom);
+    return hitTestFirst(editorState.selectableRects, p.x, p.y, {
+      slop,
+      accept: (id) => {
+        const el = doc?.elements.find((x) => x.id === id);
+        return isOpaqueAt(paperEl, el, p, zoom);
+      },
+    });
   }
 
-  /** 点下的**全部**命中 id，从最上层到最下层（Alt 轮询用）。 */
+  /**
+   * 只看外接框的最上层（**不做**实心判定）。
+   *
+   * 按在**选择框**上时用它：那个框属于已选元素，指针落在框内就是「在指这个
+   * 元素」—— 用穿透判定的话，中空图形选中后按框中央会返回下层的元素，
+   * Shift 减选 / 单击进组都会作用到别人身上。
+   */
+  function hitTopAt(e: { clientX: number; clientY: number }) {
+    const p = toDoc(e);
+    return hitTestFirst(editorState.selectableRects, p.x, p.y);
+  }
+
+  /** 点下的**全部**命中 id，从最上层到最下层（Alt 轮询用；同样是外接框口径）。 */
   function hitIdsAt(e: { clientX: number; clientY: number }): string[] {
     const p = toDoc(e);
     return hitTestAll(editorState.selectableRects, p.x, p.y);
@@ -1052,7 +1076,7 @@
    * 就把选择收缩成指针底下那一个，那是很烦人的事故。
    */
   function onSelectionBoxDown(e: PointerEvent): void {
-    const hit = hitAt(e);
+    const hit = hitTopAt(e);
     const el = hit ? (doc?.elements.find((x) => x.id === hit.id) ?? null) : null;
     startMoveGesture(makeEnv(), toDoc(e), {
       onClick: () => {
@@ -1084,6 +1108,25 @@
     }
     if (e.button !== 0) return;
     if (!doc) return;
+
+    /*
+     * 格式刷 / 动画刷：这一次点击是「选目标」，不是选择语义。
+     *
+     * 必须放在**最前面**（连文本编辑那条分支之前）：刷子开着时点哪儿都是刷，
+     * 不该有「点到正在编辑的文本框就把光标挪过去」这种例外。
+     * 落空 = 取消（用户明确要求），由 `clearSelection()` 顺手做掉。
+     */
+    const brush = editorState.painter;
+    if (brush) {
+      const target = hitAt(e);
+      if (!target) {
+        editorState.clearSelection();
+        return;
+      }
+      actions.applyPainterTo(target.id);
+      return;
+    }
+
     const hit = hitAt(e);
 
     // 正在编辑这个元素时，指针事件归浏览器的文本选择 —— 否则一按就把
@@ -1132,6 +1175,8 @@
    */
   function onStageDblClick(e: MouseEvent): void {
     if (!doc) return;
+    // 刷子开着时双击只是「刷了两次」，不该顺手进入文本编辑。
+    if (editorState.painter) return;
     const hit = hitAt(e);
     if (!hit) return;
     const el = doc.elements.find((x) => x.id === hit.id);
@@ -1269,6 +1314,24 @@
   $effect(() => {
     registerTextRangeRefresher(refreshTextRange);
     return () => registerTextRangeRefresher(null);
+  });
+
+  /**
+   * 刷子开着时底栏说清楚「现在在等什么、怎么退出」。
+   *
+   * 走 `statusHint.gesture`（优先级最高的那一层）而不是一次性 toast：刷子是个
+   * **持续状态**，用户可能过几秒才点目标 —— toast 早就消失了，而底栏会一直
+   * 提示到收起为止。清扫放在 effect 的清理函数里，于是「点了空白 / 再点按钮 /
+   * 按 Esc / 关编辑器」这些路径都不必各自记得清一次。
+   */
+  $effect(() => {
+    const brush = editorState.painter;
+    if (!brush) return;
+    statusHint.setGesture({
+      text: brush.kind === 'format' ? 'typo.painterFormat' : 'typo.painterAnimation',
+      actions: [{ keysKey: 'sc.key.esc', labelKey: 'typo.painterCancel' }],
+    });
+    return () => statusHint.clearGesture();
   });
 
   /**
@@ -1526,6 +1589,7 @@
     <div
       class="viewport"
       class:panning
+      class:painting={!!editorState.painter}
       role="presentation"
       bind:this={viewportEl}
       onpointerdown={onStageDown}
@@ -1650,8 +1714,12 @@
 
           控制点（`paths: false`）则**与选择层并存**，所以它必须排在选择层**之后**
           （DOM 靠后 = 叠在上面）：选择层的框会吞掉整片 pointerdown。
+
+          格式刷 / 动画刷开着时也不渲染选择层：那一次点击要落到「目标元素」上，
+          而选择框（含把手）会把它整片吞掉 —— 源元素完全盖住目标时，刷子就
+          永远刷不到它，看起来像「点了没反应」。
         -->
-        {#if !nodeEditEl}
+        {#if !nodeEditEl && !editorState.painter}
           <SelectionLayer
             rect={selectionBox}
             {zoom}
@@ -1740,7 +1808,8 @@
 
     <!--
       背景预览：播放按钮 + 进度条（用户要求放在缩放区右侧）+ 开关 + 不透明度。
-      播放/拖动都走 `bgPreview`（局部时间），同时驱动底图与排版动画。
+      播放/拖动都推**工程播放头**（`bgPreview`），所以它和关键帧面板的播放头、
+      时间轴播放头永远是同一时刻。
     -->
     <div class="typo-bg-controls" data-testid="typo-bg-controls">
       <IconButton
@@ -2033,6 +2102,15 @@
   /* 中键平移中：光标要有反馈，否则用户不知道手势被接住了。 */
   .viewport.panning {
     cursor: grabbing;
+  }
+  /*
+   * 刷子开着：`copy` 是系统里「把东西刷到这儿」的通用光标（带一个加号）。
+   * 用 `!important` 是因为文档元素自己会设 cursor（文本框是 text、图片是 move），
+   * 那些规则更靠内层、优先级更高。
+   */
+  .viewport.painting,
+  .viewport.painting :global(*) {
+    cursor: copy !important;
   }
   .paper-wrap {
     position: relative;

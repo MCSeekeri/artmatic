@@ -59,6 +59,13 @@ export interface RibbonButtonSpec extends RibbonItemBase {
   kind: 'button';
   icon: IconName;
   onselect: () => void;
+  /**
+   * 双击（在第一下之后的 `click` 之后触发）。
+   *
+   * 只给「双击 = 另一种模式」的按钮用 —— 目前只有格式刷 / 动画刷：单击刷一次、
+   * 双击连续刷。按钮的常规语义仍然是单击，别把主操作挪到双击上。
+   */
+  ondblclick?: () => void;
 }
 
 export interface RibbonToggleSpec extends RibbonItemBase {
@@ -66,6 +73,8 @@ export interface RibbonToggleSpec extends RibbonItemBase {
   icon: IconName;
   active: boolean;
   onchange: (active: boolean) => void;
+  /** 见 `RibbonButtonSpec.ondblclick`。 */
+  ondblclick?: () => void;
 }
 
 export interface RibbonSelectSpec extends RibbonItemBase {

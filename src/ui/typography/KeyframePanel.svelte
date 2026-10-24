@@ -9,7 +9,9 @@
    * 交互与片段编辑器的时间轴对齐：
    *   · **标尺拖动 = 播放头**，**轨道上拖动 = 框选**；
    *   · 滚轮横向滚动（内容超出时），`⌘/Ctrl + 滚轮` 缩放；
-   *   · 关键帧**自由拖曳**，按住 Shift 才吸附到拍。
+   *   · 关键帧**自由拖曳**，按住 Shift 才吸附 —— 吸附到哪一档由顶栏的
+   *     「吸附」下拉决定（拍 / 秒 / 0.1 秒 / 帧）；
+   *   · 框选之后拖任意一帧 = **整组一起走**（一笔撤销）。
    *
    * 其它纪律：一条动画 = 一个属性（见 `typography/AGENTS.md`）；拖动 = 一笔撤销；
    * 列表派生逐层浅拷贝（文档对象是原地改的）。
@@ -36,7 +38,14 @@
     type TracksAnimation,
   } from '../../typography/animation-tracks';
   import type { TypographyElement } from '../../typography/document';
-  import { beatAtTime, beatDur, timeAtBeat } from '../../core/time';
+  import {
+    KEY_SNAP_UNITS,
+    beatAtTime,
+    beatDur,
+    snapKeyTime,
+    timeAtBeat,
+    type KeySnapUnit,
+  } from '../../core/time';
   import { tr } from '../../i18n/index.svelte';
 
   const actions = createTypographyActions();
@@ -58,7 +67,8 @@
   };
 
   const CUSTOM = '__custom';
-  const PROPS_W = 132;
+  /** 属性列宽。含「属性名 + 读数 + 循环开关」三样，130 出头会开始挤掉读数。 */
+  const PROPS_W = 152;
   const ROW_H = 24;
 
   const clip = $derived.by(() => {
@@ -68,6 +78,8 @@
   const clipStart = $derived(clip?.start ?? 0);
   const clipDur = $derived(clip ? Math.max(0.001, clip.end - clip.start) : 1);
   const grid = $derived(appState.project.beatGrid);
+  /** 工程帧率（「吸附到帧」的唯一依据，硬约束 1.1）。 */
+  const fps = $derived(Math.max(1, appState.project.fps));
   const localSec = $derived.by(() => {
     void appState.playT;
     return clip ? appState.playT - clip.start : 0;
@@ -167,11 +179,26 @@
     return Math.max(0, Math.min(clipDur, x / px));
   }
 
-  /** 吸到最近的拍。**只在按住 Shift 时用**（默认自由拖曳）。 */
+  /**
+   * 吸到 `kfPanel.snapUnit` 选定的刻度（拍 / 秒 / 0.1 秒 / 帧）。
+   * **只在按住 Shift 时用**（默认自由拖曳，见 `onKeyDown`）。
+   *
+   * 换算在**绝对秒**上做（拍网格带 offset、帧号是 `t = frame/fps`），再把结果
+   * 折回片段内的相对秒 —— 拿相对秒直接吸会让同一个位置在不同片段里对齐到
+   * 不同刻度。
+   */
   function snapSec(sec: number): number {
-    const beat = Math.round(beatAtTime(clipStart + sec, grid));
-    return Math.max(0, Math.min(clipDur, timeAtBeat(beat, grid) - clipStart));
+    const abs = snapKeyTime(clipStart + sec, kfPanel.snapUnit, grid, fps);
+    return Math.max(0, Math.min(clipDur, abs - clipStart));
   }
+
+  /** 吸附单位下拉的选项。在派生的作用域里取 `tr()`，切语言时才会跟着变。 */
+  const snapOptions = $derived(
+    (Object.keys(KEY_SNAP_UNITS) as KeySnapUnit[]).map((u) => ({
+      value: u,
+      label: tr(KEY_SNAP_UNITS[u].labelKey),
+    })),
+  );
 
   /** 主刻度：秒。步长取第一个「不小于 64px」的候选，否则数字会挤成一团。 */
   const STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10];
@@ -299,33 +326,60 @@
     return Math.min(Math.max(t * px, 5), contentW - 5);
   }
 
+  /**
+   * 拖关键帧。**按下时已经在选择集里 ⇒ 整组一起走**（框选完一拖就是一排）；
+   * 按在没选中的帧上则先把选择换成它 —— 与 Office 拖形状同一条语义。
+   *
+   * 三个必须留意的点：
+   *  1. 位移一律由**按下点的原始时刻**重算（不是逐帧累加），否则会漂；
+   *  2. 组内任何一帧都不许被夹出 `[0, clipDur]`，否则相对间距会被夹变形 ——
+   *     夹的是整组的位移，不是每一帧各自夹；
+   *  3. 同轨道往右拖时**从右往左**写（反向亦然）：先挪走右边那帧，左边那帧
+   *     才不会暂时落在它的位置上被 `normalizeKeys` 去重吃掉。
+   */
   function onKeyDown(e: PointerEvent, animId: string, t: number): void {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const anchor = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    kfPanel.selectKey(animId, t, anchor);
+    if (!isSel(animId, t)) kfPanel.selectKeys([{ animId, t }]);
 
-    const startT = t;
+    // 按下的一刻就把「拖谁」定下来：拖动中 keys 每帧都在变，不能现取。
+    const origins = kfPanel.keys.map((k) => ({ animId: k.animId, t: k.t }));
+    const cur = origins.map((k) => ({ ...k }));
+    const tMin = Math.min(...origins.map((k) => k.t));
+    const tMax = Math.max(...origins.map((k) => k.t));
+    /** 整组允许的位移区间（夹住整组，保持相对间距）。 */
+    const dMin = -tMin;
+    const dMax = clipDur - tMax;
+
     const startX = e.clientX;
     let moved = false;
-    let snapped = false;
     editorState.beginGesture();
     statusHint.setGesture({
-      actions: [{ keysKey: 'sc.key.shiftDrag', labelKey: 'typo.kfSnap' }],
+      actions: [
+        { keysKey: 'sc.key.shiftDrag', labelKey: KEY_SNAP_UNITS[kfPanel.snapUnit].hintKey },
+      ],
     });
     const move = (ev: PointerEvent): void => {
-      // **自由拖曳**；按住 Shift 才吸到拍（旧版无条件吸附，0.5s 一跳，像拖不动）。
-      let next = Math.max(0, Math.min(clipDur, startT + (ev.clientX - startX) / px));
-      if (ev.shiftKey) next = snapSec(next);
-      snapped = ev.shiftKey;
-      const current = kfPanel.keys[0]?.t;
-      if (current === undefined || Math.abs(next - current) < 1e-9) return;
-      // 索引会被重排，所以每次都用「当前时刻」定位这一帧（见 panel-state 的注释）。
-      actions.moveKey(animId, current, next);
-      kfPanel.moveSelection(next);
-      moved = true;
+      // **自由拖曳**；按住 Shift 才吸到刻度（旧版无条件吸附，0.5s 一跳，像拖不动）。
+      let delta = (ev.clientX - startX) / px;
+      if (ev.shiftKey) delta = snapSec(t + delta) - t;
+      delta = Math.max(dMin, Math.min(dMax, delta));
+
+      const order = origins
+        .map((_, i) => i)
+        .sort((a, b) => (delta > 0 ? origins[b]!.t - origins[a]!.t : origins[a]!.t - origins[b]!.t));
+      for (const i of order) {
+        const next = origins[i]!.t + delta;
+        if (Math.abs(next - cur[i]!.t) < 1e-9) continue;
+        // 索引会被重排，所以每次都用「当前时刻」定位这一帧（见 panel-state 的注释）。
+        actions.moveKey(origins[i]!.animId, cur[i]!.t, next);
+        cur[i]!.t = next;
+        moved = true;
+      }
+      if (moved) kfPanel.moveKeys(cur);
     };
     const up = (): void => {
       window.removeEventListener('pointermove', move);
@@ -335,9 +389,9 @@
         kfPanel.closePop();
       } else {
         editorState.cancelGesture();
-        kfPanel.pop = anchor;
+        // 零位移 = 单击：多选时收缩到这一帧，并弹出它的值 / 曲线。
+        kfPanel.selectKey(animId, t, anchor);
       }
-      void snapped;
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
@@ -583,6 +637,20 @@
 
       <span class="sep"></span>
 
+      <!-- 吸附单位：Shift 拖关键帧时对齐到这一档（默认拍）。 -->
+      <span class="lab">{tr('typo.kfSnap')}</span>
+      <span class="sel-w snap">
+        <Select
+          value={kfPanel.snapUnit}
+          options={snapOptions}
+          testid="typo-kf-snap-unit"
+          optionTestidPrefix="typo-kf-snap"
+          onchange={(v) => (kfPanel.snapUnit = v)}
+        />
+      </span>
+
+      <span class="sep"></span>
+
       <IconButton
         icon={appState.playing ? 'pause' : 'play'}
         label={appState.playing ? tr('typo.animPause') : tr('typo.animPlay')}
@@ -656,6 +724,19 @@
             <div class="prop-row" class:on={a.id === selTrack?.id} data-testid="typo-kf-track">
               <span class="pname">{propLabel(a.prop)}</span>
               <span class="pval mono">{valueAt(a)}</span>
+              <!--
+                循环开关：`iterations = Infinity` → CSS 的 `infinite`。
+                放在轨道行上而不是顶栏：一条轨道 = 一个属性，循环是**这条轨道**
+                的属性 —— 顶栏那个「作用于哪条轨道」的歧义正是被删掉的时序组。
+              -->
+              <IconButton
+                icon="repeat"
+                label={tr(a.iterations === Infinity ? 'typo.kfLoopOn' : 'typo.kfLoopOff')}
+                size="sm"
+                active={a.iterations === Infinity}
+                testid="typo-kf-loop"
+                onclick={() => actions.setTrackLoop(a.id, a.iterations !== Infinity)}
+              />
             </div>
           {/each}
           {#each legacy as leg (leg.id)}
@@ -844,6 +925,10 @@
     width: 92px;
     flex: none;
   }
+  /* 吸附单位的标签最长是「0.1 秒」，比属性下拉窄一点。 */
+  .sel-w.snap {
+    width: 72px;
+  }
   .txt {
     height: 20px;
     width: 84px;
@@ -1009,6 +1094,12 @@
   }
   .pval {
     color: var(--text-muted);
+    /* 循环开关占一个图标位之后，读数不许把它挤出去（长读数自己省略）。 */
+    flex: none;
+    max-width: 48px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* ---- 轨道区（横 + 纵滚动） ---- */

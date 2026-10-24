@@ -215,6 +215,12 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   预设名必须从 `get_typography_capabilities().animations.presets` 取 —— 猜错拼写
   的表现是「动画没生效、也不报错」。视图里回显**完整动画字段**，否则模型读不回
   自己设过什么。
+- **格式刷 / 动画刷**（2026-10-24）：`typo_copy_style({ sourceId, targetIds, what })`
+  与编辑器两个按钮走**同一条纯函数**（`typography/format-painter.ts`）。`what:'format'`
+  只搬外观（填充 / 描边 / 圆角 / 文本样式 / 图片处理 / 阴影与虚化），不搬内容、几何、
+  `opacity` / `blend`；`what:'animation'` **整份替换**并重新发号。返回 `changed`
+  = 真的改了几个（0 = 本来就一样，不是错误）。能力清单在
+  `get_typography_capabilities().styleCopy` —— 少了它，模型会拿它当 duplicate 用。
 - `typo_replace_doc` 的 `droppedKeys` 是契约的一部分：未知键逐条报出来（
   `elements[2].colour`），静默归一化会让模型照着一份自己以为对的文档继续做。
   同理 `docView` 的 `full` 对缺 `fonts` / `elements` 的旧文档必须兜底（曾经整档崩 `internal`）。

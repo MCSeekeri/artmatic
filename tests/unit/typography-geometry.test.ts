@@ -6,6 +6,7 @@ import {
   distribute,
   hitTest,
   hitTestAll,
+  hitTestFirst,
   rectsIntersect,
   resizeFramesRotated,
   rotateFrames,
@@ -294,6 +295,55 @@ describe('hitTest', () => {
 
   it('空集合返回 null', () => {
     expect(hitTest([], 0, 0)).toBeNull();
+  });
+});
+
+describe('hitTestFirst（带否决权 = 中空图形让下层可点）', () => {
+  const rects = [rect('bottom', 0, 0, 100, 100), rect('top', 50, 50, 100, 100)];
+
+  it('没有 accept 时与 hitTest 完全一致', () => {
+    for (const [x, y] of [
+      [60, 60],
+      [10, 10],
+      [500, 500],
+    ] as const) {
+      expect(hitTestFirst(rects, x, y)?.id).toBe(hitTest(rects, x, y)?.id ?? undefined);
+    }
+  });
+
+  it('最上层被否决时继续往下找（透明处穿透）', () => {
+    // top 是「中空」的：它框里的点不算数，于是落到下面的 bottom 上。
+    expect(hitTestFirst(rects, 60, 60, { accept: (id) => id !== 'top' })!.id).toBe('bottom');
+  });
+
+  it('全部被否决 + 都没命中都返回 null', () => {
+    expect(hitTestFirst(rects, 60, 60, { accept: () => false })).toBeNull();
+    expect(hitTestFirst(rects, 500, 500, { accept: () => true })).toBeNull();
+  });
+
+  it('accept 只对框命中的元素求值（不是整张表都问一遍）', () => {
+    const asked: string[] = [];
+    hitTestFirst(rects, 10, 10, {
+      accept: (id) => {
+        asked.push(id);
+        return true;
+      },
+    });
+    expect(asked).toEqual(['bottom']);
+  });
+
+  it('slop 把外接框判定向外放宽（细线压在边缘外侧也点得中）', () => {
+    const line = [rect('line', 200, 200, 4, 200)];
+    // 指针在框外 2px：默认口径落空，带 3 的 slop 才命中。
+    expect(hitTest(line, 205, 300)).toBeNull();
+    expect(hitTestFirst(line, 205, 300)).toBeNull();
+    expect(hitTestFirst(line, 205, 300, { slop: 3 })!.id).toBe('line');
+  });
+
+  it('slop 不放宽 z 序：被否决的最上层仍然让位', () => {
+    expect(
+      hitTestFirst(rects, 60, 60, { slop: 10, accept: (id) => id !== 'top' })!.id,
+    ).toBe('bottom');
   });
 });
 

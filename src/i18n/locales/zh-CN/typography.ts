@@ -58,6 +58,8 @@ export const typography = {
   'typo.undo.rotate': '旋转元素',
   'typo.undo.frame': '修改元素几何',
   'typo.undo.order': '调整层级',
+  'typo.undo.formatPainter': '格式刷',
+  'typo.undo.animPainter': '动画刷',
   'typo.undo.shapeFill': '修改填充',
   'typo.undo.shapeStroke': '修改描边',
   'typo.undo.strokeWidth': '修改描边宽度',
@@ -88,7 +90,6 @@ export const typography = {
   'typo.undo.distribute': '分布元素',
   'typo.undo.addAnim': '添加动画',
   'typo.undo.clearAnim': '清除动画',
-  'typo.undo.animTiming': '修改动画时序',
   'typo.undo.customAnim': '设置自定义动画',
   'typo.undo.addAnimTrack': '添加属性轨道',
   'typo.undo.removeAnimTrack': '删除属性轨道',
@@ -97,6 +98,7 @@ export const typography = {
   'typo.undo.keyMove': '移动关键帧',
   'typo.undo.keyEase': '修改缓动',
   'typo.undo.removeKey': '删除关键帧',
+  'typo.undo.trackLoop': '设置循环',
   'typo.undo.flatten': '排版转为图片',
   'typo.undo.keyOn': '开启抠图',
   'typo.undo.keyOff': '关闭抠图',
@@ -306,7 +308,20 @@ export const typography = {
   'typo.kfKeyDelete': '删除关键帧',
   'typo.kfAddKeyHint': '双击轨道加点',
   'typo.kfMarquee': '框选关键帧',
-  'typo.kfSnap': '吸附到拍',
+  'typo.kfSnap': '吸附',
+  /* 吸附单位（Shift 拖关键帧时对齐到哪种刻度）—— 下拉里的短标签。 */
+  'typo.kfSnapBeat': '拍',
+  'typo.kfSnapSec': '秒',
+  'typo.kfSnapTenth': '0.1 秒',
+  'typo.kfSnapFrame': '帧',
+  /* 同一组单位的底栏手势提示（Shift 拖 → 吸附到…）。 */
+  'typo.kfSnapToBeat': '吸附到拍',
+  'typo.kfSnapToSec': '吸附到秒',
+  'typo.kfSnapToTenth': '吸附到 0.1 秒',
+  'typo.kfSnapToFrame': '吸附到帧',
+  'typo.kfLoop': '循环',
+  'typo.kfLoopOn': '循环：开',
+  'typo.kfLoopOff': '循环：关',
   'typo.kfSelCount': '选中 {n} 帧',
   'typo.kfNoTrack': '还没有属性轨道',
   'typo.kfNoKey': '没有选中关键帧',
@@ -390,6 +405,12 @@ export const typography = {
 
   /* ------------------------------------------------ 选择框（SelectionLayer） */
   'typo.rotateHandle': '旋转（Shift 吸附 15°）',
+  'typo.moveHandle': '拖动',
+
+  /* ------------------------------------------------ 格式刷 / 动画刷 */
+  'typo.painterFormat': '格式刷：点目标元素',
+  'typo.painterAnimation': '动画刷：点目标元素',
+  'typo.painterCancel': '取消',
 
   /* ------------------------------------------------ SVG 素材生成器（typography/svg-gen） */
 

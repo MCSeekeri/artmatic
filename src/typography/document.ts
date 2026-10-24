@@ -1281,6 +1281,8 @@ export function createShapeElement(  size: Size,
     clipFrame: over.clipFrame,
     evenOdd: over.evenOdd,
     gen: over.gen,
+    // 图片填充同理：漏了它，「带着 imageFill 建形状」会静默变成普通填充。
+    imageFill: over.imageFill,
   };
 }
 

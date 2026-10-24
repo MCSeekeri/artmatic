@@ -41,6 +41,7 @@
     width={w}
     disabled={item.disabled}
     testid={item.testid}
+    ondblclick={item.ondblclick}
     onactivate={item.onselect}
   />
 {:else if item.kind === 'toggle'}
@@ -52,6 +53,7 @@
     active={item.active}
     disabled={item.disabled}
     testid={item.testid}
+    ondblclick={item.ondblclick}
     onchange={item.onchange}
   />
 {:else if item.kind === 'color'}

@@ -14,7 +14,7 @@
  * 所以 CSS 动画可以做帧精确导出，但必须走这条烘焙路径。
  */
 
-import { animationCurrentTimeMs, customSubAnimations, ANIM_ID_ATTR, type ElementAnimation } from './animation';
+import { animationCurrentTimeMs, ANIM_ID_ATTR, type ElementAnimation } from './animation';
 import type { TypographyDocument } from './document';
 
 export type AnimValueSnapshot = {
@@ -39,29 +39,26 @@ function animLayers(root: HTMLElement): HTMLElement[] {
  * 调用方必须保证 root **已经挂进文档** —— 脱离文档的元素拿不到 CSSAnimation，
  * `getAnimations()` 会返回空数组，表现为「动画永远停在第一帧」。
  *
- * 一个动画层可能同时挂着**多条动画**（自定义条目的逗号简写，见 animation.ts）：
- * 每条各有自己的延迟。`getAnimations()` 按简写里的顺序返回它们，所以逐条用
- * 各自的延迟 seek。预设 / 旧单 body 自定义只有一条、延迟 = spec.delay，
- * 结果与扩展前逐字一致。数量对不上时整层退回 spec.delay（防御，正常不会发生）。
+ * 一个动画层可能同时挂着**多条动画**（自定义条目的逗号简写，见 animation.ts），
+ * 每条各有自己的 delay —— 但延迟已经写进 CSS 简写（`animationShorthand`），属于
+ * effect timing，因此 `currentTime` 对每一条都是**同一个绝对时间**。别再按
+ * `localSec - delay` 逐条换算：那会把延迟算两遍，起点的 `currentTime` 要走到
+ * `delay` 才进 active 段（delay=3s ⇒ 6s 才开始），且全程不报错。
  */
 export function seekAnimations(
   root: HTMLElement,
   specs: Map<string, ElementAnimation>,
   localSec: number,
 ): void {
+  const currentTime = animationCurrentTimeMs(localSec);
   for (const layer of animLayers(root)) {
     const animId = layer.getAttribute(ANIM_ID_ATTR);
     if (!animId) continue;
-    const spec = specs.get(animId);
-    if (!spec) continue;
-    const parts = customSubAnimations(spec);
-    const list = layer.getAnimations();
-    const perPart = list.length === parts.length;
-    list.forEach((a, i) => {
-      const delay = perPart ? parts[i]!.delay : spec.delay;
+    if (!specs.has(animId)) continue;
+    for (const a of layer.getAnimations()) {
       a.pause();
-      a.currentTime = animationCurrentTimeMs({ delay }, localSec);
-    });
+      a.currentTime = currentTime;
+    }
   }
 }
 

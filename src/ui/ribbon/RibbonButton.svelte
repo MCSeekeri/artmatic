@@ -25,9 +25,20 @@
      */
     width?: number;
     onactivate: () => void;
+    /** 双击回调（见 ribbon-model::RibbonButtonSpec.ondblclick）。 */
+    ondblclick?: () => void;
   }
-  const { icon, label, size = 'large', active = false, disabled = false, testid, width, onactivate }: Props =
-    $props();
+  const {
+    icon,
+    label,
+    size = 'large',
+    active = false,
+    disabled = false,
+    testid,
+    width,
+    onactivate,
+    ondblclick,
+  }: Props = $props();
 
   /** 图标边长按档位：大按钮 18、紧凑 13、纯图标 15（没有文字，可以稍微大一点）。 */
   const iconSize = $derived(size === 'large' ? 18 : size === 'small' ? 13 : 15);
@@ -45,6 +56,7 @@
   {disabled}
   aria-pressed={active}
   onclick={onactivate}
+  ondblclick={ondblclick}
 >
   <Icon name={icon} size={iconSize} />
   {#if size !== 'icon'}<span class="lbl">{label}</span>{/if}

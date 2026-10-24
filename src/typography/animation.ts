@@ -185,13 +185,17 @@ export function animationName(anim: ElementAnimation): string {
 /**
  * 本地时间 → WAAPI 的 currentTime（ms）。
  *
- * 只依赖 `delay`（多动画简写里每条各有自己的延迟，见 customSubAnimations）。
+ * `currentTime` 的时间轴**包含** start delay：CSS `animation-delay` 属于 effect
+ * timing，`getComputedTiming().localTime === currentTime`（实测，delay=3s 的动画
+ * 在 currentTime=3000 时才刚进入 active 段）。所以这里只做秒→毫秒，**不许再减
+ * delay** —— 再减一次等于把延迟算两遍，起点变成 2×delay（delay=3s 的元素 6s 才
+ * 开始动），而延迟期被 `Math.max(0, …)` 钳住，看起来一切正常。
  *
- * 延迟之前钳到 0：`fill: backwards` 时显示首帧、`fill: none` 时显示基础样式，
- * 两种都是确定的，且与真实播放的首帧一致。
+ * 本地时间在片段起点之前时钳到 0：`fill: backwards` 显示首帧、`fill: none` 显示
+ * 基础样式，两种都是确定的，也与真实播放的 before 段一致。
  */
-export function animationCurrentTimeMs(anim: { delay: number }, localSec: number): number {
-  return Math.max(0, (localSec - anim.delay) * 1000);
+export function animationCurrentTimeMs(localSec: number): number {
+  return Math.max(0, localSec * 1000);
 }
 
 /** 此刻动画是否落在「有作用」的区间内（图层面板给动画打点 / 高亮用）。 */
@@ -631,7 +635,9 @@ export function parseAnimationShorthand(s: string): ShorthandParse {
  *  - 预设 / 旧单 body 自定义 → 一条，延迟取 timing 字段（与旧行为逐字一致）。
  *  - 多动画自定义 → 逐条取自简写，各有自己的时长与延迟。
  *
- * 烘焙 seek 与关键帧面板都读它，保证「预览看到几条」与「面板画几条」一致。
+ * 关键帧面板与 agent 的读回形状都读它，保证「预览里跑几条」与「面板画几条 /
+ * 读回几条」一致。烘焙 seek **不**需要它：延迟已经写进 CSS 简写（effect timing），
+ * `currentTime` 对每一条都是同一个绝对时间。
  */
 export function customSubAnimations(anim: ElementAnimation): ParsedAnimPart[] {
   const fallback: ParsedAnimPart = {

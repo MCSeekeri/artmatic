@@ -1,14 +1,14 @@
 /**
- * background-preview.spec.ts — 排版「背景预览」：半透明底图 + 局部播放 + 进度条。
+ * background-preview.spec.ts — 排版「背景预览」：半透明底图 + 播放 + 进度条。
  *
  * 三条断言对应需求的三个要点：
  *  1. **底图**：打开开关后，画幅框里出现一张 `blob:` 的 `<img>`，正好占满画幅、
  *     不透明度是设定的值；关掉即消失。
  *  2. **进度条同时驱动动画**：拖动进度条（键盘 Home / End 精确落点）后，舞台动画层
- *     被 seek 到对应时刻 —— 证明「seek 到 localSec」这一条路径真的改到了动画，
- *     而不只是底图。
- *  3. **播放**：点播放后局部时间推进（底图与动画跟着走），再点一次暂停。
+ *     被 seek 到对应时刻 —— 证明这一条路径真的改到了动画，而不只是底图。
+ *  3. **播放**：点播放后时间推进（底图与动画跟着走），再点一次暂停。
  *
+ * 另有一条：**底栏进度条与关键帧面板的播放头是同一个时钟**（双向同步）。
  * 取帧本身发生在 WebGL 里，headless 也能跑（排版 E2E 已在用同一台 renderer）。
  */
 
@@ -175,4 +175,53 @@ test('背景预览：半透明底图 + 进度条驱动动画 + 局部播放', as
   // ------------------------------------------------------------ 关开关
   await page.getByTestId('typo-bg-toggle').click();
   await expect(page.getByTestId('typo-bg-frame')).toHaveCount(0);
+});
+
+/**
+ * 底栏进度条与关键帧面板的播放头**是同一个时钟**（`appState.playT`）。
+ *
+ * 反例（修复前）：拖底栏滑块只改一份「局部预览时间」，关键帧面板的播放头读的是
+ * `appState.playT`，一动不动 —— 两个控件看着是同一个播放头，实际各走各的，
+ * 于是「反向操作一下绑定就没了」。
+ */
+test('底栏进度条与关键帧播放头双向同步（同一份 playT）', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  const { start } = await clipSpan(page, clipId);
+
+  const readNum = async (testid: string): Promise<number> =>
+    Number.parseFloat((await page.getByTestId(testid).textContent()) ?? '0');
+  const playT = (): Promise<number> =>
+    page.evaluate(
+      () => (window as never as { __artmatic: { appState: { playT: number } } }).__artmatic.appState.playT,
+    );
+
+  // ① 拖底栏滑块 → 关键帧面板的播放头跟着走（同一个片段内秒）。
+  const scrub = page.getByTestId('typo-bg-scrub');
+  const box = (await scrub.boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height / 2);
+  await expect.poll(async () => readNum('typo-kf-clock')).toBeGreaterThan(0.2);
+  expect(await readNum('typo-kf-clock')).toBeCloseTo(await readNum('typo-bg-time'), 1);
+  const t1 = await playT();
+  expect(t1 - start).toBeCloseTo(await readNum('typo-bg-time'), 1);
+
+  // ② 拖关键帧面板的标尺 → 底栏读数跟着走（反向也不能断）。
+  const ruler = (await page.getByTestId('typo-kf-ruler').boundingBox())!;
+  await page.mouse.click(ruler.x + ruler.width * 0.2, ruler.y + 10);
+  await expect.poll(playT).toBeLessThan(t1 - 0.05);
+  const t2 = await playT();
+  expect(await readNum('typo-bg-time')).toBeCloseTo(t2 - start, 1);
+  expect(await readNum('typo-kf-clock')).toBeCloseTo(t2 - start, 1);
+
+  // ③ 底栏播放：播放头推进，关键帧时钟同步推进 —— 两条读数永远是一份时间。
+  await page.getByTestId('typo-bg-play').click();
+  await page.waitForFunction(
+    (prev) =>
+      (window as never as { __artmatic: { appState: { playT: number } } }).__artmatic.appState
+        .playT > prev + 0.1,
+    t2,
+  );
+  expect(await readNum('typo-kf-clock')).toBeCloseTo(await readNum('typo-bg-time'), 1);
+  await page.getByTestId('typo-bg-play').click();
 });

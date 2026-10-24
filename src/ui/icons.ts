@@ -97,6 +97,7 @@ import MoveHorizontal from '@lucide/svelte/icons/move-horizontal';
 import MoveUp from '@lucide/svelte/icons/move-up';
 import Music from '@lucide/svelte/icons/music';
 import PaintBrush from '@lucide/svelte/icons/paintbrush';
+import PaintBrushVertical from '@lucide/svelte/icons/paintbrush-vertical';
 import PaintBucket from '@lucide/svelte/icons/paint-bucket';
 import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
 import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
@@ -108,6 +109,7 @@ import PenTool from '@lucide/svelte/icons/pen-tool';
 import Pipette from '@lucide/svelte/icons/pipette';
 import Play from '@lucide/svelte/icons/play';
 import Plus from '@lucide/svelte/icons/plus';
+import Repeat from '@lucide/svelte/icons/repeat';
 import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 import RotateCw from '@lucide/svelte/icons/rotate-cw';
 import Save from '@lucide/svelte/icons/save';
@@ -251,6 +253,7 @@ export const ICONS = {
   music: Music,
   'paint-bucket': PaintBucket,
   paintbrush: PaintBrush,
+  'paintbrush-vertical': PaintBrushVertical,
   'panel-left-close': PanelLeftClose,
   'panel-left-open': PanelLeftOpen,
   'panel-right': PanelRight,
@@ -261,6 +264,7 @@ export const ICONS = {
   pipette: Pipette,
   play: Play,
   plus: Plus,
+  repeat: Repeat,
   'rotate-cw': RotateCw,
   save: Save,
   scissors: Scissors,

@@ -47,6 +47,7 @@ import {
   type AlignAxis,
   type Rect,
 } from '../../typography/geometry';
+import { applyElementAnimations, applyElementFormat } from '../../typography/format-painter';
 import {
   createCustomAnimation,
   createPresetAnimation,
@@ -276,28 +277,6 @@ function eachTrack(
     const a = el.animations.find((x) => x.id === animId);
     if (a && a.kind === 'tracks') fn(a);
   }
-}
-
-/**
- * 结构化轨道的时序是**派生的**（`delay = 第一帧`、`duration = 末帧 − 首帧`），
- * 所以 Ribbon 上改这两个数不能直接写字段：
- *   · 改 `delay` = **整条轨道平移**（关键帧之间的相对编排不变）；
- *   · 改 `duration` = **只挪最后一帧**（用户 2026-10-24 定的口径）。
- * 其余（loop / easing / direction / fill）是普通字段，直接合并。
- */
-function retimeTrack(anim: TracksAnimation, patch: Partial<AnimTiming>): TracksAnimation {
-  const { delay, duration, ...rest } = patch;
-  let keys = anim.keys.map((k) => ({ ...k }));
-  if (delay !== undefined) {
-    const shift = delay - anim.delay;
-    keys = keys.map((k) => ({ ...k, t: Math.max(0, k.t + shift) }));
-  }
-  if (duration !== undefined && keys.length > 0) {
-    const base = delay !== undefined ? Math.max(0, delay) : anim.delay;
-    const last = keys[keys.length - 1]!;
-    keys[keys.length - 1] = { ...last, t: Math.max(base + 1e-3, base + Math.max(1e-3, duration)) };
-  }
-  return applyTrackTiming({ ...anim, ...rest, keys });
 }
 
 /**
@@ -920,6 +899,21 @@ export interface TypographyActions {
   setGroupStrokeWidth(width: number): void;
   setGroupNumber(key: 'radius' | 'padding', value: number): void;
 
+  /* 格式刷 / 动画刷 */
+  /**
+   * 启用刷子（源 = 当前**单选**的那个元素）。
+   *
+   * `sticky` = 双击启用的连续模式：刷完一个继续等下一个。同一种刷子再点一次
+   * （`sticky` 为 false）= 取消。
+   */
+  togglePainter(kind: 'format' | 'animation', sticky: boolean): void;
+  /** 收起刷子（再点按钮 / 点空白 / Esc 都走这里）。 */
+  cancelPainter(): void;
+  /** 把刷子应用到某个元素（点中目标时调）。返回是否真的改了文档。 */
+  applyPainterTo(targetId: string): boolean;
+  /** 按钮可用性：已启用（允许再点一下取消）或当前恰好单选了一个元素。 */
+  canPaint(kind: 'format' | 'animation'): boolean;
+
   /* 图形 */
   setShapeFill(color: string): void;
   /** 填充类型 / 渐变 / 纹理的**一处**写入路径（见 document.ts 的 applyPaintPatch）。 */
@@ -1057,7 +1051,6 @@ export interface TypographyActions {
 
   /* 动画 */
   applyPreset(preset: AnimPreset): void;
-  setAnimTiming(patch: Partial<AnimTiming>): void;
   /** 写入手写 keyframes 体。返回 false 表示代码非法（未写入）。 */
   applyCustomCss(css: string): boolean;
   clearAnimations(): void;
@@ -1069,6 +1062,13 @@ export interface TypographyActions {
    */
   addTrack(prop: string, initial?: number | string, atSec?: number): void;
   removeTrack(animId: string): void;
+  /**
+   * 整条轨道**循环播放**（CSS `animation-iteration-count: infinite`）。
+   *
+   * 走 `iterations` 而不是新加一个 `loop` 字段：模型里它本来就是这个意思
+   * （`Infinity` → `infinite`），多一个同义字段只会有「两个真源」的分叉。
+   */
+  setTrackLoop(animId: string, loop: boolean): void;
   /** 在 `t` 处插一帧；`v` 缺省 = 该时刻的插值（浮动轨道取恒等值）。 */
   addKey(animId: string, t: number, v?: number | string): void;
   setKeyValue(animId: string, t: number, v: number | string): void;
@@ -1918,6 +1918,75 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
+    /* ------------------------------------------------------ 格式刷 / 动画刷 */
+
+    togglePainter(kind, sticky) {
+      const cur = editorState.painter;
+      /*
+       * 同一种刷子再点一次 = 收起（用户明确要求的取消方式）。
+       *
+       * 但**双击**不能被这两次单击的开关抵消：单击两次的节奏是
+       * 「开 → 关」，紧接着的 dblclick 再把 `sticky` 置上，最终一定是「开着且
+       * 连续」。所以这里不能把「同一 kind 已启用」当成错误，它只是流程中的一站。
+       */
+      if (cur?.kind === kind && !sticky) {
+        editorState.painter = null;
+        return;
+      }
+      /*
+       * 源的取法：已经开着同一种刷子时**保留原源**（双击只改连续模式，不该把
+       * 源换成刚刷过的那个 —— 虽然两者格式已相同，但那是巧合，不是语义）。
+       */
+      const sourceId = cur?.kind === kind ? cur.sourceId : editorState.selected[0]?.id;
+      if (!sourceId) return;
+      editorState.painter = { kind, sourceId, sticky };
+    },
+
+    cancelPainter() {
+      editorState.painter = null;
+    },
+
+    applyPainterTo(targetId) {
+      const brush = editorState.painter;
+      if (!brush) return false;
+      const source = editorState.elements.find((e) => e.id === brush.sourceId);
+      const target = editorState.elements.find((e) => e.id === targetId);
+      // 源被删掉（或点回了源自己）：没有可刷的东西，静默收起。
+      if (!source || !target || source.id === target.id) {
+        if (!source) editorState.painter = null;
+        return false;
+      }
+      const isFormat = brush.kind === 'format';
+      /*
+       * 先拿一份副本试跑：全被跳过时（例如从纯图形刷到纯图片）不能开一笔空撤销。
+       * `structuredClone` 能带上 Infinity（animations 的 iterations），JSON 不行。
+       */
+      const probe = structuredClone(target);
+      const wouldChange = isFormat
+        ? applyElementFormat(source, probe)
+        : applyElementAnimations(source, probe);
+      if (!wouldChange) return false;
+
+      editorState.commit(tr(isFormat ? 'typo.undo.formatPainter' : 'typo.undo.animPainter'), (doc) => {
+        const s = doc.elements.find((e) => e.id === brush.sourceId);
+        const t = doc.elements.find((e) => e.id === targetId);
+        if (!s || !t) return;
+        if (isFormat) applyElementFormat(s, t);
+        else applyElementAnimations(s, t);
+      });
+
+      // 刷完一个就选中它（看得见结果）；连续模式继续等下一下。
+      editorState.selectOnly(targetId);
+      if (!brush.sticky) editorState.painter = null;
+      return true;
+    },
+
+    canPaint(kind) {
+      if (editorState.painter?.kind === kind) return true;
+      const sel = editorState.selected;
+      return sel.length === 1 && !sel[0]!.locked;
+    },
+
     /* ---------------------------------------------------------- 图形 */
 
     setShapeFill(color) {
@@ -2530,20 +2599,6 @@ export function createTypographyActions(): TypographyActions {
       });
     },
 
-    setAnimTiming(patch) {
-      // 面板里选中的那条优先；没选就保持旧行为（改选中元素的全部动画）。
-      const target = kfPanel.animId;
-      editorState.commit(tr('typo.undo.animTiming'), (doc) => {
-        for (const el of anyElement(doc)) {
-          el.animations = el.animations.map((a) => {
-            if (target && a.id !== target) return a;
-            if (a.kind !== 'tracks') return { ...a, ...patch };
-            return retimeTrack(a, patch);
-          });
-        }
-      });
-    },
-
     applyCustomCss(css) {
       // 解析（含清洗）放在写库之前：非法代码绝不能进文档 —— 一旦进了，光栅化时
       // animationStyleSheet 会跳过它，但用户已经以为「保存成功」了。
@@ -2608,6 +2663,14 @@ export function createTypographyActions(): TypographyActions {
         for (const el of anyElement(doc)) {
           el.animations = el.animations.filter((a) => a.id !== animId);
         }
+      });
+    },
+
+    setTrackLoop(animId, loop) {
+      editorState.commit(tr('typo.undo.trackLoop'), (doc) => {
+        eachTrack(doc, animId, (a) => {
+          a.iterations = loop ? Infinity : 1;
+        });
       });
     },
 

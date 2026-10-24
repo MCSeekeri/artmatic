@@ -142,7 +142,7 @@ const dial: SvgGenSpec = {
   params: [
     range('count', 'gen.p.count', 12, 120, 1, 60),
     range('majorEvery', 'gen.p.majorEvery', 2, 12, 1, 5),
-    range('tickLen', 'gen.p.tickLen', 0.04, 0.3, 0.01, 0.1),
+    range('tickLen', 'gen.p.tickLen', 0.01, 0.3, 0.01, 0.1),
     range('majorScale', 'gen.p.majorScale', 1, 3, 0.1, 1.8),
     range('tickWidth', 'gen.p.tickWidth', 0.1, 1.4, 0.05, 0.45),
     range('ringWidth', 'gen.p.ringWidth', 0, 6, 0.2, 1.2),

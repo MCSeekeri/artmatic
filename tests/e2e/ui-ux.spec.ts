@@ -259,29 +259,13 @@ test('Ribbon：纯小按钮的组排成两行', async ({ page }) => {
   expect(ys[2]).toBeGreaterThan(ys[0]!);
 });
 
-test('无动画时：时序控件呈禁用态（既是功能上的也是视觉上的）', async ({ page }) => {
-  await boot(page);
-  await addTextClipAndOpen(page);
-  await page.getByTestId('typo-layer-row').first().click();
-  await page.getByTestId('ribbon-tab-anim').click();
-
-  for (const id of ['typo-anim-iterations', 'typo-anim-easing', 'typo-anim-direction']) {
-    const el = page.getByTestId(id);
-    await expect(el).toHaveAttribute('aria-disabled', 'true');
-    // 视觉上也要能看出来：禁用态的背景被压到 surface-2、光标是默认箭头
-    const cursor = await el.evaluate((n) => getComputedStyle(n).cursor);
-    expect(cursor, `${id} 的禁用光标`).toBe('default');
-  }
-  const delayBox = await page.getByTestId('typo-anim-delay-wrap').evaluate(
-    (n) => getComputedStyle(n).backgroundColor,
-  );
-  expect(delayBox).not.toBe('rgba(0, 0, 0, 0)');
-
-  // 加上动画之后立刻恢复可编辑
-  await page.getByTestId('typo-anim-preset').click();
-  await page.getByTestId('typo-anim-option-fade-in').click();
-  await expect(page.getByTestId('typo-anim-iterations')).toHaveAttribute('aria-disabled', 'false');
-});
+/*
+ * 原来这里有一条「时序控件禁用态」的用例。它测的是 Ribbon「动画 → 时序」
+ * 那一组（延迟 / 时长 / 次数 / 缓动 / 方向 / 填充）—— 那一组整体删掉了：
+ * 显示值取的是「选区里第一个动画」，写入却按 `kfPanel.animId` 扫全文档，
+ * 两者可以不一致，属于动画窗格留下的技术债。时序现在只由关键帧面板表达
+ * （循环开关在属性行上，见 `typography-keyframes.spec.ts`）。
+ */
 
 test('图层列表可拖曳排序，数组顺序跟着变', async ({ page }) => {
   await boot(page);

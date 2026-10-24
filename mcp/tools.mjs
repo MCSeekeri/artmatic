@@ -962,6 +962,24 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_typo_copy_style',
+    kind: 'write',
+    description:
+      '把**一个元素**的样子刷到其它元素上（编辑器的「格式刷 / 动画刷」同一条路径）：一次调用 = 一笔撤销。' +
+      "what:'format'（缺省）只复制**外观**：填充（图形的 fill 落到文本框的 boxFill，反之亦然）、" +
+      '描边（同样的对角映射）、圆角、文本样式（字体 / 字号 / 字重 / 行高 / 对齐 / 字色 / 装饰 / 高亮）、' +
+      '图片处理（fit / crop / key / quad / adjust / recolor / border / filter）、阴影与虚化；' +
+      '**不**复制内容（runs / assetId）、几何（frame / transform3d）与 opacity / blend。' +
+      "what:'animation' 用源的动画**整份替换**目标的动画（重新发 id；源没有动画 = 清空目标）。" +
+      '目标种类没有的字段静默跳过（图形没有 fit / crop）。返回 { changed, elements }；changed = 0 表示本来就一样。',
+    args: {
+      clipId: F.string(),
+      sourceId: F.string({ required: true, description: '从哪个元素复制。' }),
+      targetIds: F.stringArray({ required: true, description: '要刷到的元素 id（源自己会被忽略）。' }),
+      what: F.string({ enum: ['format', 'animation'] }),
+    },
+  },
+  {
     name: 'artmatic_typo_set_scripts',
     kind: 'write',
     description:

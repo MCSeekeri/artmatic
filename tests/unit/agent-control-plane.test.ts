@@ -1411,3 +1411,94 @@ describe('媒体池（media_list / media_op + 默认需确认）', () => {
     expect(await code(h.cp.mediaPoolOp({ op: 'clear_trash', confirm: true }))).toBe('unsupported');
   });
 });
+
+/**
+ * 格式刷 / 动画刷（`typo_copy_style`）。
+ *
+ * 编辑器里那两个按钮走的是**同一条纯函数路径**（`typography/format-painter.ts`），
+ * 所以这里守的是「控制平面也能做到」+「一次调用一笔撤销」+「前置校验不动工程」。
+ */
+describe('格式刷 / 动画刷（typo_copy_style）', () => {
+  async function twoShapes(h: Harness): Promise<{ clipId: string; src: string; tgt: string }> {
+    const clipId = await textClip(h);
+    const added = await ok(
+      h.cp.addTypographyElements(clipId, [
+        {
+          kind: 'shape',
+          shape: 'rect',
+          frame: { x: 10, y: 10, w: 100, h: 100 },
+          fill: { kind: 'solid', color: '#ff0000' },
+          stroke: { color: '#00ff00', width: 6, style: 'dashed' },
+          radius: 12,
+        },
+        {
+          kind: 'shape',
+          shape: 'rect',
+          frame: { x: 200, y: 10, w: 100, h: 100 },
+          fill: { kind: 'solid', color: '#0000ff' },
+        },
+      ]),
+    );
+    return { clipId, src: added.elementIds[0]!, tgt: added.elementIds[1]! };
+  }
+
+  it('format：填充 / 描边 / 圆角刷过去，且只有一笔撤销', async () => {
+    const h = harness();
+    const { clipId, src, tgt } = await twoShapes(h);
+
+    const r = await ok(h.cp.copyTypographyStyle(clipId, src, [tgt]));
+    expect(r.changed).toBe(1);
+    const painted = r.elements[0] as unknown as {
+      fill: { kind: string; color?: string };
+      stroke: { color?: string; width?: number } | null;
+      radius?: number;
+    };
+    expect(painted.fill).toMatchObject({ kind: 'solid', color: '#ff0000' });
+    expect(painted.stroke).toMatchObject({ color: '#00ff00', width: 6 });
+    expect(painted.radius).toBe(12);
+
+    expect(h.store.undo()).toBe(true);
+    const back = (await ok(h.cp.getTypographyDoc(clipId, 'full')) as unknown as {
+      elements: { fill: { color?: string } }[];
+    }).elements;
+    expect(back[1]!.fill.color).toBe('#0000ff');
+  });
+
+  it('animation：整份替换目标的动画（id 重新发号）', async () => {
+    const h = harness();
+    const { clipId, src, tgt } = await twoShapes(h);
+    await ok(
+      h.cp.setTypographyAnimation(clipId, src, {
+        prop: 'opacity',
+        keys: [
+          { t: 0, v: 0 },
+          { t: 0.6, v: 1 },
+        ],
+      }),
+    );
+    const r = await ok(h.cp.copyTypographyStyle(clipId, src, [tgt], 'animation'));
+    expect(r.changed).toBe(1);
+
+    const els = (await ok(h.cp.getTypographyDoc(clipId, 'full')) as unknown as {
+      elements: { id: string; animations: { id: string; prop?: string }[] }[];
+    }).elements;
+    const a = els.find((e) => e.id === src)!.animations;
+    const b = els.find((e) => e.id === tgt)!.animations;
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    expect(b[0]!.prop).toBe('opacity');
+    expect(b[0]!.id).not.toBe(a[0]!.id);
+  });
+
+  it('空目标 / 不存在的元素都是可判别错误，且不改工程', async () => {
+    const h = harness();
+    const { clipId, src } = await twoShapes(h);
+    const before = JSON.stringify(h.store.project);
+    expect(await code(h.cp.copyTypographyStyle(clipId, src, []))).toBe('invalid-argument');
+    // 只有源自己 = 没有目标
+    expect(await code(h.cp.copyTypographyStyle(clipId, src, [src]))).toBe('invalid-argument');
+    expect(await code(h.cp.copyTypographyStyle(clipId, src, ['nope']))).toBe('not-found');
+    expect(await code(h.cp.copyTypographyStyle(clipId, 'nope', ['x']))).toBe('not-found');
+    expect(JSON.stringify(h.store.project)).toBe(before);
+  });
+});

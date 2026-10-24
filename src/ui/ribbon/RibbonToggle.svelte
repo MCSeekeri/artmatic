@@ -19,9 +19,20 @@
     disabled?: boolean;
     testid?: string;
     onchange: (active: boolean) => void;
+    /** 见 ribbon-model::RibbonToggleSpec.ondblclick。 */
+    ondblclick?: () => void;
   }
-  const { icon, label, active, size = 'large', width, disabled = false, testid, onchange }: Props =
-    $props();
+  const {
+    icon,
+    label,
+    active,
+    size = 'large',
+    width,
+    disabled = false,
+    testid,
+    onchange,
+    ondblclick,
+  }: Props = $props();
 </script>
 
 <RibbonButton
@@ -32,5 +43,6 @@
   active={active}
   {disabled}
   {testid}
+  {ondblclick}
   onactivate={() => onchange(!active)}
 />

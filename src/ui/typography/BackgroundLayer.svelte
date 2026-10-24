@@ -39,11 +39,10 @@
     return editorState.clip;
   });
 
-  /** 要取的那一帧的绝对时间：局部预览时用局部时间，否则跟随播放头。 */
+  /** 要取的那一帧的绝对时间 = 工程播放头（与关键帧面板 / 时间轴同一个时钟）。 */
   const captureT = $derived.by(() => {
     void appState.playT;
-    void bgPreview.at;
-    return bgPreview.at ?? appState.playT;
+    return appState.playT;
   });
 
   /* ------------------------------------------------ 取帧调度（合并 + 节流） */
@@ -57,7 +56,7 @@
   let destroyed = false;
 
   function minGapMs(): number {
-    // 局部播放与**时间轴播放**都算「在播」：后者 playT 每 rAF 都变，
+    // 底栏播放与**时间轴播放**都算「在播」：playT 每 rAF 都变，
     // 不降频的话会以 60fps 反复重渲一张半透明底图。
     return bgPreview.playing || appState.playing ? 1000 / BG_PLAY_HZ : 0;
   }

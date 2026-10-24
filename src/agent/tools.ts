@@ -865,6 +865,28 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'typo_copy_style',
+    description:
+      "Paint ONE element's look onto other elements — the editor's format painter (what:'format') and " +
+      "animation painter (what:'animation'), in ONE call and ONE undo entry.\n" +
+      "what:'format' copies the APPEARANCE only: fill (a shape's fill lands on a text box's boxFill and " +
+      'vice versa), stroke (same mapping), radius, text style (font / size / weight / line-height / ' +
+      'align / color / decoration / highlight), image processing (fit / crop / key / quad / adjust / ' +
+      'recolor / border / filter) and element shadows + blur. It never copies content (runs, assetId), ' +
+      'geometry (frame, transform3d) or opacity / blend.\n' +
+      "what:'animation' REPLACES the targets' animations with copies of the source's (ids are " +
+      'regenerated; an empty source clears them).\n' +
+      'Fields the target kind does not have are silently skipped (a shape has no fit / crop). ' +
+      'Returns { changed, elements } with the stored values; changed = 0 means nothing differed.',
+    params: [
+      OPT_CLIP_ID,
+      req('sourceId', 'string', 'Element to copy from.'),
+      req('targetIds', 'stringArray', 'Elements to paint (the source itself is ignored).'),
+      p('what', 'string', '"format" (default) | "animation"', { enum: ['format', 'animation'] }),
+    ],
+    writes: true,
+  },
+  {
     name: 'typo_set_scripts',
     description:
       'Replace the whole per-frame script list of a typography document (one undo entry; array ' +

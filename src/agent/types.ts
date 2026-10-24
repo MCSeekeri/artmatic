@@ -553,6 +553,25 @@ export interface TypographyCapabilities {
     note: string;
   };
   /**
+   * 格式刷 / 动画刷（`typo_copy_style`）。
+   *
+   * 与 `animations` 分开一段而不是塞进它的 note：刷子是**跨元素**的操作，
+   * 模型要先知道「能刷什么、不刷什么」，否则会拿它当 duplicate 用
+   * （然后发现位置和内容都没跟过去）。
+   */
+  styleCopy: {
+    /** 工具签名。 */
+    tool: string;
+    /** 两种模式各刷什么。 */
+    what: string[];
+    /** 跨种类怎么落（图形的 fill ↔ 文本框的 boxFill）。 */
+    mapping: string;
+    /** 目标没有的字段怎么办。 */
+    skips: string;
+    /** 有意不搬的东西。 */
+    notCopied: string;
+  };
+  /**
    * 文档级脚本（每帧求值）。
    *
    * **这是模型唯一能知道 `ctx` 形状的地方**：没有它，模型只能凭「应该有个

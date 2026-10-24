@@ -93,9 +93,37 @@ export function toRects(
  *     「点得中但拖不动」这类不一致。
  */
 export function hitTest(rects: Rect[], x: number, y: number): Rect | null {
+  return hitTestFirst(rects, x, y);
+}
+
+/**
+ * 带否决权与容差的命中：框命中了还要过 `accept` 才算数，否则继续往下找。
+ *
+ * 这是「面积很大的中空元素挡住下层」的出口 —— 外接框是矩形的，而一个圆环 /
+ * 方框 / 星形的**中间是透的**，指针在那儿时用户要的是下层的元素。像素级判断
+ * 需要 DOM（见 `ui/typography/hit-area.ts`），所以这里只留一个回调解耦：
+ * `core` / `typography` 这一层依然不碰 DOM，逻辑本身仍可单测。
+ *
+ * `slop` 把**外接框判定**向外放宽（文档单位）：细线 / 旋转过的细长元素的框里
+ * 有很大一片不在图形上，指针压在边缘外侧一点点也算「在它旁边」。默认 0 =
+ * 严格按框，`hitTest` 用的就是这一档。
+ *
+ * 顺序与 `hitTest` 一致：从最上层往下，第一个通过 `accept` 的就是结果。
+ */
+export function hitTestFirst(
+  rects: Rect[],
+  x: number,
+  y: number,
+  opts: { accept?: (id: string) => boolean; slop?: number } = {},
+): Rect | null {
+  const slop = Math.max(0, opts.slop ?? 0);
+  const accept = opts.accept;
   for (let i = rects.length - 1; i >= 0; i--) {
     const r = rects[i]!;
-    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+    if (x < r.x - slop || x > r.x + r.w + slop) continue;
+    if (y < r.y - slop || y > r.y + r.h + slop) continue;
+    if (accept && !accept(r.id)) continue;
+    return r;
   }
   return null;
 }

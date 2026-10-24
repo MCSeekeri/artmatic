@@ -4,17 +4,24 @@
  * 它只管状态与播放循环，不认识 DOM、也不碰 renderer（取帧在
  * `BackgroundLayer.svelte` 里做 —— 那一半要 await、要挂卸载清理，属于组件）。
  *
- * ## 时间：**局部**，不动工程的播放头
+ * ## 时间：就是**工程播放头**（`appState.playT`），没有第二份时钟
  *
- * `at` 是「编辑器局部预览时间」（绝对秒）。它非 null 时，舞台的动画与底图都改由
- * 它驱动（见 TypographyEditor 的 `stageTime`），而 `appState.playT` **一帧都不改** ——
- * 那是时间轴的播放头，属于另一份状态；在排版页里推它会把时间轴的播放头也带着走。
+ * 这里曾经有一份「编辑器局部时间」（`at`，非 null 时盖住 `playT`）。它的本意是
+ * 「在排版页里预览不该推动时间轴」，但它把两条时间线**劈成了两份状态**：
+ * 拖动底栏进度条只改 `at`，关键帧面板的播放头读 `playT` 一动不动 —— 两个控件
+ * 看着是同一个播放头，实际各走各的，反向拖动就「断开绑定」。
+ *
+ * 现在只有一个时钟：进度条拖动 = `appState.seek()`，播放 = 每帧写 `playT`。
+ * 于是底栏进度条、关键帧面板的播放头、时间轴播放头、舞台动画、底图取帧永远是
+ * 同一时刻（硬约束 1.1：时间只有一个来源）。
  *
  * 语义：
- *  - `at === null`：跟随 `appState.playT`（编辑器平时就是这一档）。
- *  - 拖动进度条 / 播放：`at` 生效，舞台与底图跟着它。
- *  - 播放到片段尾：**停**（不回环），并把 `at` 复原到「进入播放前」的值。
- *  - 关掉背景预览 / 关编辑器：`at` 回到 null、跟随播放头。
+ *  - 播放到**片段尾就停，不回环**，停在片尾（不再复原到播放前的位置 —— 那会
+ *    把别人也看得见的播放头一起拽回去）。
+ *  - 播放期间**别人挪了 `playT`**（拖标尺 / 拖关键帧 / 时间轴操作）⇒ 本循环立刻
+ *    停手，不跟用户抢时钟（判据见 `tick` 里的 `written`）。
+ *  - 时间轴自己在播时（`appState.playing`）本循环不启动 / 立刻退出：两套推进器
+ *    同时写 `playT` 只会打架。
  */
 
 import { appState } from '../app-state.svelte';
@@ -28,19 +35,16 @@ class BackgroundPreviewState {
   /** 底图不透明度（0..1）。 */
   opacity = $state(BG_DEFAULT_OPACITY);
 
-  /** 是否正在播放局部预览。 */
+  /** 是否正在推进播放头（底栏那个播放按钮）。 */
   playing = $state(false);
-
-  /** 局部预览时间（绝对秒）。null = 跟随 `appState.playT`。 */
-  at = $state<number | null>(null);
 
   /** 当前底图的对象 URL（`<img src>`）。 */
   url = $state<string | null>(null);
 
   private raf = 0;
   private lastTs = 0;
-  /** 进入播放前的 `at`（可能是 null）—— 播到尾时复原到它。 */
-  private restoreAt: number | null = null;
+  /** 上一帧由**本循环**写进 `playT` 的值。外部 seek 会让它对不上（见 `tick`）。 */
+  private written = 0;
 
   /* ------------------------------------------------------------ 开关 */
 
@@ -49,11 +53,10 @@ class BackgroundPreviewState {
     else this.enabled = true;
   }
 
-  /** 关掉背景预览：停止播放、回到跟随播放头，并立刻释放底图对象 URL。 */
+  /** 关掉背景预览：停止播放并立刻释放底图对象 URL。 */
   disable(): void {
     this.stopLoop();
     this.playing = false;
-    this.at = null;
     this.enabled = false;
     this.releaseUrl();
   }
@@ -64,31 +67,35 @@ class BackgroundPreviewState {
 
   /* ------------------------------------------------------------ 时间 */
 
-  /** 拖动进度条 / 跳到某个绝对时间：暂停播放并进入局部覆盖态。 */
-  seekLocal(t: number): void {
+  /**
+   * 拖动进度条 / 跳到某个时刻：**推工程播放头**。
+   *
+   * 走 `appState.seek()` 而不是直接赋 `playT`：它会夹到工程时长、清反馈历史
+   * （`renderer.onSeek()`，模拟状态要重新对齐）—— 与时间轴的拖动同一条路径。
+   */
+  seekTo(t: number): void {
     if (!Number.isFinite(t)) return;
     this.stopLoop();
     this.playing = false;
-    this.at = t;
+    appState.seek(t);
   }
 
-  /** 从当前预览位置（越界时从片段起点）播到片段末尾。 */
+  /** 从当前播放头（越界时从片段起点）推到片段末尾。 */
   play(): void {
     if (this.playing) return;
     const clip = editorState.clip;
     if (!clip) return;
-    // 时间轴若在播，先停 —— 两套时钟同时推 playT / at 会互相打架。
+    // 时间轴若在播，先停 —— 两套推进器同时写 playT 会互相打架。
     if (appState.playing) appState.pause();
-    this.restoreAt = this.at;
-    const from0 = this.at ?? clip.start;
-    const from = from0 >= clip.end ? clip.start : Math.max(clip.start, from0);
-    this.at = from;
+    const from = appState.playT >= clip.end ? clip.start : Math.max(clip.start, appState.playT);
+    appState.seek(from);
+    this.written = from;
     this.playing = true;
     this.lastTs = 0;
     this.raf = requestAnimationFrame(this.tick);
   }
 
-  /** 暂停（保持当前帧，不还原）。 */
+  /** 暂停（保持当前帧）。 */
   pause(): void {
     if (!this.playing) return;
     this.playing = false;
@@ -98,18 +105,24 @@ class BackgroundPreviewState {
   /** 回到片段起点（暂停态）。 */
   rewind(): void {
     const clip = editorState.clip;
-    if (!clip) return;
-    this.seekLocal(clip.start);
+    if (clip) this.seekTo(clip.start);
   }
 
-  /**
-   * 每帧推进。**到片段尾就停，不回环**，并把 `at` 复原到进入播放前的值
-   * （`restoreAt`，通常是 null = 回到跟随播放头）。
-   */
+  /** 每帧推进播放头。**到片段尾就停**，不回环。 */
   private tick = (ts: number): void => {
     if (!this.playing) return;
     const clip = editorState.clip;
-    if (!clip) {
+    // 片段被关掉 / 时间轴开始播：让位。
+    if (!clip || appState.playing) {
+      this.pause();
+      return;
+    }
+    /*
+     * 外部 seek 检测：`playT` 与本循环上一帧写进去的值对不上，说明用户正在别处
+     * 挪播放头（拖关键帧面板的标尺、拖时间轴、按回退…）。此时停手 —— 否则下一帧
+     * 就把用户的落点覆盖掉，表现是「在播放中拖播放头，它自己弹回去」。
+     */
+    if (Math.abs(appState.playT - this.written) > 1e-6) {
       this.pause();
       return;
     }
@@ -117,14 +130,14 @@ class BackgroundPreviewState {
     const dt = (ts - this.lastTs) / 1000;
     this.lastTs = ts;
 
-    const step = advancePreviewTime(this.at ?? clip.start, dt, clip);
+    const step = advancePreviewTime(appState.playT, dt, clip);
     if (step.ended) {
-      this.playing = false;
-      this.at = this.restoreAt;
-      this.stopLoop();
+      this.pause();
+      appState.playT = clip.end;
       return;
     }
-    this.at = step.at;
+    appState.playT = step.at;
+    this.written = step.at;
     this.raf = requestAnimationFrame(this.tick);
   };
 
@@ -139,11 +152,10 @@ class BackgroundPreviewState {
     this.url = null;
   }
 
-  /** 编辑器卸载时调用：停播、复原时间、释放 URL。 */
+  /** 编辑器卸载时调用：停播并释放 URL（播放头是工程状态，不在这里复原）。 */
   dispose(): void {
     this.stopLoop();
     this.playing = false;
-    this.at = null;
     this.enabled = false;
     this.releaseUrl();
   }

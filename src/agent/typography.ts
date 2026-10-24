@@ -40,6 +40,7 @@ import {
   applyTextToPath,
   convertShapeToPath,
 } from '../typography/shape-convert';
+import { applyElementAnimations, applyElementFormat } from '../typography/format-painter';
 import type { MessageKey } from '../i18n/locales';
 import { CUSTOM_CSS_ERROR_KEYS } from '../typography/animation';
 import { coerceRuns } from '../typography/rich-text';
@@ -474,6 +475,53 @@ export function setElementAnimation(
     setAnimOp(el, input, mode);
   });
   return { changed, element: viewOf(store, clipId, elementId) };
+}
+
+/**
+ * 把**一个元素**的外观（`what:'format'`）或动画（`what:'animation'`）刷到一批目标上
+ * —— 编辑器里「格式刷 / 动画刷」的同一条路径（`typography/format-painter.ts`）。
+ *
+ * 语义与界面完全一致，这也是它存在的理由（硬约束 1.9）：
+ *  - `format`：填充 / 描边 / 圆角 / 文本样式 / 图片的各项处理 / 阴影与虚化；
+ *  - `animation`：**整份替换**动画条目（不是追加），并重新发 id；
+ *  - 目标没有的字段静默跳过（图形没有 `fit`、文本框没有 `crop`…），不报错。
+ *
+ * 返回真的改了几个（0 = 全都无事可做，例如源与目标的格式本来就一样）。
+ */
+export function copyElementStyle(
+  store: ProjectStore,
+  clipId: string,
+  sourceId: string,
+  targetIds: string[],
+  what: 'format' | 'animation',
+): { changed: number; elements: TypographyElementView[] } {
+  requireElement(store, clipId, sourceId);
+  if (!Array.isArray(targetIds) || targetIds.length === 0) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.batchEmpty', { what: 'targetIds' }));
+  }
+  if (targetIds.length > MAX_BATCH) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.batchTooLarge', { max: MAX_BATCH }));
+  }
+  // 源自己混在目标里没有意义（那是空操作），去重后必须还剩东西。
+  const ids = [...new Set(targetIds)].filter((id) => id !== sourceId);
+  if (!ids.length) {
+    throw new ControlFailure('invalid-argument', tr('agent.typo.batchEmpty', { what: 'targetIds' }));
+  }
+  // 校验前置：任何一个目标不存在就在动手之前报错。
+  for (const id of ids) requireElement(store, clipId, id);
+
+  let changed = 0;
+  withDoc(store, clipId, `agent:typo_copy_${what}`, (d) => {
+    const src = d.elements.find((e) => e.id === sourceId);
+    if (!src) return;
+    for (const id of ids) {
+      const target = d.elements.find((e) => e.id === id);
+      if (!target) continue;
+      const done = what === 'format' ? applyElementFormat(src, target) : applyElementAnimations(src, target);
+      if (done) changed += 1;
+    }
+  });
+  return { changed, elements: ids.map((id) => viewOf(store, clipId, id)) };
 }
 
 /**

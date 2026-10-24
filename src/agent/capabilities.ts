@@ -455,6 +455,23 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
         'of `loop`) is accepted verbatim, so a document can be read, edited and written back ' +
         'without losing animations.',
     },
+    /* 格式刷 / 动画刷（`typo_copy_style`）：一次调用刷一批，一笔撤销。 */
+    styleCopy: {
+      tool: 'typo_copy_style({ clipId?, sourceId, targetIds[], what? })',
+      what: [
+        'format (default): fill, stroke, radius, text style, image processing (fit / crop / key / quad / adjust / recolor / border / filter), shadows, blur',
+        'animation: replaces the targets\' animations with copies of the source\'s (new ids; an empty source clears them)',
+      ],
+      mapping:
+        'A shape\'s `fill` / `stroke` lands on a text box\'s `boxFill` / `boxStroke` and vice versa, ' +
+        'so painting a shape onto a text box gives the box the same background and border.',
+      skips:
+        'Fields the TARGET kind does not have are silently skipped (a shape has no fit / crop, a ' +
+        'text box has no radius). `changed: 0` means nothing differed — not an error.',
+      notCopied:
+        'Content (runs, assetId), geometry (frame, transform3d), opacity and blend are NEVER copied: ' +
+        'this is an appearance painter, not a duplicate.',
+    },
     scripts: {
       fields: ['id', 'name', 'code', 'enabled', 'targets', 'needs'],
       form:

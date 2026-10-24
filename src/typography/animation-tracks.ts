@@ -186,10 +186,11 @@ export function trackSpan(keys: readonly TrackKey[]): { delay: number; duration:
 /**
  * 把派生时序回填进对象：`delay = 第一帧`、`duration = 最后一帧 − 第一帧`。
  *
- * 为什么还留着这两个字段（而不是删掉只读 keys）：Ribbon 的时长输入、
- * `isAnimationActiveAt()`、`customSubAnimations()`、`seekAnimations()` 全都在读
- * 它们，删掉就是一次跨四个文件的连锁改动。**真源是 keys**，这两个字段只是在
- * 每次写入后同步一次，读的人不必知道新模型。
+ * 为什么还留着这两个字段（而不是删掉只读 keys）：`isAnimationActiveAt()`、
+ * `customSubAnimations()` 与光栅化的缓存键都在读它们，删掉就是一次跨四五个
+ * 文件的连锁改动。**真源是 keys**，这两个字段只是在每次写入后同步一次，读的人
+ * 不必知道新模型。（`seekAnimations()` 不读它们 —— CSS 的 `animation-delay`
+ * 已经承担了延迟，见 `animation.ts::animationCurrentTimeMs`。）
  */
 export function applyTrackTiming<T extends TracksAnimation>(anim: T): T {
   anim.keys = normalizeKeys(anim.keys);

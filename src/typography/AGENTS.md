@@ -42,6 +42,12 @@
     覆盖、嵌套层矩阵相乘，语义都不可预期）——UI 拒绝，`applyPreset` 按 prop 替换。
   - `preset` / `custom`：旧形态，只在打开旧工程（v17 迁移）或 agent 的 `css` 入参时出现。
     渲染层必须继续支持（`animationStyleSheet` 三条分支），面板对它们显示只读行。
+  - **延迟只许出现一次**：`delay` 写在 CSS 简写的 `animation-delay` 里，那是 effect
+    timing 的一部分，而 WAAPI 的 `currentTime` 时间轴**包含**它（实测 delay=3s 的动画
+    在 `currentTime=3000` 才进 active 段）。所以 seek 只做「秒 → 毫秒」
+    （`animationCurrentTimeMs`），**不许再减 `delay`**。再减一次 = 起点变成 2×delay
+    （3s 起的元素 6s 才动），而延迟期被 fill 停在首帧 —— 不报错、不闪，只在回头比对
+    时间时看得出（2026-10-24 修，守卫在 `tests/e2e/typography-keyframes.spec.ts`）。
 
   agent 侧入口是 `agent-ops.ts::parseAnimationInput` / `animationsFromInput` /
   `setAnimation` + `typo_set_animation` / `typo_add_element.animation`。五条不能破：
