@@ -11,6 +11,7 @@
  */
 
 import type { TextSpanStyle } from './rich-text';
+import { cssFamily } from './font/css-family';
 import { resolveThemeColor, type TypographyTheme } from './theme';
 import {
   normalizeStops,
@@ -395,7 +396,14 @@ export function textStyle(style: TextStyle, theme?: ThemeArg): CssDecls {
     'box-sizing': 'border-box',
     overflow: 'hidden',
 
-    'font-family': style.fontFamily,
+    /*
+     * **必须过 `cssFamily()`**：本机族名里带数字 / 逗号 / 空格的名字裸拼会让
+     * 整条声明失效（`font-family: HYPixel 11px` 里的 `11px` 是 dimension，
+     * 不是 ident ⇒ 声明被丢弃，字符**静默**退回界面字体）。
+     * 字体下拉走的就是这个函数，所以「下拉里看着对、舞台上却回退」的怪相
+     * 只出现在这条漏了它（2026-10-25 用户报的那个像素字体）。
+     */
+    'font-family': cssFamily(style.fontFamily),
     'font-size': px(style.fontSize),
     'font-weight': String(style.fontWeight),
     'font-style': style.fontStyle,
@@ -903,7 +911,11 @@ export function spanStyle(span: TextSpanStyle | undefined, theme?: ThemeArg): Cs
    */
   const out: CssDecls = { 'background-color': 'var(--typo-hl, transparent)' };
   if (!span) return out;
-  if (span.fontFamily !== undefined) out['font-family'] = span.fontFamily;
+  // 与 textStyle 同理：族名必须加引号转义（`HYPixel 11px` 裸拼整条声明失效）。
+  if (span.fontFamily !== undefined) {
+    const family = cssFamily(span.fontFamily);
+    if (family) out['font-family'] = family;
+  }
   if (span.fontSize !== undefined) out['font-size'] = px(span.fontSize);
   if (span.fontWeight !== undefined) out['font-weight'] = String(span.fontWeight);
   if (span.fontStyle !== undefined) out['font-style'] = span.fontStyle;

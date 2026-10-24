@@ -26,6 +26,12 @@ describe('cssFamily：族名 → 合法的 font-family 值', () => {
     expect(cssFamily('JetBrains Mono')).toBe('"JetBrains Mono"');
   });
 
+  it('族名里有「数字开头的词」也必须加引号（`11px` 是 dimension，不是 ident）', () => {
+    // 汉仪像素的族名（Local Font Access 报的是 nameID 16 的 "HYPixel 11px"）。
+    expect(cssFamily('HYPixel 11px')).toBe('"HYPixel 11px"');
+    expect(cssFamily('5by7')).toBe('"5by7"');
+  });
+
   it('中文族名也能安全写进内联样式', () => {
     expect(cssFamily('宋体')).toBe('"宋体"');
   });

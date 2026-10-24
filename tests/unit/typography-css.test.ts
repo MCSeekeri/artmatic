@@ -199,6 +199,25 @@ describe('textStyle', () => {
     expect(s.height).toBe('100%');
     expect(s.position).toBe('absolute');
   });
+
+  it('族名必须加引号 —— 「HYPixel 11px」裸拼会让整条声明失效', () => {
+    // 本机像素字体（汉仪像素 11px U / HYPixel 11px）的族名里带 `11px`：
+    // 裸拼时 `11px` 被解析成 dimension 而不是 ident，`font-family: HYPixel 11px`
+    // 整条声明被判非法 ⇒ 元素**静默**继承界面字体。字体下拉早就过 cssFamily，
+    // 所以症状是「下拉里是像素字形、舞台上回退到系统字体」。
+    expect(textStyle({ ...base, fontFamily: 'HYPixel 11px' })['font-family']).toBe('"HYPixel 11px"');
+    // 通用族不能加引号（`"serif"` 是一个叫 serif 的具体字体）
+    expect(textStyle({ ...base, fontFamily: 'serif' })['font-family']).toBe('serif');
+    // 存的是族列表时只取第一个（与 text-outline / familyRenders 同口径）
+    expect(textStyle({ ...base, fontFamily: '"Inter", sans-serif' })['font-family']).toBe('"Inter"');
+  });
+});
+
+describe('spanStyle：行内覆盖', () => {
+  it('行内换字体同样要加引号（否则只有那一段悄悄回退）', () => {
+    expect(spanStyle({ fontFamily: 'HYPixel 11px' })['font-family']).toBe('"HYPixel 11px"');
+    expect(spanStyle({ fontFamily: 'serif' })['font-family']).toBe('serif');
+  });
 });
 
 describe('shapePaintAttrs', () => {
