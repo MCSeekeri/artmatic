@@ -2401,14 +2401,28 @@ export function createTypographyActions(): TypographyActions {
           name: tr('typo.bakedName'),
           originName: 'flatten.png',
         });
-        appState.store.updateClip(clipId, tr('typo.undo.flatten'), (clip) => {
-          if (clip.kind === 'source' && clip.source.type === 'text') {
-            clip.source = { type: 'image', assetId };
-          }
-        });
-        appState.store.commit(tr('typo.undo.registerImageAsset'), (p) => {
-          p.assets[assetId] = { id: assetId, kind: 'image', name: tr('typo.bakedName') };
-        });
+        /*
+         * 「换源」与「登记素材」必须合成**一笔**撤销。
+         *
+         * 拆成两笔时栈顶是登记：第一下 Ctrl+Z 只把 `p.assets[assetId]` 撤掉，
+         * 而片段已经指向它 —— 画面当场变成离线占位符，用户看到的是「撤销
+         * 之后图没了」。`beginTx` 只在没有外层事务时打开（它会覆盖快照，
+         * 见 `core/project-store.ts::inTx` 的注释）。
+         */
+        const wrap = !appState.store.inTx;
+        if (wrap) appState.store.beginTx();
+        try {
+          appState.store.commit(tr('typo.undo.registerImageAsset'), (p) => {
+            p.assets[assetId] = { id: assetId, kind: 'image', name: tr('typo.bakedName') };
+          });
+          appState.store.updateClip(clipId, tr('typo.undo.flatten'), (clip) => {
+            if (clip.kind === 'source' && clip.source.type === 'text') {
+              clip.source = { type: 'image', assetId };
+            }
+          });
+        } finally {
+          if (wrap) appState.store.endTx(tr('typo.undo.flatten'));
+        }
         // 源已经不是 text 了，编辑页必须关掉 —— 留着会指向一个不存在的文档。
         appState.closeTypographyView();
       })();
