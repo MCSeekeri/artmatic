@@ -5,6 +5,7 @@ import {
   migrateProjectAnimations,
   parseEase,
   parseKeyframeBody,
+  pinAnimationTargets,
   presetToTracks,
   type MigrationReport,
 } from '../../src/typography/animation-migrate';
@@ -188,6 +189,63 @@ describe('migrateAnimations / migrateProjectAnimations', () => {
     const raw = { schemaVersion: 16, tracks: [{ kind: 'audio', clips: [] }] };
     const { project, report: r } = migrateProjectAnimations(raw);
     expect(r.changed).toBe(false);
+    expect(project).toBe(raw);
+  });
+});
+
+/**
+ * v18 迁移：作用层从「隐式 = 内容层」变成显式字段。
+ *
+ * 缺省改成 `box` 之后，老工程里那些**没写键**的动画必须被钉成 `content` ——
+ * 漏掉这一步的表现是「打开旧工程，所有排版动画突然连文本框底板一起动」。
+ */
+describe('v18：作用层钉住', () => {
+  type Anims = { animations: { id: string; target?: string }[] };
+
+  const withAnims = (animations: unknown[]): Record<string, unknown> => ({
+    schemaVersion: 17,
+    tracks: [
+      {
+        kind: 'visual',
+        clips: [
+          { kind: 'source', source: { type: 'text', doc: { elements: [{ id: 'e1', animations }] } } },
+        ],
+      },
+    ],
+  });
+
+  const animsOf = (project: Record<string, unknown>): { id: string; target?: string }[] => {
+    type Row = { clips: { source: { doc: { elements: Anims[] } } }[] };
+    return ((project.tracks as Row[])[0]!.clips[0]!.source.doc.elements[0]! as Anims).animations;
+  };
+
+  it('没有 target 的动画钉成 content；不动入参', () => {
+    const raw = withAnims([{ id: 'a1', kind: 'tracks', prop: 'rot', keys: [] }]);
+    const before = JSON.stringify(raw);
+    const { project, changed } = pinAnimationTargets(raw);
+    expect(JSON.stringify(raw), '迁移必须返回新对象').toBe(before);
+    expect(changed).toBe(true);
+    expect(animsOf(project).map((a) => a.target)).toEqual(['content']);
+  });
+
+  it('已经带 target 的条目原样保留（含新存的 box）；再跑一遍 changed = false', () => {
+    const raw = withAnims([
+      { id: 'a1', kind: 'tracks', target: 'box' },
+      { id: 'a2', kind: 'custom', target: 'content' },
+    ]);
+    const { project, changed } = pinAnimationTargets(raw);
+    expect(changed).toBe(false);
+    expect(project).toBe(raw);
+
+    // 幂等：迁移后的工程再跑一次不产生新改动（否则每次打开都会重写工程文件）。
+    const once = pinAnimationTargets(withAnims([{ id: 'a1', kind: 'tracks' }])).project;
+    expect(pinAnimationTargets(once).changed).toBe(false);
+  });
+
+  it('没有排版文档 / 非文本片段原样返回', () => {
+    const raw = { schemaVersion: 17, tracks: [{ kind: 'audio', clips: [] }] };
+    const { project, changed } = pinAnimationTargets(raw);
+    expect(changed).toBe(false);
     expect(project).toBe(raw);
   });
 });

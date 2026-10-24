@@ -833,7 +833,12 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'delay / duration are DERIVED from the first and last key (passing them changes nothing). ' +
       'To stagger properties, send SEVERAL animations with mode:"add" — each one becomes its own ' +
       'CSS animation with its own delay, so opacity and movement can start at different times. ' +
-      'Do not animate the same property twice on one element.\n' +
+      'Do not animate the same property twice on the SAME target layer.\n' +
+      'target (optional): "box" (default) animates the whole element box, so the text-box fill ' +
+      'and border move with it (clip-path clips the box, rot spins the whole block). "content" ' +
+      'animates only the text / svg / image itself and leaves the text-box background still — ' +
+      'use it only when that is explicitly what you want. Both layers may animate the same ' +
+      'property independently.\n' +
       'Other accepted forms:\n' +
       '  { css: "<@keyframes blocks + animation shorthand>", duration?, delay?, loop?, easing?, ' +
       'direction?, fill? }\n' +

@@ -313,6 +313,68 @@ describe('migrateProject', () => {
     expect(clips[1]!.source.params).toEqual({ size: 320 });
     expect(clips[2]!.source.params).toEqual({ size: 112, width: 96, height: 64 });
   });
+
+  /**
+   * v17 → v18：排版动画的**作用层**从「隐式 = 内容层」变成显式字段，缺省改成了
+   * `box`。判据只有一条：老工程里**没写 target** 的条目必须被钉成 `content`，
+   * 否则打开就整块一起动（旧工程画面全变，而且不报错）。
+   */
+  it('v17 → v18：没写 target 的动画钉成 content；已有 target 原样保留', () => {
+    const track = (id: string, target?: string) => ({
+      id,
+      kind: 'tracks',
+      prop: 'rot',
+      keys: [
+        { t: 0, v: 0 },
+        { t: 1, v: 90 },
+      ],
+      ...(target ? { target } : {}),
+    });
+    const p = defaultProject('v17-anim');
+    p.schemaVersion = 17;
+    p.tracks.push({
+      kind: 'visual',
+      id: newId(),
+      name: 'V1',
+      enabled: true,
+      clips: [
+        {
+          kind: 'source', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+          source: {
+            type: 'text',
+            doc: {
+              size: { w: 1920, h: 1080 },
+              background: { kind: 'none' },
+              elements: [
+                {
+                  id: 'e1', kind: 'text', frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+                  runs: [{ text: 'A' }], animations: [track('a1')],
+                },
+                {
+                  id: 'e2', kind: 'text', frame: { x: 0, y: 0, w: 100, h: 100, rot: 0 },
+                  runs: [{ text: 'B' }], animations: [track('a2', 'box')],
+                },
+              ],
+              fonts: [],
+            },
+          },
+          blend: 'normal', opacity: 1,
+          transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'contain',
+        },
+      ],
+    } as never);
+
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    const clip = out.tracks[0]!.clips[0]!;
+    if (clip.kind !== 'source' || clip.source.type !== 'text') throw new Error('unreachable');
+    const els = clip.source.doc.elements as unknown as {
+      id: string;
+      animations: { target?: string }[];
+    }[];
+    expect(els[0]!.animations[0]!.target, '老工程必须保持「只转字」').toBe('content');
+    expect(els[1]!.animations[0]!.target, '显式写的 box 不该被迁移改写').toBe('box');
+  });
 });
 
 describe('排版片段的校验', () => {

@@ -37,6 +37,7 @@
     type AnimChannel,
     type TracksAnimation,
   } from '../../typography/animation-tracks';
+  import { animTargetOf, type AnimTarget } from '../../typography/animation';
   import type { TypographyElement } from '../../typography/document';
   import {
     KEY_SNAP_UNITS,
@@ -429,6 +430,25 @@
   let addProp = $state<string>('opacity');
   let customName = $state('');
   let customValue = $state('');
+  /**
+   * 新轨道的作用层：`box`（缺省）= 整个元素框（含文本框底板与边框），
+   * `content` = 只动文字 / 图形本身（旧行为）。
+   */
+  let addTarget = $state<AnimTarget>('box');
+
+  /**
+   * 顶栏两态按钮的当前态：有轨道时 = **这条轨道**的层，没有轨道时 = 下一条新建的
+   * 缺省层。共用一个按钮是刻意的 —— 用户看到一条「只转字」的轨道时，唯一想做的
+   * 就是把它改成整块，不该让他先删了重建。
+   */
+  const activeTarget = $derived(selTrack ? animTargetOf(selTrack) : addTarget);
+
+  function toggleTarget(): void {
+    const next: AnimTarget = activeTarget === 'box' ? 'content' : 'box';
+    // 新建缺省跟着走：连续加几条时不会「上一条 box、下一条又变回去」。
+    addTarget = next;
+    if (selTrack) actions.setTrackTarget(selTrack.id, next);
+  }
 
   const ADD_OPTIONS = [
     ...ANIM_CHANNELS.map((c) => ({ value: c as string, label: CHANNEL_LABEL[c] })),
@@ -458,10 +478,12 @@
     const prop = addProp === CUSTOM ? customName.trim() : addProp;
     if (!prop) return;
     const initial = addProp === CUSTOM ? customValue.trim() || '0' : identityValue(prop);
-    actions.addTrack(prop, initial, Math.max(0, localSec));
+    actions.addTrack(prop, initial, Math.max(0, localSec), addTarget);
     const found = editorState.elements
       .find((e) => e.id === el.id)
-      ?.animations.find((a) => a.kind === 'tracks' && a.prop === prop);
+      ?.animations.find(
+        (a) => a.kind === 'tracks' && a.prop === prop && animTargetOf(a) === addTarget,
+      );
     if (found) kfPanel.selectTrack(found.id);
     if (addProp === CUSTOM) {
       customName = '';
@@ -549,6 +571,14 @@
       />
       <span class="sep"></span>
 
+      <!-- 作用层：两态按钮（元素框 / 内容）。有轨道时改这条轨道，没有时改新建缺省。 -->
+      <IconButton
+        icon={activeTarget === 'box' ? 'square' : 'type'}
+        label={activeTarget === 'box' ? tr('typo.kfTargetBox') : tr('typo.kfTargetContent')}
+        size="sm"
+        testid="typo-kf-target-toggle"
+        onclick={toggleTarget}
+      />
       <span class="sel-w">
         <Select
           value={addProp}
@@ -722,7 +752,13 @@
         <div class="props" bind:this={propsEl} data-testid="typo-kf-props">
           {#each tracks as a (a.id)}
             <div class="prop-row" class:on={a.id === selTrack?.id} data-testid="typo-kf-track">
-              <span class="pname">{propLabel(a.prop)}</span>
+              <span class="pname">
+                {#if animTargetOf(a) === 'box'}
+                  <!-- 作用于整个元素框（含底板 / 边框），与只动文字的轨道区分开。 -->
+                  <Icon name="square" size={9} />
+                {/if}
+                <span class="nm">{propLabel(a.prop)}</span>
+              </span>
               <span class="pval mono">{valueAt(a)}</span>
               <!--
                 循环开关：`iterations = Infinity` → CSS 的 `infinite`。
@@ -742,7 +778,10 @@
           {#each legacy as leg (leg.id)}
             <div class="prop-row" data-testid="typo-kf-legacy">
               <span class="pname">
-                {leg.kind === 'preset' ? leg.preset : tr('typo.anim.custom')}
+                {#if animTargetOf(leg) === 'box'}
+                  <Icon name="square" size={9} />
+                {/if}
+                <span class="nm">{leg.kind === 'preset' ? leg.preset : tr('typo.anim.custom')}</span>
               </span>
               <span class="pval">{tr('typo.kfLegacy')}</span>
               <IconButton
@@ -1088,6 +1127,12 @@
   }
   .pname {
     flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+  }
+  .pname .nm {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

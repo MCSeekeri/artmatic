@@ -406,7 +406,12 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
           'x | y | sx | sy | rot | opacity | blur, or ANY CSS property name in kebab-case ' +
           '("letter-spacing", "clip-path", "color", "transform"). ONE animation animates ONE ' +
           'property — to make properties start at different times, send several animations ' +
-          '(mode:"add"); never animate the same property twice on one element.',
+          '(mode:"add"); never animate the same property twice on the SAME target layer.',
+        target:
+          'box (default) = the whole element box, so the text-box fill and border move too ' +
+          '(clip-path clips the box, rot spins the whole block). content = only the text / svg / ' +
+          'image itself (the text-box background stays still) — use it only when that is what you ' +
+          'want. Omitted = box.',
         channels: ANIM_CHANNELS.map((id) => ({
           id,
           unit: CHANNEL_META[id].unit,

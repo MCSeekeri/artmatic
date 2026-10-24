@@ -30,7 +30,11 @@ import type { MessageKey } from '../i18n/locales';
 
 /** 动画名统一加前缀，避免与用户手写 CSS 或页面其它动画撞名。 */
 export const ANIM_NAME_PREFIX = 'artmatic-a-';
-/** 动画挂载在元素的**内层包装**上（外层的 transform 被旋转占用），见 render-dom.ts。 */
+/**
+ * 动画层的标记 —— 落在哪一层由 `target` 决定：
+ * `box`（缺省）= 外壳**之外**的 `.typo-box`，`content` = 外壳之内的 `.typo-anim`。
+ * 见 render-dom.ts 的文件头（外层的 transform 被旋转占用，所以动画不能写在外壳上）。
+ */
 export const ANIM_ID_ATTR = 'data-anim-id';
 
 export type Easing =
@@ -58,6 +62,36 @@ export type AnimPreset =
   | 'shake'
   | 'blur-in';
 
+/**
+ * 动画作用在元素的哪一层。
+ *
+ *  - `box`（**缺省**）：元素最外层包装 `.typo-box`（包住 `.typo-el`）——
+ *    文本框底板、边框与内容一起动。`clip-path` 因此能裁到框，`rotate` 转的是整块。
+ *    用户说「我给文本框设了个旋转」时想的就是这个，所以它必须是缺省。
+ *  - `content`：内层包装 `.typo-anim` —— 只影响文本 / 图形 / 图片本身。
+ *    这是引入 `target` 之前的唯一行为，现在**只能显式选择**。
+ *
+ * 为什么不能「把动画一律挪到外壳上」（即不要 `.typo-box` 那一层）：外壳的
+ * `transform` 被 `frame.rot` / 3D 占用，动画会顶掉用户设的旋转；而放在外壳**之内**
+ * 又碰不到外壳自己的 `background-*` / `border`（CSS 动画不向上影响祖先）。
+ *
+ * **旧工程靠 `SCHEMA_VERSION = 18` 的迁移钉住**：v17 及以前保存的文档里所有动画都
+ * 没这个键，迁移会给它们显式写 `target:'content'` —— 缺省改成 `box` 之后，那些
+ * 「只转字」的动画仍然逐像素不变。
+ *
+ * 已知代价（`box` 独有）：动画层会成为 `mix-blend-mode` 的新参照系，所以
+ * 「元素混合模式 + box 动画」同时用时，与其他元素的混合结果与静止时不同。
+ */
+export type AnimTarget = 'content' | 'box';
+
+/** 缺省作用层：整个元素框（含文本框底板 / 边框）。 */
+export const DEFAULT_ANIM_TARGET: AnimTarget = 'box';
+
+/** 条目实际作用在哪一层（缺省 / 脏数据一律当 `box`；`content` 必须显式写）。 */
+export function animTargetOf(a: { target?: AnimTarget }): AnimTarget {
+  return a.target === 'content' ? 'content' : DEFAULT_ANIM_TARGET;
+}
+
 export interface AnimTiming {
   /** 秒，相对片段起点。 */
   delay: number;
@@ -68,6 +102,14 @@ export interface AnimTiming {
   easing: Easing;
   direction: 'normal' | 'reverse' | 'alternate' | 'alternate-reverse';
   fill: 'none' | 'forwards' | 'backwards' | 'both';
+  /**
+   * 作用层。缺省 = `box`（整个元素框）；`content`（只动内容）必须显式写。
+   *
+   * 放在 `AnimTiming` 里是刻意的：它是**所有条目共有**的字段（预设 / 自定义 /
+   * 轨道），构造、序列化、agent 读回各只有一条路径 —— 三个接口各加一次的话，
+   * 漏掉的那一种会静默落到另一层。
+   */
+  target?: AnimTarget;
 }
 
 export interface PresetAnimation extends AnimTiming {
@@ -807,8 +849,9 @@ function emitTracks(anim: TracksAnimation): EmittedCustom | null {
  * 绑定走**一份样式表**而不是逐个元素写内联 style：注入点唯一，
  * 快照序列化时只需要带上这一个节点，也让「手写 CSS 无法逃逸」这条成立。
  *
- * 选择器用 `[data-anim-id=...]`（挂在元素的**内层包装**上），
- * 因为外层的 transform 被旋转占用，而动画预设大量使用 transform。
+ * 选择器用 `[data-anim-id=...]`：`box` 条目挂在外壳**之外**的 `.typo-box`，
+ * `content` 挂在**内层** `.typo-anim` —— 无论哪种都不写在外壳上，
+ * 因为外壳的 transform 被旋转占用，而动画预设大量使用 transform。
  */
 export function animationStyleSheet(doc: TypographyDocument): string {
   const frames: string[] = [];

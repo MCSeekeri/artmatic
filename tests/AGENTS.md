@@ -38,6 +38,10 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
     才算真守卫：反应扩散 `F=k=0` 时 `Σ(u+v)` 守恒、沙堆的**阿贝尔性**（fifo 与 lifo
     两种崩塌顺序的终止态逐格相同）、雪花「冰只增不减」、循环 CA「默认参数下相邻两步
     必须有格子在变」（这条直接抓「冻死」）。
+  - `tests/e2e/typography-anim-target.spec.ts` —— 动画作用层（`target`）。走
+    `typoRasterize`（不经过 compositor）：`target:'box'` 时 `clip-path` 连文本框底板
+    一起裁、缺省只裁文字（后者就是「旧工程逐像素不变」）；另一条守 DOM 结构
+    （动画层在外壳之外、外壳退化成 `inset:0`、同属性两层各一条互不顶掉）。
   - `tests/e2e/algo-sim.spec.ts` —— sim 的渲染断言。**sim 一律用 `settle`，
     不要用 `waitForSourceReady`**（后者的 minMean 判据是给整幅非黑准备的）。
   - `tests/unit/flashback.test.ts` + `tests/e2e/algo-flashback.spec.ts` —— 闪回

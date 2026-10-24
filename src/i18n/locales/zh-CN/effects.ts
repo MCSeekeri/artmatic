@@ -101,7 +101,7 @@ export const effects = {
   'fx.desc.ringWarp': '同心环状的波纹。',
   'fx.desc.ripple': '像水面涟漪一样推开。',
   'fx.desc.scanlines': '隔行压暗，旧屏幕的质感。',
-  'fx.desc.screenJump': '整帧回绕滚卷。',
+  'fx.desc.screenJump': '整帧回绕滚卷，可加抽动。',
   'fx.desc.shake': '整帧随机抖动。',
   'fx.desc.sharpen': '强化细节与边缘。',
   'fx.desc.shockwave': '一圈冲击波扫过画面。',

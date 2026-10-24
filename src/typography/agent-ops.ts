@@ -61,6 +61,7 @@ import {
 import { sanitizeScripts, type TypographyScript } from './script/model';
 import {
   ANIM_PRESETS,
+  animTargetOf,
   createCustomAnimation,
   createPresetAnimation,
   createTracksAnimation,
@@ -1225,6 +1226,15 @@ export interface AnimationInput {
   fill?: string;
   /** 预设参数（slide 的 dist / zoom 的 z0,z1 / blur 的 blur）。 */
   params?: Record<string, number>;
+  /**
+   * 作用层：`'box'`（缺省，整个元素框，含文本框底板与边框）/ `'content'`
+   * （只动文字 / 图形 / 图片本身）。
+   *
+   * 缺省是 `box`：模型说「给文本框设个旋转」时想的就是整块。只有明确要
+   * 「只转字」时才传 `'content'` —— 旧工程里的动画由 schema v18 迁移显式钉成
+   * `'content'`，不受这个缺省影响。
+   */
+  target?: string;
   /** 结构化轨道形态：`prop` + `keys[].t`（绝对秒）。 */
   prop?: string;
   /** 旧式形态：`keys[].at`（0..1）；两者按「有没有 `prop` / 有没有 `t`」判别。 */
@@ -1264,6 +1274,15 @@ function timingOf(input: AnimationInput): Partial<AnimTiming> | null {
   if (input.fill !== undefined) {
     if (!FILLS.has(String(input.fill))) return null;
     out.fill = input.fill as AnimTiming['fill'];
+  }
+  // 作用层只认两个值：写错（`'element'` / `'text'`）时整条拒掉，而不是静默
+  // 回落缺省 —— 后者表现成「设了只转字、结果整块飞了」，模型不会怀疑是拼写。
+  //
+  // `content` 也必须**显式写进对象**：schema v18 迁移靠它把旧工程的动画钉住，
+  // 读回/写回（`animationView` → `parseAnimationInput`）也靠它往返。
+  if (input.target !== undefined) {
+    if (input.target !== 'content' && input.target !== 'box') return null;
+    out.target = input.target;
   }
   return out;
 }
@@ -1515,6 +1534,10 @@ export function animationView(a: ElementAnimation): Record<string, unknown> {
   return {
     id: a.id,
     kind: a.kind,
+    // 作用层**总是**输出（含缺省值）：`content` 是旧工程迁移后的显式状态，
+    // 省略它再写回就会落回缺省的 `box` —— 老工程打开一次、动一下别处，动画
+    // 就会从「只转字」变成「整块转」。
+    target: animTargetOf(a),
     ...(a.kind === 'preset' ? { preset: a.preset, ...(a.params ? { params: a.params } : {}) } : {}),
     ...(a.kind === 'custom' ? { css: a.css, ...(a.animation ? { animation: a.animation } : {}) } : {}),
     // 结构化轨道：**原样**给出 `prop` + 绝对秒关键帧，`parseAnimationInput` 能读回。

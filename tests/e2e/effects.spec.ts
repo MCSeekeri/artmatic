@@ -1,5 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo, addEffectViaPicker, buildStage, hashAt, renderTwiceDiff, setTrackEnabled } from './_stage';
+import {
+  openDemo,
+  addEffectViaPicker,
+  buildStage,
+  hashAt,
+  renderTwiceDiff,
+  setTrackEnabled,
+  waitForSourceReady,
+} from './_stage';
 
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
@@ -44,6 +52,82 @@ test('slices：同帧逐像素一致，异帧不同（u_seed 注入路径）', a
 
   // ③ 防止 ② 在比两张一样的图
   expect(await hashAt(page, 3)).not.toBe(await hashAt(page, 3.5));
+});
+
+/*
+ * 「抽动」（`screen-jump` 的 `jerk` / `jerkRate`）的判据：位移是**分段常量** ——
+ * 刻度之内纹丝不动（画面照常平滑滚动），跨刻度时整帧突然换位置。
+ *
+ * 两边都要钉：
+ *   - 只断「画面变了」→ 一个逐帧重掷的实现照样过，而那恰好是要避免的形态
+ *     （抽动退化成噪声）。
+ *   - 只断「刻度内相同」→ 一个根本没接上 `u_jump`（恒 0）的实现也照样过。
+ *
+ * 舞台的两个要点：
+ *   - 源用 mandelbrot：它的 fragment 里**没有 `u_time`**（逐帧完全静止），而
+ *     `coloring: stripe` 让逃逸区铺满高频条纹 —— 实测横移 2% 幅就改变 74% 的像素，
+ *     所以「跨刻度变了」这条不会被一次不巧的小位移误判。
+ *   - `speed: 0`：平滑滚动关掉，于是画面只可能因为抽动而变化。
+ */
+test('画面滚卷：抽动在刻度内保持、跨刻度突变', async ({ page }) => {
+  await boot(page);
+  await buildStage(
+    page,
+    {
+      id: 'mbj',
+      source: { type: 'algo', generator: 'mandelbrot', params: { coloring: 'stripe' } },
+    },
+    {
+      id: 'fxj',
+      defId: 'screen-jump',
+      values: { direction: 'vertical', intensity: 1, sync: 'free', speed: 0, jerk: 0.4, jerkRate: 4 },
+    },
+  );
+  await waitForSourceReady(page, 1.1);
+
+  const r = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        renderFrame: (t: number) => void;
+        readPixels: () => { data: number[] };
+        renderer: { onSeek: () => void };
+      };
+    }).__artmatic;
+    const shot = (t: number): number[] => {
+      A.renderer.onSeek();
+      A.renderFrame(t);
+      return A.readPixels().data;
+    };
+    const diff = (a: number[], b: number[]): number => {
+      let n = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) n++;
+      return n;
+    };
+    // 跨过启动窗口（AGENTS §1.3 的两个鬼只在预热之后才安静）
+    for (let k = 0; k < 16; k++) shot(1.1);
+
+    // 刻度 = 1/4 秒：1.10 / 1.20 同属刻 4；1.30 是刻 5、1.55 刻 6、1.80 刻 7
+    const frames = [1.1, 1.2, 1.3, 1.55, 1.8].map(shot);
+    const d0 = frames[0]!;
+    let mean = 0;
+    for (let i = 0; i < d0.length; i += 4) mean += (d0[i]! + d0[i + 1]! + d0[i + 2]!) / 3;
+    mean /= d0.length / 4;
+
+    return {
+      total: d0.length,
+      mean,
+      sameTick: diff(d0, frames[1]!),
+      jumps: frames.slice(2).map((f) => diff(d0, f)),
+    };
+  });
+
+  // 空转探针红旗：舞台必须是「有画面的」，否则下面两条比的都是黑图。
+  expect(r.mean, '舞台没有画面，下面的判据什么都不测').toBeGreaterThan(20);
+  // ① 刻度内保持：位移是常量 ⇒ 两帧逐字节相同。
+  expect(r.sameTick / r.total, '同一刻度内画面不该变化').toBeLessThan(0.01);
+  // ② 跨刻度突变。取 3 个边界的最大值：位移有界（±0.4 幅），偶尔两次抽到相近的
+  //    位置是分布本身允许的，不该判红。
+  expect(Math.max(...r.jumps) / r.total, '跨刻度必须突变').toBeGreaterThan(0.1);
 });
 
 test('echo：顺序渲染留下拖尾，clearFeedback 后消失，两次顺序渲染一致', async ({ page }) => {

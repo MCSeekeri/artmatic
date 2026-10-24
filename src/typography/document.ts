@@ -473,6 +473,13 @@ export interface ElementBase {
   opacity: number;
   visible: boolean;
   locked: boolean;
+  /**
+   * 元素动画（`ElementAnimation[]`，见 `animation.ts`）。
+   *
+   * 缺省 `target:'box'` 包在元素外壳**之外**（整块一起动）；显式 `content` 落在
+   * 外壳之内的 `.typo-anim` 上 —— 两者是**结构**差异，改它要重建 DOM。
+   * 老工程里没有这个键的条目由 schema v18 迁移钉成 `content`。
+   */
   animations: ElementAnimation[];
   /**
    * 所属组合 id。undefined = 不属于任何组合。

@@ -370,6 +370,9 @@ function timingOf(anim: AnimTiming): Partial<AnimTiming> {
     easing: anim.easing,
     direction: anim.direction,
     fill: anim.fill,
+    // 作用层必须跟着搬：预设展开成轨道时丢了它，`target:'box'` 会静默回落内容层
+    //（表现是「明明设在整块上，结果只转了字」）。
+    ...(anim.target ? { target: anim.target } : {}),
   };
 }
 
@@ -558,4 +561,66 @@ export function migrateProjectAnimations(raw: Record<string, unknown>): {
   });
 
   return { project: report.changed ? { ...raw, tracks: nextTracks } : raw, report };
+}
+
+/**
+ * v17 → v18：把**没有 `target` 的动画条目**显式钉成 `content`。
+ *
+ * 为什么必须做：`target` 刚引入时缺省是 `content`（与旧行为一致），后来缺省改成了
+ * `box`（用户说「给文本框设个旋转」，想的就是整块 —— 见 `animation.ts` 的
+ * `AnimTarget`）。v17 及以前保存的工程里，动画条目根本不带这个键；不迁移的话，
+ * 那些原本「只转字 / 只裁字」的动画会突然连文本框底板一起动，画面全变。
+ *
+ * **幂等**：已经带 `target` 的条目（含新存的 `box`）原样保留。返回新对象，
+ * 不动入参；没有改动的工程原样返回。
+ */
+export function pinAnimationTargets(raw: Record<string, unknown>): {
+  project: Record<string, unknown>;
+  changed: boolean;
+} {
+  const tracks = raw.tracks;
+  if (!Array.isArray(tracks)) return { project: raw, changed: false };
+  let changed = false;
+
+  const nextTracks = tracks.map((track) => {
+    if (!track || typeof track !== 'object') return track;
+    const t = track as Record<string, unknown>;
+    if (!Array.isArray(t.clips)) return track;
+    let trackChanged = false;
+    const clips = t.clips.map((clip) => {
+      if (!clip || typeof clip !== 'object') return clip;
+      const c = clip as Record<string, unknown>;
+      const source = c.source;
+      if (!source || typeof source !== 'object') return clip;
+      const src = source as Record<string, unknown>;
+      if (src.type !== 'text' || !src.doc || typeof src.doc !== 'object') return clip;
+      const doc = src.doc as Record<string, unknown>;
+      if (!Array.isArray(doc.elements)) return clip;
+      let docChanged = false;
+      const elements = doc.elements.map((el) => {
+        if (!el || typeof el !== 'object') return el;
+        const e = el as Record<string, unknown>;
+        if (!Array.isArray(e.animations) || e.animations.length === 0) return el;
+        let elChanged = false;
+        const animations = e.animations.map((a) => {
+          if (!a || typeof a !== 'object') return a;
+          const anim = a as Record<string, unknown>;
+          if (anim.target !== undefined) return a;
+          elChanged = true;
+          return { ...anim, target: 'content' };
+        });
+        if (!elChanged) return el;
+        docChanged = true;
+        return { ...e, animations };
+      });
+      if (!docChanged) return clip;
+      trackChanged = true;
+      return { ...c, source: { ...src, doc: { ...doc, elements } } };
+    });
+    if (!trackChanged) return track;
+    changed = true;
+    return { ...t, clips };
+  });
+
+  return { project: changed ? { ...raw, tracks: nextTracks } : raw, changed };
 }

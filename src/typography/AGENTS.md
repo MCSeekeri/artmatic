@@ -38,8 +38,32 @@
     **绝对秒（相对片段起点）**，每帧可带出向 `ease`（关键字 / `[x1,y1,x2,y2]` /
     `{ steps: n, jump }`，发射时统一由 `animation.ts::easingCss` 拼成 CSS 值）。
     想让几个属性异步起落就发**多条**
-    动画，各带自己的 `animation-delay`。同一元素**不许两条动画动同一属性**（同层互相
-    覆盖、嵌套层矩阵相乘，语义都不可预期）——UI 拒绝，`applyPreset` 按 prop 替换。
+    动画，各带自己的 `animation-delay`。同一元素**不许两条动画动同一 (属性, 作用层)**
+    （同层互相覆盖、嵌套层矩阵相乘，语义都不可预期）——UI 拒绝，`applyPreset` 按
+    `(prop, target)` 替换。**跨层各一条是合法的**（它们落在不同 DOM 节点上）。
+  - **`target` 只有两个值，缺省是 `box`**：
+    `box`（不写键）落在 `.typo-box`（外壳**之外**，文本框底板与边框一起动 ——
+    `clip-path` 才裁得到框、`rot` 才转整块）；`content` 落在 `.typo-anim`
+    （外壳**之内**，只影响文字 / 图形 / 图片）。
+    **为什么缺省是 box 而不是 content**：用户说「给文本框设个旋转」时想的就是整块，
+    缺省成「只转字」会被当成 bug（第一版就是这么上的，用户当场报回来）。
+    老工程靠 **`SCHEMA_VERSION = 18` 的迁移**（`pinAnimationTargets`）把每个没写键的
+    条目显式钉成 `content` —— **没有这条迁移，缺省一改旧工程画面就全变**。
+    五条实现纪律：
+    1. **只在有 `box` 动画时才建 `.typo-box`**，且它承担 frame 的定位、外壳退化成
+       `inset:0`（`elementStyle` 的 `inset`）—— 每层都写 left/top 会把偏移算两遍。
+    2. `syncDocDom` / `syncGroupShells` 找外壳必须过 `unwrapShell()`：包装层夹在
+       `.typo-doc` 与 `.typo-el` 之间，只认直接子节点的话整轮同步**静默跳过**。
+    3. `target` 要进 `docSignature`（它是结构差异）；`parseAnimationInput` 展开出的
+       **每一条**轨道（legacy keys / preset）都得带上它，迁移的 `timingOf` 不许丢。
+    4. `animationView` **总是**输出 `target`（含 `content`）：省略它再写回就会落回
+       缺省的 `box`（老工程「只转字」变「整块转」）。
+    5. 新写入口（面板 `addTrack`、agent 的 `typo_set_animation`）显式写这个键 ——
+       读回 / 复制 / 迁移时一眼看得出它落在哪一层。**已有轨道可以换层**
+       （`actions.setTrackTarget`：改字段 → 签名变 → 重建动画层），
+       同层同属性按替换处理 —— 别让用户「删了重建」。
+    已知代价：`box` 动画层会成为 `mix-blend-mode` 的新参照系，与静止时不完全等价；
+    选中框仍按 `frame` 算（与其它动画一致，不跟着动画转）。
   - `preset` / `custom`：旧形态，只在打开旧工程（v17 迁移）或 agent 的 `css` 入参时出现。
     渲染层必须继续支持（`animationStyleSheet` 三条分支），面板对它们显示只读行。
   - **延迟只许出现一次**：`delay` 写在 CSS 简写的 `animation-delay` 里，那是 effect

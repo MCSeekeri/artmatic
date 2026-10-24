@@ -270,6 +270,8 @@ export const media = {
   'fx.screenJump.dirHorizontal': '水平',
   'fx.screenJump.intensity': '强度',
   'fx.screenJump.speed': '滚动速度',
+  'fx.screenJump.jerk': '抽动幅度',
+  'fx.screenJump.jerkRate': '抽动频率',
 
   'fx.tile': '平铺',
   'fx.tile.size': '平铺数',

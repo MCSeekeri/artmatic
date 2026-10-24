@@ -942,7 +942,10 @@ export const TOOLS = [
       'ease 是「从本帧到下一帧」那一段的缓动（关键字或 [x1,y1,x2,y2]），不填则继承条目 easing。' +
       'delay / duration 由第一帧与最后一帧派生（传了也不改变时序）。' +
       '要让几个属性错开起落，就发多条动画（mode:"add"）—— 每条各自是一条 CSS 动画、各有各的 delay；' +
-      '同一元素不要对同一属性发两条。' +
+      '同一作用层（target）里不要对同一属性发两条。' +
+      'target（可选）："box"（缺省）动**整个元素框**，文本框底板与边框跟着一起走' +
+      '（clip-path 裁到框、rot 转整块）；"content" 只动文字 / 图形 / 图片本身、文本框底色' +
+      '不动（只在明确要「只转字」时才用）。两层可以各自动同一属性。' +
       '其余形态照旧：{ css } / { preset, duration?, delay?, loop?, easing? } / ' +
       '{ keys:[{ at, opacity?, x?, y?, sx?, sy?, rot?, blur? }], duration?, delay?, easing? }' +
       '（旧式：at 为 0..1 或 { beat:n }，会按属性拆成多条轨道，t = delay + at × duration）。' +

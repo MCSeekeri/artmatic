@@ -524,6 +524,8 @@ export interface TypographyCapabilities {
     tracks: {
       form: string;
       prop: string;
+      /** 作用层：`content`（缺省，只动内容）/ `box`（整个元素框，含文本框底板与边框）。 */
+      target: string;
       channels: { id: string; unit: string; identity: number }[];
       keys: { t: string; v: string; ease: string };
       derived: string;

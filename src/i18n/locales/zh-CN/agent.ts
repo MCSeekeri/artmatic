@@ -161,6 +161,7 @@ export const agent = {
   'agent.typo.badShape': '未知图形 {shape}',
   'agent.typo.badAnimation': '动画入参非法（需要 css，或 preset 字段，或 2..20 个 keys；预设名见 get_typography_capabilities().animations.presets）',
   'agent.typo.badAnimationCss': '自定义 CSS 动画被拒绝：{reason}',
+  'agent.typo.badAnimTarget': '动画 target 只能是 content（只动内容）或 box（整个元素框，含文本框底板与边框），收到 {target}',
   'agent.typo.badTransform3d': 'transform3d 必须是对象（可只给要改的子项）或 null',
   'agent.typo.autoHeightNotText': '元素 {id} 不是文本元素，没有 autoHeight',
   'agent.typo.keyNotImage': '元素 {id} 不是图片元素：key / quad 只用于图片',

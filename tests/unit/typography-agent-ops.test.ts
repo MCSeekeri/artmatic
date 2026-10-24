@@ -549,6 +549,87 @@ describe('动画原语', () => {
     expect(again.animation.direction).toBe('alternate');
   });
 
+  it('作用层缺省 = box；content 是显式 opt-in 且能原样读回', () => {
+    // 缺省：不写键 = box（整个元素框）。读回形状**总是**带 target。
+    const plain = parseAnimationInput({
+      prop: 'rot',
+      keys: [
+        { t: 0, v: 0 },
+        { t: 1, v: 36 },
+      ],
+    });
+    expect(plain.ok).toBe(true);
+    if (!plain.ok) return;
+    expect(plain.animation.target).toBeUndefined();
+    expect(animationView(plain.animation).target).toBe('box');
+
+    const boxed = parseAnimationInput({
+      prop: 'rot',
+      keys: [
+        { t: 0, v: 0 },
+        { t: 1, v: 36 },
+      ],
+      target: 'box',
+    });
+    expect(boxed.ok).toBe(true);
+    if (!boxed.ok) return;
+    expect(boxed.animation.target).toBe('box');
+    expect(animationView(boxed.animation).target).toBe('box');
+
+    // content 必须能往返：v18 迁移把旧工程的动画钉成 content，省略它就会
+    // 在读回再写回时落回 box（老工程「只转字」变「整块转」）。
+    const content = parseAnimationInput({
+      prop: 'rot',
+      keys: [
+        { t: 0, v: 0 },
+        { t: 1, v: 36 },
+      ],
+      target: 'content',
+    });
+    expect(content.ok).toBe(true);
+    if (!content.ok) return;
+    expect(content.animation.target).toBe('content');
+    const view = animationView(content.animation);
+    expect(view.target).toBe('content');
+    const again = parseAnimationInput(view);
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.animation.target).toBe('content');
+  });
+
+  it('target 写错时整条拒绝（不静默回落缺省层）', () => {
+    const bad = parseAnimationInput({
+      prop: 'rot',
+      keys: [
+        { t: 0, v: 0 },
+        { t: 1, v: 36 },
+      ],
+      target: 'element',
+    });
+    expect(bad.ok).toBe(false);
+  });
+
+  it('legacy keys / preset 展开出的每一条轨道都带上 target', () => {
+    const legacy = parseAnimationInput({
+      keys: [
+        { at: 0, opacity: 0, x: 0 },
+        { at: 1, opacity: 1, x: 20 },
+      ],
+      target: 'box',
+    });
+    expect(legacy.ok).toBe(true);
+    if (!legacy.ok) return;
+    expect(legacy.animations.length).toBeGreaterThan(1);
+    expect(legacy.animations.every((a) => a.target === 'box')).toBe(true);
+
+    // 预设会被展开成轨道，target 不能在展开时丢掉。
+    const preset = parseAnimationInput({ preset: 'fade-in', target: 'box' });
+    expect(preset.ok).toBe(true);
+    if (!preset.ok) return;
+    expect(preset.animations.length).toBeGreaterThan(0);
+    expect(preset.animations.every((a) => a.target === 'box')).toBe(true);
+  });
+
   it('自定义 CSS：裸 keyframes 体与「块 + 简写」两种写法都收', () => {
     const legacy = parseAnimationInput({ css: 'from{opacity:0}to{opacity:1}', duration: 0.4 });
     expect(legacy.ok).toBe(true);

@@ -25,11 +25,11 @@ import {
 } from '../typography/theme';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
-import { migrateProjectAnimations } from '../typography/animation-migrate';
+import { migrateProjectAnimations, pinAnimationTargets } from '../typography/animation-migrate';
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -677,6 +677,22 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
       });
     }
     return { ...project, schemaVersion: 17 };
+  },
+
+  /**
+   * v17 → v18：排版动画的**作用层**从「隐式 = 内容层」变成显式字段。
+   *
+   * 缺省改成了 `box`（整块一起动）—— 因为「给文本框设个旋转」在所有既有工具里
+   * 都是整块转，缺省 `content` 才是那个会被当成 bug 的行为。代价是 v17 及以前
+   * 的工程里那些**没写键**的动画会被当成 `box`，所以必须在这里把它们显式钉成
+   * `content`，否则老工程一打开动画就全变样了。
+   *
+   * 转换本身是纯函数（`typography/animation-migrate.ts::pinAnimationTargets`），
+   * 幂等；没有排版文档的工程原样返回。
+   */
+  17: (p) => {
+    const { project } = pinAnimationTargets(p);
+    return { ...project, schemaVersion: 18 };
   },
 };
 

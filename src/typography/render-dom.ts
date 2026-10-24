@@ -9,18 +9,25 @@
  * 结构（从外到内）：
  *   .typo-doc            文档根：尺寸、裁切、isolation
  *     <style>            动画面板（唯一注入点）
- *     .typo-el           几何 + 旋转 + 不透明度 + 混合模式
- *       .typo-anim       动画层（每个动画一层，可嵌套）
- *         content        文本 / SVG / 图片
+ *     .typo-box          动画层 target:'box'（每个 box 动画一层，可嵌套，**只在有
+ *                        这类动画时存在**）：包住整个元素，几何由它承担
+ *       .typo-el         几何 + 旋转 + 不透明度 + 混合模式 + 文本框底板 / 边框
+ *         .typo-anim     动画层 target:'content'（缺省，每个动画一层，可嵌套）
+ *           content      文本 / SVG / 图片
  *
  * 为什么把动画单独放一层：动画预设大量使用 transform，而外层 .typo-el 的
  * transform 被旋转占用了。放在同一元素上会互相覆盖。
+ *
+ * 为什么 box 动画层要放在外壳**之外**：CSS 动画只重绘被选中的节点及其子树，
+ * 落在外壳之内永远碰不到外壳自己的 `background-*` / `border`（`clip-path` 会
+ * 只裁到文字、`rotate` 只转文字）。外壳之外的包装层才能让「整块一起动」。
  */
 
-import { animationStyleSheet, ANIM_ID_ATTR } from './animation';
+import { animationStyleSheet, animTargetOf, ANIM_ID_ATTR } from './animation';
 import {
   animLayerStyle,
   applyDecls,
+  boxWrapStyle,
   docStyle,
   elementStyle,
   groupStyle,
@@ -129,6 +136,15 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const OFFLINE_ATTR = 'data-typo-offline';
 
 /**
+ * `target: 'box'` 的动画封装层标记（值 = 元素 id）。
+ *
+ * 它夹在 `.typo-doc` 与 `.typo-el` 之间，所以 `syncDocDom` / `syncGroupShells`
+ * 找外壳时**必须先解包**（见 `unwrapShell`）—— 只认直接子节点的话，
+ * 表现是「拖了半天画面纹丝不动」，且不报错。
+ */
+const BOX_ATTR = 'data-anim-box';
+
+/**
  * 结构签名：元素 id / 种类 / 顺序 / 动画 id 的组合。
  *
  * 舞台用它决定「要不要重建 DOM」：只有这些变了才重建，纯粹的拖拽（改 frame）
@@ -158,7 +174,10 @@ export function docSignature(
     doc.elements
       .map(
         (e) =>
-          `${e.id}:${e.kind}:${e.visible ? 1 : 0}:${e.animations.map((a) => a.id).join(',')}:${e.groupId ?? ''}`,
+          // `target` 参与签名：它决定动画层在外壳之外还是之内，是**结构**差异。
+          `${e.id}:${e.kind}:${e.visible ? 1 : 0}:${e.animations
+            .map((a) => `${a.id}${animTargetOf(a) === 'box' ? 'b' : ''}`)
+            .join(',')}:${e.groupId ?? ''}`,
       )
       .join('|') +
     `#g${(doc.groups ?? []).map((g) => g.id).join(',')}` +
@@ -238,11 +257,16 @@ function buildElement(
   theme: TypographyTheme,
   needs?: ElementScriptNeeds,
 ): HTMLElement | null {
+  // `target: 'box'` 的动画层包在外壳**之外**（见文件头），所以外壳这时退化成
+  // 「铺满外层」的一层，几何由最外层承担。
+  const boxAnims = el.animations.filter((a) => animTargetOf(a) === 'box');
+  const contentAnims = el.animations.filter((a) => animTargetOf(a) !== 'box');
+
   const shell = document.createElement('div');
   shell.className = `typo-el typo-el-${el.kind}`;
   shell.setAttribute(EL_ID_ATTR, el.id);
   // theme 是给阴影色用的（阴影色可以是配色方案引用）。
-  applyDecls(shell, elementStyle(el, theme));
+  applyDecls(shell, elementStyle(el, theme, { inset: boxAnims.length > 0 }));
   // 文本框背景 / 边框画在**外壳**上，在文字之下；字形填充在内层另一个节点
   // （`background-clip: text`），两者互不干扰 —— 见 css.ts::textBoxStyle。
   if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
@@ -250,7 +274,7 @@ function buildElement(
   // 动画层：doc.elements[i].animations 的第一个在最外层。
   // 嵌套而不是并列，是因为多个动画会各自写 transform，并列只能有一个生效。
   let cursor: HTMLElement = shell;
-  for (const anim of el.animations) {
+  for (const anim of contentAnims) {
     const layer = document.createElement('div');
     layer.className = 'typo-anim';
     layer.setAttribute(ANIM_ID_ATTR, anim.id);
@@ -276,7 +300,26 @@ function buildElement(
   const content = buildContent(el, opts, theme, needs?.chars === true);
   if (!content) return null;
   cursor.appendChild(content);
-  return shell;
+
+  /*
+   * `target: 'box'`：整块（含文本框底板 / 边框）一起动的动画层。
+   *
+   * 顺序约定与 content 层一致 —— `el.animations` 里第一个在最外层，所以这里
+   * **倒序**建、逐层包住。只有最外层承担 frame 的定位，内层都是 `inset: 0`
+   * （否则 left/top 会被算两遍）。
+   */
+  let node: HTMLElement = shell;
+  for (let i = boxAnims.length - 1; i >= 0; i--) {
+    const anim = boxAnims[i]!;
+    const wrap = document.createElement('div');
+    wrap.className = 'typo-box';
+    wrap.setAttribute(BOX_ATTR, el.id);
+    wrap.setAttribute(ANIM_ID_ATTR, anim.id);
+    applyDecls(wrap, i === 0 ? boxWrapStyle(el) : animLayerStyle());
+    wrap.appendChild(node);
+    node = wrap;
+  }
+  return node;
 }
 
 /** 脚本 Canvas：铺满元素框，**先于内容** append（内容画在它上面）。 */
@@ -532,7 +575,8 @@ export function syncDocDom(host: HTMLElement, doc: TypographyDocument, opts: Bui
 
   const shells = new Map<string, HTMLElement>();
   for (const child of Array.from(root.children)) {
-    const el = child as HTMLElement;
+    // 直接子节点可能被 box 动画层包住（target:'box'），先剥到外壳本体。
+    const el = unwrapShell(child as HTMLElement);
     const id = el.getAttribute(EL_ID_ATTR);
     if (id) shells.set(id, el);
   }
@@ -574,6 +618,41 @@ function syncGroupShells(root: HTMLElement, doc: TypographyDocument, theme: Typo
   }
 }
 
+/**
+ * 剥掉 `target:'box'` 的动画层，拿到 `.typo-el` 外壳。
+ *
+ * 不剥的后果是**静默失效**：`syncDocDom` 收集 shells 时匹配不到 `data-el-id`，
+ * 于是整轮同步全部 continue —— 拖动元素画面不动，也没有报错。
+ */
+function unwrapShell(node: HTMLElement): HTMLElement {
+  let cur = node;
+  while (cur.hasAttribute(BOX_ATTR)) {
+    const next = cur.firstElementChild as HTMLElement | null;
+    if (!next) break;
+    cur = next;
+  }
+  return cur;
+}
+
+/**
+ * 就地刷新 `target:'box'` 的动画层几何。
+ *
+ * 只有**最外层**承担 frame 定位（`boxWrapStyle`），内层是 `inset: 0` 的填充层：
+ * 每层都写 left/top 的话偏移会被累加（拖一下元素，动画层跑出两倍距离）。
+ */
+function syncBoxLayers(shell: HTMLElement, el: TypographyElement): void {
+  const layers: HTMLElement[] = [];
+  let p = shell.parentElement;
+  while (p && p.hasAttribute(BOX_ATTR)) {
+    layers.push(p);
+    p = p.parentElement;
+  }
+  for (let i = 0; i < layers.length; i++) {
+    const isOutermost = i === layers.length - 1;
+    applyDecls(layers[i]!, isOutermost ? boxWrapStyle(el) : animLayerStyle());
+  }
+}
+
 function syncStyleSheet(root: HTMLElement, doc: TypographyDocument): void {  // 第一个子节点是 <style>（buildDocDom 里 prepend 的形态）。动画参数改了
   // 但动画 id 没变时，签名不变、不重建 —— 全靠这里把新参数写回去。
   const sheet = animationStyleSheet(doc);
@@ -599,13 +678,16 @@ function syncElement(
   theme: TypographyTheme,
   needs?: ElementScriptNeeds,
 ): void {
-  applyDecls(shell, elementStyle(el, theme));
+  const boxCount = el.animations.filter((a) => animTargetOf(a) === 'box').length;
+  syncBoxLayers(shell, el);
+  applyDecls(shell, elementStyle(el, theme, { inset: boxCount > 0 }));
   // 与 buildElement 同一份声明：就地同步时切回「无填充」由它复位。
   if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
 
   // 钻进动画层，停在脚本层（老 DOM 没有脚本层时直接停在内容节点上）。
+  const contentCount = el.animations.length - boxCount;
   let cursor: Element | null = shell.firstElementChild;
-  for (let i = 0; i < el.animations.length; i++) {
+  for (let i = 0; i < contentCount; i++) {
     const layer = cursor as HTMLElement | null;
     if (!layer || !layer.hasAttribute(ANIM_ID_ATTR)) return;
     applyDecls(layer, animLayerStyle());

@@ -229,16 +229,24 @@ function elementFilter(el: TypographyElement, theme?: ThemeArg): string {
  * （`syncDocDom`）没有删除语义，只 set 不 delete —— 少写一个键，从「启用」
  * 切回「关闭」时上一份的值会留在元素上（见 textBoxStyle 的同一条纪律）。
  *
+ * `inset`：由外层 `.typo-box`（`target: 'box'` 的动画层）承担几何时，外壳退化成
+ * 「铺满外层」的一层 —— 否则 frame 的 left/top 会被算**两遍**（外层一次、内层一次）。
+ *
  * `theme` 只有阴影色需要（阴影色可以是配色方案引用）。缺省 = 默认方案。
  */
-export function elementStyle(el: TypographyElement, theme?: ThemeArg): CssDecls {
+export function elementStyle(
+  el: TypographyElement,
+  theme?: ThemeArg,
+  opts: { inset?: boolean } = {},
+): CssDecls {
   const t3 = el.transform3d;
+  const inset = opts.inset === true;
   return {
     position: 'absolute',
-    left: px(el.frame.x),
-    top: px(el.frame.y),
-    width: px(el.frame.w),
-    height: px(el.frame.h),
+    left: inset ? '0' : px(el.frame.x),
+    top: inset ? '0' : px(el.frame.y),
+    width: inset ? '100%' : px(el.frame.w),
+    height: inset ? '100%' : px(el.frame.h),
     transform: t3
       ? transform3dCss(el.frame.rot, t3)
       : el.frame.rot
@@ -253,6 +261,31 @@ export function elementStyle(el: TypographyElement, theme?: ThemeArg): CssDecls 
     'pointer-events': 'none',
     'user-select': 'none',
     'box-sizing': 'border-box',
+  };
+}
+
+/**
+ * `target: 'box'` 的动画层：包住整个外壳（含文本框底板 / 边框），并**承担 frame
+ * 的定位**（外壳这时退化成 `inset: 0` 的填充层，见 `elementStyle` 的 `inset`）。
+ *
+ * 为什么不能像 content 层那样只写 `inset: 0`：那一层是 `.typo-doc` 的直接子节点，
+ * `100%` 会等于**整张画布** —— `transform-origin: 50% 50%` 就成了画布中心，
+ * 「原地旋转」会变成「绕画布中心甩」。
+ *
+ * 不写 `transform` / `opacity` / `filter`：它们要么归动画（CSS 动画自带），
+ * 要么归外壳（`elementStyle`）。同步时只 set 不 delete，写了就会盖掉别的层。
+ */
+export function boxWrapStyle(el: TypographyElement): CssDecls {
+  return {
+    position: 'absolute',
+    left: px(el.frame.x),
+    top: px(el.frame.y),
+    width: px(el.frame.w),
+    height: px(el.frame.h),
+    'transform-origin': '50% 50%',
+    'box-sizing': 'border-box',
+    'pointer-events': 'none',
+    'user-select': 'none',
   };
 }
 

@@ -228,6 +228,19 @@ function validateAnimationInput(animation: unknown, animations: unknown): void {
   const list = Array.isArray(animations) ? animations : animation !== undefined ? [animation] : [];
   for (const item of list) {
     if (item === null) continue;
+    /*
+     * `target` 单独报一句：写错成 `'element'` / `'text'` 时 `parseAnimationInput`
+     * 只会回「入参非法」，而模型不会怀疑是拼写 —— 它会去改 keys 或 preset。
+     */
+    if (isRecordLike(item)) {
+      const target = item.target;
+      if (target !== undefined && target !== 'content' && target !== 'box') {
+        throw new ControlFailure('invalid-argument', tr('agent.typo.badAnimTarget', { target: String(target) }), {
+          target,
+          validIds: ['content', 'box'],
+        });
+      }
+    }
     const parsed = parseAnimationInput(item);
     if (parsed.ok) continue;
     if (parsed.reason) {

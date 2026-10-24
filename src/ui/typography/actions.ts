@@ -49,11 +49,13 @@ import {
 } from '../../typography/geometry';
 import { applyElementAnimations, applyElementFormat } from '../../typography/format-painter';
 import {
+  animTargetOf,
   createCustomAnimation,
   createPresetAnimation,
   createTracksAnimation,
   parseCustomCss,
   type AnimPreset,
+  type AnimTarget,
   type AnimTiming,
   type TracksAnimation,
 } from '../../typography/animation';
@@ -1057,11 +1059,21 @@ export interface TypographyActions {
 
   /* 关键帧（结构化轨道，一条动画一个属性） */
   /**
-   * 给选中元素加一条属性轨道。`atSec` 缺省 = 片段起点；同一属性已有时不重复加
-   * （返回时调用方自己按 prop 找回那条）。
+   * 给选中元素加一条属性轨道。`atSec` 缺省 = 片段起点；同一 **(属性, 作用层)**
+   * 已有时不重复加（返回时调用方自己按 prop + target 找回那条）。
+   *
+   * `target` 缺省 = `'box'`（整个元素框，含文本框底板与边框）；`'content'`
+   * 只动文字 / 图形本身。已有轨道换层要删了重建 —— 它是 DOM 结构差异。
    */
-  addTrack(prop: string, initial?: number | string, atSec?: number): void;
+  addTrack(prop: string, initial?: number | string, atSec?: number, target?: AnimTarget): void;
   removeTrack(animId: string): void;
+  /**
+   * 把一条动画的作用层改成 `box`（整个元素框）或 `content`（只动内容）。
+   *
+   * 换层会让动画层在 DOM 里换位置（`.typo-box` 在外面 / `.typo-anim` 在里面），
+   * 所以 `docSignature` 认它、下一帧整棵重建 —— 动画不会中断（seek 按时间重算）。
+   */
+  setTrackTarget(animId: string, target: AnimTarget): void;
   /**
    * 整条轨道**循环播放**（CSS `animation-iteration-count: infinite`）。
    *
@@ -2580,13 +2592,20 @@ export function createTypographyActions(): TypographyActions {
             dropProps: [],
           });
           /*
-           * 预设动到的属性**替换**同属性轨道。
+           * 预设动到的属性**替换**同属性轨道（同一作用层内）。
            *
-           * 同一元素上两条同属性动画：同层会互相覆盖（后写的赢），嵌套层会把矩阵
-           * 乘起来 —— 两种都不是用户想要的；面板里还会出现两行同名属性。
+           * 同一层里两条同属性动画会互相覆盖（后写的赢）；而 `content` 与 `box`
+           * 是两条独立的 DOM 层、不互相覆盖 —— 按 prop 一刀切会把用户设在整块上的
+           * 轨道顺手删掉。面板里也会出现两行同名属性（那一行有方块标记）。
            */
           const keep = el.animations.filter(
-            (a) => !incoming.some((t) => a.kind === 'tracks' && a.prop === t.prop),
+            (a) =>
+              !incoming.some(
+                (t) =>
+                  a.kind === 'tracks' &&
+                  a.prop === t.prop &&
+                  animTargetOf(a) === animTargetOf(t),
+              ),
           );
           el.animations = [...keep, ...incoming];
         }
@@ -2636,12 +2655,23 @@ export function createTypographyActions(): TypographyActions {
 
     /* ------------------------------------------------ 关键帧（结构化轨道） */
 
-    addTrack(prop, initial, atSec) {
+    addTrack(prop, initial, atSec, target: AnimTarget = 'box') {
       const at = Math.max(0, atSec ?? 0);
+      const want = target === 'content' ? 'content' : 'box';
       editorState.commit(tr('typo.undo.addAnimTrack'), (doc) => {
         for (const el of anyElement(doc)) {
-          // 同一属性只允许一条轨道（见 applyPreset 的注释）。
-          if (el.animations.some((a) => a.kind === 'tracks' && a.prop === prop)) continue;
+          /*
+           * 同一 **(属性, 作用层)** 只允许一条轨道（见 applyPreset 的注释）。
+           * 两层各一条是合法的：它们落在不同 DOM 节点上，不会互相覆盖；
+           * 同一层里同属性才会（`transform` 只有最后一条生效）。
+           */
+          if (
+            el.animations.some(
+              (a) => a.kind === 'tracks' && a.prop === prop && animTargetOf(a) === want,
+            )
+          ) {
+            continue;
+          }
           const v = initial ?? identityValue(prop);
           /*
            * 起手两根**零变化**的帧：一是给用户一根可抓的时长（单帧轨道只有 1ms，
@@ -2649,10 +2679,17 @@ export function createTypographyActions(): TypographyActions {
            */
           el.animations = [
             ...el.animations,
-            createTracksAnimation(newId(), prop, [
-              { t: at, v },
-              { t: at + DEFAULT_TRACK_SEC, v },
-            ]),
+            createTracksAnimation(
+              newId(),
+              prop,
+              [
+                { t: at, v },
+                { t: at + DEFAULT_TRACK_SEC, v },
+              ],
+              // 新轨道**显式**写作用层：缺省虽然是 box，但写出来才能在读回 /
+              // 复制 / 迁移时一眼看出它落在哪一层（与旧数据区分开）。
+              { target: want },
+            ),
           ];
         }
       });
@@ -2662,6 +2699,35 @@ export function createTypographyActions(): TypographyActions {
       editorState.commit(tr('typo.undo.removeAnimTrack'), (doc) => {
         for (const el of anyElement(doc)) {
           el.animations = el.animations.filter((a) => a.id !== animId);
+        }
+      });
+    },
+
+    setTrackTarget(animId, target) {
+      const want: AnimTarget = target === 'content' ? 'content' : 'box';
+      editorState.commit(tr('typo.undo.trackTarget'), (doc) => {
+        // 旧形态（preset / custom）也认 id：换层对它们同样有效，不必先迁移。
+        for (const el of anyElement(doc)) {
+          const a = el.animations.find((x) => x.id === animId);
+          if (!a) continue;
+          /*
+           * 同一层里同属性只能有一条（同层会互相覆盖）。换过去时把目标层那条
+           * **替换**掉 —— 与 `applyPreset` / `addTrack` 的判重同一条口径。
+           */
+          if (a.kind === 'tracks') {
+            const prop = a.prop;
+            el.animations = el.animations.filter(
+              (x) =>
+                !(
+                  x.id !== animId &&
+                  x.kind === 'tracks' &&
+                  x.prop === prop &&
+                  animTargetOf(x) === want
+                ),
+            );
+          }
+          const moved = el.animations.find((x) => x.id === animId);
+          if (moved) moved.target = want;
         }
       });
     },
