@@ -48,6 +48,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   万花筒: 'wan hua tong',
   极坐标: 'ji zuo biao',
   缩放: 'suo fang',
+  缩小居中: 'suo xiao ju zhong',
   圆筒变形: 'yuan tong bian xing',
   径向模糊: 'jing xiang mo hu',
   浮雕: 'fu diao',
