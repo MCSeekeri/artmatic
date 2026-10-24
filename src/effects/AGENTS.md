@@ -160,7 +160,8 @@
 ```
 uniform sampler2D u_overlay;   // Canvas2D 画好的框/标签/连线（straight alpha）
 uniform int   u_boxCount;      // 0..12
-uniform vec4  u_boxA[12];      // xy = 中心、zw = 半宽半高（均 0..1，左上原点）
+uniform vec4  u_boxA[12];      // xy = 中心、zw = 半宽半高（0..1，**GL 空间：v 向上**）
+uniform float u_boxFade[12];   // 每框的绘制不透明度（出场/消失动画）
 ```
 
 - 服务是 `engine/box-tracker.ts`（`BoxTracker`）。**判据只有一条**：主 pass 声明了
@@ -171,7 +172,13 @@ uniform vec4  u_boxA[12];      // xy = 中心、zw = 半宽半高（均 0..1，�
      **之前**。它要切 program / FBO / 激活纹理单元，插在纹理绑定之后会把
      `u_texture` 顶掉（本文件记过两次真实事故）。
   2. `ctx.tracker?.bind(prog, inst)` —— 在 `.tex('u_texture').tex('u_original')`
-     之后，只做 `prog.tex('u_overlay', …)` 与 `uniform1i/uniform4fv`。
+     之后，只做 `prog.tex('u_overlay', …)` 与 `uniform1i/uniform4fv/uniform1fv`。
+- **掩码的几何必须取自「画到叠层上的那一份」**（`Entry.views`），不要另算：
+  - `cy` 是 Canvas2D 的**左上原点**，而片元里 `vUv.y` 向上（同 `placement.frag`
+    那条约定）⇒ 进 uniform 前要 `1 - cy`。写错不报错，症状是「框内效果整块
+    上下镜像」，与「检测框错位」看起来一样。
+  - `zw` 要乘 `BoxView.scale`（出场/消失时框在缩放），`u_boxFade` 要取
+    `BoxView.alpha`。漏掉的表现是「框在动、反色块不动」「框没了、反色块还在」。
 - **`Program.u()` 装不下 48 个 float**：数组 uniform 必须直接 `uniform4fv`
   （location 已去掉 `[0]` 后缀）。别试图用 `floats()` 派发。
 - **框内效果只支持内置的单 pass 观感**（反色 / 黑白 / 阈值 / 色阶 / 色相 /
@@ -193,8 +200,8 @@ uniform vec4  u_boxA[12];      // xy = 中心、zw = 半宽半高（均 0..1，�
 - **反色的强度必须是 1**（或者 0）：`mix(c, 1-c, 0.5)` 恒等于 0.5 灰，
   半强度反色是一块死灰补丁。需要「弱一点」就去色或直接关掉。
 - 守卫：`tests/e2e/box-tracker.spec.ts`（出框 / 换框线颜色画面跟着变 / 探针尺寸
-  不随渲染档位变）。**不要**断言「同一 t 两渲逐字节相同」—— 它持有跨帧状态，
-  seek 时清空（与 `feedback` 类特效同一处置）。
+  不随渲染档位变 / **框内效果的像素范围与框线重合**）。**不要**断言「同一 t 两渲
+  逐字节相同」—— 它持有跨帧状态，seek 时清空（与 `feedback` 类特效同一处置）。
 
 ### 字形图集（`u_atlas` / `u_glyphCount` / `u_glyphCols`）
 

@@ -53,7 +53,9 @@ export const REVEAL_MODE: Record<BakeReveal, number> = {
 
 /** 有状态模拟句柄：纯数据，不碰 GL（单测可以直接打）。 */
 export interface SimHandle {
+  /** 列数。**两轴可以不等** —— 网格模拟的尺寸是 `width × height`（见 grid-dims.ts）。 */
   readonly gridW: number;
+  /** 行数。 */
   readonly gridH: number;
   readonly stepsPerSec: number;
   /**

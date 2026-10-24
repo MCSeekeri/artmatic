@@ -104,7 +104,7 @@ test('rule110：代际着色与二值着色是两张不同的图', async ({ page
 
 test('生命游戏：手绘滑翔机落上网格，且与随机撒种不同', async ({ page }) => {
   await boot(page);
-  const common = { size: 64, rate: 12 };
+  const common = { width: 64, height: 64, rate: 12 };
   const pattern = presetParamValue('glider');
 
   await buildStage(page, {
@@ -136,7 +136,7 @@ test('生命游戏：手绘滑翔机落上网格，且与随机撒种不同', as
 
 test('生命游戏：B/S 规则族（HighLife）与邻域切换都改变画面', async ({ page }) => {
   await boot(page);
-  const common = { size: 64, rate: 12, seedMode: 'random', density: 0.45 };
+  const common = { width: 64, height: 64, rate: 12, seedMode: 'random', density: 0.45 };
   const conway = 6152;
   const highLife = 6216; // B36/S23
 
@@ -226,7 +226,7 @@ test('图案编辑器：画一笔并应用，缩略图与 store 都跟着变', a
     source: {
       type: 'algo',
       generator: 'game-of-life',
-      params: { size: 64, rate: 12, seedMode: 'pattern', pattern: '' },
+      params: { width: 64, height: 64, rate: 12, seedMode: 'pattern', pattern: '' },
     },
     end: 8,
   });
@@ -271,7 +271,7 @@ test('图案编辑器：预设与清空按钮各司其职', async ({ page }) => 
     source: {
       type: 'algo',
       generator: 'game-of-life',
-      params: { size: 64, rate: 12, seedMode: 'pattern', pattern: '' },
+      params: { width: 64, height: 64, rate: 12, seedMode: 'pattern', pattern: '' },
     },
     end: 8,
   });
@@ -290,6 +290,140 @@ test('图案编辑器：预设与清空按钮各司其职', async ({ page }) => 
   await page.getByTestId('algo-param-pattern-clear').click();
   expect(await paramOf(page, 'gol-preset', 'pattern')).toBe('');
   await expect(page.getByTestId('algo-param-pattern-clear')).toHaveCount(0);
+});
+
+/* ------------------------------------------------ DOM：从媒体池图片导入图案 */
+
+/** 64×64、**上半不透明 / 下半透明**的 PNG 字节（现场造，不进仓库）。 */
+async function makeHalfOpaquePng(page: Page): Promise<number[]> {
+  return page.evaluate(async () => {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, 64, 32); // 下半留空 = 完全透明
+    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png'));
+    return blob ? Array.from(new Uint8Array(await blob.arrayBuffer())) : [];
+  });
+}
+
+/** 64×64、**左半不透明**的 SVG 文本字节（判据同上，只是另一半轴）。 */
+function makeHalfOpaqueSvg(): Buffer {
+  return Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' +
+      '<rect x="0" y="0" width="32" height="64" fill="#000"/></svg>',
+  );
+}
+
+/**
+ * 走真实导入路径把一张图放进媒体池（右键轨道行 → 导入图片 → 文件选择器）。
+ *
+ * 导入需要一个轨道行。辅助轨落在 demo 轨之下，被测的源轨是整帧 tint 输出，
+ * 会把它盖住 —— 不用事后清理。
+ */
+async function importMedia(
+  page: Page,
+  name: string,
+  mimeType: string,
+  bytes: Buffer,
+): Promise<void> {
+  const aux = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { addTrack: (kind: 'visual', name?: string) => string } };
+    }).__artmatic;
+    return A.store.addTrack('visual', 'aux');
+  });
+
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser', { timeout: 15_000 }),
+    (async () => {
+      await page
+        .locator(`[data-testid=tl-row][data-track-id="${aux}"]`)
+        .click({ button: 'right', position: { x: 30, y: 14 } });
+      await page.getByTestId('ctx-image').click();
+    })(),
+  ]);
+  await chooser.setFiles({ name, mimeType, buffer: bytes });
+
+  // 导入是异步的（解码 → 登记素材 → 建片段）。**SVG 这条尤其重要**：
+  // `createImageBitmap` 不接受 SVG blob，走的是 `media-assets` 的 `<img>` 兜底。
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            Object.values(
+              (window as never as {
+                __artmatic: { store: { project: { assets: Record<string, { kind: string }> } } };
+              }).__artmatic.store.project.assets,
+            ).filter((a) => a.kind === 'image').length,
+        ),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(0);
+}
+
+/** 图案编辑器 →「从素材导入」→ 选中最新那张 → 应用。 */
+async function pickPatternFromAsset(page: Page): Promise<void> {
+  await page.getByTestId('algo-param-pattern-edit').click();
+  await page.getByTestId('pattern-editor-import').click();
+  const item = page.getByTestId('pattern-asset-item').last();
+  await expect(item).toBeVisible();
+  await item.click();
+  await page.getByTestId('pattern-editor-apply').click();
+  await expect(page.getByTestId('pattern-editor')).toHaveCount(0);
+}
+
+/** 建一条网格 64² 的图案种子生命游戏，并断言导入后的位图。 */
+async function importPatternAndCheck(
+  page: Page,
+  clipId: string,
+  name: string,
+  mimeType: string,
+  bytes: Buffer,
+  expectedLive: number,
+): Promise<void> {
+  await boot(page);
+  await buildStage(page, {
+    id: clipId,
+    source: {
+      type: 'algo',
+      generator: 'game-of-life',
+      params: { width: 64, height: 64, rate: 12, seedMode: 'pattern', pattern: '' },
+    },
+    end: 8,
+  });
+  await selectClip(page, clipId);
+
+  await importMedia(page, name, mimeType, bytes);
+  // 导入会改选中（新片段），把源片段重新选回来，检查器才渲染出图案参数。
+  await selectClip(page, clipId);
+  await pickPatternFromAsset(page);
+
+  const stored = await paramOf(page, clipId, 'pattern');
+  const bm = decodePattern(String(stored));
+  expect(bm, 'store 里的图案串应当可解码').not.toBeNull();
+  // 采样分辨率 = 网格分辨率：图案盖回去是恒等映射，不是缩在中间的一小块。
+  expect([bm!.w, bm!.h]).toEqual([64, 64]);
+  expect(liveCount(bm!)).toBe(expectedLive);
+
+  await settle(page, 0);
+  expect(await meanAt(page, 0), '活格应该真的渲染出来').toBeGreaterThan(0);
+}
+
+test('图案导入：媒体池 PNG 按不透明度采样成初始图案', async ({ page }) => {
+  // 字节在 about:blank 上造（只需要 canvas），省掉「先进应用再造图」。
+  const bytes = await makeHalfOpaquePng(page);
+  expect(bytes.length).toBeGreaterThan(100);
+  // 上半（32 行 × 64 列）不透明 → 活；下半完全透明 → 死。
+  await importPatternAndCheck(page, 'gol-import-png', 'seed.png', 'image/png', Buffer.from(bytes), 32 * 64);
+});
+
+test('图案导入：SVG 走 `<img>` 兜底解码，同样按不透明度采样', async ({ page }) => {
+  // 左半（64 行 × 32 列）不透明 → 2048 格活。
+  // 这条同时钉住媒体池那条链路：`createImageBitmap` 不接受 SVG blob。
+  await importPatternAndCheck(page, 'gol-import-svg', 'seed.svg', 'image/svg+xml', makeHalfOpaqueSvg(), 32 * 64);
 });
 
 /* ------------------------------------------------------ DOM：试炼场也要接上 */

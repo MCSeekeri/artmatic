@@ -164,10 +164,17 @@ function buildStack(project: Project, t: number): Stack {
   一张探针 Target + 一张叠层纹理，只增不减就是显存泄漏的老形态。
 - **纹理纪律**：建/传纹理前先切 `scratchUnit`（`Program.tex()` 会把采样本绑到
   0..n 并留下最后一个为激活态）。这条在 `effects/AGENTS.md` 里记过两次事故。
+- **三套坐标，混了就「框内效果和框不同步」**：检测/状态/`Canvas2D` 用
+  **左上原点**（探针 pass 已经把回读行序翻成与 canvas 同序），片元里 `vUv.y`
+  **向上**，上传叠层时又 `UNPACK_FLIP_Y = true`。所以叠层纹理与 `vUv` 天然对齐，
+  而 `u_boxA` 的 `cy` 必须由装配侧翻成 `1 - cy`。本文件与 `effects/AGENTS.md`
+  都记了这条：写错时的症状是「反色块整体上下镜像」，看起来像检测器错位。
+- **掩码与绘制同源**：`Entry.views`（含出场/消失的 `scale`/`alpha`）是唯一几何来源 ——
+  绘制与 `u_boxA`/`u_boxFade` 都从它取，不要各自再算一遍。
 
 测试：`tests/unit/blob-track.test.ts`（纯算法）+ `tests/e2e/box-tracker.spec.ts`
-（真的出框 / 换色跟着变 / 探针不随档位变）。读数为 `renderer.trackerStats()`，
-`__artmatic.trackerStats()` 与 `__lab.trackerStats()` 都通到它。
+（真的出框 / 换色跟着变 / 探针不随档位变 / 框内效果与框线重合）。读数为
+`renderer.trackerStats()`，`__artmatic.trackerStats()` 与 `__lab.trackerStats()` 都通到它。
 
 ---
 

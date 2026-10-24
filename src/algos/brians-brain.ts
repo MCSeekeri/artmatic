@@ -19,6 +19,7 @@
 
 import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCentered } from './pattern-codec';
+import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import type { GeneratorDef, SimHandle } from './types';
 
@@ -36,15 +37,15 @@ const SNAPSHOT_OPTS = {
 };
 
 /** 一步（环面）。纯函数，单测直接打。 */
-export function briansStep(cur: Uint8Array, n: number): Uint8Array {
-  const next = new Uint8Array(n * n);
-  for (let y = 0; y < n; y++) {
-    const yU = (y === 0 ? n - 1 : y - 1) * n;
-    const yD = (y === n - 1 ? 0 : y + 1) * n;
-    const yM = y * n;
-    for (let x = 0; x < n; x++) {
-      const xL = x === 0 ? n - 1 : x - 1;
-      const xR = x === n - 1 ? 0 : x + 1;
+export function briansStep(cur: Uint8Array, w: number, h: number): Uint8Array {
+  const next = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const yU = (y === 0 ? h - 1 : y - 1) * w;
+    const yD = (y === h - 1 ? 0 : y + 1) * w;
+    const yM = y * w;
+    for (let x = 0; x < w; x++) {
+      const xL = x === 0 ? w - 1 : x - 1;
+      const xR = x === w - 1 ? 0 : x + 1;
       const s = cur[yM + x]!;
       if (s === BB_FIRING) {
         next[yM + x] = BB_REFRACTORY;
@@ -73,35 +74,36 @@ export function createBriansBrain(
   params: Record<string, number | string>,
   seed: number,
 ): SimHandle {
-  const n = Math.max(32, Math.min(512, Math.round(Number(params.size) || 256)));
+  const { w, h } = gridSizeOf(params, BB_GRID);
+  const total = w * h;
   const stepsPerSec = Math.max(1, Number(params.rate) || 30);
 
   // TS 5.9 的泛型 TypedArray：显式标 Uint8Array（= ArrayBufferLike），
   // 否则 cur 被 infer 成 ArrayBuffer 版，briansStep 的返回值赋不进来。
-  let cur: Uint8Array = new Uint8Array(n * n);
+  let cur: Uint8Array = new Uint8Array(total);
   if (params.seedMode === 'pattern') {
     const bm = patternFromParam(params.pattern);
-    if (bm) stampCentered(cur, n, n, bm, BB_FIRING);
-    else seedRandom(cur, n, seed, Number(params.density) || 0.15);
+    if (bm) stampCentered(cur, w, h, bm, BB_FIRING);
+    else seedRandom(cur, seed, Number(params.density) || 0.15);
   } else {
-    seedRandom(cur, n, seed, Number(params.density) || 0.15);
+    seedRandom(cur, seed, Number(params.density) || 0.15);
   }
 
   let frame = 0;
   const snapshots = new SnapshotRing<Uint8Array>(SNAPSHOT_OPTS, cur);
-  const out = new Uint8Array(n * n);
+  const out = new Uint8Array(total);
 
   const stepTo = (target: number): void => {
     while (frame < target) {
-      cur = briansStep(cur, n);
+      cur = briansStep(cur, w, h);
       frame++;
       if (snapshots.shouldStore(frame)) snapshots.store(frame, cur);
     }
   };
 
   return {
-    gridW: n,
-    gridH: n,
+    gridW: w,
+    gridH: h,
     stepsPerSec,
     seek(simFrame: number): void {
       const target = Math.max(0, Math.floor(simFrame));
@@ -120,11 +122,14 @@ export function createBriansBrain(
 }
 
 /** 撒种密度默认 0.15：太密会立刻烧成一整片同步波，太稀则第一代就熄。 */
-function seedRandom(g: Uint8Array, n: number, seed: number, density: number): void {
+function seedRandom(g: Uint8Array, seed: number, density: number): void {
   const rnd = mulberry32(seed);
   const d = Math.max(0, Math.min(1, density));
-  for (let i = 0; i < n * n; i++) g[i] = rnd() < d ? BB_FIRING : BB_READY;
+  for (let i = 0; i < g.length; i++) g[i] = rnd() < d ? BB_FIRING : BB_READY;
 }
+
+/** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
+const BB_GRID = { min: 32, max: 512, fallback: 256 } as const;
 
 export const briansBrainDef: GeneratorDef = {
   id: 'brians-brain',
@@ -132,7 +137,8 @@ export const briansBrainDef: GeneratorDef = {
   kind: 'sim',
   volatile: ['rate', 'colorBg', 'colorLive'],
   params: [
-    { key: 'size', labelKey: 'algo.briansBrain.grid', type: 'range', min: 64, max: 512, step: 32, defaultValue: 256 },
+    { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
+    { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
     {
       key: 'seedMode',
       labelKey: 'algo.briansBrain.seedMode',

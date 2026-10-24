@@ -25,9 +25,13 @@
  */
 
 import { mulberry32 } from '../core/prng';
+import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import { LIVE } from './rule110';
 import type { GeneratorDef, SimHandle } from './types';
+
+/** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
+const ANT_GRID = { min: 32, max: 768, fallback: 384 } as const;
 
 /** 每多少步写一次状态快照。稀一点没关系 —— 单步太便宜了。 */
 const SNAPSHOT_EVERY = 16_384;
@@ -92,9 +96,9 @@ function cellValue(v: number, states: number): number {
 }
 
 export function createAnt(params: Record<string, number | string>, seed = 1): SimHandle {
-  const size = Math.max(32, Math.round(Number(params.size) || 384));
+  const { w, h } = gridSizeOf(params, ANT_GRID);
   const stepsPerSec = Math.max(1, Number(params.rate) || 400);
-  const total = size * size;
+  const total = w * h;
   const rule = parseTurmite(String(params.variant ?? 'RL'));
   const states = rule.length;
   const wrap = Number(params.wrap ?? 1) !== 0;
@@ -105,40 +109,45 @@ export function createAnt(params: Record<string, number | string>, seed = 1): Si
   const ants: TurmiteAnt[] = [];
   {
     const rnd = mulberry32(seed);
-    const mid = size >> 1;
+    const midX = w >> 1;
+    const midY = h >> 1;
     if (startMode === 'random') {
       for (let i = 0; i < antCount; i++) {
         ants.push({
-          x: Math.floor(rnd() * size),
-          y: Math.floor(rnd() * size),
+          x: Math.floor(rnd() * w),
+          y: Math.floor(rnd() * h),
           dir: Math.floor(rnd() * 4) & 3,
         });
       }
     } else if (startMode === 'corner') {
       // 角起手：四只蚂蚁绕成一圈，看不出「中心爆开」那套对称
-      const q = Math.max(2, Math.floor(size / 4));
+      const qx = Math.max(2, Math.floor(w / 4));
+      const qy = Math.max(2, Math.floor(h / 4));
       const spots: [number, number][] = [
-        [q, q],
-        [size - 1 - q, q],
-        [size - 1 - q, size - 1 - q],
-        [q, size - 1 - q],
+        [qx, qy],
+        [w - 1 - qx, qy],
+        [w - 1 - qx, h - 1 - qy],
+        [qx, h - 1 - qy],
       ];
       for (let i = 0; i < antCount; i++) {
         const [x, y] = spots[i % 4]!;
         ants.push({ x, y, dir: i & 3 });
       }
     } else if (antCount === 1) {
-      ants.push({ x: mid, y: mid, dir: 0 });
+      ants.push({ x: midX, y: midY, dir: 0 });
     } else if (antCount === 2) {
-      ants.push({ x: mid - 4, y: mid, dir: 1 });
-      ants.push({ x: mid + 4, y: mid, dir: 3 });
+      // 两只隔开一段距离，但别把其中一只推出边界（窄网格上 4 格就会）
+      const gap = Math.max(1, Math.min(4, midX >> 1));
+      ants.push({ x: Math.max(0, midX - gap), y: midY, dir: 1 });
+      ants.push({ x: Math.min(w - 1, midX + gap), y: midY, dir: 3 });
     } else {
       // 4 只：四象限、四个朝向 —— 环面下会长出四重旋转对称的图案
-      const q = size >> 2;
-      ants.push({ x: mid - q, y: mid - q, dir: 0 });
-      ants.push({ x: mid + q, y: mid - q, dir: 1 });
-      ants.push({ x: mid + q, y: mid + q, dir: 2 });
-      ants.push({ x: mid - q, y: mid + q, dir: 3 });
+      const qx = w >> 2;
+      const qy = h >> 2;
+      ants.push({ x: midX - qx, y: midY - qy, dir: 0 });
+      ants.push({ x: midX + qx, y: midY - qy, dir: 1 });
+      ants.push({ x: midX + qx, y: midY + qy, dir: 2 });
+      ants.push({ x: midX - qx, y: midY + qy, dir: 3 });
     }
   }
 
@@ -149,16 +158,16 @@ export function createAnt(params: Record<string, number | string>, seed = 1): Si
   const advance = (target: number): void => {
     while (step < target) {
       for (const ant of ants) {
-        const i = ant.y * size + ant.x;
+        const i = ant.y * w + ant.x;
         const c = grid[i]!;
         ant.dir = (ant.dir + rule[c]!) & 3;
         grid[i] = (c + 1) % states;
         const nx = ant.x + DX[ant.dir]!;
         const ny = ant.y + DY[ant.dir]!;
-        if (nx < 0 || ny < 0 || nx >= size || ny >= size) {
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) {
           if (wrap) {
-            ant.x = (nx + size) % size;
-            ant.y = (ny + size) % size;
+            ant.x = (nx + w) % w;
+            ant.y = (ny + h) % h;
           } else {
             // 固定边界：掉头而不是原地卡住（后者会让蚂蚁永远停在一个格子上）
             ant.dir = (ant.dir + 2) & 3;
@@ -174,8 +183,8 @@ export function createAnt(params: Record<string, number | string>, seed = 1): Si
   };
 
   return {
-    gridW: size,
-    gridH: size,
+    gridW: w,
+    gridH: h,
     stepsPerSec,
     seek(simFrame: number): void {
       const target = Math.max(0, Math.floor(simFrame));
@@ -231,7 +240,8 @@ export const langtonsAntDef: GeneratorDef = {
       defaultValue: 'RL',
       options: TURMITE_VARIANTS.map((v) => ({ labelKey: v.labelKey, value: v.value })),
     },
-    { key: 'size', labelKey: 'algo.langtonsAnt.grid', type: 'range', min: 96, max: 768, step: 32, defaultValue: 384 },
+    { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 32, max: 768, step: 32, defaultValue: 384 },
+    { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 32, max: 768, step: 32, defaultValue: 384 },
     {
       key: 'startMode',
       labelKey: 'algo.langtonsAnt.startMode',

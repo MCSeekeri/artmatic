@@ -50,8 +50,12 @@
  */
 
 import { hashSeed, mulberry32 } from '../core/prng';
+import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import type { GeneratorDef, SimHandle } from './types';
+
+/** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
+const SAND_GRID = { min: 32, max: 512, fallback: 160 } as const;
 
 /** 崩塌阈值。4 是二维 von Neumann 邻域下的经典取值。 */
 export const TOPPLE_AT = 4;
@@ -86,7 +90,8 @@ export const MAX_TOPPLE_PER_STEP = 400_000;
  */
 export function stabilize(
   h: Uint32Array,
-  n: number,
+  w: number,
+  height: number,
   seedQueue: number[] = [],
   order: 'fifo' | 'lifo' = 'lifo',
   maxTopple: number = MAX_TOPPLE_PER_STEP,
@@ -105,10 +110,10 @@ export function stabilize(
    * `maxTopple` 真的截断时 —— 那种情况本来就与顺序有关，闸门的意义就是
    * 「宁可暂时不稳，也不卡死」。
    */
-  const queued = scratch ?? new Uint8Array(n * n);
+  const queued = scratch ?? new Uint8Array(w * height);
   queued.fill(0);
   if (q.length === 0) {
-    for (let i = 0; i < n * n; i++) {
+    for (let i = 0; i < w * height; i++) {
       if (h[i]! >= TOPPLE_AT) {
         queued[i] = 1;
         q.push(i);
@@ -140,19 +145,19 @@ export function stabilize(
       queued[i] = 1;
       q.push(i);
     }
-    const x = i % n;
-    const y = (i - x) / n;
+    const x = i % w;
+    const y = (i - x) / w;
     // von Neumann + 环面。
     //
     // **四个邻居写开、不写成 `for (const j of [a,b,c,d])`**：那个数组字面量是
     // **每次崩塌分配一个数组**，而稳定态下一步要塌十万次上下（见文件头的成本表）。
     // 实测 8.8 → 6.4 ms/步 —— 有收益但不是数量级，真正的开销在队列进出上（见
     // 上面「去重」那段注释）。
-    const up = (y === 0 ? n - 1 : y - 1) * n + x;
-    const dn = (y === n - 1 ? 0 : y + 1) * n + x;
-    const row = y * n;
-    const lf = row + (x === 0 ? n - 1 : x - 1);
-    const rt = row + (x === n - 1 ? 0 : x + 1);
+    const up = (y === 0 ? height - 1 : y - 1) * w + x;
+    const dn = (y === height - 1 ? 0 : y + 1) * w + x;
+    const row = y * w;
+    const lf = row + (x === 0 ? w - 1 : x - 1);
+    const rt = row + (x === w - 1 ? 0 : x + 1);
     let v = h[up]! + 1;
     h[up] = v;
     if (v >= TOPPLE_AT && !queued[up]!) { queued[up] = 1; q.push(up); }
@@ -170,32 +175,33 @@ export function stabilize(
 }
 
 export function createSandpile(params: Record<string, number | string>, seed: number): SimHandle {
-  const n = Math.max(32, Math.min(512, Math.round(Number(params.size) || 256)));
+  const { w, h: height } = gridSizeOf(params, SAND_GRID);
+  const total = w * height;
   const stepsPerSec = Math.max(1, Number(params.rate) || 30);
   const batchRaw = Math.max(1, Math.min(2000, Math.round(Number(params.batch) || 200)));
-  // 撒沙量相对于网格要有上限：格子的容量是 3·n²，一次倒进去太多就永远稳不下来
-  // （每步都塌不完，下一轮再往上加）。n²/32 是实测能撑住的比例。
-  const batch = Math.max(1, Math.min(batchRaw, Math.floor((n * n) / 32)));
+  // 撒沙量相对于网格要有上限：格子的容量是 3·格数，一次倒进去太多就永远稳不下来
+  // （每步都塌不完，下一轮再往上加）。格数/32 是实测能撑住的比例。
+  const batch = Math.max(1, Math.min(batchRaw, Math.floor(total / 32)));
   const center = params.dropMode !== 'random';
 
-  const h = new Uint32Array(n * n);
+  const h = new Uint32Array(total);
   let frame = 0;
   const snapshots = new SnapshotRing<Uint32Array>(SNAPSHOT_OPTS, h);
-  const out = new Uint8Array(n * n);
+  const out = new Uint8Array(total);
   const queue: number[] = [];
   /** `stabilize` 的去重标记（复用，避免每步分配 65KB 再填零）。 */
-  const queued = new Uint8Array(n * n);
+  const queued = new Uint8Array(total);
 
   /** 一步 = 撒 `batch` 粒沙 + 稳定化。 */
   const stepOnce = (): void => {
     const rnd = mulberry32(hashSeed(seed, 'sandpile', frame));
-    const ci = (n >> 1) * n + (n >> 1);
+    const ci = (height >> 1) * w + (w >> 1);
     for (let g = 0; g < batch; g++) {
-      const i = center ? ci : Math.floor(rnd() * n * n);
+      const i = center ? ci : Math.floor(rnd() * total);
       h[i] = h[i]! + 1;
       if (h[i]! >= TOPPLE_AT) queue.push(i);
     }
-    stabilize(h, n, queue, 'lifo', MAX_TOPPLE_PER_STEP, queued);
+    stabilize(h, w, height, queue, 'lifo', MAX_TOPPLE_PER_STEP, queued);
     queue.length = 0;
   };
 
@@ -208,8 +214,8 @@ export function createSandpile(params: Record<string, number | string>, seed: nu
   };
 
   return {
-    gridW: n,
-    gridH: n,
+    gridW: w,
+    gridH: height,
     stepsPerSec,
     seek(simFrame: number): void {
       const target = Math.max(0, Math.floor(simFrame));
@@ -244,7 +250,8 @@ export const sandpileDef: GeneratorDef = {
     // 单步崩塌量能到 440 万次 —— 既慢（整条 24 秒轴 3.4 秒）又**会撞上
     // `MAX_TOPPLE_PER_STEP` 被静默截断**（实测 t=8s 起就有 h>=4 的格子残留，
     // 也就是画面已经不在表达模型的状态了）。实测见文件头。
-    { key: 'size', labelKey: 'algo.sandpile.grid', type: 'range', min: 64, max: 512, step: 32, defaultValue: 160 },
+    { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 32, max: 512, step: 32, defaultValue: 160 },
+    { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 32, max: 512, step: 32, defaultValue: 160 },
     {
       key: 'batch',
       labelKey: 'algo.sandpile.batch',

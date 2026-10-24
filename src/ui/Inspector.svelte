@@ -33,6 +33,8 @@
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
   import { defaultParams, getGenerator } from '../algos/registry';
+  import { gridSizeFromDefs } from '../algos/grid-dims';
+  import { appPatternSource } from './pattern/pattern-import';
   import { defaultEffectValues, getEffect } from '../effects/registry';
   import EffectPickerModal from './effect-picker/EffectPickerModal.svelte';
   import AlgoPickerModal from './algo-picker/AlgoPickerModal.svelte';
@@ -54,6 +56,12 @@
     void appState.version;
     return themeById(appState.project.typographyTheme, appState.project.customThemes);
   });
+
+  /**
+   * 图案编辑器的「从素材导入」数据源。无状态，建一次即可 —— 列表在打开选择器时
+   * 才读（那时 `appState.version` 是最新的）。
+   */
+  const patternAssets = appPatternSource();
 
   const blendOptions = BLEND_MODES.map((m) => ({ value: m.id, label: tr(m.labelKey) }));
   const fitOptions = [
@@ -1102,6 +1110,8 @@
                   label={resolveLabel(p.labelKey, tr)}
                   mode={p.mode}
                   editorSize={p.editorSize}
+                  grid={gridSizeFromDefs(clip.source.params, def.params) ?? undefined}
+                  source={patternAssets}
                   colors={{
                     bg: String(clip.source.params.colorBg ?? '#05070f'),
                     live: String(clip.source.params.colorLive ?? '#7fd4ff'),

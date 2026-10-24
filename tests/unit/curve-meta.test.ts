@@ -63,8 +63,12 @@ describe('animatableParams', () => {
     expect(speed.animatable).toBe(true);
 
     const sim = animatableParams(source({ type: 'algo', generator: 'game-of-life', params: {} }));
-    const size = sim.find((x) => x.key === 'size')!;
-    expect(size.animatable).toBe(false);
+    // 网格是两栏（v16 起）。**两个轴都不可打关键帧**：改尺寸 = 重建模拟。
+    for (const key of ['width', 'height']) {
+      const dim = sim.find((x) => x.key === key)!;
+      expect(dim, `${key} 应当出现在 sim 的参数量纲里`).toBeTruthy();
+      expect(dim.animatable).toBe(false);
+    }
   });
 
   it('特效参数按键 `instanceId.param` 展开，缺省值来自定义表', () => {

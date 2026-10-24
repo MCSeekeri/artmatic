@@ -246,6 +246,15 @@ interface Entry {
   state: TrackState;
   /** 抖动后的视图：绘制与 uniform 都用它。 */
   view: TrackBox[];
+  /**
+   * 本帧的**绘制态**（含出场/消失的缩放与不透明度）。
+   *
+   * 叠层绘制与框内效果的掩码**只能从这一份取几何**。曾经两边各算一次，结果
+   * 掩码用的是 `TrackBox` 的原始矩形：动画期间「框在缩放、反色块不缩」，而且
+   * 掩码直接把 `cy` 当成了着色器坐标（`cy` 是 Canvas2D 左上原点，片元里
+   * `vUv.y` 向上），画面上就是一整块与框完全错开的反色补丁。
+   */
+  views: BoxView[];
   canvas: HTMLCanvasElement | null;
   g: CanvasRenderingContext2D | null;
   tex: WebGLTexture | null;
@@ -302,6 +311,8 @@ export class BoxTracker {
   private readonly scratchUnit: number;
   /** `u_boxA` 的暂存（每次 bind 前重写，`uniform4fv` 会复制一份）。 */
   private readonly boxA = new Float32Array(MAX_BOXES * 4);
+  /** `u_boxFade` 的暂存（每框的绘制不透明度，与叠层上的淡入淡出同一个数）。 */
+  private readonly boxFade = new Float32Array(MAX_BOXES);
   private frameCount = 0;
 
   constructor(
@@ -405,6 +416,7 @@ export class BoxTracker {
       hashSeed(this.projectSeed(), inst.instanceId, 'jitter'),
       fc.frame,
     );
+    e.views = this.viewsFor(e, p, fc);
 
     this.drawOverlay(e, p, fc);
     this.uploadOverlay(e, fc.w, fc.h);
@@ -424,22 +436,35 @@ export class BoxTracker {
     const e = this.perInstance.get(inst.instanceId);
     const gl = this.kit.gl;
 
-    const n = Math.min(MAX_BOXES, e?.view.length ?? 0);
+    const n = Math.min(MAX_BOXES, e?.views.length ?? 0);
     // 先写数组再绑纹理：`prog.tex()` 会切换激活单元，但 uniform 与单元无关。
     const countLoc = prog.uniforms['u_boxCount'];
     if (countLoc) gl.uniform1i(countLoc, n);
     if (n > 0 && e) {
       for (let i = 0; i < n; i++) {
-        const b = e.view[i]!;
+        const v = e.views[i]!;
+        const b = v.b;
+        /*
+         * 与 `frameRect` 是同一个矩形：尺寸吃掉出场/消失的缩放，中心不动
+         * （缩放绕中心）。
+         *
+         * **y 必须翻一次**：`cy` 是 Canvas2D 的左上原点（探针回读时已经翻成
+         * 与 canvas 同序），而片元里的 `vUv.y` 向上（`VERT_QUAD` 的 (0,0) 在
+         * 帧的左下，与 placement 那份约定同一条）。漏翻的表现不是报错，而是
+         * 「框内效果整体上下镜像」—— 看起来和「检测框错位」一模一样。
+         */
         this.boxA[i * 4] = b.cx;
-        this.boxA[i * 4 + 1] = b.cy;
-        this.boxA[i * 4 + 2] = b.hw;
-        this.boxA[i * 4 + 3] = b.hh;
+        this.boxA[i * 4 + 1] = 1 - b.cy;
+        this.boxA[i * 4 + 2] = b.hw * v.scale;
+        this.boxA[i * 4 + 3] = b.hh * v.scale;
+        this.boxFade[i] = v.alpha;
       }
       const aLoc = prog.uniforms['u_boxA'];
       // `Program.u()` 只认 number / 2·3·4 长数组，装不下 48 个 float，
       // 所以数组 uniform 必须直接走 `uniform4fv`（location 已去掉 `[0]` 后缀）。
       if (aLoc) gl.uniform4fv(aLoc, this.boxA);
+      const fadeLoc = prog.uniforms['u_boxFade'];
+      if (fadeLoc) gl.uniform1fv(fadeLoc, this.boxFade);
     }
 
     prog.tex('u_overlay', e?.tex ?? this.emptyTex);
@@ -453,6 +478,7 @@ export class BoxTracker {
       e.state = emptyTrackState();
       e.prevLuma = null;
       e.view = [];
+      e.views = [];
       e.detectSig = '';
       if (e.g && e.canvas) e.g.clearRect(0, 0, e.canvas.width, e.canvas.height);
     }
@@ -549,6 +575,7 @@ export class BoxTracker {
         prevLuma: null,
         state: emptyTrackState(),
         view: [],
+        views: [],
         canvas: null,
         g: null,
         tex: null,
@@ -633,9 +660,10 @@ export class BoxTracker {
     // 线宽与字号按画高缩放：同一个参数在预览（540）与导出（1080）上应当长得一样。
     // 下限 0.5 只影响缩略图（360 高）这类小尺寸：再按比例缩下去字就读不出来了。
     const s = Math.max(h / 1080, 0.5);
-    if (e.view.length === 0) return;
-
-    const views = this.viewsFor(e, p, fc);
+    // 几何来自 `prepare` 算好的那一份绘制态 —— 框内效果的掩码用的是同一个数组
+    // （见 `Entry.views`），断言「画出来」与「处理到」永远一致。
+    const views = e.views;
+    if (views.length === 0) return;
     if (p.linkShow && views.length > 1) this.drawLinks(g, views, p, w, h, s, fc);
 
     for (const v of views) {

@@ -332,6 +332,15 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             ),
           );
 
+        case 'seed_pattern_from_asset':
+          return unwrap(
+            await control.seedPatternFromAsset(
+              String(args.clipId ?? ''),
+              String(args.param ?? ''),
+              String(args.assetId ?? ''),
+            ),
+          );
+
         case 'set_curve':
           return unwrap(
             await control.setCurve(String(args.clipId ?? ''), String(args.param ?? ''), (args.curve ?? null) as never),

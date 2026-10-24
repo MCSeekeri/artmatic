@@ -245,24 +245,24 @@ describe('生命游戏扩展：B/S 规则族', () => {
     const n = 32;
     for (const seed of [1, 2, 3]) {
       const g = rndGrid(n, seed);
-      expect(lifeStepRule(g, n, conwayCfg), `seed ${seed}`).toEqual(lifeStep(g, n));
+      expect(lifeStepRule(g, n, n, conwayCfg), `seed ${seed}`).toEqual(lifeStep(g, n));
     }
   });
 
   it('HighLife（多一位出生规则）演化出不同的一代', () => {
     const n = 32;
     const g = rndGrid(n, 17);
-    const conway = lifeStepRule(g, n, conwayCfg);
-    const high = lifeStepRule(g, n, { ...conwayCfg, birth: CONWAY_BIRTH | (1 << 6) });
+    const conway = lifeStepRule(g, n, n, conwayCfg);
+    const high = lifeStepRule(g, n, n, { ...conwayCfg, birth: CONWAY_BIRTH | (1 << 6) });
     expect(high).not.toEqual(conway);
   });
 
   it('von Neumann 邻域与固定边界都改变下一代', () => {
     const n = 32;
     const g = rndGrid(n, 23);
-    const moore = lifeStepRule(g, n, conwayCfg);
-    const vn = lifeStepRule(g, n, { ...conwayCfg, vonNeumann: true });
-    const fixed = lifeStepRule(g, n, { ...conwayCfg, wrap: false });
+    const moore = lifeStepRule(g, n, n, conwayCfg);
+    const vn = lifeStepRule(g, n, n, { ...conwayCfg, vonNeumann: true });
+    const fixed = lifeStepRule(g, n, n, { ...conwayCfg, wrap: false });
     expect(vn).not.toEqual(moore);
     expect(fixed).not.toEqual(moore);
   });

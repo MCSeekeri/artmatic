@@ -9,6 +9,7 @@
    */
   import Button from './Button.svelte';
   import PatternEditorModal from '../pattern/PatternEditorModal.svelte';
+  import type { PatternAssetSource } from '../pattern/pattern-import';
   import { tr } from '../../i18n/index.svelte';
   import { decodePattern, liveCount } from '../../algos/pattern-codec';
 
@@ -17,6 +18,10 @@
     label: string;
     mode?: '2d' | '1d';
     editorSize?: number;
+    /** 模拟网格尺寸：编辑器里的「从素材导入」按它采样（见 PatternEditorModal）。 */
+    grid?: { w: number; h: number };
+    /** 「从素材导入」的数据源。不给 = 编辑器里没有这个按钮（lab 走这条）。 */
+    source?: PatternAssetSource;
     colors: { bg: string; live: string };
     disabled?: boolean;
     testid?: string;
@@ -27,6 +32,8 @@
     label,
     mode = '2d',
     editorSize = 32,
+    grid,
+    source,
     colors,
     disabled = false,
     testid = 'pattern',
@@ -112,6 +119,8 @@
     title={label}
     {mode}
     {editorSize}
+    {grid}
+    {source}
     {colors}
     initial={() => value}
     onclose={() => (open = false)}

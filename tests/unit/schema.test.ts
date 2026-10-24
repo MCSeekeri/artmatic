@@ -271,6 +271,48 @@ describe('migrateProject', () => {
     const twice = migrateProject(JSON.parse(JSON.stringify(once)));
     expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
   });
+
+  /**
+   * v15 → v16：网格模拟的 `size` 拆成 `width` / `height`。
+   *
+   * 判据必须是**两个轴都拿到原值**。只写 width 的话画面会从正方形变成
+   * 「宽度对、高度退回默认」—— 那种变形不会报错，只会看起来「工程被改过」。
+   */
+  it('v15 → v16：网格模拟的 size 拆成 width / height；雪花保持 size', () => {
+    const p = defaultProject('grid');
+    p.schemaVersion = 15;
+    const base = {
+      kind: 'source',
+      id: newId(),
+      start: 0,
+      end: 1,
+      label: '',
+      fadeSec: 0,
+      curves: {},
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'contain',
+    };
+    p.tracks.push({
+      kind: 'visual',
+      id: newId(),
+      name: 'V1',
+      enabled: true,
+      clips: [
+        { ...base, id: newId(), source: { type: 'algo', generator: 'game-of-life', params: { size: 224, mask: 6152 } } },
+        { ...base, id: newId(), source: { type: 'algo', generator: 'snowflake', params: { size: 320 } } },
+        // 已经是新格式（或手改过）的不该被覆盖
+        { ...base, id: newId(), source: { type: 'algo', generator: 'lenia', params: { size: 112, width: 96, height: 64 } } },
+      ],
+    } as never);
+
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    const clips = (out.tracks[0] as { clips: { source: { params: Record<string, unknown> } }[] }).clips;
+    expect(clips[0]!.source.params).toEqual({ width: 224, height: 224, mask: 6152 });
+    expect(clips[1]!.source.params).toEqual({ size: 320 });
+    expect(clips[2]!.source.params).toEqual({ size: 112, width: 96, height: 64 });
+  });
 });
 
 describe('排版片段的校验', () => {

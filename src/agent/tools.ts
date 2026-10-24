@@ -420,6 +420,21 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'seed_pattern_from_asset',
+    description:
+      "Fill an algo clip's `pattern` parameter from a media-pool image (SVG / PNG). " +
+      'Sampled by OPACITY at the current sim grid size (width x height): pixels with alpha >= 50% ' +
+      'become live cells, colour and brightness are ignored. Also switches `seedMode` to ' +
+      "'pattern' in the same undo step, so the picture becomes the initial state instead of " +
+      'sitting next to a random seed. Returns the encoded pattern (WxH:base64) and the sampled size.',
+    params: [
+      CLIP_ID,
+      req('param', 'string', 'Pattern parameter key (usually "pattern").'),
+      ASSET_ID,
+    ],
+    writes: true,
+  },
+  {
     name: 'set_curve',
     description:
       'Attach a keyframe curve to a parameter, or pass null to remove it. Only range parameters ' +

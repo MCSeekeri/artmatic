@@ -49,6 +49,12 @@ export const agent = {
   /* ------------------------------------------------------------ 生成器 */
   'agent.algo.notAlgo': '片段 {id} 的源是 {type}，不是算法片段',
   'agent.algo.notFound': '没有生成器 {id}',
+  /* 从媒体池图片导入初始图案（按不透明度采样） */
+  'agent.pattern.notPattern': '生成器 {id} 的参数里没有图案参数 {param}',
+  'agent.pattern.notImage': '素材 {id} 不是图片（图案只能从图片采样）',
+  'agent.pattern.decodeFailed': '素材 {id} 解码失败（只支持 SVG / PNG 这类带透明通道的图片）',
+  'agent.pattern.noBytes': '素材 {id} 没有字节（文件可能丢了）',
+  'agent.pattern.unsupported': '当前宿主没有接媒体池，读不到素材',
 
   /* ------------------------------------------------------------ 媒体池 */
   'agent.media.unsupported': '当前宿主没有接媒体池（没有工程，或未初始化）',

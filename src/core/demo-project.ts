@@ -290,7 +290,7 @@ export function createDemoProject(): Project {
     label: tr('tl.demoClipAnt'),
     generator: 'langtons-ant',
     params: {
-      variant: 'RL', size: 384, startMode: 'center', count: '1', wrap: 1,
+      variant: 'RL', width: 384, height: 384, startMode: 'center', count: '1', wrap: 1,
       rate: 900, colorBg: '#06070d', colorLive: '#c9a2ff',
     },
     blend: 'screen',
@@ -305,7 +305,7 @@ export function createDemoProject(): Project {
     label: tr('tl.demoClipSand'),
     generator: 'sandpile',
     params: {
-      size: 256, batch: 500, dropMode: 'center', rate: 30,
+      width: 256, height: 256, batch: 500, dropMode: 'center', rate: 30,
       colorBg: '#05060c', colorLive: '#ffd489',
     },
     blend: 'screen',

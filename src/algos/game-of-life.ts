@@ -10,6 +10,10 @@
  * 网格很小（默认 112²≈12.5k 细胞，一步 <1ms），seek 重放必须同步
  * 可用，放主线程——1.4 管的是每帧预算，这个量级进不了预算。
  *
+ * 网格是 `width × height`（列 × 行）。协议本来就是两栏（`SimHandle.gridW/gridH`），
+ * 方形只是早期实现里的硬编码；16:9 工程里方形网格会被 contain 成中间一块。
+ * v16 之前存的工程只有一个 `size`，由 `core/schema.ts` 的迁移拆成两个相等的值。
+ *
  * ## 扩展
  *
  * - `mask`：18 位 B/S 掩码（出生占低 9 位、存活占高 9 位，见 `core/bitmask`），
@@ -25,10 +29,14 @@
 import { mulberry32 } from '../core/prng';
 import { birthFromMask, masksFromBS, surviveFromMask } from '../core/bitmask';
 import { patternFromParam, stampCentered } from './pattern-codec';
+import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import { LIVE } from './rule110';
 import type { MessageKey } from '../i18n/locales';
 import type { GeneratorDef, SimHandle } from './types';
+
+/** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
+const LIFE_GRID = { min: 64, max: 256, fallback: 112 } as const;
 
 const SNAPSHOT_EVERY = 16;
 /** 快照张数上限。超过就抽稀（见 `sim-util.SnapshotRing`），内存有硬上限。 */
@@ -57,21 +65,21 @@ export interface LifeRule {
 export const CONWAY_BIRTH = 1 << 3;
 export const CONWAY_SURVIVE = (1 << 2) | (1 << 3);
 
-export function lifeStepRule(cur: Uint8Array, n: number, cfg: LifeRule): Uint8Array {
-  return cfg.wrap ? stepWrap(cur, n, cfg) : stepFixed(cur, n, cfg);
+export function lifeStepRule(cur: Uint8Array, w: number, h: number, cfg: LifeRule): Uint8Array {
+  return cfg.wrap ? stepWrap(cur, w, h, cfg) : stepFixed(cur, w, h, cfg);
 }
 
 /** 环面边界。每格同时算 8 邻居与 4 邻居，再按配置取 —— 省掉一个分支分支。 */
-function stepWrap(cur: Uint8Array, n: number, cfg: LifeRule): Uint8Array {
-  const next = new Uint8Array(n * n);
+function stepWrap(cur: Uint8Array, w: number, h: number, cfg: LifeRule): Uint8Array {
+  const next = new Uint8Array(w * h);
   const { birth, survive, vonNeumann } = cfg;
-  for (let y = 0; y < n; y++) {
-    const yUp = (y === 0 ? n - 1 : y - 1) * n;
-    const yDn = (y === n - 1 ? 0 : y + 1) * n;
-    const yMid = y * n;
-    for (let x = 0; x < n; x++) {
-      const xL = x === 0 ? n - 1 : x - 1;
-      const xR = x === n - 1 ? 0 : x + 1;
+  for (let y = 0; y < h; y++) {
+    const yUp = (y === 0 ? h - 1 : y - 1) * w;
+    const yDn = (y === h - 1 ? 0 : y + 1) * w;
+    const yMid = y * w;
+    for (let x = 0; x < w; x++) {
+      const xL = x === 0 ? w - 1 : x - 1;
+      const xR = x === w - 1 ? 0 : x + 1;
       const n8 =
         cur[yUp + xL]! + cur[yUp + x]! + cur[yUp + xR]! +
         cur[yMid + xL]! + cur[yMid + xR]! +
@@ -86,18 +94,18 @@ function stepWrap(cur: Uint8Array, n: number, cfg: LifeRule): Uint8Array {
 }
 
 /** 固定边界：网格外一律视为死。 */
-function stepFixed(cur: Uint8Array, n: number, cfg: LifeRule): Uint8Array {
-  const next = new Uint8Array(n * n);
+function stepFixed(cur: Uint8Array, w: number, h: number, cfg: LifeRule): Uint8Array {
+  const next = new Uint8Array(w * h);
   const { birth, survive, vonNeumann } = cfg;
-  for (let y = 0; y < n; y++) {
+  for (let y = 0; y < h; y++) {
     const hasU = y > 0;
-    const hasD = y < n - 1;
-    const yUp = (y - 1) * n;
-    const yDn = (y + 1) * n;
-    const yMid = y * n;
-    for (let x = 0; x < n; x++) {
+    const hasD = y < h - 1;
+    const yUp = (y - 1) * w;
+    const yDn = (y + 1) * w;
+    const yMid = y * w;
+    for (let x = 0; x < w; x++) {
       const hasL = x > 0;
-      const hasR = x < n - 1;
+      const hasR = x < w - 1;
       const a = cur[yMid + x]!;
       let k = 0;
       if (vonNeumann) {
@@ -127,11 +135,11 @@ function stepFixed(cur: Uint8Array, n: number, cfg: LifeRule): Uint8Array {
 
 /**
  * 旧签名（被 `tests/unit/algos.test.ts` 钉住）：Conway + Moore + 环面。
- * 与 `lifeStepRule(..., {birth: CONWAY_BIRTH, survive: CONWAY_SURVIVE, vonNeumann:false, wrap:true})`
+ * 与 `lifeStepRule(..., n, n, {birth: CONWAY_BIRTH, survive: CONWAY_SURVIVE, vonNeumann:false, wrap:true})`
  * 逐格等价（有单测钉着这条等价性）。
  */
 export function lifeStep(cur: Uint8Array, n: number): Uint8Array {
-  return stepWrap(cur, n, {
+  return stepWrap(cur, n, n, {
     birth: CONWAY_BIRTH,
     survive: CONWAY_SURVIVE,
     vonNeumann: false,
@@ -145,29 +153,35 @@ const TRAIL_MAX_DECAY = 40;
 function initAlive(
   params: Record<string, number | string>,
   seed: number,
-  n: number,
+  w: number,
+  h: number,
 ): Uint8Array {
-  const g = new Uint8Array(n * n);
+  const g = new Uint8Array(w * h);
   if (params.seedMode === 'pattern') {
     const bm = patternFromParam(params.pattern);
     if (bm) {
-      stampCentered(g, n, n, bm, 1);
+      stampCentered(g, w, h, bm, 1);
       return g; // 手绘种子**不消耗 RNG**，所以画什么就是什么
     }
     // 图案串坏了（手改过工程文件）→ 退回落差最小的随机撒种，不报错、不空白
   }
   const density = Number(params.density) || 0.42;
   const rnd = mulberry32(seed);
-  const lo = Math.floor(n * 0.2);
-  const hi = Math.ceil(n * 0.8);
-  for (let y = lo; y < hi; y++) {
-    for (let x = lo; x < hi; x++) g[y * n + x] = rnd() < density ? 1 : 0;
+  // 只在中间 3/5 区域撒种：贴边撒的群落会立刻撞上边界（环面下则是自我缠绕）。
+  // 两轴各算各的，是因为网格现在可以不是正方形。
+  const loX = Math.floor(w * 0.2);
+  const hiX = Math.ceil(w * 0.8);
+  const loY = Math.floor(h * 0.2);
+  const hiY = Math.ceil(h * 0.8);
+  for (let y = loY; y < hiY; y++) {
+    for (let x = loX; x < hiX; x++) g[y * w + x] = rnd() < density ? 1 : 0;
   }
   return g;
 }
 
 export function createLife(params: Record<string, number | string>, seed: number): SimHandle {
-  const n = Math.round(Number(params.size) || 112);
+  const { w, h } = gridSizeOf(params, LIFE_GRID);
+  const total = w * h;
   const stepsPerSec = Number(params.rate) || 12;
   const rawMask = Number(params.mask ?? masksFromBS(CONWAY_BIRTH, CONWAY_SURVIVE));
   const mask = Number.isFinite(rawMask) ? rawMask : masksFromBS(CONWAY_BIRTH, CONWAY_SURVIVE);
@@ -179,8 +193,8 @@ export function createLife(params: Record<string, number | string>, seed: number
   };
   const decay = Math.round(Math.max(0, Math.min(1, Number(params.trail) || 0)) * TRAIL_MAX_DECAY);
 
-  const initial = initAlive(params, seed, n);
-  let heat = new Uint8Array(n * n);
+  const initial = initAlive(params, seed, w, h);
+  let heat = new Uint8Array(total);
 
   let frame = 0;
   // TS 5.9 的泛型 TypedArray：显式标 Uint8Array（= ArrayBufferLike），
@@ -194,16 +208,16 @@ export function createLife(params: Record<string, number | string>, seed: number
   );
 
   const stepOnce = (): void => {
-    const next = lifeStepRule(cur, n, cfg);
+    const next = lifeStepRule(cur, w, h, cfg);
     if (decay > 0) {
-      const nh = new Uint8Array(n * n);
+      const nh = new Uint8Array(total);
       for (let i = 0; i < nh.length; i++) {
         nh[i] = next[i] ? LIVE : Math.max(0, heat[i]! - decay);
       }
       heat = nh;
     } else if (heat.some((v) => v !== 0)) {
       // trail 关掉时余温必须归零，否则「关掉拖尾」不会立刻生效。
-      heat = new Uint8Array(n * n);
+      heat = new Uint8Array(total);
     }
     cur = next;
   };
@@ -217,8 +231,8 @@ export function createLife(params: Record<string, number | string>, seed: number
   };
 
   return {
-    gridW: n,
-    gridH: n,
+    gridW: w,
+    gridH: h,
     stepsPerSec,
     seek(simFrame: number): void {
       const target = Math.max(0, Math.floor(simFrame));
@@ -269,7 +283,8 @@ export const gameOfLifeDef: GeneratorDef = {
   // 速度与配色不参与 create() —— 改它们不该把跑了几百代的群落重建。
   volatile: ['rate', 'colorBg', 'colorLive'],
   params: [
-    { key: 'size', labelKey: 'algo.gameOfLife.grid', type: 'range', min: 64, max: 256, step: 16, defaultValue: 112 },
+    { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 64, max: 256, step: 16, defaultValue: 112 },
+    { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 64, max: 256, step: 16, defaultValue: 112 },
     {
       key: 'mask',
       labelKey: 'algo.gameOfLife.rules',

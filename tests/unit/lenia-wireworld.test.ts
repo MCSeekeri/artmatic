@@ -148,7 +148,7 @@ describe('Wireworld', () => {
   it('环形种子：铺出导线、放了一个电子与一条尾巴', () => {
     const n = 64;
     const g = new Uint8Array(n * n);
-    seedRing(g, n);
+    seedRing(g, n, n);
     const count = (s: number): number => [...g].filter((v) => v === s).length;
     expect(count(WW_CONDUCTOR)).toBeGreaterThan(50);
     expect(count(WW_HEAD)).toBe(1);
@@ -172,7 +172,7 @@ describe('Wireworld', () => {
     for (let x = 1; x < 7; x++) g[3 * n + x] = WW_CONDUCTOR;
     g[3 * n + 3] = WW_HEAD;
     g[3 * n + 4] = WW_TAIL;
-    const next = wireworldStep(g, n);
+    const next = wireworldStep(g, n, n);
     expect(next[3 * n + 3]).toBe(WW_TAIL); // head 变尾巴
     expect(next[3 * n + 4]).toBe(WW_CONDUCTOR); // 尾巴恢复导线
     expect(next[3 * n + 2]).toBe(WW_HEAD); // 左邻恰有 1 个 head → 变电子

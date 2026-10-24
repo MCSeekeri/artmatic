@@ -23,6 +23,7 @@
   import { tr } from '../src/i18n/index.svelte';
   import { resolveLabel } from '../src/i18n/label';
   import { visibleParams, type ParamDef } from '../src/effects/types';
+  import { gridSizeFromDefs } from '../src/algos/grid-dims';
   // 取色卡给的是主题色引用（`@accent1`），而算法/特效参数直接进 `hexToRgba()`，
   // 引用在那里会退化成**品红**。与检查器同一条纪律：写入时就解析成裸 hex。
   import { resolveThemeColor } from '../src/typography/theme';
@@ -32,6 +33,10 @@
   // 试炼场是「新增参数类型（含 visibleWhen）的 testbed」，这里与产品端不一致，
   // 等于 testbed 测不到产品行为。
   const sourceParams = $derived(visibleParams(paramsFor('source', labState.sourceId), labState.sourceParams));
+  /** 源生成器的网格尺寸（图案导入按它采样）。没有网格参数的生成器是 null。 */
+  const sourceGrid = $derived(
+    gridSizeFromDefs(labState.sourceParams, paramsFor('source', labState.sourceId)) ?? undefined,
+  );
   const effectParams = $derived(
     visibleParams(paramsFor('effect', labState.effectId ?? NO_EFFECT_ID), labState.effectParams),
   );
@@ -141,6 +146,7 @@
                   label={resolveLabel(p.labelKey, tr)}
                   mode={p.mode}
                   editorSize={p.editorSize}
+                  grid={sourceGrid}
                   colors={{
                     bg: String(labState.sourceParams.colorBg ?? '#05070f'),
                     live: String(labState.sourceParams.colorLive ?? '#7fd4ff'),

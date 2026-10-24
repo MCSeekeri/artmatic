@@ -451,7 +451,13 @@ const IMAGE_HELP = `# Screenshots
 - Both \`render_frame\` and \`frame_signature\` echo \`layers\`: the tracks and clips
   that actually composited. When \`only\` is used, this is the only way to see that
   an effect track was hidden by the isolation (the picture looks identical to
-  "my parameter did nothing").`;
+  "my parameter did nothing").
+- **Seeding a grid simulation with an image**: \`seed_pattern_from_asset({ clipId,
+  param:'pattern', assetId })\` samples a media-pool image (PNG / SVG) by OPACITY at
+  the generator's current grid size — pixels with alpha >= 50% become live cells,
+  colour and brightness are ignored — and switches \`seedMode\` to \`pattern\` in the
+  same undo step. Use \`media_list\` for asset ids. Hand-drawn patterns still go
+  through \`set_params({ params:{ pattern } })\` with the \`WxH:<base64>\` encoding.`;
 
 export type HelpTopic = 'plugin-api' | 'timeline' | 'typography' | 'workflow' | 'images';
 

@@ -103,6 +103,25 @@
 - 彩条用 HSV 等分色相而不是硬编码 7 色：条数是参数，硬编码表跟不了。
   渐变的三形态用 `int` uniform 分派（`selectInt`），不要用字符串 uniform。
 
+### 网格尺寸：`width` / `height`（2026-10）
+
+网格类模拟的尺寸是**两栏**（列 × 行），参数键固定 `width` / `height`，单位是格。
+协议本来就是这样（`SimHandle.gridW/gridH`、tint 的 `u_srcAspect`、`stampCentered`
+都收两轴）；早先每个生成器只写一个 `size` 并内部当正方形用，是移植残留，
+16:9 工程里会得到「中间一块方形图 + 两侧底色」。
+
+- 读取一律走 **`gridSizeOf(params, LIMITS)`**（`grid-dims.ts`），别再写
+  `Math.round(Number(params.size) || n)`。`LIMITS` 的 min/max/default 必须与参数表
+  同源；UI / Agent 反推尺寸走 `gridSizeFromDefs(params, def.params)`。
+- `gridSizeOf` 保留 `size` 兜底（单轴缺失时两轴都取它）：老工程由
+  `core/schema.ts` 的 **v15 → v16** 迁移拆成两栏，兜底只服务手改过的文件与老式单测。
+- **环面回绕必须按两轴分别取**（`x` 用 `w`、`y` 用 `h`）。把 `w` 当高用不会报错，
+  只会读到错行 —— 单测里要用「宽高不等」的网格才抓得到。
+- `TorusField` 支持矩形：`new TorusField(w, h, kernel)`（旧的 `(n, kernel)` 仍成立）。
+  上下 halo 复制**整行**（连左右 halo 一起），四个角才不会错。
+- **仍保持 `size` 的方形**（不是没做，是模型本身）：雪花（六角格半径）、佛像
+  （复平面方窗）、`dla` / `chaos-game`（bake 的输出方形）。
+
 ### 参数类型：`bitmask` 与 `pattern`（2026-10-04）
 
 两个新变体是为「规则可调 / 种子可画」加的，它们**都不需要抬 `SCHEMA_VERSION`**
@@ -141,6 +160,17 @@
   - 编辑器（`ui/pattern/PatternEditorModal.svelte`）是**精简版**：涂/擦（经典拖拽语义，
     没有独立笔刷开关）、清空/反相/随机、网格尺寸、几个标准预设。**刻意不做**
     旋转/镜像/平移/洪水填充 —— 它存在的唯一理由是「画出随机撒种给不出的初始条件」。
+  - **从素材导入**（`algos/pattern-image.ts`）：把媒体池里的图按**不透明度**采样成位图。
+    三条口径：
+    1. **采样分辨率 = 模拟网格**（`PatternField` 的 `grid` prop，由
+       `gridSizeFromDefs` 算出），于是 `stampCentered` 盖回去是恒等映射；
+       超过 `MAX_PATTERN_DIM`（512）时等比缩小，不横向压扁。
+    2. **阈值 128，不是 255**。按网格重绘之后每个格子拿到的是覆盖率（抗锯齿），
+       要求 alpha 恰好 255 会把 1px 的描边整条丢掉。颜色 / 亮度不参与。
+    3. **SVG 走 `<img>` 解码**：`createImageBitmap` 在 Chromium 里不接受 SVG blob
+       （`engine/media-assets.ts` 的解码也有同一条兜底）。contain 适配、不拉伸。
+    Agent 侧的入口是 `seed_pattern_from_asset`（同时把 `seedMode` 切到 `pattern`，
+    一笔撤销）。
   - 画布必须 `data-exempt`、DPR 比较必须 `Math.round`、随机走 `mulberry32(hashSeed(…))`
     （根 `AGENTS.md` 硬约束 1.2 禁止裸 `Math.random()`）。全部改动是**本地草稿**，只有「应用」才回写参数
     → 整个编辑过程是一笔撤销。

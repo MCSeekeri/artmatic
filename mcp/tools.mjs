@@ -492,6 +492,19 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_seed_pattern_from_asset',
+    kind: 'write',
+    description:
+      '把媒体池里的一张图片（SVG / PNG）按**不透明度**采样成算法片段的 pattern 参数：' +
+      'alpha ≥ 50% 的像素变活格，颜色 / 亮度不参与。采样分辨率 = 当前网格（width × height），' +
+      '并把 seedMode 切到 pattern（同一笔撤销）。返回编码后的图案（WxH:base64）与采样尺寸。',
+    args: {
+      clipId: ID('片段'),
+      param: F.string({ required: true, description: '图案参数的键（通常是 "pattern"）。' }),
+      assetId: ID('素材'),
+    },
+  },
+  {
     name: 'artmatic_set_curve',
     kind: 'write',
     description:

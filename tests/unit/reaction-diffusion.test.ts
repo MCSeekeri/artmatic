@@ -34,7 +34,7 @@ describe('rdStep：解析不变量（证明 step 写对了）', () => {
     const tmpU = new Float32Array(n * n);
     const tmpV = new Float32Array(n * n);
     const before = sum(u) + sum(v);
-    for (let i = 0; i < 80; i++) rdStep(u, v, tmpU, tmpV, n, 0, 0, 1, 0.5);
+    for (let i = 0; i < 80; i++) rdStep(u, v, tmpU, tmpV, n, n, 0, 0, 1, 0.5);
     const after = sum(u) + sum(v);
     // float32 累积舍入；相对误差 1e-4 已经很宽松
     expect(Math.abs(after - before) / Math.abs(before)).toBeLessThan(1e-4);
@@ -46,7 +46,7 @@ describe('rdStep：解析不变量（证明 step 写对了）', () => {
     const v = new Float32Array(n * n);
     const tmpU = new Float32Array(n * n);
     const tmpV = new Float32Array(n * n);
-    for (let i = 0; i < 10; i++) rdStep(u, v, tmpU, tmpV, n, 0, 0, 1, 0.5);
+    for (let i = 0; i < 10; i++) rdStep(u, v, tmpU, tmpV, n, n, 0, 0, 1, 0.5);
     for (let i = 0; i < n * n; i++) {
       expect(u[i]).toBeCloseTo(0.6, 6);
       expect(v[i]).toBe(0);
@@ -61,7 +61,7 @@ describe('rdStep：解析不变量（证明 step 写对了）', () => {
     const tmpV = new Float32Array(n * n);
     const u0 = sum(u);
     const v0 = sum(v);
-    for (let i = 0; i < 5; i++) rdStep(u, v, tmpU, tmpV, n, 0, 0, 1, 0.5);
+    for (let i = 0; i < 5; i++) rdStep(u, v, tmpU, tmpV, n, n, 0, 0, 1, 0.5);
     // 均匀场没有扩散通量，所以场的每一格都精确按 uv² 的量搬运
     expect(sum(u)).toBeLessThan(u0);
     expect(sum(v)).toBeGreaterThan(v0);
@@ -75,8 +75,8 @@ describe('rdStep：解析不变量（证明 step 写对了）', () => {
     const ta = new Float32Array(n * n);
     const tb = new Float32Array(n * n);
     for (let i = 0; i < 20; i++) {
-      rdStep(a.u, a.v, ta, tb, n, 0.0545, 0.062, 1, 0.5);
-      rdStep(b.u, b.v, ta, tb, n, 0.0545, 0.062, 1, 0.5);
+      rdStep(a.u, a.v, ta, tb, n, n, 0.0545, 0.062, 1, 0.5);
+      rdStep(b.u, b.v, ta, tb, n, n, 0.0545, 0.062, 1, 0.5);
     }
     expect(Array.from(b.u)).toEqual(Array.from(a.u));
     expect(Array.from(b.v)).toEqual(Array.from(a.v));
@@ -88,7 +88,7 @@ describe('rdStep：解析不变量（证明 step 写对了）', () => {
     const tmpU = new Float32Array(n * n);
     const tmpV = new Float32Array(n * n);
     const before = sum(u) + sum(v);
-    for (let i = 0; i < 60; i++) rdStep(u, v, tmpU, tmpV, n, 0.0545, 0.062, 1, 0.5);
+    for (let i = 0; i < 60; i++) rdStep(u, v, tmpU, tmpV, n, n, 0.0545, 0.062, 1, 0.5);
     const after = sum(u) + sum(v);
     expect(Math.abs(after - before)).toBeGreaterThan(1);
   });
@@ -213,7 +213,7 @@ describe('反应扩散：种子策略', () => {
   it('initRd 的 pattern 路径与 stampCentered 的居中语义一致', () => {
     const n = 16;
     const bm = bitmapFromRows(['#']);
-    const single = initRd({ n, seedMode: 'pattern', pattern: encodePattern(bm), seedSize: 1, seedDensity: 0, seed: 1 });
+    const single = initRd({ w: n, h: n, seedMode: 'pattern', pattern: encodePattern(bm), seedSize: 1, seedDensity: 0, seed: 1 });
     // 单格图案 → 只有一个格被种下，且落在中心
     const planted: number[] = [];
     for (let i = 0; i < n * n; i++) if (single.v[i]! > 0) planted.push(i);

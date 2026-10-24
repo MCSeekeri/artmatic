@@ -159,6 +159,108 @@ test('方框跟踪：探针尺寸不随渲染档位变（预览与导出同一�
   expect(quarter.boxes).toBeGreaterThan(0);
 });
 
+test('方框跟踪：框内效果与框线是同一块矩形（位置与大小）', async ({ page }) => {
+  await boot(page);
+  /*
+   * 钉住「掩码和叠层各算一份几何」那一类 bug。真实事故：掩码没把 Canvas2D 的
+   * `cy` 翻成着色器的 v 向上（也漏了出场动画的缩放），画面上是一块与框完全错开
+   * 的反色补丁 —— 看起来像检测框错了，而所有「有框 / 有叠层」的断言全绿。
+   *
+   * 做法：同一个 t 渲三次，只改「框线可见」「框内效果」两个开关，分别取
+   * 「框线的像素包围盒」与「框内被改动的像素包围盒」，两者必须重合。
+   */
+  await page.evaluate(() => {
+    const L = (window as unknown as LabWindow).__lab!;
+    /*
+     * 关掉一切会同时作用于两边的量（抖动、出场动画）、会画到别处的装饰
+     * （扫描线 / 准星 / 数据条 / 标签 / 连线），以及多框（包围盒会变成并集）。
+     *
+     * 源用 `lab:bars` 而不是分形：后者同参数连渲两次有上百个像素的差异
+     * （见 `tests/e2e/AGENTS.md` 那条采样竞态），差异包围盒会被那点噪声撑爆 ——
+     * 实测把框外 100 多像素的行列算进来，量出来的「错位」全是噪声。
+     */
+    L.selectSource('lab:bars');
+    L.selectEffect('box-tracker');
+    const base: Record<string, number | string> = {
+      blobCount: 1,
+      refresh: 6,
+      jitter: 0,
+      smoothness: 0,
+      animShow: 0,
+      frameStyle: 'solid',
+      frameAlpha: 1,
+      interior: 'none',
+      scanShow: 0,
+      reticleShow: 0,
+      barsShow: 0,
+      labelShow: 0,
+      linkShow: 0,
+    };
+    for (const [k, v] of Object.entries(base)) L.setParam('effect', k, v);
+    // 先让追踪器建立状态。后面三张图都停在帧 7（refresh = 6 ⇒ 不重检），
+    // 于是方框位置逐像素相同，差别只有那两个开关。
+    L.renderAt(0.2, true);
+  });
+
+  const boxes = await page.evaluate(() => {
+    const L = (window as unknown as LabWindow).__lab!;
+    interface Shot {
+      data: number[];
+      w: number;
+      h: number;
+    }
+    interface Box {
+      x0: number;
+      y0: number;
+      x1: number;
+      y1: number;
+    }
+    const shot = (over: Record<string, number | string>): Shot => {
+      for (const [k, v] of Object.entries(over)) L.setParam('effect', k, v);
+      L.renderAt(0.24, false);
+      return L.readPixels();
+    };
+    /** 两张图的差异包围盒（没有差异 = null）。 */
+    const bbox = (a: Shot, b: Shot): Box | null => {
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -1;
+      let y1 = -1;
+      for (let i = 0; i < a.data.length; i += 4) {
+        if (a.data[i] === b.data[i] && a.data[i + 1] === b.data[i + 1] && a.data[i + 2] === b.data[i + 2]) {
+          continue;
+        }
+        const p = i / 4;
+        const x = p % a.w;
+        const y = (p - x) / a.w;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+      return x1 < 0 ? null : { x0, y0, x1, y1 };
+    };
+    const bare = shot({ interior: 'none', frameAlpha: 0 });
+    return {
+      frame: bbox(bare, shot({ interior: 'none', frameAlpha: 1 })),
+      inner: bbox(bare, shot({ interior: 'invert', frameAlpha: 0 })),
+    };
+  });
+
+  const f = boxes.frame;
+  const r = boxes.inner;
+  expect(f, '框线没有出现在画面上').not.toBeNull();
+  expect(r, '框内效果没有出现在画面上').not.toBeNull();
+
+  // 容差：框线 0.75px 宽且两端有抗锯齿，掩码有 1.5px 羽化。
+  const tol = 4;
+  const both = `框线 ${JSON.stringify(f)} / 框内效果 ${JSON.stringify(r)}`;
+  expect(Math.abs((f!.x0 + f!.x1) / 2 - (r!.x0 + r!.x1) / 2), `框内效果横向错开：${both}`).toBeLessThanOrEqual(tol);
+  expect(Math.abs((f!.y0 + f!.y1) / 2 - (r!.y0 + r!.y1) / 2), `框内效果纵向错开：${both}`).toBeLessThanOrEqual(tol);
+  expect(Math.abs(f!.x1 - f!.x0 - (r!.x1 - r!.x0)), `框内效果宽度与框线不一致：${both}`).toBeLessThanOrEqual(tol);
+  expect(Math.abs(f!.y1 - f!.y0 - (r!.y1 - r!.y0)), `框内效果高度与框线不一致：${both}`).toBeLessThanOrEqual(tol);
+});
+
 test('方框跟踪：每个装饰项都真的画到画面上', async ({ page }) => {
   await boot(page);
   // 用分形做源：方框又大又稳，装饰项的像素变化才量得出来

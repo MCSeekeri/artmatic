@@ -31,8 +31,12 @@
 
 import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCenteredInto } from './pattern-codec';
+import { gridSizeOf } from './grid-dims';
 import { SnapshotRing, TorusField, annulusKernel } from './sim-util';
 import type { GeneratorDef, SimHandle } from './types';
+
+/** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
+const LENIA_GRID = { min: 48, max: 192, fallback: 112 } as const;
 
 const SNAPSHOT_OPTS = {
   every: 24,
@@ -78,7 +82,8 @@ export function leniaStep(
 }
 
 export function createLenia(params: Record<string, number | string>, seed: number): SimHandle {
-  const n = Math.max(48, Math.min(192, Math.round(Number(params.size) || 112)));
+  const { w, h } = gridSizeOf(params, LENIA_GRID);
+  const total = w * h;
   const stepsPerSec = Math.max(1, Number(params.rate) || 12);
   const R = Math.max(4, Math.min(16, Math.round(Number(params.R) || 10)));
   const rule: LeniaRule = {
@@ -88,15 +93,15 @@ export function createLenia(params: Record<string, number | string>, seed: numbe
   };
   const kernel = annulusKernel(R);
   // 核是常量 → 偏移表算一次就够（每步重建会把 2× 的收益吃回去）
-  const field = new TorusField(n, kernel);
+  const field = new TorusField(w, h, kernel);
 
-  const buf: [Float32Array, Float32Array] = [new Float32Array(n * n), new Float32Array(n * n)];
+  const buf: [Float32Array, Float32Array] = [new Float32Array(total), new Float32Array(total)];
   const { seedMode } = params;
 
   if (seedMode === 'pattern') {
     const bm = patternFromParam(params.pattern);
-    if (bm) stampCenteredInto(n, n, bm, (i) => (buf[0]![i] = 1));
-    else seedBlob(buf[0]!, n, Number(params.seedSize) || 14);
+    if (bm) stampCenteredInto(w, h, bm, (i) => (buf[0]![i] = 1));
+    else seedBlob(buf[0]!, w, h, Number(params.seedSize) || 14);
   } else if (seedMode === 'random') {
     const rnd = mulberry32(seed);
     const d = Math.max(0, Math.min(1, Number(params.seedDensity) || 0.3));
@@ -106,13 +111,13 @@ export function createLenia(params: Record<string, number | string>, seed: numbe
     const rnd = mulberry32(seed);
     for (let i = 0; i < buf[0]!.length; i++) buf[0]![i] = rnd() * 0.5;
   } else {
-    seedBlob(buf[0]!, n, Number(params.seedSize) || 14);
+    seedBlob(buf[0]!, w, h, Number(params.seedSize) || 14);
   }
 
   let which = 0;
   let frame = 0;
   const snapshots = new SnapshotRing<Float32Array>(SNAPSHOT_OPTS, buf[0]!);
-  const out = new Uint8Array(n * n);
+  const out = new Uint8Array(total);
 
   const stepTo = (target: number): void => {
     while (frame < target) {
@@ -124,8 +129,8 @@ export function createLenia(params: Record<string, number | string>, seed: numbe
   };
 
   return {
-    gridW: n,
-    gridH: n,
+    gridW: w,
+    gridH: h,
     stepsPerSec,
     seek(simFrame: number): void {
       const target = Math.max(0, Math.floor(simFrame));
@@ -147,15 +152,16 @@ export function createLenia(params: Record<string, number | string>, seed: numbe
   };
 }
 
-function seedBlob(a: Float32Array, n: number, radius: number): void {
+function seedBlob(a: Float32Array, w: number, h: number, radius: number): void {
   const r = Math.max(2, Math.round(radius));
-  const c = n >> 1;
+  const cx = w >> 1;
+  const cy = h >> 1;
   const r2 = r * r;
-  for (let y = 0; y < n; y++) {
-    const dy = y - c;
-    for (let x = 0; x < n; x++) {
-      const dx = x - c;
-      if (dx * dx + dy * dy <= r2) a[y * n + x] = 1;
+  for (let y = 0; y < h; y++) {
+    const dy = y - cy;
+    for (let x = 0; x < w; x++) {
+      const dx = x - cx;
+      if (dx * dx + dy * dy <= r2) a[y * w + x] = 1;
     }
   }
 }
@@ -166,7 +172,8 @@ export const leniaDef: GeneratorDef = {
   kind: 'sim',
   volatile: ['rate', 'colorBg', 'colorLive'],
   params: [
-    { key: 'size', labelKey: 'algo.lenia.grid', type: 'range', min: 48, max: 192, step: 16, defaultValue: 112 },
+    { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 48, max: 192, step: 16, defaultValue: 112 },
+    { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 48, max: 192, step: 16, defaultValue: 112 },
     // 默认 R=10 而不是原论文的 13：卷积成本按 R² 涨，112²+R=13 实测约 9M MAC/步
     { key: 'R', labelKey: 'algo.lenia.radius', type: 'range', min: 4, max: 16, step: 1, defaultValue: 10 },
     { key: 'mu', labelKey: 'algo.lenia.mu', type: 'range', min: 0.02, max: 0.6, step: 0.005, defaultValue: 0.15 },

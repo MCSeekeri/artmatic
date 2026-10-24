@@ -35,11 +35,15 @@
 
 import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCenteredInto } from './pattern-codec';
+import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import type { MessageKey } from '../i18n/locales';
 import type { GeneratorDef, SimHandle } from './types';
 
 /* --------------------------------------------------------------- 参数表 */
+
+/** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
+const RD_GRID = { min: 32, max: 384, fallback: 160 } as const;
 
 /** 9 点 Laplacian 的系数。改成 5 点就必须同时改 Du/Dv。 */
 const LAP_EDGE = 0.2;
@@ -118,20 +122,21 @@ export function rdStep(
   v: Float32Array,
   tmpU: Float32Array,
   tmpV: Float32Array,
-  n: number,
+  w: number,
+  h: number,
   f: number,
   k: number,
   du: number,
   dv: number,
 ): void {
   const fk = f + k;
-  for (let y = 0; y < n; y++) {
-    const yU = (y === 0 ? n - 1 : y - 1) * n;
-    const yD = (y === n - 1 ? 0 : y + 1) * n;
-    const yM = y * n;
-    for (let x = 0; x < n; x++) {
-      const xL = x === 0 ? n - 1 : x - 1;
-      const xR = x === n - 1 ? 0 : x + 1;
+  for (let y = 0; y < h; y++) {
+    const yU = (y === 0 ? h - 1 : y - 1) * w;
+    const yD = (y === h - 1 ? 0 : y + 1) * w;
+    const yM = y * w;
+    for (let x = 0; x < w; x++) {
+      const xL = x === 0 ? w - 1 : x - 1;
+      const xR = x === w - 1 ? 0 : x + 1;
 
       const uu = u[yM + x]!;
       const vv = v[yM + x]!;
@@ -161,7 +166,8 @@ const SEED_U = 0.5;
 const SEED_V = 0.25;
 
 export interface RdInitOptions {
-  n: number;
+  w: number;
+  h: number;
   seedMode: 'blob' | 'pattern' | 'random';
   pattern: string;
   seedSize: number;
@@ -170,9 +176,9 @@ export interface RdInitOptions {
 }
 
 export function initRd(o: RdInitOptions): { u: Float32Array; v: Float32Array } {
-  const n = o.n;
-  const u = new Float32Array(n * n).fill(1);
-  const v = new Float32Array(n * n);
+  const { w, h } = o;
+  const u = new Float32Array(w * h).fill(1);
+  const v = new Float32Array(w * h);
   const plant = (i: number): void => {
     u[i] = SEED_U;
     v[i] = SEED_V;
@@ -181,7 +187,7 @@ export function initRd(o: RdInitOptions): { u: Float32Array; v: Float32Array } {
   if (o.seedMode === 'pattern') {
     const bm = patternFromParam(o.pattern);
     if (bm) {
-      stampCenteredInto(n, n, bm, plant);
+      stampCenteredInto(w, h, bm, plant);
       return { u, v };
     }
     // 图案串坏了 / 空串 → 退回落差最小的团块，不报错、不空白
@@ -200,25 +206,27 @@ export function initRd(o: RdInitOptions): { u: Float32Array; v: Float32Array } {
     //   · 整场 × 30% → 只有 3 个预设活得下来。
     // 留出四周的 u=1/v=0 介质、只在中间撒噪声，三个密度都能出图 ——
     // 与生命游戏「中间 3/5 区域撒种」是同一个理由。
-    const lo = Math.floor(n * 0.2);
-    const hi = Math.ceil(n * 0.8);
-    for (let y = lo; y < hi; y++) {
-      for (let x = lo; x < hi; x++) {
-        if (rnd() < d) plant(y * n + x);
+    const loX = Math.floor(w * 0.2);
+    const hiX = Math.ceil(w * 0.8);
+    const loY = Math.floor(h * 0.2);
+    const hiY = Math.ceil(h * 0.8);
+    for (let y = loY; y < hiY; y++) {
+      for (let x = loX; x < hiX; x++) {
+        if (rnd() < d) plant(y * w + x);
       }
     }
     return { u, v };
   }
 
   const r = Math.max(1, Math.round(o.seedSize));
-  const cx = n >> 1;
-  const cy = n >> 1;
+  const cx = w >> 1;
+  const cy = h >> 1;
   const r2 = r * r;
-  for (let y = 0; y < n; y++) {
+  for (let y = 0; y < h; y++) {
     const dy = y - cy;
-    for (let x = 0; x < n; x++) {
+    for (let x = 0; x < w; x++) {
       const dx = x - cx;
-      if (dx * dx + dy * dy <= r2) plant(y * n + x);
+      if (dx * dx + dy * dy <= r2) plant(y * w + x);
     }
   }
   return { u, v };
@@ -230,7 +238,8 @@ export function createReactionDiffusion(
   params: Record<string, number | string>,
   seed: number,
 ): SimHandle {
-  const n = Math.max(32, Math.min(512, Math.round(Number(params.size) || 160)));
+  const { w, h } = gridSizeOf(params, RD_GRID);
+  const total = w * h;
   const stepsPerSec = Math.max(1, Number(params.rate) || 120);
   const preset = String(params.preset ?? 'coral');
   const fk = RD_PRESETS[preset];
@@ -240,7 +249,8 @@ export function createReactionDiffusion(
   const dv = Math.max(0, Number(params.dv ?? 0.5));
 
   const state = initRd({
-    n,
+    w,
+    h,
     seedMode: params.seedMode === 'pattern' || params.seedMode === 'random' ? params.seedMode : 'blob',
     pattern: String(params.pattern ?? ''),
     seedSize: Number(params.seedSize) || 8,
@@ -249,25 +259,25 @@ export function createReactionDiffusion(
   });
   let u = state.u;
   let v = state.v;
-  const tmpU = new Float32Array(n * n);
-  const tmpV = new Float32Array(n * n);
+  const tmpU = new Float32Array(total);
+  const tmpV = new Float32Array(total);
 
   let frame = 0;
   const snapshots = new SnapshotRing<{ u: Float32Array; v: Float32Array }>(SNAPSHOT_OPTS, { u, v });
 
-  const out = new Uint8Array(n * n * 2);
+  const out = new Uint8Array(total * 2);
 
   const stepTo = (target: number): void => {
     while (frame < target) {
-      rdStep(u, v, tmpU, tmpV, n, f, k, du, dv);
+      rdStep(u, v, tmpU, tmpV, w, h, f, k, du, dv);
       frame++;
       if (snapshots.shouldStore(frame)) snapshots.store(frame, { u, v });
     }
   };
 
   return {
-    gridW: n,
-    gridH: n,
+    gridW: w,
+    gridH: h,
     stepsPerSec,
     channels: 2,
     seek(simFrame: number): void {
@@ -283,7 +293,7 @@ export function createReactionDiffusion(
     },
     current(): Uint8Array {
       // 交错 RG：r = u，g = v × RD_V_SCALE（拉开 v 的窄动态范围，见文件头）
-      for (let i = 0, j = 0; i < n * n; i++, j += 2) {
+      for (let i = 0, j = 0; i < total; i++, j += 2) {
         const a = u[i]!;
         const b = v[i]! * RD_V_SCALE;
         out[j] = a <= 0 ? 0 : a >= 1 ? 255 : Math.round(a * 255);
@@ -395,10 +405,19 @@ export const reactionDiffusionDef: GeneratorDef = {
     { key: 'du', labelKey: 'algo.reactionDiffusion.du', type: 'range', min: 0.5, max: 1.2, step: 0.01, defaultValue: 1 },
     { key: 'dv', labelKey: 'algo.reactionDiffusion.dv', type: 'range', min: 0.2, max: 0.7, step: 0.01, defaultValue: 0.5 },
     {
-      key: 'size',
-      labelKey: 'algo.reactionDiffusion.grid',
+      key: 'width',
+      labelKey: 'algo.simGrid.width',
       type: 'range',
-      min: 64,
+      min: 32,
+      max: 384,
+      step: 16,
+      defaultValue: 160,
+    },
+    {
+      key: 'height',
+      labelKey: 'algo.simGrid.height',
+      type: 'range',
+      min: 32,
       max: 384,
       step: 16,
       defaultValue: 160,

@@ -61,6 +61,9 @@ import { activeRangeOf, newRange, nextRangeName, normalizeRange, rangeFrames } f
 import { defaultValues, type ParamDef } from '../effects/types';
 import { defaultEffectValues, getEffect } from '../effects/registry';
 import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
+import { encodePattern } from '../algos/pattern-codec';
+import { bitmapFromImageBlob } from '../algos/pattern-image';
+import { gridSizeFromDefs } from '../algos/grid-dims';
 import { coerceCropEdges, coerceKeySettings, coerceQuadCorners, identityCrop, isIdentityCrop } from '../core/image-fx';
 import { defaultTransitionValues, getTransition } from '../effects/transitions/registry';
 import { Mp4Sink, probeMp4Codec } from '../exporters/mp4-sink';
@@ -335,6 +338,19 @@ export interface AgentControlPlane {
     clipId: string,
     params: Record<string, number | string>,
   ): Promise<ControlResult<{ changed: boolean; values: Record<string, number | string> }>>;
+  /**
+   * 把媒体池里的一张图片（SVG / PNG）按模拟网格采样成 `pattern` 参数，
+   * 并把 `seedMode` 切到 `'pattern'`（生成器有这一档时）。
+   *
+   * 采样判据是**不透明度**（见 `algos/pattern-image.ts`）；颜色 / 亮度不参与。
+   * 一次调用 = 一笔撤销（图案 + seedMode 一起换，否则会出现「图案写了但
+   * 生成器还在随机撒种」的半截状态）。
+   */
+  seedPatternFromAsset(
+    clipId: string,
+    param: string,
+    assetId: string,
+  ): Promise<ControlResult<{ param: string; pattern: string; w: number; h: number }>>;
   /**
    * 改一个特效实例：参数与 / 或启用开关。两者至少给一个 ——
    * 「只关掉这一条看差异」和「只调一个参数」都不该被迫带上另一个。
@@ -1026,6 +1042,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'splitClip'
     | 'setClipProps'
     | 'setClipSourceParams'
+    | 'seedPatternFromAsset'
     | 'setGenerator'
     | 'setEffectParams'
     | 'setCurve'
@@ -1555,6 +1572,72 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           else if (after.source.type === 'solid' && key === 'color') values.color = after.source.color;
         }
         return { changed: store.version !== before, values };
+      });
+    },
+
+    async seedPatternFromAsset(clipId, param, assetId) {
+      return run(async () => {
+        const store = beforeWrite();
+        const clip = needSourceClip(store, clipId);
+        if (clip.source.type !== 'algo') {
+          throw new ControlFailure('unsupported', tr('agent.algo.notAlgo', { id: clipId, type: clip.source.type }));
+        }
+        const def = getGenerator(clip.source.generator);
+        if (!def) {
+          throw new ControlFailure('not-found', tr('agent.gen.notFound', { id: clip.source.generator }));
+        }
+        const target = def.params.find((p) => p.key === param);
+        if (!target || target.type !== 'pattern') {
+          throw new ControlFailure(
+            'invalid-argument',
+            tr('agent.pattern.notPattern', { id: def.id, param }),
+            { validIds: def.params.filter((p) => p.type === 'pattern').map((p) => p.key) },
+          );
+        }
+
+        const assets = ctx.getAssets();
+        if (!assets) throw new ControlFailure('unsupported', tr('agent.pattern.unsupported'));
+        const declared = store.project.assets[assetId];
+        const kind = declared?.kind ?? assets.input(assetId)?.kind;
+        if (!kind) {
+          throw new ControlFailure('not-found', tr('agent.asset.notFound', { id: assetId }), {
+            validIds: Object.keys(store.project.assets),
+          });
+        }
+        if (kind !== 'image') {
+          throw new ControlFailure('invalid-argument', tr('agent.pattern.notImage', { id: assetId }));
+        }
+        const bytes = await assets.readAll(assetId);
+        if (!bytes || bytes.byteLength === 0) {
+          throw new ControlFailure('not-found', tr('agent.pattern.noBytes', { id: assetId }));
+        }
+
+        /*
+         * 采样分辨率 = 模拟网格。图案盖回网格时是恒等映射，图片就是初始状态；
+         * 用编辑器那个 32² 的话，256 宽的网格上只会在中间出现一小块。
+         */
+        const grid = gridSizeFromDefs(clip.source.params, def.params) ?? { w: 32, h: 32 };
+        const name = assets.input(assetId)?.originName ?? '';
+        const type = name.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/png';
+        // `Uint8Array<ArrayBufferLike>` 不满足 BlobPart（TS 5.9），切一份自己的 buffer。
+        const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        const bm = await bitmapFromImageBlob(new Blob([buf], { type }), grid.w, grid.h);
+        if (!bm) {
+          throw new ControlFailure('unsupported', tr('agent.pattern.decodeFailed', { id: assetId }));
+        }
+        const pattern = encodePattern(bm);
+
+        // 图案与 `seedMode` 在同一笔撤销里：只写图案的话，生成器还在随机撒种，
+        // 模型会以为工具没生效、再调一次。
+        const seedParam = def.params.find((p) => p.key === 'seedMode');
+        const canSeed =
+          seedParam?.type === 'select' && seedParam.options.some((o) => o.value === 'pattern');
+        store.updateClip(clipId, label('seed_pattern_from_asset'), (c) => {
+          if (c.kind !== 'source' || c.source.type !== 'algo') return;
+          c.source.params[param] = pattern;
+          if (canSeed) c.source.params.seedMode = 'pattern';
+        });
+        return { param, pattern, w: bm.w, h: bm.h };
       });
     },
 

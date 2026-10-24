@@ -28,7 +28,7 @@ import type { MessageKey } from '../i18n/locales';
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -387,6 +387,24 @@ export function defaultProject(name = tr('proj.unnamed')): Project {
 
 /* ----------------------------------------------------------- 校验与迁移 */
 
+/**
+ * v15 → v16 要改写参数的生成器。
+ *
+ * 白名单而不是「凡是有 size 的都改」：雪花与佛像也有 `size`，但那个尺寸是
+ * 六角格半径 / 复平面方窗，不是「列数」。误改它们会让画面几何直接变样。
+ * 这张表是**历史快照**：以后新增的生成器不需要往这里加。
+ */
+const GRID_SIM_GENERATORS = new Set([
+  'game-of-life',
+  'langtons-ant',
+  'brians-brain',
+  'cyclic-ca',
+  'wireworld',
+  'sandpile',
+  'reaction-diffusion',
+  'lenia',
+]);
+
 class SchemaError extends Error {}
 
 /**
@@ -594,6 +612,47 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * （静默数据丢失，且只有听得出）。
    */
   14: (p) => ({ ...p, schemaVersion: 15 }),
+
+  /**
+   * v15 → v16：网格类模拟的 `size`（正方形）拆成 `width` / `height`（列 × 行）。
+   *
+   * **真迁移，不是恒等**：`size` 这个键在新参数表里已经不存在，逐键合并会把它
+   * 丢掉、退回默认值 —— 用户把网格从 112 调到 224 之后存的工程会静默变回 112。
+   * 所以这里必须把它读出来，两个轴都写成同一个值（老语义就是正方形）。
+   *
+   * 只改**确实有网格的那批生成器**（白名单在下方）。雪花与佛像也各有一个
+   * `size`，但方形是它们模型的一部分（六角格 / 复平面），不在此列。
+   */
+  15: (p) => {
+    const tracks = Array.isArray(p.tracks) ? (p.tracks as unknown[]) : [];
+    const next = tracks.map((raw) => {
+      const track = raw as { clips?: unknown[] };
+      if (!Array.isArray(track?.clips)) return raw;
+      let changed = false;
+      const clips = track.clips.map((rawClip) => {
+        const clip = rawClip as {
+          kind?: string;
+          source?: { type?: string; generator?: string; params?: Record<string, unknown> };
+        };
+        if (clip?.kind !== 'source' || clip.source?.type !== 'algo') return rawClip;
+        if (!GRID_SIM_GENERATORS.has(String(clip.source.generator))) return rawClip;
+        const params = clip.source.params;
+        if (!params) return rawClip;
+        const size = Number(params.size);
+        if (!Number.isFinite(size)) return rawClip;
+        // 已经是新格式（手改 / 半迁移）就不要再覆盖用户给的宽高
+        if (params.width !== undefined || params.height !== undefined) return rawClip;
+        const { size: _old, ...rest } = params;
+        changed = true;
+        return {
+          ...clip,
+          source: { ...clip.source, params: { ...rest, width: size, height: size } },
+        };
+      });
+      return changed ? { ...track, clips } : raw;
+    });
+    return { ...p, tracks: next, schemaVersion: 16 };
+  },
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {

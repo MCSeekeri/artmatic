@@ -110,6 +110,7 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   'fast-mosh': { base: 'scroll', descKey: 'fx.desc.fastMosh', category: 'glitch' },
   feedback: { base: 'photo', descKey: 'fx.desc.feedback', category: 'blur', overlay: true },
   'fiber-displace': { base: 'photo', descKey: 'fx.desc.fiberDisplace', category: 'geometry' },
+  fisheye: { base: 'grid', descKey: 'fx.desc.fisheye', category: 'geometry' },
   'flash-glitch': { base: 'mandel', descKey: 'fx.desc.flashGlitch', category: 'glitch' },
   'flow-contours': { base: 'photo', descKey: 'fx.desc.flowContours', category: 'style' },
   ghosting: { base: 'grid', descKey: 'fx.desc.ghosting', category: 'blur', overlay: true },

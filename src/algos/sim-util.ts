@@ -234,7 +234,7 @@ export function discKernel(R: number, eps = 1e-6): SparseKernel {
  * ```
  *
  * 那是每个抽头 4 个分支 + 2 次下标乘加。这里改成**先把场连同一圈 R 宽的
- * 环面 halo 复制进一块 `(n+2R)²` 的缓冲**，内层循环就只剩 `acc += w * pad[base + off]`
+ * 环面 halo 复制进一块 `(w+2R) × (h+2R)` 的缓冲**，内层循环就只剩 `acc += w * pad[base + off]`
  * —— 一条乘加、零分支。halo 刷新是 O(n·R) 的拷贝，相对 O(n²·taps) 的卷积可以忽略。
  *
  * 实测（112²、R=10、317 抽头）：**7.82 → 3.80 ms/次，2.06×**，且
@@ -245,54 +245,64 @@ export function discKernel(R: number, eps = 1e-6): SparseKernel {
  * - 一个实例绑一个核；换 R 要新建（偏移表是按核预计算的）。
  */
 export class TorusField {
-  /** 带 halo 的场，边长 = n + 2R。 */
+  /** 带 halo 的场，宽 = w + 2R、高 = h + 2R。 */
   private readonly pad: Float32Array;
-  private readonly w: number;
+  /** 带 halo 的场的**行宽**（不是网格宽度 —— 别拿它当 `w` 用）。 */
+  private readonly pw: number;
   private readonly off: Int32Array;
   private readonly wt: Float32Array;
-  /** 上一次卷积的原始结果（n×n）。调用方直接读，省一次拷贝。 */
+  /** 网格列数。 */
+  readonly w: number;
+  /** 网格行数。 */
+  readonly h: number;
+  /** 上一次卷积的原始结果（w×h）。调用方直接读，省一次拷贝。 */
   readonly conv: Float32Array;
 
-  constructor(
-    readonly n: number,
-    kernel: SparseKernel,
-  ) {
+  /** 正方形（大部分调用点 / 单测）。 */
+  constructor(w: number, kernel: SparseKernel);
+  /** 矩形网格。 */
+  constructor(w: number, h: number, kernel: SparseKernel);
+  constructor(w: number, hOrKernel: number | SparseKernel, maybeKernel?: SparseKernel) {
+    const h = typeof hOrKernel === 'number' ? hOrKernel : w;
+    const kernel = typeof hOrKernel === 'number' ? maybeKernel! : hOrKernel;
     const taps = kernel.w.length;
     let R = 0;
     for (let t = 0; t < taps; t++) {
       const r = Math.max(Math.abs(kernel.dx[t]!), Math.abs(kernel.dy[t]!));
       if (r > R) R = r;
     }
-    this.w = n + 2 * R;
-    this.pad = new Float32Array(this.w * this.w);
+    this.w = w;
+    this.h = h;
+    this.pw = w + 2 * R;
+    this.pad = new Float32Array(this.pw * (h + 2 * R));
     this.off = new Int32Array(taps);
-    for (let t = 0; t < taps; t++) this.off[t] = kernel.dy[t]! * this.w + kernel.dx[t]!;
+    for (let t = 0; t < taps; t++) this.off[t] = kernel.dy[t]! * this.pw + kernel.dx[t]!;
     this.wt = kernel.w.slice();
-    this.conv = new Float32Array(n * n);
+    this.conv = new Float32Array(w * h);
   }
 
-  /** 卷积 `src`（n×n），结果在 `this.conv`。 */
+  /** 卷积 `src`（w×h），结果在 `this.conv`。 */
   convolve(src: Float32Array): void {
-    const { n, w, pad, off, wt } = this;
-    const R = (w - n) >> 1;
+    const { w, h, pw, pad, off, wt } = this;
+    const R = (pw - w) >> 1;
 
-    for (let y = 0; y < n; y++) {
-      const row = y * n;
-      const prow = (y + R) * w + R;
-      pad.set(src.subarray(row, row + n), prow);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      const prow = (y + R) * pw + R;
+      pad.set(src.subarray(row, row + w), prow);
       // 左右 halo
       for (let r = 0; r < R; r++) {
-        pad[prow - 1 - r] = src[row + n - 1 - r]!;
-        pad[prow + n + r] = src[row + r]!;
+        pad[prow - 1 - r] = src[row + w - 1 - r]!;
+        pad[prow + w + r] = src[row + r]!;
       }
     }
     // 上下 halo：**整行**复制（连左右 halo 一起，否则四个角是错的）
     for (let r = 0; r < R; r++) {
-      const srcTop = (R + n - 1 - r) * w;
-      const dstTop = (R - 1 - r) * w;
-      const srcBot = (R + r) * w;
-      const dstBot = (R + n + r) * w;
-      for (let x = 0; x < w; x++) {
+      const srcTop = (R + h - 1 - r) * pw;
+      const dstTop = (R - 1 - r) * pw;
+      const srcBot = (R + r) * pw;
+      const dstBot = (R + h + r) * pw;
+      for (let x = 0; x < pw; x++) {
         pad[dstTop + x] = pad[srcTop + x]!;
         pad[dstBot + x] = pad[srcBot + x]!;
       }
@@ -300,10 +310,10 @@ export class TorusField {
 
     const taps = off.length;
     const out = this.conv;
-    for (let y = 0; y < n; y++) {
-      const base = (y + R) * w + R;
-      const orow = y * n;
-      for (let x = 0; x < n; x++) {
+    for (let y = 0; y < h; y++) {
+      const base = (y + R) * pw + R;
+      const orow = y * w;
+      for (let x = 0; x < w; x++) {
         const b = base + x;
         let acc = 0;
         for (let t = 0; t < taps; t++) acc += wt[t]! * pad[b + off[t]!]!;

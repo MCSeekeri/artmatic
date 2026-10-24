@@ -196,6 +196,11 @@ export const media = {
   'fx.bulge.amount': '凸起量',
   'fx.bulge.radius': '半径',
 
+  'fx.fisheye': '鱼眼镜头',
+  'fx.fisheye.strength': '强度',
+  'fx.fisheye.crop': '裁剪范围',
+  'fx.fisheye.reverse': '反向',
+
   'fx.halftone': '半调网屏',
   'fx.halftone.scale': '网屏间距',
   'fx.halftone.angle': '角度',
@@ -730,8 +735,11 @@ export const media = {
   'algo.rule.name184': 'Rule 184',
   'algo.rule.name250': 'Rule 250',
 
+  /* 网格类模拟的两个尺寸（列 / 行）。整个 CA 家族共用这两条文案。 */
+  'algo.simGrid.width': '宽',
+  'algo.simGrid.height': '高',
+
   'algo.gameOfLife': '生命游戏',
-  'algo.gameOfLife.grid': '网格',
   'algo.gameOfLife.rules': 'B/S 规则',
   'algo.gameOfLife.seedMode': '种子',
   'algo.gameOfLife.seedRandom': '随机撒种',
@@ -769,6 +777,11 @@ export const media = {
   'algo.pattern.hint': '拖拽涂画：从空格起手是画，从活格起手是擦',
   'algo.pattern.alive': '活格',
   'algo.pattern.none': '未绘制',
+  /* 从媒体池图片导入图案（按不透明度采样） */
+  'algo.pattern.import': '从素材导入',
+  'algo.pattern.importTitle': '选择图片',
+  'algo.pattern.importEmpty': '媒体池里还没有图片素材',
+  'algo.pattern.importFailed': '这张图读不出来',
   'algo.pattern.preset.glider': '滑翔机',
   'algo.pattern.preset.gospersGun': '滑翔机枪',
   'algo.pattern.preset.pulsar': '脉冲星',
@@ -867,7 +880,6 @@ export const media = {
   'algo.langtonsAnt.vRLRR': 'RLRR',
   'algo.langtonsAnt.vRLLR': 'RLLR',
   'algo.langtonsAnt.vLong': 'RRLLLRLLLRRR',
-  'algo.langtonsAnt.grid': '网格',
   'algo.langtonsAnt.startMode': '起点',
   'algo.langtonsAnt.startCenter': '中心',
   'algo.langtonsAnt.startCorner': '四角',
@@ -1061,7 +1073,6 @@ export const media = {
   'algo.reactionDiffusion.kill': '消耗 k',
   'algo.reactionDiffusion.du': '扩散 Du',
   'algo.reactionDiffusion.dv': '扩散 Dv',
-  'algo.reactionDiffusion.grid': '网格',
   'algo.reactionDiffusion.seedMode': '种子',
   'algo.reactionDiffusion.seedBlob': '中心团块',
   'algo.reactionDiffusion.seedPattern': '手绘图案',
@@ -1082,7 +1093,6 @@ export const media = {
 
   /* ---- Brian's Brain ---- */
   'algo.briansBrain': 'Brian 的脑',
-  'algo.briansBrain.grid': '网格',
   'algo.briansBrain.seedMode': '种子',
   'algo.briansBrain.seedRandom': '随机撒种',
   'algo.briansBrain.seedPattern': '手绘图案',
@@ -1094,7 +1104,6 @@ export const media = {
 
   /* ---- 循环元胞自动机 ---- */
   'algo.cyclicCa': '循环元胞自动机',
-  'algo.cyclicCa.grid': '网格',
   'algo.cyclicCa.states': '状态数',
   'algo.cyclicCa.threshold': '触发阈值',
   'algo.cyclicCa.neighborhood': '邻域',
@@ -1116,7 +1125,6 @@ export const media = {
 
   /* ---- 阿贝尔沙堆 ---- */
   'algo.sandpile': '阿贝尔沙堆',
-  'algo.sandpile.grid': '网格',
   'algo.sandpile.batch': '每步撒沙量',
   'algo.sandpile.dropMode': '落点',
   'algo.sandpile.dropCenter': '中心一点',
@@ -1141,7 +1149,6 @@ export const media = {
 
   /* ---- Lenia（连续 CA）---- */
   'algo.lenia': 'Lenia（连续生命）',
-  'algo.lenia.grid': '网格',
   'algo.lenia.radius': '核半径 R',
   'algo.lenia.mu': '生长中心 μ',
   'algo.lenia.sigma': '生长宽度 σ',
@@ -1160,7 +1167,6 @@ export const media = {
 
   /* ---- Wireworld ---- */
   'algo.wireworld': 'Wireworld（电子线路）',
-  'algo.wireworld.grid': '网格',
   'algo.wireworld.seedMode': '种子',
   'algo.wireworld.seedRing': '环形轨道',
   'algo.wireworld.seedPattern': '手绘电路',

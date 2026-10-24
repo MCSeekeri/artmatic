@@ -96,9 +96,53 @@ function notify(): void {
  * 重传，不再参与逐帧路径。
  */
 export async function registerImageBytes(assetId: string, blob: Blob): Promise<void> {
-  const bitmap = await createImageBitmap(blob);
-  const w = bitmap.width;
-  const h = bitmap.height;
+  const decoded = await decodeToCanvas(blob);
+  if (!decoded) throw new Error('image decode failed');
+  images.set(assetId, { source: decoded.canvas as unknown as TexImageSource, w: decoded.w, h: decoded.h });
+  notify();
+}
+
+/**
+ * 字节 → canvas。
+ *
+ * **两条解码路径不是冗余**：Chromium 的 `createImageBitmap` 不接受 SVG blob
+ * （直接 reject），而 SVG 是本项目支持的素材类型（媒体池的扩展名表里有它）。
+ * 于是位图走快路，SVG 走 `<img>` + `drawImage` —— `<img>` 里的 SVG 是隔离文档，
+ * 外部引用与脚本都不会执行，作为素材解码是安全的。
+ *
+ * SVG 没有固有尺寸时 `naturalWidth` 是 0：此时按 1024² 的默认视口画，
+ * 至少让「一个没有 width/height 的图标」能显示出来，而不是一条画不出来的素材。
+ */
+async function decodeToCanvas(blob: Blob): Promise<{ canvas: CanvasImageSource; w: number; h: number } | null> {
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    bitmap = null;
+  }
+  if (bitmap) {
+    const out = drawInto(bitmap, bitmap.width, bitmap.height);
+    bitmap.close();
+    return out;
+  }
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const w = img.naturalWidth || 1024;
+    const h = img.naturalHeight || 1024;
+    return drawInto(img, w, h);
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** 把任意图源画进一张 canvas（统一成 canvas 的理由见 `registerImageBytes` 的注释）。 */
+function drawInto(source: CanvasImageSource, w: number, h: number): { canvas: CanvasImageSource; w: number; h: number } | null {
   const canvas =
     typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(w, h)
@@ -111,14 +155,9 @@ export async function registerImageBytes(assetId: string, blob: Blob): Promise<v
     | OffscreenCanvasRenderingContext2D
     | CanvasRenderingContext2D
     | null;
-  if (!ctx) {
-    bitmap.close();
-    return;
-  }
-  ctx.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  images.set(assetId, { source: canvas as unknown as TexImageSource, w, h });
-  notify();
+  if (!ctx) return null;
+  ctx.drawImage(source, 0, 0, w, h);
+  return { canvas: canvas as unknown as CanvasImageSource, w, h };
 }
 
 export function imageSourceFor(assetId: string): ImageEntry | null {

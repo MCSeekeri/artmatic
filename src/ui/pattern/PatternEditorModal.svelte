@@ -17,8 +17,11 @@
   import Modal from '../controls/Modal.svelte';
   import Button from '../controls/Button.svelte';
   import Select from '../controls/Select.svelte';
+  import AssetPickerModal from './AssetPickerModal.svelte';
+  import type { PatternAssetSource } from './pattern-import';
   import { tr } from '../../i18n/index.svelte';
   import { hashSeed, mulberry32 } from '../../core/prng';
+  import { hexToRgba } from '../../core/color';
   import {
     decodePattern,
     emptyBitmap,
@@ -36,11 +39,22 @@
 
   interface Props {
     title: string;
+    /**
+     * 模拟网格的尺寸。给了它，「从素材导入」按**这个分辨率**采样 ——
+     * 图案盖回网格时是恒等映射，图片就是初始状态本身（而不是缩在中间的一块）。
+     * 不给则退回 `editorSize` 的正方形。
+     */
+    grid?: { w: number; h: number };
     /** 初值用函数取（同 CustomCssModal 的理由：避免在 props 求值期读 store）。 */
     initial: () => string;
     mode?: '2d' | '1d';
     /** 新建空白图案时的边长。 */
     editorSize?: number;
+    /**
+     * 「从素材导入」的数据源。**不给就没有这个按钮** —— `/lab/` 不装配
+     * `appState`，在那里它不该出现（见 `pattern-import.ts` 的文件头）。
+     */
+    source?: PatternAssetSource;
     colors: { bg: string; live: string };
     onapply: (encoded: string) => void;
     onclose: () => void;
@@ -48,9 +62,11 @@
   }
   const {
     title,
+    grid,
     initial,
     mode = '2d',
     editorSize = 32,
+    source,
     colors,
     onapply,
     onclose,
@@ -69,6 +85,34 @@
    * 记成「只在初始化时捕获一次」（state_referenced_locally）。
    */
   const CANVAS = $derived(mode === '1d' ? { w: 448, h: 44 } : { w: 320, h: 320 });
+
+  /** 「一格一像素」的离屏图（仅格子 <2px 时用）。见 `draw` 的注释。 */
+  let dots: HTMLCanvasElement | null = null;
+  let dotsForBm: Bitmap | null = null;
+  let dotsLive = '';
+
+  function dotsFor(b: Bitmap, live: string): HTMLCanvasElement {
+    if (dots && dotsForBm === b && dotsLive === live) return dots;
+    const c = document.createElement('canvas');
+    c.width = b.w;
+    c.height = b.h;
+    const cx = c.getContext('2d')!;
+    const img = cx.createImageData(b.w, b.h);
+    const [r, g, bl] = hexToRgba(live);
+    for (let i = 0; i < b.data.length; i++) {
+      if (!b.data[i]) continue;
+      const j = i * 4;
+      img.data[j] = r;
+      img.data[j + 1] = g;
+      img.data[j + 2] = bl;
+      img.data[j + 3] = 255;
+    }
+    cx.putImageData(img, 0, 0);
+    dots = c;
+    dotsForBm = b;
+    dotsLive = live;
+    return c;
+  }
 
   function makeInitial(): Bitmap {
     const decoded = decodePattern(initial());
@@ -89,7 +133,17 @@
   /** 「随机」的种子计数器：每次点击不同，但同一次会话里可复现。 */
   let randTick = 0;
 
-  const sizeOptions = SIZES.map((n) => ({ value: n, label: String(n) }));
+  /**
+   * 下拉项跟着草稿走：从素材导入的图案可能不是方形（按网格尺寸采样），
+   * 它的边长可能不在预设里 —— 不补一项的话触发器会显示成空值。
+   */
+  const sizeOptions = $derived.by(() => {
+    const opts = SIZES.map((n) => ({ value: n, label: String(n) }));
+    if (!SIZES.includes(bm.w)) {
+      opts.unshift({ value: bm.w, label: bm.h === bm.w ? String(bm.w) : `${bm.w}×${bm.h}` });
+    }
+    return opts;
+  });
 
   function draw(b: Bitmap): void {
     const c = canvas;
@@ -118,11 +172,21 @@
     const gh = lay.cell * b.h;
 
     ctx.fillStyle = colors.live;
-    for (let y = 0; y < b.h; y++) {
-      for (let x = 0; x < b.w; x++) {
-        if (!b.data[y * b.w + x]) continue;
-        ctx.fillRect(lay.ox + x * lay.cell, lay.oy + y * lay.cell, lay.cell, lay.cell);
+    if (lay.cell >= 2) {
+      for (let y = 0; y < b.h; y++) {
+        for (let x = 0; x < b.w; x++) {
+          if (!b.data[y * b.w + x]) continue;
+          ctx.fillRect(lay.ox + x * lay.cell, lay.oy + y * lay.cell, lay.cell, lay.cell);
+        }
       }
+    } else {
+      /*
+       * 从素材导入的图案可能和网格一样大（512² = 26 万格）。逐格 `fillRect`
+       * 在 `pointermove` 里是几十万次调用，拖动会直接卡住；这里预渲一张
+       * 「一格一像素」的小图再整体放大（`imageSmoothingEnabled = false`，
+       * 观感与逐格画一致）。缓存按 `bm` 的对象身份失效 —— 涂一笔换一次引用。
+       */
+      ctx.drawImage(dotsFor(b, colors.live), lay.ox, lay.oy, gw, gh);
     }
 
     // 格线：格子太小时不画（否则整片是灰的）。
@@ -211,7 +275,34 @@
   }
 
   function setSize(n: number): void {
+    // 导入的矩形图案：选中它自己那一项时不要悄悄把它压成正方形。
+    if (n === bm.w && mode === '2d' && bm.h !== bm.w) return;
     bm = resizeBitmap(bm, n, mode === '1d' ? 1 : n);
+  }
+
+  /* --------------------------------------------------- 从素材导入图案 */
+
+  let assetOpen = $state(false);
+  let importing = $state(false);
+
+  /** 导入失败时的提示。没有 `appState` 的宿主（lab）就没有闪条，静默保留草稿。 */
+  let importFailed = $state(false);
+
+  async function importAsset(assetId: string): Promise<void> {
+    assetOpen = false;
+    importing = true;
+    importFailed = false;
+    try {
+      const size = grid ?? { w: bm.w, h: bm.h };
+      const next = source ? await source.load(assetId, size.w, size.h) : null;
+      if (!next) {
+        importFailed = true;
+        return;
+      }
+      bm = next;
+    } finally {
+      importing = false;
+    }
   }
 
   function loadPreset(id: string): void {
@@ -259,6 +350,16 @@
       <Button label={tr('algo.pattern.clear')} variant="outline" testid={`${testid}-clear`} onclick={clearAll} />
       <Button label={tr('algo.pattern.invert')} variant="outline" testid={`${testid}-invert`} onclick={invert} />
       <Button label={tr('algo.pattern.random')} variant="outline" testid={`${testid}-random`} onclick={roll} />
+      {#if mode === '2d' && source}
+        <Button
+          label={tr('algo.pattern.import')}
+          icon="image"
+          variant="outline"
+          disabled={importing}
+          testid={`${testid}-import`}
+          onclick={() => (assetOpen = true)}
+        />
+      {/if}
     </div>
 
     <div class="pe-stage" data-exempt>
@@ -272,7 +373,10 @@
       ></canvas>
     </div>
 
-    <p class="pe-hint">{tr('algo.pattern.hint')} · {tr('algo.pattern.alive')}: {liveCount(bm)}</p>
+    <p class="pe-hint">
+      {tr('algo.pattern.hint')} · {tr('algo.pattern.alive')}: {liveCount(bm)}
+      {#if importFailed}<span class="pe-err">{tr('algo.pattern.importFailed')}</span>{/if}
+    </p>
   </div>
 
   {#snippet footer()}
@@ -285,6 +389,10 @@
     />
   {/snippet}
 </Modal>
+
+{#if assetOpen && source}
+  <AssetPickerModal items={source.list()} onpick={importAsset} onclose={() => (assetOpen = false)} />
+{/if}
 
 <style>
   .pe {
@@ -326,5 +434,9 @@
     margin: 0;
     color: var(--text-muted);
     font-size: var(--fs-xs);
+  }
+  .pe-err {
+    margin-left: var(--sp-2);
+    color: var(--danger);
   }
 </style>

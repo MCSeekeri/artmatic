@@ -5,6 +5,10 @@ import { floats, type EffectShaderDef } from '../shader-def';
  *
  * 移植自 openmosh `gl/effect-shaders.ts` 的 `bulge`（MIT，见 CREDITS.md）。
  *
+ * **它不是鱼眼镜头**：只有半径内的一团在变形，半径外逐像素原样、也没有黑边。
+ * 真正的鱼眼是整幅画面的重投影（圆心略放大、边缘压缩、圆外截止），在
+ * `glsl/fisheye.ts`。
+ *
  * **上游的指数是 `1 - amount`，正负语义是反的** —— 这是反查采样：
  * 输出像素在半径 `dist` 处去读半径 `distortion` 处的内容，
  * 所以 `distortion > dist`（采样点更靠外）读到的效果是画面被**压向中心**即凹陷。

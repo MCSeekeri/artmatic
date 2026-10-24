@@ -35,7 +35,7 @@ export const effects = {
   'fx.desc.audioBars': '按频谱在画面上画出一排律动柱。',
   'fx.desc.bleach': '抽掉颜色，只留下明暗。',
   'fx.desc.blur': '柔化整幅画面。',
-  'fx.desc.bulge': '像鱼眼镜头一样鼓起或凹陷。',
+  'fx.desc.bulge': '只把中心一团鼓起或凹下，半径外不变。',
   'fx.desc.boxTracker': '给画面叠一层检测 HUD：方框、标签与连线。',
 
   /*
@@ -63,6 +63,7 @@ export const effects = {
   'fx.desc.fastMosh': '只让画面里运动的部分融掉。',
   'fx.desc.feedback': '把画面反复喂给自己。',
   'fx.desc.fiberDisplace': '按纤维状的噪声推开像素。',
+  'fx.desc.fisheye': '中间放大、边缘压缩，四角露出黑边；反向则凹陷。',
   'fx.desc.flashGlitch': '按拍闪出反相与色偏。',
   'fx.desc.flowContours': '用流线画出等值线。',
   'fx.desc.ghosting': '拖出多层错位的残影。',

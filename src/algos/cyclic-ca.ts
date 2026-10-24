@@ -22,8 +22,12 @@
 
 import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCentered } from './pattern-codec';
+import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import type { GeneratorDef, SimHandle } from './types';
+
+/** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
+const CYCLIC_GRID = { min: 32, max: 512, fallback: 256 } as const;
 
 const SNAPSHOT_OPTS = {
   every: 16,
@@ -49,25 +53,26 @@ export interface CyclicRule {
 export function cyclicStep(
   cur: Uint8Array,
   next: Uint8Array,
-  n: number,
+  w: number,
+  h: number,
   rule: CyclicRule,
 ): void {
   const { k, theta, vonNeumann, wrap } = rule;
-  for (let y = 0; y < n; y++) {
-    const yU = wrap ? (y === 0 ? n - 1 : y - 1) : y - 1;
-    const yD = wrap ? (y === n - 1 ? 0 : y + 1) : y + 1;
-    const yUok = yU >= 0 && yU < n;
-    const yDok = yD >= 0 && yD < n;
-    const yMr = yUok ? yU * n : 0;
-    const yDr = yDok ? yD * n : 0;
-    const yM = y * n;
-    for (let x = 0; x < n; x++) {
+  for (let y = 0; y < h; y++) {
+    const yU = wrap ? (y === 0 ? h - 1 : y - 1) : y - 1;
+    const yD = wrap ? (y === h - 1 ? 0 : y + 1) : y + 1;
+    const yUok = yU >= 0 && yU < h;
+    const yDok = yD >= 0 && yD < h;
+    const yMr = yUok ? yU * w : 0;
+    const yDr = yDok ? yD * w : 0;
+    const yM = y * w;
+    for (let x = 0; x < w; x++) {
       const s = cur[yM + x]!;
       const want = (s + 1) % k;
-      const xL = wrap ? (x === 0 ? n - 1 : x - 1) : x - 1;
-      const xR = wrap ? (x === n - 1 ? 0 : x + 1) : x + 1;
-      const xLok = xL >= 0 && xL < n;
-      const xRok = xR >= 0 && xR < n;
+      const xL = wrap ? (x === 0 ? w - 1 : x - 1) : x - 1;
+      const xR = wrap ? (x === w - 1 ? 0 : x + 1) : x + 1;
+      const xLok = xL >= 0 && xL < w;
+      const xRok = xR >= 0 && xR < w;
 
       let c = 0;
       if (vonNeumann) {
@@ -95,7 +100,8 @@ export function cyclicStep(
 }
 
 export function createCyclicCa(params: Record<string, number | string>, seed: number): SimHandle {
-  const n = Math.max(32, Math.min(512, Math.round(Number(params.size) || 256)));
+  const { w, h } = gridSizeOf(params, CYCLIC_GRID);
+  const total = w * h;
   const stepsPerSec = Math.max(1, Number(params.rate) || 40);
   const k = Math.max(3, Math.min(24, Math.round(Number(params.states) || 12)));
   const rule: CyclicRule = {
@@ -105,15 +111,15 @@ export function createCyclicCa(params: Record<string, number | string>, seed: nu
     wrap: Number(params.wrap ?? 1) !== 0,
   };
 
-  const cur0 = new Uint8Array(n * n);
+  const cur0 = new Uint8Array(total);
   if (params.seedMode === 'pattern') {
     const bm = patternFromParam(params.pattern);
     // 图案只给了两种值（0/1），而这里有 K 个状态 —— 把「点亮」映射成状态 1，
     // 其余留给种子化的随机底噪，否则螺旋起不来（一片 0 只有两个状态参与循环）。
     if (bm) {
       const rnd = mulberry32(seed);
-      for (let i = 0; i < n * n; i++) cur0[i] = Math.floor(rnd() * k);
-      stampCentered(cur0, n, n, bm, 1 % k);
+      for (let i = 0; i < total; i++) cur0[i] = Math.floor(rnd() * k);
+      stampCentered(cur0, w, h, bm, 1 % k);
     } else {
       fillRandom(cur0, seed, k, Number(params.density) || 1);
     }
@@ -125,17 +131,17 @@ export function createCyclicCa(params: Record<string, number | string>, seed: nu
 
   // 双缓冲：`buf[i]` 读出、`buf[1-i]` 写入，再翻转下标。`cyclicStep` 会写满
   // 每一个格子，所以交换是安全的；`slice()` 每步都会分配一个 n² 的数组。
-  const buf: [Uint8Array, Uint8Array] = [cur0, new Uint8Array(n * n)];
+  const buf: [Uint8Array, Uint8Array] = [cur0, new Uint8Array(total)];
   let which = 0;
   let frame = 0;
   const snapshots = new SnapshotRing<Uint8Array>(SNAPSHOT_OPTS, cur0);
-  const out = new Uint8Array(n * n);
+  const out = new Uint8Array(total);
 
   const encode = (s: number): number => Math.round((s * 255) / (k - 1));
 
   const stepTo = (target: number): void => {
     while (frame < target) {
-      cyclicStep(buf[which]!, buf[1 - which]!, n, rule);
+      cyclicStep(buf[which]!, buf[1 - which]!, w, h, rule);
       which = 1 - which;
       frame++;
       if (snapshots.shouldStore(frame)) snapshots.store(frame, buf[which]!);
@@ -143,8 +149,8 @@ export function createCyclicCa(params: Record<string, number | string>, seed: nu
   };
 
   return {
-    gridW: n,
-    gridH: n,
+    gridW: w,
+    gridH: h,
     stepsPerSec,
     channels: 1,
     seek(simFrame: number): void {
@@ -216,7 +222,8 @@ export const cyclicCaDef: GeneratorDef = {
   kind: 'sim',
   volatile: ['rate', 'colorBg', 'colorLive', 'palette'],
   params: [
-    { key: 'size', labelKey: 'algo.cyclicCa.grid', type: 'range', min: 64, max: 512, step: 32, defaultValue: 256 },
+    { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
+    { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
     // 默认 K=8（不是网上更常见的 12）：θ=2 时 K≥12 会让整场一步冻死 ——
     // 见文件头那张实测表。
     { key: 'states', labelKey: 'algo.cyclicCa.states', type: 'range', min: 3, max: 24, step: 1, defaultValue: 8 },

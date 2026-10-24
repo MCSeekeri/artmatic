@@ -56,6 +56,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   霓虹描边: 'ni hong miao bian',
   暗角: 'an jiao',
   凸起畸变: 'tu qi ji bian',
+  鱼眼镜头: 'yu yan jing tou',
   半调网屏: 'ban diao wang ping',
   'ASCII 滤镜': 'lv jing',
   逐行抖动: 'zhu hang dou dong',

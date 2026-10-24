@@ -26,6 +26,13 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
     上面几条 `test.each` 全是空转 —— 空转的守卫比没有守卫更坏。
   - `tests/unit/pattern-codec.test.ts` / `tests/unit/bitmask.test.ts` / `tests/unit/pattern-paint.test.ts` ——
     纯函数（编解码往返、非法输入降级、位序、Bresenham 补线、居中裁剪）。
+  - `tests/unit/pattern-image.test.ts` —— 图片 → 图案的采样（alpha 阈值 128、contain
+    适配、等比缩进 `MAX_PATTERN_DIM`）。**只测纯函数**：真正解 PNG / SVG 的那层在
+    E2E（`algo-pattern.spec.ts` 的「从素材导入」用例，判据是「上半不透明的 PNG
+    → 恰好上半的格子活」）。
+  - `tests/unit/grid-dims.test.ts` —— 网格两轴尺寸（`width` / `height` / 老 `size`
+    兜底 / 钳制）+ **矩形网格**的行为：环面回绕按两轴分别取、`TorusField` 矩形 halo
+    与朴素两轴卷积逐位对拍、各 sim 句柄报告 `gridW × gridH`。
   - `tests/unit/cellular-automata.test.ts` / `tests/unit/lenia-wireworld.test.ts` /
     `tests/unit/reaction-diffusion.test.ts` —— Wave 2 那 7 个 sim。里面有几条**解析不变量**
     才算真守卫：反应扩散 `F=k=0` 时 `Σ(u+v)` 守恒、沙堆的**阿贝尔性**（fifo 与 lifo

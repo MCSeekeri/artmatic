@@ -16,9 +16,14 @@ import { compose, floats, HSV_GLSL, selectInt, type EffectShaderDef } from '../s
  *
  * ## `u_boxA` 的语义
  *
- * `xy` = 中心（0..1，**左上原点**）、`zw` = 半宽/半高（0..1）。
- * 归一化到各自轴上，所以宽高比不等于 1 时「方框」在 UV 空间里不是正方形，
- * 但掩码逐轴比较，画出来仍是屏幕上的矩形。
+ * `xy` = 中心（0..1，**GL 空间：v 向上，与 `vUv` 同一套**）、`zw` = 半宽/半高
+ * （0..1）。归一化到各自轴上，所以宽高比不等于 1 时「方框」在 UV 空间里不是
+ * 正方形，但掩码逐轴比较，画出来仍是屏幕上的矩形。
+ *
+ * **这两个数与画在叠层上的矩形是同一份**（`engine/box-tracker.ts` 的
+ * `Entry.views`：含出场/消失的缩放与不透明度），装配时把 Canvas2D 的左上原点
+ * `cy` 翻成 `1 - cy`。写错这一条不会报错，症状是「框内效果整块上下镜像」——
+ * 与「检测框错位」长得一模一样；漏乘缩放则是「框在动、反色块不动」。
  *
  * ## 为什么不支持「任意特效」
  *
@@ -36,6 +41,7 @@ export const shader: EffectShaderDef = {
 uniform sampler2D u_overlay;
 uniform int u_boxCount;
 uniform vec4 u_boxA[12];
+uniform float u_boxFade[12];
 uniform int u_interior;
 uniform float u_interiorStrength;
 uniform float u_interiorScale;
@@ -82,7 +88,12 @@ vec3 interiorFx(vec3 c, vec2 uv) {
   return c;
 }
 
-/** 所有方框内部的掩码（取并集）。带 1.5 像素羽化，避免非整数缩放下出现硬锯齿。 */
+/**
+ * 所有方框内部的掩码（取并集）。带 1.5 像素羽化，避免非整数缩放下出现硬锯齿。
+ *
+ * 每框再乘 u_boxFade（叠层上那一框的不透明度）：出场/消失时框在淡入淡出，
+ * 框内效果必须一起淡 —— 否则「框没了、反色块还在」。
+ */
 float boxMask(vec2 uv) {
   float feather = 1.5 / max(u_resolution.y, 1.0);
   float m = 0.0;
@@ -91,7 +102,7 @@ float boxMask(vec2 uv) {
     vec4 a = u_boxA[i];
     vec2 d = abs(uv - a.xy) - a.zw;
     float edge = max(d.x, d.y);
-    m = max(m, 1.0 - smoothstep(0.0, feather, edge));
+    m = max(m, (1.0 - smoothstep(0.0, feather, edge)) * u_boxFade[i]);
   }
   return m;
 }

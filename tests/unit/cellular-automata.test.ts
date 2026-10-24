@@ -32,11 +32,11 @@ describe("Brian's Brain", () => {
     const n = 8;
     const g = new Uint8Array(n * n);
     g[3 * n + 3] = BB_FIRING;
-    const t1 = briansStep(g, n);
+    const t1 = briansStep(g, n, n);
     expect(t1[3 * n + 3]).toBe(BB_REFRACTORY);
     // 它的邻居各只有 1 个激发邻居 → 生不出新格
     expect([...t1].filter((v) => v === BB_FIRING)).toHaveLength(0);
-    const t2 = briansStep(t1, n);
+    const t2 = briansStep(t1, n, n);
     expect(t2.every((v) => v === BB_READY)).toBe(true);
   });
 
@@ -113,8 +113,8 @@ describe('循环元胞自动机', () => {
     const rule = { k, theta: 1, vonNeumann: false, wrap: true };
     const a = new Uint8Array(n * n);
     const b = new Uint8Array(n * n);
-    cyclicStep(build(), a, n, rule);
-    cyclicStep(build(), b, n, rule);
+    cyclicStep(build(), a, n, n, rule);
+    cyclicStep(build(), b, n, n, rule);
     expect(b).toEqual(a);
   });
 
@@ -163,7 +163,7 @@ describe('阿贝尔沙堆', () => {
     const n = 16;
     const h = new Uint32Array(n * n);
     h[0] = 40;
-    const done = stabilize(h, n, [], 'lifo', Number.POSITIVE_INFINITY);
+    const done = stabilize(h, n, n, [], 'lifo', Number.POSITIVE_INFINITY);
     expect(done, '40 粒至少塌 10 次').toBeGreaterThanOrEqual(10);
     for (const v of h) expect(v).toBeLessThan(TOPPLE_AT);
   });
@@ -174,7 +174,7 @@ describe('阿贝尔沙堆', () => {
     // ⚠️ 粒数必须**装得下**：格子的容量是 3·n²（这里 3072）。
     // 倒进超过容量的沙，在环面上永远稳不下来 —— 那不是 bug，是「装不下」。
     for (let i = 0; i < 2000; i++) h[(i * 37) % h.length] = (h[(i * 37) % h.length] ?? 0) + 1;
-    stabilize(h, n, [], 'lifo');
+    stabilize(h, n, n, [], 'lifo');
     for (const v of h) expect(v).toBeLessThan(TOPPLE_AT);
   });
 
@@ -183,12 +183,12 @@ describe('阿贝尔沙堆', () => {
     const h = new Uint32Array(n * n);
     // 故意倒得远超容量：不设闸门的话这里会跑几十秒
     for (let i = 0; i < 200_000; i++) h[i % h.length] = h[i % h.length]! + 1;
-    const done = stabilize(h, n, [], 'lifo', 50_000);
+    const done = stabilize(h, n, n, [], 'lifo', 50_000);
     expect(done).toBe(50_000);
     // 闸门只限制「处理了多少次」，不影响确定性：同样的上限两次结果相同
     const h2 = new Uint32Array(h.length);
     for (let i = 0; i < 200_000; i++) h2[i % h2.length] = h2[i % h2.length]! + 1;
-    stabilize(h2, n, [], 'lifo', 50_000);
+    stabilize(h2, n, n, [], 'lifo', 50_000);
     expect(Array.from(h2)).toEqual(Array.from(h));
   });
 
@@ -223,8 +223,8 @@ describe('阿贝尔沙堆', () => {
       for (let i = 0; i < h.length; i++) if (h[i]! >= TOPPLE_AT) q.push(i);
       return q;
     };
-    stabilize(fifo, n, seeds(fifo), 'fifo');
-    stabilize(lifo, n, seeds(lifo), 'lifo');
+    stabilize(fifo, n, n, seeds(fifo), 'fifo');
+    stabilize(lifo, n, n, seeds(lifo), 'lifo');
     expect(Array.from(lifo)).toEqual(Array.from(fifo));
   });
 
@@ -237,7 +237,7 @@ describe('阿贝尔沙堆', () => {
       h[s % h.length] = h[s % h.length]! + 1;
     }
     const total = h.reduce((a, b) => a + b, 0);
-    stabilize(h, n, [], 'lifo');
+    stabilize(h, n, n, [], 'lifo');
     expect(h.reduce((a, b) => a + b, 0)).toBe(total);
   });
 

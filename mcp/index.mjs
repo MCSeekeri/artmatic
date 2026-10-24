@@ -369,6 +369,11 @@ async function dispatch(name, args, extra) {
     case 'artmatic_set_generator':
       return unwrap(await bridge.call('setGenerator', [args.clipId, args.generator, args.params]));
 
+    case 'artmatic_seed_pattern_from_asset':
+      return unwrap(
+        await bridge.call('seedPatternFromAsset', [args.clipId, args.param, args.assetId]),
+      );
+
     case 'artmatic_set_curve':
       return unwrap(await bridge.call('setCurve', [args.clipId, args.param, args.curve ?? null]));
 
