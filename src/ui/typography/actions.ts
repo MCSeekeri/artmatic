@@ -67,6 +67,28 @@ import { kfPanel } from './keyframe-panel-state.svelte';
 import { hasImageAsset, putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
 import { defaultKeySettings, identityQuad, type KeySettings } from '../../core/image-fx';
 import {
+  adjustIsDefault,
+  coerceImageAdjust,
+  coerceImageBorder,
+  coerceImageFilter,
+  coerceImageRecolor,
+  defaultImageAdjust,
+  type CurveChannel,
+  type CurvePoint,
+  type ImageAdjust,
+  type ImageAdjustPatch,
+  type ImageBorder,
+  type ImageFilterState,
+  type ImageRecolor,
+} from '../../typography/image-effects';
+import {
+  cropForAspect,
+  frameForAlign,
+  resizeFrameCentered,
+  type ImageAlignMode,
+  type ImageCropRect,
+} from '../../typography/image-geometry';
+import {
   cloneFragment,
   expandToGroups,
   extractFragment,
@@ -76,7 +98,7 @@ import {
   ungroupElements,
   type GroupedFragment,
 } from '../../typography/groups';
-import { type ShapePreset } from '../../typography/shapes';
+import { SHAPE_PRESETS, type ShapePreset } from '../../typography/shapes';
 import { buildFromSpec, defaultsOf, generatorById, nextSeed } from '../../typography/svg-gen';
 import { cloneAsCustomTheme, type TypographyTheme } from '../../typography/theme';
 import { ICON_STROKE_WIDTH, iconGridFrames, type IconInsert } from '../../typography/icon-shapes';
@@ -288,6 +310,71 @@ function retimeTrack(anim: TracksAnimation, patch: Partial<AnimTiming>): TracksA
 function liveWrite(fn: (doc: TypographyDocument) => void): void {
   if (!editorState.gestureActive) editorState.beginGesture();
   editorState.live(fn);
+}
+
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * 把一份色彩校正写进元素。
+ *
+ * **全默认时删字段**：`imageNeedsFx` 据 `adjustIsDefault` 判空，留一个全 0 的
+ * `adjust` 会让这张图永远走 canvas 路径（画质与性能都变，而用户什么都没改）。
+ */
+function writeImageAdjust(el: ImageElement, patch: ImageAdjustPatch): void {
+  const next = coerceImageAdjust(patch, el.adjust);
+  if (!next) return;
+  if (adjustIsDefault(next)) delete el.adjust;
+  else el.adjust = next;
+}
+
+/** `setImageCurve` / `setImageCurveLive` 的写库体（两条路必须同一份）。 */
+function applyImageCurve(
+  doc: TypographyDocument,
+  channel: CurveChannel,
+  points: CurvePoint[] | null,
+): void {
+  for (const el of onlyImage(doc)) {
+    const adjust: ImageAdjust = { ...(el.adjust ?? defaultImageAdjust()) };
+    const curves = { ...(adjust.curves ?? {}) };
+    if (points && points.length) {
+      // 排序是必须的：曲线求值假设 x 单增（`curveLut` 的 `while` 扫描）。
+      curves[channel] = points
+        .map((p) => ({ x: clamp01(p.x), y: clamp01(p.y) }))
+        .sort((a, b) => a.x - b.x);
+    } else {
+      delete curves[channel];
+    }
+    if (Object.keys(curves).length) adjust.curves = curves;
+    else delete adjust.curves;
+    if (adjustIsDefault(adjust)) delete el.adjust;
+    else el.adjust = adjust;
+  }
+}
+
+/** `setImageFilter` / `setImageFilterLive` 的写库体。 */
+function applyImageFilter(doc: TypographyDocument, filter: ImageFilterState | null): void {
+  for (const el of onlyImage(doc)) {
+    const next = filter ? coerceImageFilter(filter) : null;
+    if (next) el.filter = next;
+    else delete el.filter;
+  }
+}
+
+/**
+ * `patchImageRecolor` / `...Live` 的写库体。
+ *
+ * `amount = 0` **保留字段**，不删：用户把强度拖到 0 再拖回来时颜色还在
+ * （删掉的话下一次 `coerceImageRecolor` 会退回默认色，等于把用户挑的颜色扔了）。
+ * 「没有效果」由 `recolorIsDefault` 判定，与有没有键无关。
+ */
+function applyImageRecolor(doc: TypographyDocument, patch: Partial<ImageRecolor>): void {
+  for (const el of onlyImage(doc)) {
+    const next = coerceImageRecolor(patch, el.recolor);
+    if (next) el.recolor = next;
+  }
 }
 
 /**
@@ -925,6 +1012,44 @@ export interface TypographyActions {
 
   /* 图片 */
   setImageFit(value: ImageElement['fit']): void;
+  /** 图片圆角（0 = 直角）。 */
+  setImageRadius(value: number): void;
+  /**
+   * 色彩校正。`patch` 里缺的字段沿用原值（`coerceImageAdjust` 的 `base`）——
+   * 浮层上五个滑杆各发各的补丁，不该互相覆盖。
+   */
+  patchImageAdjust(patch: ImageAdjustPatch): void;
+  /** 实时版本（拖动滑杆时连续写，松手由 `endLive` 结算）。 */
+  patchImageAdjustLive(patch: ImageAdjustPatch): void;
+  /** 单通道曲线。`null` / 空数组 = 重置该通道。 */
+  setImageCurve(channel: CurveChannel, points: CurvePoint[] | null): void;
+  /** 曲线拖动中的实时版本（不入撤销栈）。 */
+  setImageCurveLive(channel: CurveChannel, points: CurvePoint[]): void;
+  /** 滤镜（`null` = 关掉）。 */
+  setImageFilter(filter: ImageFilterState | null): void;
+  /** 滤镜强度拖动中的实时版本。 */
+  setImageFilterLive(filter: ImageFilterState): void;
+  /** 重新着色（颜色 / 暗部色 / 强度）。 */
+  patchImageRecolor(patch: Partial<ImageRecolor>): void;
+  /** 强度拖动中的实时版本。 */
+  patchImageRecolorLive(patch: Partial<ImageRecolor>): void;
+  /** 图片边框（宽度 0 = 去掉边框）。 */
+  patchImageBorder(patch: Partial<ImageBorder>): void;
+  /** 按纵横比裁剪（`null` = 恢复整图）。会顺手把 `contain` 提成 `cover`。 */
+  setImageCropAspect(ratio: number | null): void;
+  /** 直接写裁剪窗（0..1 源比例），浮层之外的程序化入口用。 */
+  setImageCrop(rect: ImageCropRect | null): void;
+  /** 对齐到画布（居中 / 水平 / 垂直 / 适应 / 铺满 / 拉伸）。 */
+  alignImagesToCanvas(mode: ImageAlignMode): void;
+  /** 改尺寸，保持中心不动；`lockAspect` 按各自当前比例推另一边。 */
+  resizeImages(next: { w?: number; h?: number }, lockAspect: boolean): void;
+  /**
+   * 「裁剪为形状」：把选中的图片**就地换成**一个带图片填充的图形
+   * （同一个 id / 位置 / 层级 / 动画）。`presetKey` 来自 `SHAPE_PRESETS`。
+   */
+  clipImagesToShape(presetKey: string): void;
+  /** 图形的图片填充（`null` = 移除）。 */
+  setShapeImageFill(fill: { assetId: string; fit: 'fill' | 'contain' | 'cover' } | null): void;
 
   /* 对齐 */
   align(axis: AlignAxis): void;
@@ -1803,13 +1928,24 @@ export function createTypographyActions(): TypographyActions {
 
     setShapePaint(patch) {
       editorState.commit(tr('typo.undo.shapeFill'), (doc) => {
-        for (const el of onlyShape(doc)) el.fill = applyPaintPatch(el.fill, patch);
+        for (const el of onlyShape(doc)) {
+          el.fill = applyPaintPatch(el.fill, patch);
+          /*
+           * 「换一种填充方式」= 用户不要图片填充了。不清的话路径被渲染成
+           * `fill: none`，改填充色看起来完全没反应（而且没有任何报错）。
+           * 只改颜色（补丁不带 `kind`）时不动它 —— 那条路下面还有描边在用。
+           */
+          if (patch.kind !== undefined) delete el.imageFill;
+        }
       });
     },
 
     setShapePaintLive(patch) {
       liveWrite((doc) => {
-        for (const el of onlyShape(doc)) el.fill = applyPaintPatch(el.fill, patch);
+        for (const el of onlyShape(doc)) {
+          el.fill = applyPaintPatch(el.fill, patch);
+          if (patch.kind !== undefined) delete el.imageFill;
+        }
       });
     },
 
@@ -2136,6 +2272,196 @@ export function createTypographyActions(): TypographyActions {
     setImageFit(value) {
       editorState.commit(tr('typo.undo.imageFit'), (doc) => {
         for (const el of onlyImage(doc)) el.fit = value;
+      });
+    },
+
+    setImageRadius(value) {
+      editorState.commit(tr('typo.undo.imageRadius'), (doc) => {
+        const v = Math.max(0, value);
+        for (const el of onlyImage(doc)) {
+          // 0 = 直角：删字段（缺省语义就是没有圆角），别留一个 0 让文件变脏。
+          if (v > 0) el.radius = v;
+          else delete el.radius;
+        }
+      });
+    },
+
+    patchImageAdjust(patch) {
+      editorState.commit(tr('typo.undo.imgAdjust'), (doc) => {
+        for (const el of onlyImage(doc)) writeImageAdjust(el, patch);
+      });
+    },
+
+    patchImageAdjustLive(patch) {
+      liveWrite((doc) => {
+        for (const el of onlyImage(doc)) writeImageAdjust(el, patch);
+      });
+    },
+
+    setImageCurve(channel, points) {
+      editorState.commit(tr('typo.undo.imgCurve'), (doc) => applyImageCurve(doc, channel, points));
+    },
+
+    setImageCurveLive(channel, points) {
+      liveWrite((doc) => applyImageCurve(doc, channel, points));
+    },
+
+    setImageFilter(filter) {
+      editorState.commit(tr('typo.undo.imgFilter'), (doc) => applyImageFilter(doc, filter));
+    },
+
+    setImageFilterLive(filter) {
+      liveWrite((doc) => applyImageFilter(doc, filter));
+    },
+
+    patchImageRecolor(patch) {
+      editorState.commit(tr('typo.undo.imgRecolor'), (doc) => applyImageRecolor(doc, patch));
+    },
+
+    patchImageRecolorLive(patch) {
+      liveWrite((doc) => applyImageRecolor(doc, patch));
+    },
+
+    patchImageBorder(patch) {
+      editorState.commit(tr('typo.undo.imgBorder'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          const next = coerceImageBorder(patch, el.border);
+          if (!next) continue;
+          // 宽度 0 = 用户点了「无边框」：删字段而不是留一个「看不见的边框」。
+          if (next.width <= 0) delete el.border;
+          else el.border = next;
+        }
+      });
+    },
+
+    setImageCropAspect(ratio) {
+      editorState.commit(tr('typo.undo.imgCrop'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          if (ratio === null) {
+            delete el.crop;
+            continue;
+          }
+          const nat = imageSourceFor(el.assetId);
+          if (!nat) continue;
+          const rect = cropForAspect({ w: nat.w, h: nat.h }, ratio);
+          if (!rect) continue;
+          el.crop = rect;
+          /*
+           * `contain` / `none` 下裁出来的窗口会留边（窗口不是元素框的比例），
+           * 用户会以为「裁剪没生效」。提到 `cover` 之后窗口正好铺满。
+           */
+          if (el.fit === 'contain' || el.fit === 'none') el.fit = 'cover';
+        }
+      });
+    },
+
+    setImageCrop(rect) {
+      editorState.commit(tr('typo.undo.imgCrop'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          if (!rect) {
+            delete el.crop;
+            continue;
+          }
+          el.crop = {
+            x: clamp01(rect.x),
+            y: clamp01(rect.y),
+            w: Math.max(0.02, Math.min(1, rect.w)),
+            h: Math.max(0.02, Math.min(1, rect.h)),
+          };
+        }
+      });
+    },
+
+    alignImagesToCanvas(mode) {
+      editorState.commit(tr('typo.undo.imgAlign'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          const next = frameForAlign(el.frame, doc.size, mode);
+          el.frame = {
+            x: r2(next.x ?? el.frame.x),
+            y: r2(next.y ?? el.frame.y),
+            w: Math.max(1, r2(next.w ?? el.frame.w)),
+            h: Math.max(1, r2(next.h ?? el.frame.h)),
+            rot: el.frame.rot,
+          };
+          // `stretch` 要配 `fill` 才是「拉伸铺满」；其余两种配对应的等比语义。
+          if (mode === 'stretch') el.fit = 'fill';
+          else if (mode === 'fit' && el.fit === 'fill') el.fit = 'contain';
+          else if (mode === 'fill' && el.fit !== 'cover') el.fit = 'cover';
+        }
+      });
+    },
+
+    resizeImages(next, lockAspect) {
+      editorState.commit(tr('typo.undo.imgResize'), (doc) => {
+        for (const el of onlyImage(doc)) {
+          const p = resizeFrameCentered(el.frame, next, lockAspect);
+          el.frame = {
+            x: r2(p.x ?? el.frame.x),
+            y: r2(p.y ?? el.frame.y),
+            w: Math.max(1, r2(p.w ?? el.frame.w)),
+            h: Math.max(1, r2(p.h ?? el.frame.h)),
+            rot: el.frame.rot,
+          };
+        }
+      });
+    },
+
+    clipImagesToShape(presetKey) {
+      const preset = SHAPE_PRESETS.find((p) => p.key === presetKey);
+      // 直线没有面积，拿来当裁剪框等于把图片删掉。
+      if (!preset || preset.id === 'line') return;
+      editorState.commit(tr('typo.undo.clipShape'), (doc) => {
+        const ids = selectedIds();
+        doc.elements = doc.elements.map((el) => {
+          if (el.kind !== 'image' || !ids.has(el.id) || el.locked) return el;
+          /*
+           * **沿用同一个 id**：动画的 `data-anim-id`、组归属、当前选中全部靠它，
+           * 换 id 就等于「裁成形状之后动画没了、选择也丢了」。
+           * `docSignature` 带 kind，所以舞台会按新类型重建节点（那条路是必须的）。
+           */
+          const shape = createShapeElement(doc.size, preset.id, {
+            id: el.id,
+            name: el.name,
+            frame: { ...el.frame },
+            blend: el.blend,
+            opacity: el.opacity,
+            visible: el.visible,
+            locked: el.locked,
+            animations: el.animations,
+            transform3d: el.transform3d,
+            shadows: el.shadows,
+            blur: el.blur,
+            radius: preset.radius,
+            sides: preset.sides,
+            waist: preset.waist,
+            angle: preset.angle,
+            fill: { kind: 'none' },
+            stroke: null,
+          });
+          if (el.groupId) shape.groupId = el.groupId;
+          // 图片填满形状（`cover`）：裁成形状之后再留边就只是「一个框」。
+          shape.imageFill = { assetId: el.assetId, fit: 'cover' };
+          return shape;
+        });
+      });
+    },
+
+    setShapeImageFill(fill) {
+      editorState.commit(tr('typo.undo.shapeImageFill'), (doc) => {
+        for (const el of writable(doc)) {
+          if (el.kind !== 'shape') continue;
+          if (fill) {
+            el.imageFill = { ...fill };
+            continue;
+          }
+          delete el.imageFill;
+          /*
+           * 「裁剪为形状」把填充设成了 `none`（否则不透明填充会盖住图）。移掉
+           * 图片填充之后如果不补一块色，图形会直接消失 —— 用户点的是「移除图片
+           * 填充」，不是「删掉这个图形」。
+           */
+          if (el.fill.kind === 'none') el.fill = { kind: 'solid', color: DEFAULT_PAINT_A };
+        }
       });
     },
 

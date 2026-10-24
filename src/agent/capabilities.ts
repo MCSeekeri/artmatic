@@ -30,6 +30,7 @@ import { SCRIPT_LIMITS } from '../typography/script/model';
 import { SCRIPT_TEMPLATES } from '../typography/script/templates';
 import { SVG_GENERATORS, defaultsOf } from '../typography/svg-gen/registry';
 import { shapeParamSupport } from '../typography/shapes';
+import { IMAGE_FILTERS } from '../typography/image-effects';
 import {
   DEFAULT_FONT_FAMILY,
   MIX_BLENDS,
@@ -345,6 +346,42 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
     texturePatterns: TEXTURE_PATTERNS.map((p) => p.id),
     mixBlends: MIX_BLENDS.map((b) => b.id),
     imageFits: ['fill', 'contain', 'cover', 'none'],
+    images: {
+      adjust: {
+        brightness: '-100..100 (0 = unchanged)',
+        contrast: '-100..100 (0 = unchanged)',
+        saturation: '-100..100 (-100 = greyscale)',
+        sharpen: '0..100 (0 = off)',
+        soften: '0..100 (0 = off)',
+        curves:
+          '{ master?, r?, g?, b?: [{ x, y }] } — up to 16 points per channel, both coordinates ' +
+          '0..1, piecewise LINEAR (what the editor draws). master runs first, then the channel. ' +
+          '`curves: null` clears every channel.',
+      },
+      recolor:
+        '{ color, shadow, amount 0..1 } — maps LUMINANCE onto the gradient shadow(luminance 0) → ' +
+        'color(luminance 1) and mixes it with the original by `amount`. amount 0 = no effect ' +
+        '(the colours are kept, so dragging the strength back up restores them).',
+      border:
+        '{ color, width } — width in document px, drawn INSIDE the image (the frame does not grow). ' +
+        'width 0 / null removes it.',
+      filter: {
+        form:
+          '{ id, amount 0..1 } — one preset at a time (`null` removes it). Spatial presets ' +
+          '(blur / sharpen / mosaic / sketch / neon / emboss / halftone) are applied at a raster ' +
+          'capped to 2048 px on the long edge; colour presets run at full resolution.',
+        ids: IMAGE_FILTERS.map((f) => f.id),
+      },
+      crop:
+        'crop is { x, y, w, h } as SOURCE ratios (0..1, (0,0) = top-left of the original image). ' +
+        'Setting an aspect ratio through the UI also switches `fit` to "cover" so the crop window ' +
+        'fills the frame — writing `crop` yourself does not change `fit`.',
+      imageFill:
+        'Shapes may take `imageFill: { assetId, fit: "fill" | "contain" | "cover" }` — the shape ' +
+        'path clips that picture (this is what "crop to shape" produces). While imageFill is set ' +
+        'the path `fill` is IGNORED (a solid fill would cover the picture); set `fill` with a ' +
+        '`kind` or `imageFill: null` to go back to a normal fill.',
+    },
     textAligns: ['left', 'center', 'right', 'justify'],
     textVAligns: ['top', 'middle', 'bottom'],
     strokeStyles: ['solid', 'dashed', 'dotted'],

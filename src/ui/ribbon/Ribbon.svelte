@@ -197,12 +197,22 @@
     color: var(--ribbon-tab-fg-active);
     border-bottom-color: var(--accent);
   }
-  /* contextual Tab 额外加一条顶部线，暗示「它是因为你选中了东西才出现的」。 */
+  /*
+   * contextual Tab 用**文字颜色**标记「它是因为你选中了东西才出现的」。
+   *
+   * 原来这里给它加了一条 `border-top` 的主题色线，于是激活中的「图片格式」
+   * 上下各一条线、像个盒子，而其它 Tab 只有下面一条 —— 看着像 bug（用户反馈）。
+   * 视觉重心只能有一处，所以标记改走颜色：只用一条下划线，contextual 的
+   * 标签本身是主题色，未选中时也能认出来。
+   */
   .r-tab.contextual {
-    border-top: 2px solid transparent;
+    color: var(--accent);
+  }
+  .r-tab.contextual:hover {
+    color: var(--ribbon-tab-fg-hover);
   }
   .r-tab.contextual[data-active='true'] {
-    border-top-color: var(--accent);
+    color: var(--ribbon-tab-fg-active);
   }
 
   /* `layout: 'rows'` 的一行。间距比组内列间距略小：同一排的按钮是一件事。 */

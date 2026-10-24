@@ -68,6 +68,28 @@ export function paintNeedsDefs(p: Paint): boolean {
   return p.kind === 'linear' || p.kind === 'radial' || p.kind === 'texture';
 }
 
+/**
+ * 图形「图片填充」（`ShapeElement.imageFill`）的 `<clipPath>` id。
+ *
+ * 与填充渐变 / 描边渐变的 id 分开：同一个元素三者的 `<defs>` 各占一块，
+ * 共用一个 id 时后写的会把前面的 `replaceChildren` 掉（那条坑在
+ * `strokePaintDefId` 的注释里已经踩过一次）。
+ */
+export function imageFillClipId(elId: string): string {
+  return `${PAINT_ID_PREFIX}img-${elId}`;
+}
+
+/**
+ * `fit` → SVG `<image>` 的 `preserveAspectRatio`。
+ *
+ * `fill` 必须是 `none`：给 `xMidYMid` 会变成「等比放进框里」，
+ * 「拉伸」这个词在图片适配里就是非等比铺满。
+ */
+export function imageFillAspectRatio(fit: 'fill' | 'contain' | 'cover'): string {
+  if (fit === 'fill') return 'none';
+  return fit === 'cover' ? 'xMidYMid slice' : 'xMidYMid meet';
+}
+
 /** SVG `fill` 属性的值。 */
 export function fillAttr(p: Paint, elId: string, theme?: ThemeArg): string {
   if (p.kind === 'solid') return resolveThemeColor(p.color, theme);
@@ -512,9 +534,18 @@ export function shapePaintAttrs(el: ShapeElement, evenOdd = false, theme?: Theme
  *   crop = {x,y,w,h}（相对源图的 0..1）
  * 内层图片的尺寸是 100/cw %、位置是 -cx/cw * 100 %，
  * 于是 crop 矩形正好铺满外层元素框。fit 作用在内层 <img> 上。
+ *
+ * **边框走 `box-shadow: inset`，不是 `border`**：`border` 会挤占内容盒，
+ * 加一条 20px 的边就等于把图片裁小一圈（而 PPT 的图片边框是画在图片上的）。
+ * inset 阴影跟着 `border-radius` 走，snapDOM 也保真（见 typography/AGENTS.md
+ * 的阴影一节）。`width = 0` 时必须显式写 `none` —— 就地同步只 set 不 delete。
  */
-export function imageStyle(el: ImageElement): { wrapper: CssDecls; img: CssDecls } {
+export function imageStyle(
+  el: ImageElement,
+  theme?: ThemeArg,
+): { wrapper: CssDecls; img: CssDecls } {
   const c = el.crop;
+  const border = el.border && el.border.width > 0 ? el.border : null;
   const wrapper: CssDecls = {
     position: 'absolute',
     left: '0',
@@ -524,6 +555,9 @@ export function imageStyle(el: ImageElement): { wrapper: CssDecls; img: CssDecls
     overflow: 'hidden',
     'border-radius': el.radius ? px(el.radius) : '0',
     'box-sizing': 'border-box',
+    'box-shadow': border
+      ? `inset 0 0 0 ${px(border.width)} ${resolveThemeColor(border.color, theme)}`
+      : 'none',
   };
 
   if (!c || c.w <= 0 || c.h <= 0) {

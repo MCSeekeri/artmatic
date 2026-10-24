@@ -17,6 +17,12 @@
 
 import { newId } from '../core/schema';
 import { coerceKeySettings, coerceQuadCorners } from '../core/image-fx';
+import {
+  coerceImageAdjust,
+  coerceImageBorder,
+  coerceImageFilter,
+  coerceImageRecolor,
+} from '../typography/image-effects';
 import type { ProjectStore } from '../core/project-store';
 import {
   SHAPE_KINDS,
@@ -279,6 +285,31 @@ function validatePatch(el: TypographyElement, patch: Record<string, unknown>, el
   }
   if (patch.quad !== undefined && patch.quad !== null && !coerceQuadCorners(patch.quad)) {
     throw new ControlFailure('invalid-argument', tr('agent.clip.badQuad'), { quad: patch.quad });
+  }
+  /*
+   * 图片效果四件套（校正 / 重新着色 / 边框 / 滤镜）。与抠图同一条纪律：
+   * 形状不对要在**改动之前**报出来 —— `patchElement` 遇到坏形状是整条跳过，
+   * 而回执里那个字段还在（读的是旧值），模型会以为自己写成功了。
+   */
+  if (patch.adjust !== undefined && patch.adjust !== null) {
+    if (el.kind !== 'image' || !coerceImageAdjust(patch.adjust, el.adjust)) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badImageFx'), { adjust: patch.adjust });
+    }
+  }
+  if (patch.recolor !== undefined && patch.recolor !== null) {
+    if (el.kind !== 'image' || !coerceImageRecolor(patch.recolor, el.recolor)) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badImageFx'), { recolor: patch.recolor });
+    }
+  }
+  if (patch.border !== undefined && patch.border !== null) {
+    if (el.kind !== 'image' || !coerceImageBorder(patch.border, el.border)) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badImageFx'), { border: patch.border });
+    }
+  }
+  if (patch.filter !== undefined && patch.filter !== null) {
+    if (el.kind !== 'image' || !coerceImageFilter(patch.filter)) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badImageFx'), { filter: patch.filter });
+    }
   }
   // 路径三件套只对 svg 生效：写在别的图形上是静默无效（渲染侧根本不读）。
   if (patch.path !== undefined || patch.pathUnit !== undefined || patch.clipFrame !== undefined) {

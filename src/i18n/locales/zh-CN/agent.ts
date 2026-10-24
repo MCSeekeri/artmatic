@@ -164,6 +164,7 @@ export const agent = {
   'agent.typo.badTransform3d': 'transform3d 必须是对象（可只给要改的子项）或 null',
   'agent.typo.autoHeightNotText': '元素 {id} 不是文本元素，没有 autoHeight',
   'agent.typo.keyNotImage': '元素 {id} 不是图片元素：key / quad 只用于图片',
+  'agent.typo.badImageFx': '图片效果参数不合法：adjust 是 {brightness,contrast,saturation,sharpen,soften,curves}（前五项取值范围见工具说明，curves 的点是 0..1），recolor 是 {color,shadow,amount 0..1}，border 是 {color,width}，filter 是 {id,amount 0..1}（id 见 get_typography_capabilities().images.filters）',
   'agent.typo.runsNotText': '元素 {id} 不是文本元素，没有 runs',
   'agent.typo.badRuns': 'runs 不合法：需要 [{ text, style? }]，style 的键只能是 fontFamily / fontSize / fontWeight / fontStyle / letterSpacing / color / textDecoration / highlight',
   'agent.typo.pathNotSvg': '元素 {id} 不是 svg 图形：path / pathUnit / clipFrame 只在 shape:"svg" 上生效',

@@ -19,7 +19,18 @@
   import { editorState } from './editor-state.svelte';
   import { registerTextRangeRefresher } from './keys';
   import { createTypographyActions } from './actions';
-  import { CANVAS_SIZE_TESTID, buildTypographyTabs } from './ribbon-defs';
+  import {
+    CANVAS_SIZE_TESTID,
+    IMAGE_TOOL_TESTIDS,
+    buildTypographyTabs,
+    type ImageToolId,
+  } from './ribbon-defs';
+  import ImageAdjustPopover from './ImageAdjustPopover.svelte';
+  import ImageRecolorPopover from './ImageRecolorPopover.svelte';
+  import ImageFilterPopover from './ImageFilterPopover.svelte';
+  import ImageSizePopover from './ImageSizePopover.svelte';
+  import { defaultImageAdjust, defaultImageRecolor } from '../../typography/image-effects';
+  import { imageSourceFor } from '../../engine/media-assets';
   import SelectionLayer from './SelectionLayer.svelte';
   import QuadEditLayer from './QuadEditLayer.svelte';
   import NodeEditor from './NodeEditor.svelte';
@@ -199,6 +210,113 @@
     if (!anchor) return;
     canvasAnchor = anchor;
     canvasOpen = true;
+  }
+
+  /* ------------------------------------------------- 图片格式浮层 */
+
+  /**
+   * 当前打开的图片浮层（色彩校正 / 重新着色 / 滤镜 / 调整大小）。
+   *
+   * 与画布浮层同一套：Ribbon 只能发无参意图，锚点按 testid 现查。
+   * **同一时刻只开一个** —— 四个浮层都是「选中图片的效果参数」，并列摆出来
+   * 只会互相遮挡。
+   */
+  let imageTool = $state<ImageToolId | null>(null);
+  let imageToolAnchor = $state<HTMLElement | null>(null);
+
+  function toggleImageTool(tool: ImageToolId): void {
+    if (imageTool === tool) {
+      imageTool = null;
+      return;
+    }
+    const anchor = document.querySelector<HTMLElement>(`[data-testid="${IMAGE_TOOL_TESTIDS[tool]}"]`);
+    if (!anchor) return;
+    imageToolAnchor = anchor;
+    imageTool = tool;
+  }
+
+  /**
+   * 四角调整的开合 = **进出「在画布上拖角」这个模式**。
+   *
+   * 打开时顺手补一份恒等四角（字段存在 = 变形已启用），关闭时**只退出模式、
+   * 不删数据**：用户点灭开关多半是想继续编辑别的，而不是想把拖了半天的透视
+   * 扔掉。真要撤销变形走旁边的「复位」；彻底移除字段在元素属性面板里。
+   */
+  function toggleImageQuad(on: boolean): void {
+    if (!on) {
+      editorState.setQuadEdit(null);
+      return;
+    }
+    const sel = editorState.selected;
+    if (sel.length !== 1 || sel[0]!.kind !== 'image') return;
+    if (!sel[0]!.quad) actions.setImageQuad(true);
+    editorState.setQuadEdit(sel[0]!.id);
+  }
+
+  /** 当前文档的配色方案（浮层里的取色卡要用它画主题色）。 */
+  const docTheme = $derived.by(() => {
+    void appState.version;
+    return themeById(doc?.theme, appState.project.customThemes ?? []);
+  });
+
+  /**
+   * 选中图片的浮层取值（**深拷**）。
+   *
+   * 元素是原地改的普通对象：直接把 `el.adjust` 交给浮层，引用不变 ⇒ Svelte 按
+   * `===` 认为没变 ⇒ 滑杆读数停在旧值（而画面是对的）。见 AGENTS 的「界面实时性」。
+   */
+  const imageFx = $derived.by(() => {
+    void appState.version;
+    const el = editorState.selected.find((e) => e.kind === 'image');
+    if (!el || el.kind !== 'image') return null;
+    const nat = imageSourceFor(el.assetId);
+    const c = el.adjust?.curves;
+    const curves = c
+      ? {
+          ...(c.master ? { master: c.master.map((p) => ({ ...p })) } : {}),
+          ...(c.r ? { r: c.r.map((p) => ({ ...p })) } : {}),
+          ...(c.g ? { g: c.g.map((p) => ({ ...p })) } : {}),
+          ...(c.b ? { b: c.b.map((p) => ({ ...p })) } : {}),
+        }
+      : undefined;
+    return {
+      adjust: { ...(el.adjust ?? defaultImageAdjust()), ...(curves ? { curves } : {}) },
+      recolor: { ...(el.recolor ?? defaultImageRecolor()) },
+      filter: el.filter ? { ...el.filter } : undefined,
+      frame: { ...el.frame },
+      natural: nat && nat.w > 0 && nat.h > 0 ? { w: nat.w, h: nat.h } : null,
+    };
+  });
+
+  /** 选中换了（或没图了）就把浮层收掉：留着一个改不了任何东西的浮层。 */
+  $effect(() => {
+    const has = !!imageFx;
+    if (!has && imageTool) queueMicrotask(() => (imageTool = null));
+  });
+
+  /**
+   * 切走「图片格式」页签也收掉浮层。
+   *
+   * 锚点按钮随 Contextual Tab 一起消失，留着浮层会飘在一个已经不存在的按钮
+   * 原来的位置上（既点不动也看不懂它属于谁）。
+   */
+  $effect(() => {
+    const stray = !!imageTool && activeRibbonTab !== 'image-format';
+    if (stray) queueMicrotask(() => (imageTool = null));
+  });
+
+  /**
+   * 手势途中不允许 commit（见 editor-state 的注释：每一步都会拍快照）。
+   * 滑杆松手那一下 `onchange` 紧跟在 live 之后，所以离散提交统一先结算手势。
+   */
+  function settleThen(label: string, fn: () => void): void {
+    if (editorState.gestureActive) editorState.endGesture(label);
+    fn();
+  }
+
+  /** 曲线的一次离散改动（拖动刚结束时手势还开着）。 */
+  function commitImageCurve(channel: 'master' | 'r' | 'g' | 'b', pts: { x: number; y: number }[] | null): void {
+    settleThen(tr('typo.undo.imgCurve'), () => actions.setImageCurve(channel, pts));
   }
 
   /**
@@ -401,6 +519,10 @@
         customThemes: appState.project.customThemes ?? [],
         onOpenThemeEditor: () => (themeEditorOpen = true),
         onOpenCanvasSize: toggleCanvasSize,
+        onOpenImageTool: toggleImageTool,
+        onImageQuad: toggleImageQuad,
+        quadEditing: !!editorState.quadEditId,
+        imageTool,
       },
       actions,
     );
@@ -1703,6 +1825,56 @@
       onsize={setCanvasSize}
       onscale={setCanvasScale}
     />
+  {/if}
+
+  <!--
+    「图片格式」的四个浮层（色彩校正 / 重新着色 / 滤镜 / 调整大小）。
+    与画布浮层同一条理由：`position: fixed`、挂在根节点下，不能被 Ribbon 或
+    右侧面板的 `overflow` 裁掉。同一时刻只开一个（`imageTool`）。
+  -->
+  {#if imageTool && imageToolAnchor && imageFx}
+    {#if imageTool === 'adjust'}
+      <ImageAdjustPopover
+        anchor={imageToolAnchor}
+        onclose={() => (imageTool = null)}
+        adjust={imageFx.adjust}
+        onlive={(patch) => actions.patchImageAdjustLive(patch)}
+        oncommit={(patch) =>
+          settleThen(tr('typo.undo.imgAdjust'), () => actions.patchImageAdjust(patch))}
+        onliveend={() => actions.endLive(tr('typo.undo.imgAdjust'))}
+        oncurve={commitImageCurve}
+        oncurvelive={(channel, pts) => actions.setImageCurveLive(channel, pts)}
+        oncurveend={() => actions.endLive(tr('typo.undo.imgCurve'))}
+      />
+    {:else if imageTool === 'recolor'}
+      <ImageRecolorPopover
+        anchor={imageToolAnchor}
+        onclose={() => (imageTool = null)}
+        recolor={imageFx.recolor}
+        theme={docTheme}
+        onchange={(patch) =>
+          settleThen(tr('typo.undo.imgRecolor'), () => actions.patchImageRecolor(patch))}
+        onlive={(patch) => actions.patchImageRecolorLive(patch)}
+        onliveend={() => actions.endLive(tr('typo.undo.imgRecolor'))}
+      />
+    {:else if imageTool === 'filter'}
+      <ImageFilterPopover
+        anchor={imageToolAnchor}
+        onclose={() => (imageTool = null)}
+        filter={imageFx.filter}
+        onchange={(f) => settleThen(tr('typo.undo.imgFilter'), () => actions.setImageFilter(f))}
+        onlive={(f) => actions.setImageFilterLive(f)}
+        onliveend={() => actions.endLive(tr('typo.undo.imgFilter'))}
+      />
+    {:else if imageTool === 'size'}
+      <ImageSizePopover
+        anchor={imageToolAnchor}
+        onclose={() => (imageTool = null)}
+        frame={imageFx.frame}
+        natural={imageFx.natural}
+        onresize={(next, lock) => actions.resizeImages(next, lock)}
+      />
+    {/if}
   {/if}
 </div>
 

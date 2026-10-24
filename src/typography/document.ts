@@ -16,6 +16,12 @@
 
 import { newId } from '../core/schema';
 import type { KeySettings, QuadCorners } from '../core/image-fx';
+import type {
+  ImageAdjust,
+  ImageBorder,
+  ImageFilterState,
+  ImageRecolor,
+} from './image-effects';
 import type { ElementAnimation } from './animation';
 import { runsFromText, type TextRun } from './rich-text';
 import { themeRef } from './theme';
@@ -769,6 +775,17 @@ export interface ShapeElement extends ElementBase {
    * 否则用户手改的节点会被下一次参数改动覆盖。
    */
   gen?: ShapeGenState;
+  /**
+   * **图片填充**：用一张素材当作这个图形的「底色」，形状本身就是它的裁剪框
+   * （「裁剪为形状」的落地形态，也是形状的 `background-image`）。
+   *
+   * 有它时路径的 `fill` 被忽略（渲染成 `none`），只有描边照常画在上面 ——
+   * 否则一块不透明填充会把图片整个盖住，而且改填充色「没反应」。
+   * 用户改填充方式（`setShapePaint` 带 `kind`）会清掉它，见那个动作的注释。
+   *
+   * 可选字段 ⇒ 不抬 `SCHEMA_VERSION`（与 `groups` / `doc.theme` 同一条约定）。
+   */
+  imageFill?: { assetId: string; fit: 'fill' | 'contain' | 'cover' };
 }
 
 export interface ImageElement extends ElementBase {
@@ -792,6 +809,17 @@ export interface ImageElement extends ElementBase {
    * （`(0,0)` = 框左上、`(1,1)` = 右下，左上原点），与 `frame.rot` 复合。
    */
   quad?: QuadCorners;
+  /**
+   * 色彩校正（亮度 / 对比度 / 饱和度 / 锐化 / 柔化 / RGB 曲线）。
+   * 缺省或「全 0 且无曲线」= 不处理（`adjustIsDefault` 判空，见 image-effects.ts）。
+   */
+  adjust?: ImageAdjust;
+  /** 重新着色（亮度 → 双色渐变）。缺省 = 不处理。 */
+  recolor?: ImageRecolor;
+  /** 图片边框（画在图片内部）。缺省 / `width = 0` = 没有边框。 */
+  border?: ImageBorder;
+  /** 滤镜预设 + 强度。缺省 = 没有滤镜。 */
+  filter?: ImageFilterState;
 }
 
 export type TypographyElement = TextElement | ShapeElement | ImageElement;
@@ -1284,6 +1312,10 @@ export function createImageElement(
     // 可选字段必须**逐项显式搬运**：不写就会静默丢弃（见 ShapeElement 的 evenOdd / gen）。
     key: over.key,
     quad: over.quad,
+    adjust: over.adjust,
+    recolor: over.recolor,
+    border: over.border,
+    filter: over.filter,
     // frame 放最后：`baseDefaults` 已经按形状的方块填过默认值，这里按比例覆盖它。
     frame: over.frame ?? defaultImageFrame(size, over.natural?.w ?? 0, over.natural?.h ?? 0),
   };

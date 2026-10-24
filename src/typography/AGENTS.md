@@ -188,6 +188,35 @@
   4. **色键公式只有一份**：`core/image-fx.ts::applyKeyToRgba`，与
      `engine/placement.frag.ts` 逐字对齐。两套分家的形态是「排版里边缘发绿、
      时间轴上干净」，没有任何报错。
+- **图片效果（色彩校正 / 重新着色 / 滤镜 / 边框）分两条路，按「要不要逐像素」选**：
+  - **纯 CSS**：边框（`ImageElement.border` → `css.ts::imageStyle` 的
+    **`box-shadow: inset`**）。用 `border` 会挤占内容盒 —— 加一条 20px 的边等于
+    把图裁小一圈，而 PPT 的图片边框是画在图上的。`width = 0` 时必须显式写
+    `none`（就地同步只 set 不 delete）。
+  - **CPU canvas**：`adjust` / `recolor` / `filter`（`typography/image-effects.ts`
+    是纯像素层，可单测）。顺序写死在 `image-fx.ts::renderFx`：
+    **校正 → 柔化 → 锐化 → 滤镜 → 重新着色 → 抠图 → 四角**。换顺序会改变成品
+    （锐化后再柔化 = 白干），所以不要在别处再排一遍。
+  - **判空才算「没有效果」**：`adjustIsDefault` / `recolorIsDefault` 决定
+    `imageNeedsFx()` 与 `fxKey`。留一个全 0 的 `adjust` 会让老工程凭空走进
+    CPU 路径（画质与性能都变，而用户什么都没改）。
+  - 带**空间滤波**（锐化 / 柔化 / 任何滤镜）时位图长边上限降到 **2048**
+    （`MAX_EDGE_SPATIAL`）：`boxBlur` 每帧要开两块与位图同大的 scratch，
+    4096² 是 67 MB/块。滤镜是风格化处理，2048 与 4096 肉眼无差。
+  - **曲线是分段线性**（`curveLut` 的 256 项 LUT）且**两端各补一段**：
+    首点在 0.3 时暗部按比例走到首点，不补的话整段暗部会被拉平。三次样条在
+    两点之间会自己鼓出去，表现成「只提亮中间、暗部却更暗」。
+  - **滤镜的噪点 / 故障必须用坐标哈希**（`hash01`），不许 `Math.random()` ——
+    否则导出每帧都在闪（AGENTS §1.2）。17 个滤镜的名字在 `IMAGE_FILTERS`，
+    文案在 `i18n/locales/zh-CN/ribbon.ts` 的 `rib.imgfx.*`。
+- **图形的图片填充（`ShapeElement.imageFill`）是 `图片 + clipPath`，不是 `<pattern>`**：
+  pattern 的坐标活在引用它的用户空间里，而自定义路径外面还套着
+  `scale(w/100, h/100)`，图案会被非等比拉歪。结构固定为
+  `<defs><clipPath id=…><path d transform/></clipPath></defs><image clip-path/>`，
+  `<image>` 插在 `<g>` **之前**（图在下、描边在上）。有 `imageFill` 时路径的
+  `fill` 被强制成 `none`（不透明填充会把图整个盖住）。**`syncImageFill` 必须在
+  `syncPaintDefs` 之后跑** —— 那个函数会 `replaceChildren` 重建 `<defs>`。
+  用户改填充方式（`setShapePaint` 带 `kind`）会清掉 `imageFill`。
 - **两个测试钩子**：`FontRegistry.subsetting` 可关（退回整体内联），
   `tests/e2e/typography-font.spec.ts` 用它断言**子集 vs 全量逐像素零差异** —— 这是唯一能证明
   「子集化没有改动字形或度量」的测试。光栅化另有 `typoRasterize`（不经过 GPU）。

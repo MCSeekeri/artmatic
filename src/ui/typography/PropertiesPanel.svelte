@@ -191,6 +191,8 @@ import ColorField from '../controls/ColorField.svelte';
           ? { id: el.gen.id, seed: el.gen.seed, params: { ...el.gen.params } }
           : null,
       genSpec: el.kind === 'shape' ? generatorById(el.gen?.id) : null,
+      /** 图片填充（「裁剪为形状」的产物）。有它时面板把填充编辑换成「移除」。 */
+      imageFill: el.kind === 'shape' && el.imageFill ? { ...el.imageFill } : null,
       /**
        * 图片专有：抠图 / 四角。
        *
@@ -999,16 +1001,33 @@ import ColorField from '../controls/ColorField.svelte';
           {/if}
         {/if}
         <h4 class="prop-sec">{tr('typo.propFill')}</h4>
-        <PaintEditor
-          paint={model.fill}
-          kindOptions={SHAPE_KIND_OPTIONS}
-          prefix="prop-fill"
-          {theme}
-          onkind={(k) => actions.setShapePaint({ kind: k })}
-          onpatch={(p) => actions.setShapePaint(p)}
-          onpatchlive={(p) => actions.setShapePaintLive(p)}
-          onliveend={() => actions.endLive(tr('typo.undo.shapeFill'))}
-        />
+        <!--
+          图片填充（「裁剪为形状」的产物）：此时路径的 `fill` 被忽略，只画图。
+          不给一个显式的出口的话，用户会在这里调填充色并发现「怎么调都没反应」
+          —— 而真正的原因是那块填充被图片盖住了。
+        -->
+        {#if model.imageFill}
+          <Field label={tr('typo.propImageFill')} labelWidth={74}>
+            <Button
+              label={tr('typo.propImageFillRemove')}
+              icon="trash"
+              variant="outline"
+              testid="prop-image-fill-remove"
+              onclick={() => actions.setShapeImageFill(null)}
+            />
+          </Field>
+        {:else}
+          <PaintEditor
+            paint={model.fill}
+            kindOptions={SHAPE_KIND_OPTIONS}
+            prefix="prop-fill"
+            {theme}
+            onkind={(k) => actions.setShapePaint({ kind: k })}
+            onpatch={(p) => actions.setShapePaint(p)}
+            onpatchlive={(p) => actions.setShapePaintLive(p)}
+            onliveend={() => actions.endLive(tr('typo.undo.shapeFill'))}
+          />
+        {/if}
 
         <h4 class="prop-sec">{tr('typo.propStroke')}</h4>
         <!--

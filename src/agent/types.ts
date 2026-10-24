@@ -486,6 +486,27 @@ export interface TypographyCapabilities {
     defaults: string;
   };
   /**
+   * 图片元素的效果与图形的图片填充。
+   *
+   * 滤镜 / 曲线的**形状**必须写在这里：模型猜 `filter.name` 的命中率极低，
+   * 而猜错的形状会被 `coerceImageFilter` 整条丢掉 —— 回执里字段还在，
+   * 画面却没有任何变化。
+   */
+  images: {
+    /** 色彩校正各键的区间（`adjust`）。 */
+    adjust: Record<string, string>;
+    /** 重新着色的形状（两色 + 强度）。 */
+    recolor: string;
+    /** 图片边框（画在图内，不改元素框）。 */
+    border: string;
+    /** 滤镜：形状 + 全部可用 id。 */
+    filter: { form: string; ids: string[] };
+    /** 裁剪窗的口径与「设了比例会顺手改 fit」这条副作用。 */
+    crop: string;
+    /** 图形的图片填充（「裁剪为形状」）。 */
+    imageFill: string;
+  };
+  /**
    * 元素动画（CSS 动画系统，预览与导出同一条求值路径）。
    *
    * 为什么要在能力清单里列预设名：模型没法猜 `slide-in-up` 与 `slideInUp` 哪个

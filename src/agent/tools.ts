@@ -791,7 +791,13 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'path (shape:"svg" only — writing it clears the generator binding, i.e. it bakes the shape; ' +
       'pair it with pathUnit:"px" for text-outline paths), pathUnit, clipFrame, ' +
       'gen (to re-seed a generated shape), animations (replace the list) / animation (replace ' +
-      'with one) / addAnimation (append) / removeAnimations:true. Unknown keys are ignored. ' +
+      'with one) / addAnimation (append) / removeAnimations:true. ' +
+      'Image-only: adjust ({brightness,contrast,saturation,sharpen,soften,curves} — MERGES, null removes; ' +
+      'curves is {master?,r?,g?,b?:[{x,y}]} in 0..1), recolor ({color,shadow,amount 0..1}), ' +
+      'border ({color,width} px, drawn inside), filter ({id,amount 0..1}, ids in ' +
+      'get_typography_capabilities().images.filter.ids). Shape-only: imageFill ({assetId,fit}) clips that ' +
+      'picture to the path — while it is set, `fill` is ignored (this is what crop-to-shape produces). ' +
+      'Unknown keys are ignored. ' +
       'Returns the whole element ' +
       "as stored, so you don't need to re-read the document to confirm it landed. " +
       "For text, fill:{kind:'solid',color} writes style.color (same field, one semantics).",

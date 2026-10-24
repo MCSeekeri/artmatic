@@ -25,7 +25,12 @@ import {
   type TypographyElement,
   type TypographyGroup,
 } from '../../typography/document';
-import { BUILTIN_THEMES, themeById, type TypographyTheme } from '../../typography/theme';
+import {
+  BUILTIN_THEMES,
+  resolveThemeColor,
+  themeById,
+  type TypographyTheme,
+} from '../../typography/theme';
 import type { MessageKey } from '../../i18n/locales';
 import { ANIM_PRESETS, type AnimTiming } from '../../typography/animation';
 import { GRID_LIMITS, type TypoGridPrefs } from '../../typography/grid';
@@ -36,6 +41,7 @@ import {
   shapeParamSupport,
 } from '../../typography/shapes';
 import type { GalleryCard } from '../ribbon/ribbon-model';
+import { CROP_ASPECTS } from '../../typography/image-geometry';
 import { minSpanValue, uniformSpanValue, type SpanStyleKey } from '../../typography/rich-text';
 import type { TypographyActions } from './actions';
 import { loadRecentFonts, orderByRecent, rememberFont } from './recent-fonts';
@@ -53,6 +59,22 @@ const ANIM_PICK = '__pick-anim';
  * `onselect` 是无参意图，拿不到事件目标。两处共用一个常量，改名不会只改一半。
  */
 export const CANVAS_SIZE_TESTID = 'ribbon-canvas-size';
+
+/**
+ * 「图片格式」里会开浮层的四个按钮（色彩校正 / 重新着色 / 滤镜 / 调整大小）。
+ *
+ * 与 `CANVAS_SIZE_TESTID` 同一条理由：Ribbon 的按钮只能发无参意图，浮层锚点
+ * 由编辑器按 testid 现查。放在这里让「按钮」与「锚点」共用同一个常量。
+ * （「裁剪」是一次性菜单，不需要浮层。）
+ */
+export type ImageToolId = 'adjust' | 'recolor' | 'filter' | 'size';
+
+export const IMAGE_TOOL_TESTIDS: Record<ImageToolId, string> = {
+  adjust: 'ribbon-image-adjust',
+  recolor: 'ribbon-image-recolor',
+  filter: 'ribbon-image-filter',
+  size: 'ribbon-image-size',
+};
 
 export interface TypographyRibbonInput {
   doc: TypographyDocument;
@@ -114,6 +136,14 @@ export interface TypographyRibbonInput {
   onOpenThemeEditor: () => void;
   /** 开合「画布大小」浮层（画幅 / 上屏大小，见 `CanvasSizePopover`）。 */
   onOpenCanvasSize: () => void;
+  /** 打开「图片格式」的某个浮层（锚点由编辑器按 `IMAGE_TOOL_TESTIDS` 现查）。 */
+  onOpenImageTool: (tool: ImageToolId) => void;
+  /** 四角调整模式的开合（= 写 `ImageElement.quad` 并进入画布手柄态）。 */
+  onImageQuad: (enable: boolean) => void;
+  /** 当前是否处于四角调整模式（按钮的激活态）。 */
+  quadEditing: boolean;
+  /** 当前打开的图片浮层（按钮的激活态；null = 都关着）。 */
+  imageTool: ImageToolId | null;
 }
 
 const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
@@ -1810,7 +1840,13 @@ export function buildTypographyTabs(
       order: 11,
       groups: [
         {
-          id: 'image-fit',
+          /*
+           * 版式纪律（见 ui/typography/AGENTS.md）：这一组的**控件个数与宽度
+           * 恒定**。按状态条件展开的话，每勾一次「删除背景」整条 Ribbon 就会
+           * 横向位移一次，用户瞄准的按钮在点下去之前跑掉 —— 填充组那次教训。
+           * 不适用的控件置灰、**保留占位**。
+           */
+          id: 'image-style',
           label: tr('rib.group.imageStyle'),
           items: [
             {
@@ -1818,6 +1854,7 @@ export function buildTypographyTabs(
               id: 'image-fit',
               label: tr('rib.imageFit'),
               testid: 'ribbon-image-fit',
+              width: 96,
               value: image?.fit ?? 'cover',
               options: [
                 { value: 'fill', label: tr('rib.fitFill') },
@@ -1826,6 +1863,209 @@ export function buildTypographyTabs(
                 { value: 'none', label: tr('rib.fitNone') },
               ],
               onchange: (v) => a.setImageFit(v as ImageElement['fit']),
+            },
+            {
+              kind: 'number',
+              id: 'image-radius',
+              label: tr('rib.imageRadius'),
+              testid: 'ribbon-image-radius',
+              value: image?.radius ?? 0,
+              min: 0,
+              step: 1,
+              suffix: 'px',
+              onchange: (v) => a.setImageRadius(v),
+            },
+            {
+              kind: 'color',
+              id: 'image-border-color',
+              label: tr('rib.imageBorderColor'),
+              icon: 'frame',
+              testid: 'ribbon-image-border-color',
+              value: image?.border?.color ?? '#ffffff',
+              /*
+               * 改颜色时若还没有边框宽度，顺手给 4px：只选颜色却什么都不发生
+               * 是这类控件的经典坑（「点了没反应」）。
+               */
+              onchange: (v) =>
+                a.patchImageBorder({ color: v, width: image?.border?.width || 4 }),
+            },
+            {
+              kind: 'number',
+              id: 'image-border-width',
+              label: tr('rib.imageBorderWidth'),
+              testid: 'ribbon-image-border-width',
+              value: image?.border?.width ?? 0,
+              min: 0,
+              max: 200,
+              step: 1,
+              suffix: 'px',
+              onchange: (v) => a.patchImageBorder({ width: v }),
+            },
+          ],
+        },
+        {
+          id: 'image-bg',
+          label: tr('rib.group.imageBg'),
+          items: [
+            {
+              kind: 'toggle',
+              id: 'image-key',
+              label: tr('rib.imageKey'),
+              size: 'large',
+              icon: 'eraser',
+              testid: 'ribbon-image-key',
+              active: !!image?.key,
+              onchange: (on) => a.setImageKey(on),
+            },
+            {
+              kind: 'color',
+              id: 'image-key-color',
+              label: tr('rib.imageKeyColor'),
+              icon: 'pipette',
+              testid: 'ribbon-image-key-color',
+              value: image?.key?.color ?? '#00ff00',
+              // 没开抠图时置灰但保留占位（组宽不随状态变化）。
+              disabled: !image?.key,
+              /*
+               * 取色卡里选中主题色时拿到的是 `@accent1` 这样的**引用**；而抠图
+               * 颜色要参与逐像素计算，`coerceKeySettings` 只收 `#hex` —— 必须在
+               * 这里就地解析，否则「选了主题色、什么都不发生」（静默丢弃）。
+               */
+              onchange: (v) => a.patchImageKey({ color: resolveThemeColor(v, theme) }),
+            },
+          ],
+        },
+        {
+          id: 'image-quad',
+          label: tr('rib.group.imageQuad'),
+          items: [
+            {
+              kind: 'toggle',
+              id: 'image-quad',
+              label: tr('rib.imageQuad'),
+              size: 'large',
+              icon: 'square-dashed',
+              testid: 'ribbon-image-quad',
+              // 「四角调整」是一个**模式**：开着才在画布上画四个角手柄。
+              active: input.quadEditing,
+              onchange: (on) => input.onImageQuad(on),
+            },
+            {
+              kind: 'button',
+              id: 'image-quad-reset',
+              label: tr('rib.imageQuadReset'),
+              size: 'small',
+              icon: 'rotate-ccw',
+              testid: 'ribbon-image-quad-reset',
+              disabled: !image?.quad,
+              onselect: () => a.resetImageQuad(),
+            },
+          ],
+        },
+        {
+          id: 'image-adjust',
+          label: tr('rib.group.imageAdjust'),
+          items: [
+            {
+              // 「是否开着」要靠 `active` 表达 ⇒ 用 toggle（button 没有激活态）。
+              // 点击时忽略传进来的布尔值：编辑器那侧是**开合**语义（再点一次关掉）。
+              kind: 'toggle',
+              id: 'image-adjust',
+              label: tr('rib.imageAdjust'),
+              icon: 'sliders-horizontal',
+              testid: IMAGE_TOOL_TESTIDS.adjust,
+              active: input.imageTool === 'adjust',
+              onchange: () => input.onOpenImageTool('adjust'),
+            },
+            {
+              kind: 'toggle',
+              id: 'image-recolor',
+              label: tr('rib.imageRecolor'),
+              icon: 'palette',
+              testid: IMAGE_TOOL_TESTIDS.recolor,
+              active: input.imageTool === 'recolor',
+              onchange: () => input.onOpenImageTool('recolor'),
+            },
+            {
+              kind: 'toggle',
+              id: 'image-filter',
+              label: tr('rib.imageFilter'),
+              icon: 'wand-sparkles',
+              testid: IMAGE_TOOL_TESTIDS.filter,
+              active: input.imageTool === 'filter',
+              onchange: () => input.onOpenImageTool('filter'),
+            },
+          ],
+        },
+        {
+          id: 'image-crop',
+          label: tr('rib.group.imageCrop'),
+          items: [
+            {
+              // 纵横比是**一次性预设**，不显示当前值 ⇒ 用 menu 而不是 select：
+              // 下拉的触发区要放得下「16:9」这种读数，宽度会被迫变化。
+              kind: 'menu',
+              id: 'image-crop',
+              label: tr('rib.imageCrop'),
+              icon: 'crop',
+              testid: 'ribbon-image-crop',
+              items: [
+                ...CROP_ASPECTS.map((p) => ({
+                  id: `crop-${p.id}`,
+                  label: tr(p.labelKey),
+                  active: false,
+                  onselect: () => a.setImageCropAspect(p.ratio),
+                })),
+                {
+                  id: 'crop-reset',
+                  label: tr('rib.cropReset'),
+                  icon: 'rotate-ccw' as const,
+                  onselect: () => a.setImageCrop(null),
+                },
+              ],
+            },
+            {
+              kind: 'toggle',
+              id: 'image-size',
+              label: tr('rib.imageSize'),
+              icon: 'maximize',
+              testid: IMAGE_TOOL_TESTIDS.size,
+              active: input.imageTool === 'size',
+              onchange: () => input.onOpenImageTool('size'),
+            },
+            {
+              /*
+               * 裁剪为形状：图库而不是下拉 —— 形状靠名字挑不出来（与「插入形状」
+               * 同一条理由）。`line` 被排除：没有面积，裁过去等于把图删掉。
+               */
+              kind: 'gallery',
+              id: 'image-clip-shape',
+              label: tr('rib.imageClipShape'),
+              testid: 'ribbon-image-clip-shape',
+              columns: 5,
+              cards: shapeCards().filter((c) => c.id !== 'line'),
+              onselect: (key) => a.clipImagesToShape(key),
+            },
+          ],
+        },
+        {
+          id: 'image-align',
+          label: tr('rib.group.imageAlign'),
+          items: [
+            {
+              kind: 'menu',
+              id: 'image-align',
+              label: tr('rib.imageAlignCanvas'),
+              icon: 'move',
+              testid: 'ribbon-image-align',
+              items: [
+                { id: 'align-center', label: tr('rib.imgAlignCenter'), onselect: () => a.alignImagesToCanvas('center') },
+                { id: 'align-center-h', label: tr('rib.imgAlignCenterH'), onselect: () => a.alignImagesToCanvas('center-h') },
+                { id: 'align-center-v', label: tr('rib.imgAlignCenterV'), onselect: () => a.alignImagesToCanvas('center-v') },
+                { id: 'align-fit', label: tr('rib.imgAlignFit'), onselect: () => a.alignImagesToCanvas('fit') },
+                { id: 'align-fill', label: tr('rib.imgAlignFill'), onselect: () => a.alignImagesToCanvas('fill') },
+                { id: 'align-stretch', label: tr('rib.imgAlignStretch'), onselect: () => a.alignImagesToCanvas('stretch') },
+              ],
             },
           ],
         },

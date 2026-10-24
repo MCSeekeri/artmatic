@@ -1,11 +1,15 @@
 /**
- * image-fx.ts — 排版图片元素的**元素级**抠图（色键）与四角透视（CPU 实现）。
+ * image-fx.ts — 排版图片元素的**元素级像素处理**（CPU 实现）：
+ * 色彩校正 / 重新着色 / 滤镜 / 抠图（色键）/ 四角透视。
+ *
+ * 逐像素的算法本身在 `image-effects.ts`（纯函数、可单测），本文件只负责
+ * 「什么时候重算、缓存在哪、位图多大」这三件事。
  *
  * ## 为什么在 DOM 侧自己算，而不是像片段那样交给 GPU
  *
  * 排版文档渲染成 DOM（`render-dom.ts`），舞台与 snapDOM 光栅化共用这一份
  * DOM —— 没有「placement pass」那个可编程采样点。抠图要逐像素、四角重采样要
- * 与 GPU 逐点对拍，所以两条能力都在 CPU 做。
+ * 与 GPU 逐点对拍，所以这些能力都在 CPU 做。
  *
  * ⚠️ **旧注释（2026-10-17）说「snapDOM 会丢掉 matrix3d」是误判**。2026-10-21
  * 用 3.2.0 重测（裸 div / 真实 `.typo-doc` 嵌套 / 四角单应 matrix3d / `<img>` /
@@ -42,6 +46,14 @@ import {
 } from '../core/image-fx';
 import { isIdentityQuad, quadInverseMatrix } from '../core/quad';
 import type { ImageElement, TypographyDocument } from './document';
+import {
+  adjustIsDefault,
+  applyImageEffects,
+  recolorIsDefault,
+  type ImageAdjust,
+  type ImageFilterState,
+  type ImageRecolor,
+} from './image-effects';
 
 /**
  * 处理结果的长边上限。
@@ -51,6 +63,9 @@ import type { ImageElement, TypographyDocument } from './document';
  * 从 33 MP 降到 16 MP（CPU 逐像素重采样的成本是线性的）。
  */
 const MAX_EDGE = 4096;
+
+/** 带空间滤波（锐化 / 柔化 / 滤镜）时的长边上限。理由见 `fxRasterSize`。 */
+const MAX_EDGE_SPATIAL = 2048;
 
 /** 缓存条目上限。排版文档里的图片元素通常个位数；留足余量做参数来回拖。 */
 const MAX_ENTRIES = 24;
@@ -87,22 +102,64 @@ function delay(ms: number): Promise<void> {
  *
  * `quad` 存在但**恒等**时不走（与引擎 `u_quadOn = 0` 同一判据）：恒等四角
  * 的 canvas 重采样会引入一次不必要的双线性模糊，而用户在开关上看到的是「已开启」。
+ *
+ * 色彩校正 / 重新着色 / 滤镜**判空后才走**：全 0 的调整与没有滤镜的图片必须
+ * 继续走 `<img>` + CSS —— 否则每张老图片都会凭空过一次 canvas，画质与性能都变，
+ * 而用户什么都没改。
  */
 export function imageNeedsFx(el: ImageElement): boolean {
   if (el.key) return true;
+  if (!adjustIsDefault(el.adjust)) return true;
+  if (!recolorIsDefault(el.recolor)) return true;
+  // 强度 0 = 没有效果（用户把滑杆拖到底了），不值得为它付一次逐像素。
+  if (el.filter && el.filter.amount > 0) return true;
   return el.quad !== undefined && !isIdentityQuad(el.quad);
 }
 
-/** 位图尺寸：元素框的文档像素尺寸，长边夹到 `MAX_EDGE`。 */
+/**
+ * 位图尺寸：元素框的文档像素尺寸，长边夹到上限。
+ *
+ * 带**空间滤波**（锐化 / 柔化 / 任意滤镜）时上限降到 2048：这些滤镜每帧要开
+ * 两三块与位图同大的 scratch，4096² 意味着每块 67 MB（见 `boxBlur` 的注释）。
+ * 滤镜是风格化处理，2048 与 4096 的成品肉眼无差，但内存差 4 倍。
+ */
 export function fxRasterSize(el: ImageElement): { w: number; h: number } {
   const w = Math.max(1, Math.round(el.frame.w));
   const h = Math.max(1, Math.round(el.frame.h));
-  const k = Math.min(1, MAX_EDGE / Math.max(w, h));
+  const spatial = !!el.filter || (!!el.adjust && (el.adjust.sharpen > 0 || el.adjust.soften > 0));
+  const limit = spatial ? Math.min(MAX_EDGE, MAX_EDGE_SPATIAL) : MAX_EDGE;
+  const k = Math.min(1, limit / Math.max(w, h));
   return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
 }
 
 function keyHash(key: KeySettings): string {
   return `${key.color},${key.tolerance},${key.softness},${key.spill}`;
+}
+
+function adjustHash(a: ImageAdjust | undefined): string {
+  if (adjustIsDefault(a) || !a) return '-';
+  const c = a.curves ?? {};
+  const pts = (list: { x: number; y: number }[] | undefined): string =>
+    list?.length ? list.map((p) => `${p.x.toFixed(3)}:${p.y.toFixed(3)}`).join(',') : '-';
+  return [
+    a.brightness,
+    a.contrast,
+    a.saturation,
+    a.sharpen,
+    a.soften,
+    pts(c.master),
+    pts(c.r),
+    pts(c.g),
+    pts(c.b),
+  ].join(';');
+}
+
+function filterHash(f: ImageFilterState | undefined): string {
+  return f ? `${f.id},${f.amount.toFixed(3)}` : '-';
+}
+
+function recolorHash(r: ImageRecolor | undefined): string {
+  return recolorIsDefault(r) || !r ? '-' : `${r.color},${r.shadow},${r.amount.toFixed(3)}`;
 }
 
 function quadHash(q: QuadCorners): string {
@@ -120,7 +177,17 @@ export function fxKey(el: ImageElement, url: string): string {
   // 恒等四角与「没有四角」同键：两者都走 `<img>` + CSS（见 imageNeedsFx），
   // 像素结果一样，分成两条只会多占一条缓存。
   const quad = el.quad && !isIdentityQuad(el.quad) ? quadHash(el.quad) : '-';
-  return [url, `${w}x${h}`, el.fit, crop, el.key ? keyHash(el.key) : '-', quad].join('|');
+  return [
+    url,
+    `${w}x${h}`,
+    el.fit,
+    crop,
+    el.key ? keyHash(el.key) : '-',
+    quad,
+    adjustHash(el.adjust),
+    filterHash(el.filter),
+    recolorHash(el.recolor),
+  ].join('|');
 }
 
 /**
@@ -299,9 +366,23 @@ function renderFx(img: HTMLImageElement, el: ImageElement): HTMLCanvasElement | 
   if (!ctx) return null;
   paintBase(ctx, img, W, H, el);
 
-  if (el.key) {
+  /*
+   * 顺序固定：**校正 → 柔化 → 锐化 → 滤镜 → 重新着色 → 抠图 → 四角**。
+   *
+   * 抠图放在效果之后：先按色键抠掉背景再滤镜的话，滤镜会把抠干净的边缘
+   * 重新抹出一圈半透明（模糊核跨过透明区）；而抠图只读 alpha，放最后不吃亏。
+   * 四角重采样本就在最后（它要重采样整张图）。
+   */
+  const needsPixel =
+    !!el.key || !adjustIsDefault(el.adjust) || !recolorIsDefault(el.recolor) || !!el.filter;
+  if (needsPixel) {
     const data = ctx.getImageData(0, 0, W, H);
-    applyKeyToRgba(data.data, el.key);
+    applyImageEffects(data.data, W, H, {
+      adjust: el.adjust,
+      filter: el.filter,
+      recolor: el.recolor,
+    });
+    if (el.key) applyKeyToRgba(data.data, el.key);
     ctx.putImageData(data, 0, 0);
   }
 

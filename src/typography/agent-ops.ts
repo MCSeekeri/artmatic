@@ -52,6 +52,12 @@ import {
   type TypographyGroup,
 } from './document';
 import { coerceRuns, hasSpanOverrides, plainTextOf, runsFromText } from './rich-text';
+import {
+  coerceImageAdjust,
+  coerceImageBorder,
+  coerceImageFilter,
+  coerceImageRecolor,
+} from './image-effects';
 import { sanitizeScripts, type TypographyScript } from './script/model';
 import {
   ANIM_PRESETS,
@@ -268,6 +274,22 @@ function setTextBoxStroke(el: TextElement, raw: unknown): void {
     },
     raw.paint,
   );
+}
+
+/**
+ * 图形的**图片填充**（`ShapeElement.imageFill`）。
+ *
+ * 坏形状返回 null（= 不写这个字段），绝不抛：这条字段是从 agent / 手改的 JSON
+ * 进来的，而渲染侧只会拿 `assetId` 去 `resolveImage`，一个不存在的 id 自然
+ * 落到「脱机媒体」占位，不会把排版树搞坏。
+ */
+export function coerceImageFill(raw: unknown): ShapeElement['imageFill'] | null {
+  if (!isRecord(raw)) return null;
+  const assetId = typeof raw.assetId === 'string' ? raw.assetId.trim() : '';
+  if (!assetId) return null;
+  const fit =
+    raw.fit === 'fill' || raw.fit === 'contain' || raw.fit === 'cover' ? raw.fit : 'cover';
+  return { assetId, fit };
 }
 
 /** 把 `applyPaintPatch` 的入参收窄成安全形状（只认它认识的键）。 */
@@ -830,6 +852,15 @@ export function patchElement(
     if (Number.isFinite(Number(raw.inner))) el.inner = Math.max(0, Number(raw.inner));
     if (Number.isFinite(Number(raw.angle))) el.angle = Number(raw.angle);
     if (raw.evenOdd !== undefined) el.evenOdd = Boolean(raw.evenOdd);
+    // 图片填充：`null` = 回到普通填充（与编辑器的「换填充方式」同一语义）。
+    if (raw.imageFill === null) delete el.imageFill;
+    else if (raw.imageFill !== undefined) {
+      const imageFill = coerceImageFill(raw.imageFill);
+      if (imageFill) el.imageFill = imageFill;
+    }
+    if (raw.fill !== undefined && isRecord(raw.fill) && raw.fill.kind !== undefined) {
+      delete el.imageFill;
+    }
     // 改生成器的种子 / 参数：重算路径（与 UI 的 rebuildGen 同一口径）。
     if (isRecord(raw.gen)) {
       const genId = typeof raw.gen.id === 'string' ? raw.gen.id : el.gen?.id;
@@ -868,6 +899,33 @@ export function patchElement(
     else if (raw.quad !== undefined) {
       const quad = coerceQuadCorners(raw.quad);
       if (quad) el.quad = quad;
+    }
+    /*
+     * 色彩校正 / 重新着色 / 边框 / 滤镜。`null` = 关掉，对象 = **局部合并**
+     * （与抠图同一条语义：只给 `{brightness: 20}` 不该把别的项清掉）。
+     */
+    if (raw.adjust === null) delete el.adjust;
+    else if (raw.adjust !== undefined) {
+      const adjust = coerceImageAdjust(raw.adjust, el.adjust);
+      if (adjust) el.adjust = adjust;
+    }
+    if (raw.recolor === null) delete el.recolor;
+    else if (raw.recolor !== undefined) {
+      const recolor = coerceImageRecolor(raw.recolor, el.recolor);
+      if (recolor) el.recolor = recolor;
+    }
+    if (raw.border === null) delete el.border;
+    else if (raw.border !== undefined) {
+      const border = coerceImageBorder(raw.border, el.border);
+      if (border) {
+        if (border.width <= 0) delete el.border;
+        else el.border = border;
+      }
+    }
+    if (raw.filter === null) delete el.filter;
+    else if (raw.filter !== undefined) {
+      const filter = coerceImageFilter(raw.filter);
+      if (filter) el.filter = filter;
     }
   }
 
@@ -1542,6 +1600,8 @@ function elementView(el: TypographyElement): Record<string, unknown> {
       ...(el.angle !== undefined ? { angle: el.angle } : {}),
       ...(el.evenOdd ? { evenOdd: true } : {}),
       ...(el.gen ? { gen: el.gen } : {}),
+      // 图片填充（「裁剪为形状」的产物）：不给的话「读一次再写回」会把图丢了。
+      ...(el.imageFill ? { imageFill: { ...el.imageFill } } : {}),
     };
   }
   return {
@@ -1553,6 +1613,11 @@ function elementView(el: TypographyElement): Record<string, unknown> {
     ...(el.key ? { key: el.key } : {}),
     ...(el.quad ? { quad: el.quad } : {}),
     ...(el.radius !== undefined ? { radius: el.radius } : {}),
+    // 色彩校正 / 重新着色 / 边框 / 滤镜：缺省 = 没开。
+    ...(el.adjust ? { adjust: el.adjust } : {}),
+    ...(el.recolor ? { recolor: el.recolor } : {}),
+    ...(el.border ? { border: el.border } : {}),
+    ...(el.filter ? { filter: el.filter } : {}),
   };
 }
 
@@ -1693,8 +1758,8 @@ const ELEMENT_KEYS = new Set([
  */
 const KIND_KEYS: Record<string, string[]> = {
   text: ['text', 'runs', 'style', 'fill', 'boxFill', 'boxStroke', 'glyphStroke', 'autoHeight'],
-  shape: ['shape', 'path', 'pathUnit', 'clipFrame', 'fill', 'stroke', 'radius', 'sides', 'waist', 'inner', 'angle', 'evenOdd', 'gen'],
-  image: ['assetId', 'fit', 'crop', 'radius', 'key', 'quad'],
+  shape: ['shape', 'path', 'pathUnit', 'clipFrame', 'fill', 'stroke', 'radius', 'sides', 'waist', 'inner', 'angle', 'evenOdd', 'gen', 'imageFill'],
+  image: ['assetId', 'fit', 'crop', 'radius', 'key', 'quad', 'adjust', 'recolor', 'border', 'filter'],
 };
 
 /** 把一个元素输入里「不认识的键」记进 report（按 kind 的白名单）。 */
@@ -1823,6 +1888,8 @@ export function coerceDocument(
       if (Number.isFinite(Number(item.waist))) el.waist = Math.max(0.02, Math.min(1, Number(item.waist)));
       if (Number.isFinite(Number(item.inner))) el.inner = Math.max(0, Number(item.inner));
       if (Number.isFinite(Number(item.angle))) el.angle = Number(item.angle);
+      const imageFill = coerceImageFill(item.imageFill);
+      if (imageFill) el.imageFill = imageFill;
       doc.elements.push(el);
     } else if (kind === 'image' && typeof item.assetId === 'string' && item.assetId) {
       const el = createImageElement(size, item.assetId, { ...common });
@@ -1842,6 +1909,15 @@ export function coerceDocument(
       if (key) el.key = key;
       const quad = item.quad === undefined ? null : coerceQuadCorners(item.quad);
       if (quad) el.quad = quad;
+      // 色彩校正 / 重新着色 / 边框 / 滤镜：同一批「缺省 = 没开」的可选字段。
+      const adjust = item.adjust === undefined ? null : coerceImageAdjust(item.adjust);
+      if (adjust) el.adjust = adjust;
+      const recolor = item.recolor === undefined ? null : coerceImageRecolor(item.recolor);
+      if (recolor) el.recolor = recolor;
+      const border = item.border === undefined ? null : coerceImageBorder(item.border);
+      if (border) el.border = border;
+      const filter = item.filter === undefined ? null : coerceImageFilter(item.filter);
+      if (filter) el.filter = filter;
       doc.elements.push(el);
     }
   }

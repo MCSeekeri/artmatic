@@ -24,6 +24,8 @@ import {
   docStyle,
   elementStyle,
   groupStyle,
+  imageFillAspectRatio,
+  imageFillClipId,
   imageStyle,
   paintDefId,
   paintNeedsDefs,
@@ -359,7 +361,7 @@ function buildContent(
     svg.style.width = '100%';
     svg.style.height = '100%';
     svg.style.overflow = 'visible';
-    syncShape(svg, el, theme);
+    syncShape(svg, el, theme, el.imageFill ? (opts.resolveImage?.(el.imageFill.assetId) ?? null) : null);
     return svg;
   }
 
@@ -371,10 +373,12 @@ function buildContent(
      * 只是还没准备好 → 这一帧缺席，与 algo 未烘好时同语义（异步就绪后重绘）。
      * 两者必须分开：给「还没准备好」也画占位符的话，正常加载会满屏闪暗红。
      */
-    if (opts.isImageOffline?.(el.assetId)) return buildOfflineImage(el, opts.offlineLabel ?? '');
+    if (opts.isImageOffline?.(el.assetId)) {
+      return buildOfflineImage(el, opts.offlineLabel ?? '', theme);
+    }
     return null;
   }
-  return buildImageNode(el, url, opts);
+  return buildImageNode(el, url, opts, theme);
 }
 
 /**
@@ -385,8 +389,13 @@ function buildContent(
  * 处理是异步的：未就绪先显示**原图**，
  * 就绪后由 `onImageFxReady` 通知宿主重绘 —— 不让用户看到空白。
  */
-function buildImageNode(el: ImageElement, url: string, opts: BuildDocOptions): HTMLElement {
-  const { wrapper, img: imgDecls } = imageStyle(el);
+function buildImageNode(
+  el: ImageElement,
+  url: string,
+  opts: BuildDocOptions,
+  theme?: TypographyTheme,
+): HTMLElement {
+  const { wrapper, img: imgDecls } = imageStyle(el, theme);
   const wrap = document.createElement('div');
   wrap.className = 'typo-image';
   applyDecls(wrap, wrapper);
@@ -439,8 +448,8 @@ function fxCanvasNode(el: ImageElement, url: string): HTMLCanvasElement | null {
  * 才知道（doc 单位 × 缩放 × dpr）—— 用 px 就得在每次同步时重算内联值。
  * 颜色与字形与引擎侧（视频 / 图片片段）共用 `core/offline-media.ts`。
  */
-function buildOfflineImage(el: ImageElement, label: string): HTMLElement {
-  const { wrapper } = imageStyle(el);
+function buildOfflineImage(el: ImageElement, label: string, theme?: TypographyTheme): HTMLElement {
+  const { wrapper } = imageStyle(el, theme);
   const wrap = document.createElement('div');
   wrap.className = 'typo-image';
   wrap.setAttribute(OFFLINE_ATTR, '1');
@@ -636,7 +645,12 @@ function syncElement(
   }
 
   if (el.kind === 'shape') {
-    syncShape(content as unknown as SVGSVGElement, el, theme);
+    syncShape(
+      content as unknown as SVGSVGElement,
+      el,
+      theme,
+      el.imageFill ? (opts.resolveImage?.(el.imageFill.assetId) ?? null) : null,
+    );
     return;
   }
 
@@ -650,24 +664,24 @@ function syncElement(
   const wasOffline = content.hasAttribute(OFFLINE_ATTR);
 
   if (offline && !wasOffline) {
-    content.replaceChildren(buildOfflineImage(el, opts.offlineLabel ?? ''));
+    content.replaceChildren(buildOfflineImage(el, opts.offlineLabel ?? '', theme));
     content.setAttribute(OFFLINE_ATTR, '1');
     return;
   }
   if (wasOffline) {
     if (!offline && url) {
       // 媒体回来了：换回真图（几何声明下面统一刷）。
-      content.replaceChildren(buildImageNode(el, url, opts));
+      content.replaceChildren(buildImageNode(el, url, opts, theme));
       content.removeAttribute(OFFLINE_ATTR);
     } else {
       // 仍在占位态（含「既没就绪也没脱机」的加载中间态 —— 那时继续显示
       // 占位符比闪一下空节点好）：只更新几何。
-      applyDecls(content, imageStyle(el).wrapper);
+      applyDecls(content, imageStyle(el, theme).wrapper);
       return;
     }
   }
 
-  const { wrapper, img: imgDecls } = imageStyle(el);
+  const { wrapper, img: imgDecls } = imageStyle(el, theme);
   applyDecls(content, wrapper);
 
   /*
@@ -694,7 +708,7 @@ function syncElement(
   } else if (canvasEl && url) {
     // 关掉 fx（删了 key / quad 回恒等）：换回普通 `<img>` + CSS。
     // url 为空（素材还在加载）时保留现有节点，别造一个空 src 的 img。
-    content.replaceChildren(buildImageNode(el, url, opts));
+    content.replaceChildren(buildImageNode(el, url, opts, theme));
   }
 
   const img = content.querySelector('img');
@@ -711,7 +725,12 @@ function syncElement(
  * authored）时才带 scale 变换。固定结构省掉了「条件插入/删除子节点」这类
  * 容易漏掉的分支。
  */
-export function syncShape(svg: SVGSVGElement, el: ShapeElement, theme?: TypographyTheme): void {
+export function syncShape(
+  svg: SVGSVGElement,
+  el: ShapeElement,
+  theme?: TypographyTheme,
+  imageUrl?: string | null,
+): void {
   const geo = shapeGeometry(el.shape, {
     w: el.frame.w,
     h: el.frame.h,
@@ -734,7 +753,7 @@ export function syncShape(svg: SVGSVGElement, el: ShapeElement, theme?: Typograp
   syncPaintDefs(svg, el, geo.scaleFrom100 === true, theme);
 
   // 手写遍历而不是 `querySelector(':scope > g')`：后者在 SVG 子树里的支持
-  // 各浏览器不一致，而这里的结构是固定的（defs? + g），手扫更省心。
+  // 各浏览器不一致，而这里的结构是固定的（defs? + image? + g），手扫更省心。
   let g: SVGGElement | null = null;
   for (const child of Array.from(svg.children)) {
     if (child.tagName.toLowerCase() === 'g') {
@@ -761,6 +780,96 @@ export function syncShape(svg: SVGSVGElement, el: ShapeElement, theme?: Typograp
   for (const [k, v] of Object.entries(shapePaintAttrs(el, geo.evenOdd, theme))) {
     path.setAttribute(k, v);
   }
+
+  /*
+   * 图片填充必须在 `syncPaintDefs` **之后**：那个函数会 `replaceChildren`
+   * 重建 `<defs>`，先写进去的 `<clipPath>` 会被抹掉。
+   */
+  syncImageFill(svg, el, geo, imageUrl ?? null, g);
+  // 有图片填充时路径自己不能再填色（不透明填充会把图片整个盖住）。
+  if (el.imageFill) path.setAttribute('fill', 'none');
+}
+
+/**
+ * 形状的「图片填充」：一张 `<image>` 垫在路径下面，用路径本身当 `<clipPath>`。
+ *
+ * 为什么不用 `<pattern>`：pattern 的坐标活在**引用它的用户空间**里，而自定义
+ * 路径外面还套着一层 `scale(w/100, h/100)` —— 图案会跟着被非等比拉伸，
+ * 画出来的图与 `preserveAspectRatio` 算的完全不是一回事。
+ * `<image>` + `<clipPath>` 是像素坐标，`cover` / `contain` 的语义与 `<img>`
+ * 那套 `object-fit` 一致。
+ *
+ * 结构：`<defs><clipPath id=…><path d transform/></clipPath></defs><image clip-path/>`。
+ * 每次 sync 都按需增删：`imageFill` 被移除时 `<image>` 与 `<clipPath>` 一起消失。
+ */
+function syncImageFill(
+  svg: SVGSVGElement,
+  el: ShapeElement,
+  geo: { d: string; scaleFrom100?: boolean },
+  url: string | null,
+  g: SVGGElement,
+): void {
+  let image: SVGImageElement | null = null;
+  for (const child of Array.from(svg.children)) {
+    if (child.tagName.toLowerCase() === 'image') {
+      image = child as SVGImageElement;
+      break;
+    }
+  }
+  const fill = el.imageFill;
+  const clipId = imageFillClipId(el.id);
+
+  if (!fill || !url) {
+    if (image) image.remove();
+    const defs = findDefs(svg);
+    const clip = defs?.querySelector(`#${clipId}`);
+    if (clip) clip.remove();
+    return;
+  }
+
+  const w = Math.max(1, Math.round(el.frame.w));
+  const h = Math.max(1, Math.round(el.frame.h));
+  if (!image) {
+    image = document.createElementNS(SVG_NS, 'image') as SVGImageElement;
+    // 插在 `<g>` 之前：图片在底、描边在上。
+    svg.insertBefore(image, g);
+  }
+  image.setAttribute('href', url);
+  image.setAttribute('x', '0');
+  image.setAttribute('y', '0');
+  image.setAttribute('width', String(w));
+  image.setAttribute('height', String(h));
+  image.setAttribute('preserveAspectRatio', imageFillAspectRatio(fill.fit));
+  image.setAttribute('clip-path', `url(#${clipId})`);
+
+  let defs = findDefs(svg);
+  if (!defs) {
+    defs = document.createElementNS(SVG_NS, 'defs') as SVGDefsElement;
+    svg.prepend(defs);
+  }
+  let clip = defs.querySelector(`#${clipId}`) as SVGClipPathElement | null;
+  if (!clip) {
+    clip = document.createElementNS(SVG_NS, 'clipPath') as SVGClipPathElement;
+    clip.setAttribute('id', clipId);
+    clip.appendChild(document.createElementNS(SVG_NS, 'path'));
+    defs.appendChild(clip);
+  }
+  clip.setAttribute('clipPathUnits', 'userSpaceOnUse');
+  const cp = clip.firstElementChild as SVGPathElement | null;
+  if (cp) {
+    cp.setAttribute('d', geo.d);
+    // clipPath 里的坐标与舞台上的路径同一套（自定义路径是 0..100 authored）。
+    if (geo.scaleFrom100) {
+      cp.setAttribute('transform', `scale(${el.frame.w / 100} ${el.frame.h / 100})`);
+    } else {
+      cp.removeAttribute('transform');
+    }
+  }
+}
+
+function findDefs(svg: SVGSVGElement): SVGDefsElement | null {
+  const first = svg.firstElementChild;
+  return first && first.tagName.toLowerCase() === 'defs' ? (first as unknown as SVGDefsElement) : null;
 }
 
 /* ------------------------------------------------------------ 填充的 <defs> */

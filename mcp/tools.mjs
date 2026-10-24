@@ -907,7 +907,11 @@ export const TOOLS = [
       '改一个元素：name / frame / blend / opacity / visible / locked / text / style / fill / boxFill /' +
       'boxStroke / glyphStroke / autoHeight（仅文本）/ stroke / radius / sides / waist / inner / angle / evenOdd /' +
       ' fit / crop / gen / transform3d（逐层合并，null 关闭）/ path（仅 shape:"svg"，写入会烘焙掉生成器绑定）/' +
-      ' pathUnit / clipFrame / animations / animation / addAnimation / removeAnimations。',
+      ' pathUnit / clipFrame / animations / animation / addAnimation / removeAnimations。' +
+      '图片元素另有 adjust（{brightness,contrast,saturation,sharpen,soften,curves}，逐层合并、null 关闭）/' +
+      ' recolor（{color,shadow,amount}）/ border（{color,width}，画在图内）/ filter（{id,amount}，id 见' +
+      ' get_typography_capabilities().images.filter.ids）；图形另有 imageFill（{assetId,fit}，用路径裁剪图片，' +
+      '此时 fill 被忽略 —— 这就是「裁剪为形状」）。',
     args: {
       clipId: F.string(),
       elementId: F.string({ required: true }),
