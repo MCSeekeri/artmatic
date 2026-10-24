@@ -20,7 +20,7 @@ import { computeWaveform } from './audio/decode';
 import { appState } from './ui/app-state.svelte';
 import { platform } from './platform/index';
 import { theme } from './ui/theme.svelte';
-import { installTheme, applyFontScale } from './ui/theme-apply';
+import { installTheme, applyFontScale, applyMotion } from './ui/theme-apply';
 import { runExport } from './exporters/export-runner';
 import { PngSequenceSink } from './exporters/png-sequence';
 import { Mp4Sink, probeMp4Codec } from './exporters/mp4-sink';
@@ -67,6 +67,7 @@ import type { Renderer } from './engine/renderer';
    但放在 mount 前可以避免第一帧用默认值闪一下。 */
 installTheme(theme.spec);
 applyFontScale(theme.fontScale);
+applyMotion(theme.motionEnabled, theme.motionSpeed);
 
 /*
  * **首屏零选项卡**：不自动开任何工程，直接进欢迎界面。

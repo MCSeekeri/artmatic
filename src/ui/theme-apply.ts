@@ -7,7 +7,7 @@
  *   2. 想换注入方式（内联 style → CSSStyleSheet → style-src 头）只需改这里。
  */
 
-import { resolveTokens, type ThemeSpec } from './tokens';
+import { resolveMotionTokens, resolveTokens, type MotionSpeed, type ThemeSpec } from './tokens';
 
 export function applyTokens(vars: Record<string, string>, el: HTMLElement | SVGElement): void {
   for (const [k, v] of Object.entries(vars)) el.style.setProperty(k, v);
@@ -41,4 +41,16 @@ export function applyFontScale(scale: number, el?: HTMLElement): void {
   for (const [k, base] of Object.entries(FONT_BASE)) {
     target.style.setProperty(`--${k}`, `${Math.round(base * scale * 10) / 10}px`);
   }
+}
+
+/**
+ * 界面微动效偏好。
+ *
+ * 与 applyFontScale 同一个理由单独成函数：基准时长留在 tokens.ts 的纯函数里，
+ * 这里只负责把解析结果写到根节点。关闭时也保留变量（值为 0），因此组件不需要
+ * 再判一次开关。
+ */
+export function applyMotion(enabled: boolean, speed: MotionSpeed, el?: HTMLElement): void {
+  const target = el ?? document.documentElement;
+  applyTokens(resolveMotionTokens(enabled, speed), target);
 }

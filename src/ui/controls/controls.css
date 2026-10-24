@@ -270,6 +270,24 @@
   background: var(--menu-bg);
   border: 1px solid var(--menu-border);
   border-radius: var(--radius-md);
+  /* 弹层自身的小幅入场。transform 只在 fixed 的弹层上，不会成为别人的
+     包含块；位移量由偏好解析，关闭时为 0。 */
+  animation: sel-pop-in var(--motion-duration-enter, 120ms) var(--motion-ease, ease-out) backwards;
+}
+@keyframes sel-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance, -2px));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sel-pop {
+    animation: none;
+  }
 }
 .sel-opt {
   display: flex;

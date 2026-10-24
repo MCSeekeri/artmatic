@@ -798,7 +798,7 @@
     width: 20px;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 120ms ease;
+    transition: opacity var(--motion-duration-enter, 120ms) var(--motion-ease, ease-out);
   }
   .fade.l {
     left: 0;
@@ -1096,5 +1096,10 @@
     position: absolute;
     left: 8px;
     top: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fade {
+      transition: none;
+    }
   }
 </style>

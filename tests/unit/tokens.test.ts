@@ -6,6 +6,9 @@ import {
   BRAND_IDS,
   COMPONENT,
   CONTENT,
+  MOTION,
+  MOTION_SPEEDS,
+  MOTION_SPEED_FACTOR,
   PRIMITIVES,
   SEMANTIC,
   STATIC,
@@ -15,6 +18,7 @@ import {
   contrastRatio,
   parseHex,
   relativeLuminance,
+  resolveMotionTokens,
   resolveTokens,
   rgbToHsl,
   hslToRgb,
@@ -80,6 +84,47 @@ describe('resolveTokens 结构', () => {
     const out = resolveTokens(spec('light'));
     expect(out['--menu-bg']).toBe(SEMANTIC.light['surface-3']);
     expect(out['--tl-side-bg']).toBe(SEMANTIC.light['surface-2']);
+  });
+});
+
+/* ------------------------------------------------------------ 界面微动效 */
+
+describe('resolveMotionTokens', () => {
+  const duration = (vars: Record<string, string>, key: string) =>
+    Number.parseFloat(vars[`--motion-duration-${key}`]!);
+
+  it('标准档使用唯一基准，最慢档也严格小于 200ms', () => {
+    const normal = resolveMotionTokens(true, 'normal');
+    expect(normal['--motion-duration-hover']).toBe(`${MOTION.hover}ms`);
+    expect(normal['--motion-duration-enter']).toBe(`${MOTION.enter}ms`);
+    expect(normal['--motion-duration-modal']).toBe(`${MOTION.modal}ms`);
+    expect(normal['--motion-distance']).toBe(`${MOTION.distance}px`);
+
+    for (const speed of MOTION_SPEEDS) {
+      const vars = resolveMotionTokens(true, speed);
+      for (const key of ['hover', 'enter', 'modal']) {
+        const ms = duration(vars, key);
+        expect(ms, `${speed} 档 ${key} 必须小于 200ms`).toBeLessThan(200);
+        expect(ms, `${speed} 档 ${key} 必须为正`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it.each(MOTION_SPEEDS)('%s 档按唯一倍率缩放三档时长', (speed) => {
+    const vars = resolveMotionTokens(true, speed);
+    const factor = MOTION_SPEED_FACTOR[speed];
+    expect(duration(vars, 'hover')).toBe(Math.round(MOTION.hover * factor));
+    expect(duration(vars, 'enter')).toBe(Math.round(MOTION.enter * factor));
+    expect(duration(vars, 'modal')).toBe(Math.round(MOTION.modal * factor));
+  });
+
+  it('关闭时仍输出完整变量，但时长与位移归零', () => {
+    const vars = resolveMotionTokens(false, 'slow');
+    expect(vars['--motion-duration-hover']).toBe('0ms');
+    expect(vars['--motion-duration-enter']).toBe('0ms');
+    expect(vars['--motion-duration-modal']).toBe('0ms');
+    expect(vars['--motion-distance']).toBe('0px');
+    expect(vars['--motion-ease']).toBe(MOTION.ease);
   });
 });
 

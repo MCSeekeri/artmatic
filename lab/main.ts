@@ -17,7 +17,7 @@ import LabApp from './LabApp.svelte';
 import '../src/app.css';
 import '../src/ui/controls/controls.css';
 import './lab.css';
-import { installTheme } from '../src/ui/theme-apply';
+import { applyMotion, installTheme } from '../src/ui/theme-apply';
 import { theme } from '../src/ui/theme.svelte';
 import { labState, LAB_SCALES, NO_EFFECT_ID } from './lab-state.svelte';
 import { AlgoThumbRenderer, thumbSize } from '../src/render/algo-thumb-renderer';
@@ -30,6 +30,7 @@ import { transitionCompileFailures } from '../src/effects/transitions/runner';
 import { defaultValues } from '../src/effects/types';
 
 installTheme(theme.spec);
+applyMotion(theme.motionEnabled, theme.motionSpeed);
 
 mount(LabApp, { target: document.getElementById('lab')! });
 

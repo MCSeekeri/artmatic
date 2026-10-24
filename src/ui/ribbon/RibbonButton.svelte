@@ -66,6 +66,12 @@
     color: var(--ribbon-btn-fg);
     cursor: pointer;
     user-select: none;
+    /* 只过渡颜色。Ribbon 的按钮宽度参与整条排布预算，缩放或位移会让
+       相邻按钮看起来在跳，也会破坏对齐。 */
+    transition:
+      background-color var(--motion-duration-hover, 80ms) var(--motion-ease, ease-out),
+      color var(--motion-duration-hover, 80ms) var(--motion-ease, ease-out),
+      border-color var(--motion-duration-hover, 80ms) var(--motion-ease, ease-out);
   }
   .rbtn.small {
     flex-direction: row;
@@ -103,5 +109,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rbtn {
+      transition: none;
+    }
   }
 </style>

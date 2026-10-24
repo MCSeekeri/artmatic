@@ -28,7 +28,7 @@
   import { handleTypographyKey, handleTypingFormatKey } from './typography/keys';
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
-  import { installTheme, applyFontScale } from './theme-apply';
+  import { installTheme, applyFontScale, applyMotion } from './theme-apply';
   import { activeElementOwnsSpace, isExempt } from './focus';
   import { saveProjectAs, saveProjectNow } from './project-actions';
   import { isSplitKey } from './shortcuts';
@@ -60,6 +60,7 @@
   $effect(() => {
     installTheme(theme.spec);
     applyFontScale(theme.fontScale);
+    applyMotion(theme.motionEnabled, theme.motionSpeed);
   });
 
   // 切工程 = 新会话：否则 A 的聊天会被记进 B 的历史（见 agentState.onProjectChanged）。

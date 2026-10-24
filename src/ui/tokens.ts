@@ -346,6 +346,53 @@ export const STATIC: Record<string, string> = {
   'z-tooltip': '200',
 };
 
+/* ------------------------------------------------------------ motion
+ *
+ * 界面微动效的唯一基准。刻意不放进 STATIC：静态 token 是主题的固定部分，
+ * 而这里的最终值随「启用 / 速度」偏好变化。组件只消费 --motion-* 变量，
+ * 不自己写时长，否则设置里的开关会漏掉那个组件。
+ *
+ * 视觉纪律：只动 opacity、颜色，以及弹层自身不超过 2px 的位移。
+ * 不动 width / height / top / left，也不在 Modal 及浮层祖先上用 transform
+ * （会成为 fixed 后代的包含块，见 src/ui/AGENTS.md）。
+ */
+
+export const MOTION = {
+  hover: 80,
+  enter: 120,
+  modal: 140,
+  distance: -2,
+  ease: 'cubic-bezier(0.2, 0, 0, 1)',
+} as const;
+
+export const MOTION_SPEEDS = ['slow', 'normal', 'fast'] as const;
+export type MotionSpeed = (typeof MOTION_SPEEDS)[number];
+
+/** 慢 1.25×、标准 1×、快 0.75×。最慢的 Modal 也只有 175ms。 */
+export const MOTION_SPEED_FACTOR: Record<MotionSpeed, number> = {
+  slow: 1.25,
+  normal: 1,
+  fast: 0.75,
+};
+
+/**
+ * 把「启用 + 速度」解析成根节点上的 CSS 变量。
+ *
+ * 关闭时写 0ms / 0px 而不是删变量：组件仍沿用同一条声明，
+ * 不会出现「某些组件回落到 CSS 默认时长」的漏网状态。
+ */
+export function resolveMotionTokens(enabled: boolean, speed: MotionSpeed): Record<string, string> {
+  const factor = enabled ? MOTION_SPEED_FACTOR[speed] : 0;
+  const ms = (base: number) => `${Math.round(base * factor)}ms`;
+  return {
+    '--motion-duration-hover': ms(MOTION.hover),
+    '--motion-duration-enter': ms(MOTION.enter),
+    '--motion-duration-modal': ms(MOTION.modal),
+    '--motion-distance': enabled ? `${MOTION.distance}px` : '0px',
+    '--motion-ease': MOTION.ease,
+  };
+}
+
 /* ------------------------------------------------------------ component
  *
  * 组件绑定。值**必须**是 SemanticKey——想直接写 '--p-neutral-900' 会编译报错。

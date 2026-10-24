@@ -164,6 +164,10 @@
     justify-content: center;
     /* 纯色半透明遮罩，不用模糊/渐变（视觉纪律：零阴影零渐变） */
     background: var(--overlay);
+    /* 只做透明度入场：这里的 transform 会让内部 fixed Select 的包含块变成
+       遮罩，弹层定位会整体偏掉（见 src/ui/AGENTS.md 的浮层纪律）。 */
+    animation: modal-fade-in var(--motion-duration-modal, 140ms) var(--motion-ease, ease-out)
+      backwards;
   }
   .modal {
     display: flex;
@@ -174,6 +178,8 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     overflow: hidden;
+    animation: modal-panel-in var(--motion-duration-modal, 140ms) var(--motion-ease, ease-out)
+      backwards;
   }
   .modal.wide {
     width: min(1080px, 92vw);
@@ -235,5 +241,33 @@
     padding: 0 var(--sp-5);
     height: 46px;
     border-top: 1px solid var(--border);
+  }
+
+  @keyframes modal-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes modal-panel-in {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* 系统偏好优先于应用内开关。只关这个组件的动画，不用全局 * ——
+     排版文档里的用户动画不属于界面微动效。 */
+  @media (prefers-reduced-motion: reduce) {
+    .backdrop,
+    .modal {
+      animation: none;
+    }
   }
 </style>

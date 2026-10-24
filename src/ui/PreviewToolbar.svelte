@@ -159,7 +159,7 @@
     background: color-mix(in srgb, var(--surface-2) 88%, transparent);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    transition: opacity 120ms ease;
+    transition: opacity var(--motion-duration-enter, 120ms) var(--motion-ease, ease-out);
   }
   .pv-bar:hover,
   .pv-bar:focus-within {
@@ -213,5 +213,10 @@
   .pv-ball:focus-visible {
     background: var(--surface-2);
     color: var(--text-primary);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pv-bar {
+      transition: none;
+    }
   }
 </style>

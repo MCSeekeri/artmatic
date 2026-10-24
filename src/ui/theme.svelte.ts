@@ -10,10 +10,12 @@
 import {
   ACCENT_PRESETS,
   BRAND_IDS,
+  MOTION_SPEEDS,
   accentRampOf,
   type AccentSource,
   type AccentRamp,
   type BrandId,
+  type MotionSpeed,
   type ThemeMode,
   type ThemeSpec,
 } from './tokens';
@@ -36,6 +38,8 @@ interface Persisted {
   mode: ThemeMode;
   accent: AccentSource;
   fontScale: FontScale;
+  motionEnabled: boolean;
+  motionSpeed: MotionSpeed;
 }
 
 function isHex(v: unknown): v is string {
@@ -45,6 +49,10 @@ function isHex(v: unknown): v is string {
 function normalizeFontScale(v: unknown): FontScale {
   const n = Number(v);
   return (FONT_SCALE_STEPS as readonly number[]).includes(n) ? (n as FontScale) : 1;
+}
+
+function normalizeMotionSpeed(v: unknown): MotionSpeed {
+  return (MOTION_SPEEDS as readonly unknown[]).includes(v) ? (v as MotionSpeed) : 'normal';
 }
 
 function normalizeAccent(raw: unknown): AccentSource | null {
@@ -64,15 +72,26 @@ function load(): Persisted {
     mode: 'light',
     accent: { kind: 'preset', id: 'violet' },
     fontScale: 1,
+    motionEnabled: true,
+    motionSpeed: 'normal',
   };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as { mode?: unknown; accent?: unknown; fontScale?: unknown };
+    const parsed = JSON.parse(raw) as {
+      mode?: unknown;
+      accent?: unknown;
+      fontScale?: unknown;
+      motionEnabled?: unknown;
+      motionSpeed?: unknown;
+    };
     return {
       mode: parsed.mode === 'dark' ? 'dark' : 'light',
       accent: normalizeAccent(parsed.accent) ?? fallback.accent,
       fontScale: normalizeFontScale(parsed.fontScale),
+      motionEnabled:
+        typeof parsed.motionEnabled === 'boolean' ? parsed.motionEnabled : fallback.motionEnabled,
+      motionSpeed: normalizeMotionSpeed(parsed.motionSpeed),
     };
   } catch {
     // 隐私模式 / 配额满 / JSON 损坏：都不该让应用起不来。
@@ -84,12 +103,16 @@ class ThemeState {
   mode = $state<ThemeMode>('light');
   accent = $state<AccentSource>({ kind: 'preset', id: 'violet' });
   fontScale = $state<FontScale>(1);
+  motionEnabled = $state(true);
+  motionSpeed = $state<MotionSpeed>('normal');
 
   constructor() {
     const p = load();
     this.mode = p.mode;
     this.accent = p.accent;
     this.fontScale = p.fontScale;
+    this.motionEnabled = p.motionEnabled;
+    this.motionSpeed = p.motionSpeed;
   }
 
   /** 给 installTheme / canvasPalette 用。每次返回新对象，供 $effect 判等传播。 */
@@ -125,6 +148,18 @@ class ThemeState {
     this.persist();
   }
 
+  setMotionEnabled(enabled: boolean): void {
+    if (this.motionEnabled === enabled) return;
+    this.motionEnabled = enabled;
+    this.persist();
+  }
+
+  setMotionSpeed(speed: MotionSpeed): void {
+    if (this.motionSpeed === speed) return;
+    this.motionSpeed = normalizeMotionSpeed(speed);
+    this.persist();
+  }
+
   toggleMode(): void {
     this.setMode(this.mode === 'light' ? 'dark' : 'light');
   }
@@ -146,6 +181,8 @@ class ThemeState {
     this.mode = 'light';
     this.accent = { kind: 'preset', id: 'violet' };
     this.fontScale = 1;
+    this.motionEnabled = true;
+    this.motionSpeed = 'normal';
     this.persist();
   }
 
@@ -153,7 +190,13 @@ class ThemeState {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ mode: this.mode, accent: this.accent, fontScale: this.fontScale }),
+        JSON.stringify({
+          mode: this.mode,
+          accent: this.accent,
+          fontScale: this.fontScale,
+          motionEnabled: this.motionEnabled,
+          motionSpeed: this.motionSpeed,
+        }),
       );
     } catch {
       /* 存不下就算了，主题不值得中断操作 */

@@ -54,6 +54,10 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
   - `tests/unit/popover.test.ts` 的 `computePreviewPosition` —— 菜单预览浮层在任何
     翻边情况下都不能与菜单面板相交。`tests/e2e/insert-menu.spec.ts` 有一条真界面
     回归（靠右右键 → 二级左翻 → 悬停预览）。
+  - `tests/unit/tokens.test.ts` 的 `resolveMotionTokens` + `tests/e2e/ui-motion.spec.ts` ——
+    界面微动效的三档时长必须严格小于 200ms，关闭态为 0ms/0px；E2E 读的是 Modal / Select /
+    Ribbon 的 computed style，并钉住「设置保存后刷新仍生效」「系统 reduced-motion 下
+    animation 为 none」「Modal 内 Select 仍贴合触发区」。只断言 localStorage 等于没测到界面。
   - `tests/unit/color.test.ts` —— `hexToRgb` / `rgbToHex` 的坏值回落（NaN 不能写进
     hex）。`tests/e2e/runtime-errors.spec.ts` —— 未捕获错误 / rejection 必须能落到底栏，
     详情 Modal 可清空。

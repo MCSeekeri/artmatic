@@ -30,7 +30,14 @@
   import Checkbox from './controls/Checkbox.svelte';
   import { appState } from './app-state.svelte';
   import { theme, FONT_SCALE_STEPS, type FontScale } from './theme.svelte';
-  import { ACCENT_PRESETS, BRAND_IDS, type AccentSource, type BrandId } from './tokens';
+  import {
+    ACCENT_PRESETS,
+    BRAND_IDS,
+    MOTION_SPEEDS,
+    type AccentSource,
+    type BrandId,
+    type MotionSpeed,
+  } from './tokens';
   import { SHORTCUT_SCHEMES, type ShortcutScheme } from './shortcuts';
   import type { OverlapBehavior } from '../core/schema';
   import { tr } from '../i18n/index.svelte';
@@ -88,6 +95,8 @@
   let mode = $state(theme.mode);
   let accent = $state<AccentSource>(theme.accent);
   let fontScale = $state<FontScale>(theme.fontScale);
+  let motionEnabled = $state(theme.motionEnabled);
+  let motionSpeed = $state<MotionSpeed>(theme.motionSpeed);
   let scheme = $state<ShortcutScheme>(appState.shortcutScheme);
   let mascot = $state(appState.mascotEnabled);
   /**
@@ -107,6 +116,8 @@
   const overlapChanged = $derived(overlap !== base.overlap);
   const modeChanged = $derived(mode !== theme.mode);
   const fontScaleChanged = $derived(fontScale !== theme.fontScale);
+  const motionEnabledChanged = $derived(motionEnabled !== theme.motionEnabled);
+  const motionSpeedChanged = $derived(motionSpeed !== theme.motionSpeed);
   const schemeChanged = $derived(scheme !== appState.shortcutScheme);
   const mascotChanged = $derived(mascot !== appState.mascotEnabled);
   const runScriptsChanged = $derived(runScripts !== appState.runTypoScripts);
@@ -184,6 +195,19 @@
     })),
   );
 
+  const motionSpeedOptions = $derived(
+    MOTION_SPEEDS.map((s) => ({
+      value: s,
+      label: tr(
+        s === 'slow'
+          ? 'app.motionSpeedSlow'
+          : s === 'normal'
+            ? 'app.motionSpeedNormal'
+            : 'app.motionSpeedFast',
+      ),
+    })),
+  );
+
   const schemeOptions = SHORTCUT_SCHEMES.map((s) => ({ value: s.id as string, label: s.label }));
   const currentScheme = $derived(SHORTCUT_SCHEMES.find((s) => s.id === scheme) ?? SHORTCUT_SCHEMES[0]!);
 
@@ -218,6 +242,8 @@
       else theme.setCustomAccent(accent.hex);
     }
     if (fontScaleChanged) theme.setFontScale(fontScale);
+    if (motionEnabledChanged) theme.setMotionEnabled(motionEnabled);
+    if (motionSpeedChanged) theme.setMotionSpeed(motionSpeed);
     if (schemeChanged) appState.setShortcutScheme(scheme);
     if (mascotChanged) appState.setMascotEnabled(mascot);
     // 脚本开关会换掉光栅化缓存键的模式盐，setter 内部会 touch 一次重画。
@@ -420,6 +446,38 @@
               minWidth={110}
               testid="settings-font-scale"
               onchange={(v) => (fontScale = Number(v) as FontScale)}
+            />
+          </div>
+        </div>
+
+        <div class="set-row">
+          <span class="set-lbl">
+            {#if motionEnabledChanged}<i class="star" title={tr('app.changedMark')} aria-hidden="true">*</i>{/if}
+            {tr('app.motion')}
+          </span>
+          <div class="set-ctl">
+            <Checkbox
+              checked={motionEnabled}
+              label={tr('app.motionEnable')}
+              testid="settings-motion"
+              onchange={(v) => (motionEnabled = v)}
+            />
+          </div>
+        </div>
+
+        <div class="set-row">
+          <span class="set-lbl">
+            {#if motionSpeedChanged}<i class="star" title={tr('app.changedMark')} aria-hidden="true">*</i>{/if}
+            {tr('app.motionSpeed')}
+          </span>
+          <div class="set-ctl">
+            <Select
+              value={motionSpeed}
+              options={motionSpeedOptions}
+              minWidth={110}
+              disabled={!motionEnabled}
+              testid="settings-motion-speed"
+              onchange={(v) => (motionSpeed = v as MotionSpeed)}
             />
           </div>
         </div>

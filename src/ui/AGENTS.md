@@ -88,6 +88,15 @@
   **选中 / 激活、焦点环、播放头、底栏数字**这几处。默认**亮色**。
 - **密度**：轨道行高 28px、标尺 24px、字号阶梯只有 10/11/12。数值在 `tokens.ts` 的
   `DENSITY`，CSS 与 Canvas 数学（`timeline/view-model.ts`）都从它取，不许各写一份。
+- **界面微动效**：基准只在 `tokens.ts` 的 `MOTION`，经 `resolveMotionTokens()` 与
+  `theme-apply.ts::applyMotion()` 下发 `--motion-*`；组件**不许自己写时长**。
+  只动 opacity、颜色，以及弹层自身不超过 2px 的位移；全部严格小于 200ms，不做退场等待
+  （关闭、焦点恢复、快捷键与 `modalDepth` 清理必须立即完成）。
+  Modal 只做透明度，**绝不能在遮罩或浮层祖先上加 transform / filter / backdrop-filter**
+  （会改变内部 fixed Select 的包含块）。系统 `prefers-reduced-motion: reduce` 永远优先于
+  应用内开关；降级只定向到本轮的界面控件，不用全局 `*`，以免误伤排版文档动画。
+  开关与三档速度属于外观偏好（`theme.svelte.ts`，与 `fontScale` 同一存储），设置在
+  「外观」页；加载/思考态与 Mascot 不参与速度倍率。
 
 ---
 
