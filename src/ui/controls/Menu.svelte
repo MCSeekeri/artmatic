@@ -213,8 +213,10 @@
 {#each menu.levels as _, level (level)}
   {@const list = itemsAtLevel(items, level, menu)}
   {@const pos = positions[level]}
+  <!-- 纸面上下文：菜单浮在深色面板之上，灰色模式下是浅灰底 + 黑字。 -->
   <div
     class="menu"
+    data-paper=""
     bind:this={panels[level]}
     role="menu"
     tabindex="-1"
@@ -272,6 +274,7 @@
 {#if preview}
   <div
     class="menu-preview"
+    data-paper=""
     bind:this={previewPanels[0]}
     aria-hidden="true"
     data-testid="menu-preview"

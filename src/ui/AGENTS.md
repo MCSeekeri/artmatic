@@ -71,6 +71,31 @@
   → component（`--btn-*`，值必须是 `SemanticKey`，写错层直接编译报错）
   → **content**（`--clip-*`，数据类别色，随亮暗变但**永不随品牌变** ——
   它编码的是「这是哪类数据」，不是界面角色）。
+- **外观是四套，不是两套**（`THEME_MODES`：`light` / `dark` / `gray` / `contrast`）。
+  **rail 的明暗按钮只切 light↔dark**，灰与高对比度**只能**从设置→外观里选
+  （`theme.toggleMode()` 从这两套按下去 = 回亮色，图标与结果一致）。
+  「亮底还是暗底」一律读 `theme.family` / `themeFamily(mode)`，**不要写
+  `mode === 'light'`** —— logo 墨色、Canvas 网格、原生 `color-scheme`、强调色
+  的钳制方向都靠它，而写死两态的地方加模式时不会报错。
+- **灰色模式有两层底色**：深色 chrome（面板 #525252 + 白字）与**纸面**
+  （Modal / 菜单 / 下拉 / Ribbon / 曲线编辑器 = #BDBDBD + 黑字，定位是 Office /
+  Unity 那种「长时间盯着看」的一档）。纸面**不是 surface 的某一档**，而是整块
+  反相的上下文：容器挂 `data-paper`，`theme-apply.ts` 注入的 `[data-paper]` 规则
+  把 semantic 与 component 变量整体重指向 `--paper-*`（规则文本由
+  `tokens.paperScopeRule()` 从同一张表生成，**不要手写进 CSS**）。
+  于是组件 CSS 照旧写 `var(--text-primary)`，**不要为主题写分支**；新增浮层时
+  判据只有一条：它是「叠在面板之上的弹层」就挂 `data-paper`（亮 / 暗 / 高对比度
+  下这个属性是空操作）。
+- **component 层的值是 `var(--semantic)` 引用**，不是展开后的字面色：自定义属性
+  的 var() 在**声明它的元素**上就替换完了，写死颜色的话纸面覆盖追不到
+  `--menu-bg`。有单测钉着这条。
+- **高对比度模式的分类只靠边框颜色**：表面全 #000、正文全 #FFF；
+  `border` 白（结构分隔）、`border-control` 青（按钮 / 输入框 / 下拉 / 数字框）、
+  `border-icon` 青（纯图标按钮**只有这一档**有边框，其余三套是 `transparent`，
+  对应「图标按钮永远无框」那条纪律的唯一例外）。hover / active 允许离开纯黑
+  —— 否则「这里能点」没有任何反馈。Ribbon 的按钮共用 `--ribbon-btn-border`。
+  Tab 条与菜单项这类「条状 / 列表里的项」不另加边框：它们已经被所在容器的
+  一条边框界定，逐项描边会把面板变成表格。
 - **生成器默认色（`#3a6ea5` 之类）不是 token**，那是 Project 文档内容（schema 字段）。
   Inspector 里颜色控件的**外观**走 component 层，**值**走内容。
 - **z 刻度（`tokens.ts` 的 `z-*`）有个非显然的约束：抽屉（`z-drawer`）必须比

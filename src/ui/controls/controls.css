@@ -74,6 +74,11 @@
  * 纯图标按钮：**永远透明底**。hover 靠图标颜色变化表达，不加色块。
  * 这是本项目明确要求的交互（也省掉一大片灰底按钮的视觉噪声）。
  */
+/*
+ * 边框走 `--btn-icon-border`：常规三套模式是 `transparent`（图标按钮永远无框无底，
+ * 见上面的视觉纪律），**高对比度模式下它是有色的实边** —— 那个模式唯一的目标是
+ * 「所有能点的东西都看得见边界」，无框图标在那里等于不可发现。
+ */
 .ic-btn {
   display: inline-flex;
   align-items: center;
@@ -83,7 +88,7 @@
   height: var(--control-h);
   padding: 0;
   background: transparent;
-  border: 1px solid transparent;
+  border: 1px solid var(--btn-icon-border);
   border-radius: var(--radius-sm);
   color: var(--btn-ghost-fg);
   cursor: pointer;

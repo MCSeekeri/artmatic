@@ -166,7 +166,7 @@
     height: 100%;
     padding: 0 6px;
     background: transparent;
-    border: 1px solid transparent;
+    border: 1px solid var(--ribbon-btn-border);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
     cursor: pointer;

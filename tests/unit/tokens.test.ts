@@ -9,24 +9,28 @@ import {
   MOTION,
   MOTION_SPEEDS,
   MOTION_SPEED_FACTOR,
+  PAPER,
   PRIMITIVES,
   SEMANTIC,
   STATIC,
+  THEME_MODES,
   accentRampFromHex,
   accentRampOf,
   canvasPalette,
   contrastRatio,
+  paperScopeRule,
   parseHex,
   relativeLuminance,
   resolveMotionTokens,
   resolveTokens,
   rgbToHsl,
   hslToRgb,
+  themeFamily,
   type ThemeMode,
   type ThemeSpec,
 } from '../../src/ui/tokens';
 
-const MODES: ThemeMode[] = ['light', 'dark'];
+const MODES: ThemeMode[] = [...THEME_MODES];
 
 const spec = (mode: ThemeMode, id: (typeof BRAND_IDS)[number] = 'violet'): ThemeSpec => ({
   mode,
@@ -80,10 +84,12 @@ describe('resolveTokens 结构', () => {
     }
   });
 
-  it('component 层确实落到了输出里（不是死代码）', () => {
+  it('component 层确实落到了输出里，且是 var() 引用（不是死代码）', () => {
     const out = resolveTokens(spec('light'));
-    expect(out['--menu-bg']).toBe(SEMANTIC.light['surface-3']);
-    expect(out['--tl-side-bg']).toBe(SEMANTIC.light['surface-2']);
+    // 必须是引用而不是展开值：自定义属性的 var() 在**声明它的元素**上就替换完了，
+    // 写死颜色的话 `data-paper` 那种局部覆盖追不到 --menu-bg。
+    expect(out['--menu-bg']).toBe('var(--surface-3)');
+    expect(out['--tl-side-bg']).toBe('var(--surface-2)');
   });
 });
 
@@ -131,22 +137,11 @@ describe('resolveMotionTokens', () => {
 /* ------------------------------------------------------------ 换品牌的影响面 */
 
 describe('换品牌只改 accent 组（及其别名）', () => {
-  /** 值溯源到 accent 的 component token。换品牌时它们跟着变是**正确**行为——
-   *  真正要防的是「某个结构色被品牌悄悄带跑」。 */
-  const accentDerivedComponentKeys = (() => {
-    const accentKeys = new Set<string>(ACCENT_TOKEN_KEYS);
-    const out: string[] = [];
-    for (const [group, vars] of Object.entries(COMPONENT)) {
-      for (const [name, key] of Object.entries(vars)) {
-        if (accentKeys.has(key)) out.push(`--${group}-${name}`);
-      }
-    }
-    return out;
-  })();
-
+  /** 换品牌时**允许**变化的键：accent 组 + 纸面那份 accent 组（弹窗里的强调色
+   *  也属于同一个品牌）。 */
   const allowed = new Set([
     ...ACCENT_TOKEN_KEYS.map((k) => `--${k}`),
-    ...accentDerivedComponentKeys,
+    ...ACCENT_TOKEN_KEYS.map((k) => `--paper-${k}`),
   ]);
 
   /** 不应随品牌变化的：结构色 semantic + content（数据类别色）+ static。 */
@@ -156,11 +151,6 @@ describe('换品牌只改 accent 组（及其别名）', () => {
     ...Object.keys(STATIC),
   ].map((k) => `--${k}`);
 
-  it('存在别名到 accent 的 component token（这条不变量不是空转）', () => {
-    expect(accentDerivedComponentKeys.length).toBeGreaterThan(0);
-    expect(accentDerivedComponentKeys).toContain('--bar-accent');
-  });
-
   it.each(MODES)('%s：变化的键全部溯源到 accent，结构色一个都没动', (mode) => {
     const a = resolveTokens(spec(mode, 'violet'));
     const b = resolveTokens(spec(mode, 'cyan'));
@@ -169,6 +159,15 @@ describe('换品牌只改 accent 组（及其别名）', () => {
     expect(changed).toContain('--accent'); // 确认真换了，不是空断言
     for (const k of changed) expect(allowed.has(k), `${k} 不该随品牌变`).toBe(true);
     for (const k of mustStayPut) expect(a[k], `${k} 被品牌带跑了`).toBe(b[k]);
+  });
+
+  it('component 层全是 var() 引用——换品牌不可能只改到某一个控件', () => {
+    const out = resolveTokens(spec('dark', 'violet'));
+    for (const [group, vars] of Object.entries(COMPONENT)) {
+      for (const [name, key] of Object.entries(vars)) {
+        expect(out[`--${group}-${name}`], `${group}-${name}`).toBe(`var(--${key})`);
+      }
+    }
   });
 
   it('预置色相两两之间都不碰结构色', () => {
@@ -314,5 +313,161 @@ describe('canvasPalette', () => {
     for (const step of ['0', '50', '100', '150', '200', '300', '400', '500', '600', '700', '800', '850', '900', '950', '1000']) {
       expect(PRIMITIVES[`neutral-${step}`], `缺 neutral-${step}`).toBeTruthy();
     }
+  });
+});
+
+/* ------------------------------------------------------------ 族 */
+
+describe('themeFamily', () => {
+  it('只有 light 是亮族，其余三套都是深底', () => {
+    expect(themeFamily('light')).toBe('light');
+    for (const mode of ['dark', 'gray', 'contrast'] as const) {
+      expect(themeFamily(mode), mode).toBe('dark');
+    }
+  });
+});
+
+/* ------------------------------------------------------------ 灰色的来历 */
+
+describe('灰色模式', () => {
+  const sat = (hex: string): number => {
+    const c = parseHex(hex)!;
+    return rgbToHsl(c.r, c.g, c.b).s;
+  };
+  const lum = (hex: string): number => relativeLuminance(parseHex(hex)!);
+
+  it('面板主背景 #525252 配白字，正文对比度 ≥ 7', () => {
+    const out = resolveTokens(spec('gray'));
+    expect(SEMANTIC.gray['surface-1']).toBe('#525252');
+    expect(out['--surface-1']).toBe('#525252');
+    expect(out['--text-primary']).toBe('#ffffff');
+    expect(
+      contrastRatio(SEMANTIC.gray['text-primary'], SEMANTIC.gray['surface-1']),
+    ).toBeGreaterThanOrEqual(7);
+  });
+
+  it('比深色模式亮，但仍是深底（这正是它存在的理由）', () => {
+    expect(lum(SEMANTIC.gray['surface-1'])).toBeGreaterThan(lum(SEMANTIC.dark['surface-1']));
+    expect(lum(SEMANTIC.gray['surface-1'])).toBeLessThan(lum(SEMANTIC.light['surface-1']));
+    expect(lum(SEMANTIC.gray['surface-1'])).toBeLessThan(0.5); // 白字仍然成立
+  });
+
+  it('品牌色更低饱和、更亮', () => {
+    for (const id of BRAND_IDS) {
+      const g = accentRampOf({ kind: 'preset', id }, 'gray');
+      const d = accentRampOf({ kind: 'preset', id }, 'dark');
+      // 「不更饱和」是硬约束；「更亮」是这一档的目的（对 #464646 的钳制结果）。
+      expect(sat(g.accent), id).toBeLessThanOrEqual(sat(d.accent) + 0.02);
+      expect(lum(g.accent), id).toBeGreaterThan(lum(d.accent));
+    }
+    // 旗舰色（紫，饱和度 0.81 > 上限 0.55）必须真的被压下来
+    const violet = accentRampOf({ kind: 'preset', id: 'violet' }, 'gray');
+    expect(sat(violet.accent)).toBeLessThan(0.6);
+  });
+
+  it.each(BRAND_IDS)('纸面强调色 %s 在 #BDBDBD 上也够读', (id) => {
+    const out = resolveTokens(spec('gray', id));
+    expect(out['--paper-surface-1']).toBe('#bdbdbd');
+    const ratio = contrastRatio(out['--paper-accent']!, PAPER.gray['surface-1']);
+    expect(ratio, `${id} 纸面强调色 ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(ACCENT_MIN_CONTRAST);
+  });
+
+  it('弹窗 / Ribbon 的纸面是 #BDBDBD + 黑字', () => {
+    const out = resolveTokens(spec('gray'));
+    expect(PAPER.gray['surface-1']).toBe('#bdbdbd');
+    expect(out['--paper-surface-1']).toBe('#bdbdbd');
+    expect(out['--paper-text-primary']).toBe('#141414');
+    expect(
+      contrastRatio(PAPER.gray['text-primary'], PAPER.gray['surface-1']),
+    ).toBeGreaterThanOrEqual(8);
+  });
+});
+
+/* ------------------------------------------------------------ 高对比度的边界 */
+
+describe('高对比度模式', () => {
+  const contrast = SEMANTIC.contrast;
+
+  it('表面一律纯黑，正文一律纯白', () => {
+    for (const key of ['surface-0', 'surface-1', 'surface-2', 'surface-3'] as const) {
+      expect(contrast[key], key).toBe('#000000');
+    }
+    expect(contrast['text-primary']).toBe('#ffffff');
+    expect(contrastRatio('#ffffff', '#000000')).toBeCloseTo(21, 0);
+  });
+
+  it('结构线与可点容器用不同颜色的边框（它唯一的分层手段）', () => {
+    expect(contrast['border']).not.toBe(contrast['border-control']);
+    for (const key of ['border', 'border-control', 'border-icon'] as const) {
+      const ratio = contrastRatio(contrast[key], '#000000');
+      expect(ratio, `${key} 对黑底 ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(3);
+    }
+    const out = resolveTokens(spec('contrast'));
+    expect(out['--btn-border']).toBe('var(--border-control)');
+    expect(out['--input-border']).toBe('var(--border-control)');
+  });
+
+  it('纯图标按钮只有这里才有边框（常规三套必须是透明）', () => {
+    expect(contrast['border-icon']).not.toBe('transparent');
+    for (const mode of ['light', 'dark', 'gray'] as const) {
+      expect(SEMANTIC[mode]['border-icon'], mode).toBe('transparent');
+    }
+  });
+
+  it('hover / active 不留在纯黑，但也不吃掉黑白对比', () => {
+    expect(contrast['surface-hover']).not.toBe('#000000');
+    expect(contrast['surface-active']).not.toBe('#000000');
+    expect(
+      contrastRatio(contrast['text-primary'], contrast['surface-hover']),
+    ).toBeGreaterThanOrEqual(12);
+  });
+
+  it('文字三档都在正文标准之上（次级也是纯白，层级只靠字号与字重）', () => {
+    for (const key of ['text-primary', 'text-secondary', 'text-muted'] as const) {
+      const ratio = contrastRatio(contrast[key], '#000000');
+      expect(ratio, `${key} ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(ACCENT_MIN_CONTRAST);
+    }
+  });
+});
+
+/* ------------------------------------------------------------ 纸面作用域 */
+
+describe('纸面作用域（data-paper）', () => {
+  const rule = paperScopeRule();
+
+  it('覆盖全部 semantic 与 component 变量（规则由 TS 生成，不是手写清单）', () => {
+    for (const key of Object.keys(SEMANTIC.light)) {
+      expect(rule, `漏了 --${key}`).toContain(`--${key}:var(--paper-${key})`);
+    }
+    for (const [group, vars] of Object.entries(COMPONENT)) {
+      for (const [name, key] of Object.entries(vars)) {
+        expect(rule, `漏了 --${group}-${name}`).toContain(`--${group}-${name}:var(--${key})`);
+      }
+    }
+    expect(rule).toContain('color-scheme:var(--paper-color-scheme)');
+  });
+
+  it('没有自引用（自定义属性自引用会整条失效，颜色静默回落）', () => {
+    const refs = [...rule.matchAll(/(--[a-z0-9-]+):var\((--[a-z0-9-]+)\)/g)];
+    expect(refs.length).toBeGreaterThan(20);
+    for (const [, left, right] of refs) expect(left).not.toBe(right);
+  });
+
+  it('三套常规模式的纸面就是它们自己的语义表（弹窗配色不会漂）', () => {
+    expect(PAPER.light).toBe(SEMANTIC.light);
+    expect(PAPER.dark).toBe(SEMANTIC.dark);
+    expect(PAPER.contrast).toBe(SEMANTIC.contrast);
+    expect(PAPER.gray['surface-1']).not.toBe(SEMANTIC.gray['surface-1']);
+  });
+
+  it.each(MODES)('%s：resolveTokens 同时输出纸面那一套', (mode) => {
+    const out = resolveTokens(spec(mode));
+    for (const key of Object.keys(SEMANTIC[mode])) expect(out[`--paper-${key}`]).toBeTruthy();
+    expect(['light', 'dark']).toContain(out['--paper-color-scheme']);
+  });
+
+  it('灰色模式的纸面是亮色（原生滚动条 / 取色器要跟着亮）', () => {
+    expect(resolveTokens(spec('gray'))['--paper-color-scheme']).toBe('light');
+    expect(resolveTokens(spec('dark'))['--paper-color-scheme']).toBe('dark');
   });
 });

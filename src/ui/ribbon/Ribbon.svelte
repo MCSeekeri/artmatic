@@ -98,6 +98,7 @@
 -->
 <div
   class="ribbon"
+  data-paper=""
   role="toolbar"
   aria-label={tr('rib.ariaTools')}
   // -1：不进 Tab 序（面板里的控件自己排），但满足 toolbar 角色的可达性要求。

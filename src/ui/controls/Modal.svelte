@@ -124,12 +124,18 @@
   onpointerdown={onBackdropDown}
   onclick={onBackdropClick}
 >
+  <!--
+    `data-paper`：进入「纸面」上下文（灰色模式下弹窗是浅灰底 + 黑字，见
+    tokens.ts 的 PAPER）。这个属性在亮 / 暗 / 高对比度下是**空操作** ——
+    那三套模式的纸面值就是它们自己的语义值。
+  -->
   <div
     class="modal {width}"
     role="dialog"
     aria-modal="true"
     aria-label={title}
     tabindex="-1"
+    data-paper=""
     data-testid={testid}
     onclick={(e) => e.stopPropagation()}
   >

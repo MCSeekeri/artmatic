@@ -338,6 +338,7 @@
   -->
   <div
     class="sel-pop"
+    data-paper=""
     id={listboxId}
     bind:this={panelEl}
     role="listbox"

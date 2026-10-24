@@ -256,6 +256,9 @@ export const app = {
   'app.mode': '模式',
   'app.light': '亮色',
   'app.dark': '暗色',
+  /* 这两套**只能**在这里选，rail 的明暗按钮不提供（见 Rail.svelte 的注释）。 */
+  'app.modeGray': '灰色',
+  'app.modeContrast': '高对比度',
   /* 彩蛋。文案刻意只说「是什么」，不说「怎么玩」—— 捏一下的乐趣在于自己发现。 */
   'app.mascot': '看板娘',
   'app.mascotEnable': '启用',

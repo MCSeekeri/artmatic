@@ -34,9 +34,11 @@
     ACCENT_PRESETS,
     BRAND_IDS,
     MOTION_SPEEDS,
+    THEME_MODES,
     type AccentSource,
     type BrandId,
     type MotionSpeed,
+    type ThemeMode,
   } from './tokens';
   import { SHORTCUT_SCHEMES, type ShortcutScheme } from './shortcuts';
   import type { OverlapBehavior } from '../core/schema';
@@ -206,6 +208,20 @@
             : 'app.motionSpeedFast',
       ),
     })),
+  );
+
+  /**
+   * 四套外观模式。顺序取自 `THEME_MODES`（从常规到极端），文案在这里拼：
+   * 模块级常量里调 tr() 会把语言冻结在加载那一刻。
+   */
+  const MODE_LABEL_KEYS = {
+    light: 'app.light',
+    dark: 'app.dark',
+    gray: 'app.modeGray',
+    contrast: 'app.modeContrast',
+  } as const;
+  const modeOptions = $derived(
+    THEME_MODES.map((m) => ({ value: m, label: tr(MODE_LABEL_KEYS[m]) })),
   );
 
   const schemeOptions = SHORTCUT_SCHEMES.map((s) => ({ value: s.id as string, label: s.label }));
@@ -540,13 +556,10 @@
           <div class="set-ctl">
             <Select
               value={mode}
-              options={[
-                { value: 'light', label: tr('app.light') },
-                { value: 'dark', label: tr('app.dark') },
-              ]}
+              options={modeOptions}
               minWidth={110}
               testid="settings-mode"
-              onchange={(v) => (mode = v as 'light' | 'dark')}
+              onchange={(v) => (mode = v as ThemeMode)}
             />
           </div>
         </div>

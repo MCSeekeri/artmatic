@@ -53,12 +53,16 @@
       .replace(/^<!DOCTYPE[^>]*>\s*/i, '')
       .replace(/fill:rgb\(111,\s*100,\s*239\)/g, 'fill:var(--accent)');
 
+  /**
+   * 取哪份资源按**族**判（`theme.family`），不是按 mode：灰色模式与高对比度
+   * 都是深底，一样要 `-light`（近白墨）那份。加模式时这里不需要改。
+   */
   const src = $derived(
     variant === 'word'
-      ? SOURCES.word[theme.mode]
+      ? SOURCES.word[theme.family]
       : size >= largeFrom
-        ? SOURCES.mark.large[theme.mode]
-        : SOURCES.mark.small[theme.mode],
+        ? SOURCES.mark.large[theme.family]
+        : SOURCES.mark.small[theme.family],
   );
   const markup = $derived(prepare(src));
 </script>

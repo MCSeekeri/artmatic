@@ -126,6 +126,7 @@
 {#if open}
   <div
     class="cf-pop"
+    data-paper=""
     id={panelId}
     bind:this={panelEl}
     role="dialog"

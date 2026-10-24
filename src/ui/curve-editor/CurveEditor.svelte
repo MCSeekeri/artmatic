@@ -961,6 +961,7 @@
 {#if target && clip}
   <div
     class="panel"
+    data-paper=""
     class:moved={pos !== null}
     class:resizing
     bind:this={panelEl}

@@ -11,11 +11,14 @@ import {
   ACCENT_PRESETS,
   BRAND_IDS,
   MOTION_SPEEDS,
+  THEME_MODES,
   accentRampOf,
+  themeFamily,
   type AccentSource,
   type AccentRamp,
   type BrandId,
   type MotionSpeed,
+  type ThemeFamily,
   type ThemeMode,
   type ThemeSpec,
 } from './tokens';
@@ -55,6 +58,10 @@ function normalizeMotionSpeed(v: unknown): MotionSpeed {
   return (MOTION_SPEEDS as readonly unknown[]).includes(v) ? (v as MotionSpeed) : 'normal';
 }
 
+function normalizeMode(v: unknown): ThemeMode {
+  return (THEME_MODES as readonly unknown[]).includes(v) ? (v as ThemeMode) : 'light';
+}
+
 function normalizeAccent(raw: unknown): AccentSource | null {
   if (!raw || typeof raw !== 'object') return null;
   const a = raw as { kind?: unknown; id?: unknown; hex?: unknown };
@@ -86,7 +93,7 @@ function load(): Persisted {
       motionSpeed?: unknown;
     };
     return {
-      mode: parsed.mode === 'dark' ? 'dark' : 'light',
+      mode: normalizeMode(parsed.mode),
       accent: normalizeAccent(parsed.accent) ?? fallback.accent,
       fontScale: normalizeFontScale(parsed.fontScale),
       motionEnabled:
@@ -118,6 +125,14 @@ class ThemeState {
   /** 给 installTheme / canvasPalette 用。每次返回新对象，供 $effect 判等传播。 */
   get spec(): ThemeSpec {
     return { mode: this.mode, accent: this.accent };
+  }
+
+  /**
+   * 亮 / 暗族。rail 的切换按钮、logo 墨色、原生 color-scheme 都读它 ——
+   * 灰模式与高对比度都是深底，不该各自再判一次 `mode === 'light'`。
+   */
+  get family(): ThemeFamily {
+    return themeFamily(this.mode);
   }
 
   /** 当前生效的色阶（设置面板画色块用）。 */
@@ -160,8 +175,16 @@ class ThemeState {
     this.persist();
   }
 
+  /**
+   * rail 的二态切换：**只认亮/暗两档**。
+   *
+   * 灰色与高对比度**只能**从设置→外观里选（它们是「另一套观感」，不是明暗的
+   * 第三、第四档）。所以从这两套里按切换键等于「回到标准模式」：灰/高对比度
+   * 都是深底，点它就去亮色 —— 与图标（此刻显示太阳）一致，不会出现「点了太阳
+   * 反而更暗」。
+   */
   toggleMode(): void {
-    this.setMode(this.mode === 'light' ? 'dark' : 'light');
+    this.setMode(this.family === 'light' ? 'dark' : 'light');
   }
 
   setPreset(id: BrandId): void {

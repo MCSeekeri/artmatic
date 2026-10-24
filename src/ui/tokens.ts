@@ -30,7 +30,33 @@
 import type { MessageKey } from '../i18n/locales';
 import { hexToRgb, rgbToHex } from '../core/color';
 
-export type ThemeMode = 'light' | 'dark';
+/**
+ * 外观模式。四套：
+ *   light     亮底
+ *   dark      近黑底
+ *   gray      中灰面板（#525252）+ 浅灰纸面弹窗（#BDBDBD）——长时间工作的护眼档
+ *   contrast  纯黑纯白 + 彩色边框——只为「一眼可辨」
+ *
+ * **只有实现差异，没有层级差异**：四套都走同一套 semantic 键，组件不感知模式。
+ */
+export type ThemeMode = 'light' | 'dark' | 'gray' | 'contrast';
+
+/** 设置面板里的排列顺序（也是「从常规到极端」的顺序）。 */
+export const THEME_MODES = ['light', 'dark', 'gray', 'contrast'] as const;
+
+/**
+ * 亮 / 暗「族」。
+ *
+ * 四套模式里只有 light 是亮底：gray 的面板是 #525252、contrast 是纯黑，都属于暗底。
+ * 凡是「亮底还是暗底」的二元判断（logo 墨色取哪份资源、Canvas 网格用哪档透明度、
+ * 原生 `color-scheme`、强调查色的钳制方向）**一律读它**，不要写 `mode === 'light'`
+ * —— 那种写法每加一套模式就要改一遍，而改漏的地方不会报错（只会看起来「有点不对」）。
+ */
+export type ThemeFamily = 'light' | 'dark';
+
+export function themeFamily(mode: ThemeMode): ThemeFamily {
+  return mode === 'light' ? 'light' : 'dark';
+}
 
 /** 预置品牌色相。注意这是「色相」不是「某个 hex」——亮暗两套取不同明度步进。 */
 export type BrandId = 'violet' | 'cyan' | 'lime' | 'amber';
@@ -62,6 +88,16 @@ export type SemanticKey =
   | 'surface-active'
   | 'border'
   | 'border-strong'
+  /*
+   * 可点容器（按钮 / 输入框 / 下拉 / 数字框 / 复选框）的边框。
+   *
+   * 亮暗灰三套里它与 `border` 同值 —— 分层只靠 surface 深度，按钮不该多一道重色边。
+   * 高对比度里它是**唯一的分类手段**：结构分隔线用白、可点容器用青，一眼能分出
+   * 「这是能点的」与「这只是隔开两块区域」。
+   */
+  | 'border-control'
+  /** 纯图标按钮的边框。三套常规模式是 `transparent`（图标按钮永远无框无底）。 */
+  | 'border-icon'
   | 'border-focus'
   | 'text-primary'
   | 'text-secondary'
@@ -194,6 +230,8 @@ export const SEMANTIC: Record<ThemeMode, Record<SemanticKey, string>> = {
     'surface-active': NEUTRAL['200'],
     border: NEUTRAL['200'],
     'border-strong': NEUTRAL['300'],
+    'border-control': NEUTRAL['200'],
+    'border-icon': 'transparent',
     'border-focus': '#000000', // 被 accent 覆盖
     'text-primary': NEUTRAL['1000'],
     'text-secondary': NEUTRAL['600'],
@@ -221,6 +259,8 @@ export const SEMANTIC: Record<ThemeMode, Record<SemanticKey, string>> = {
     'surface-active': NEUTRAL['700'],
     border: NEUTRAL['800'],
     'border-strong': NEUTRAL['700'],
+    'border-control': NEUTRAL['800'],
+    'border-icon': 'transparent',
     'border-focus': '#ffffff',
     'text-primary': NEUTRAL['100'],
     'text-secondary': NEUTRAL['400'],
@@ -238,6 +278,86 @@ export const SEMANTIC: Record<ThemeMode, Record<SemanticKey, string>> = {
     overlay: 'rgba(0, 0, 0, 0.50)',
     scrollbar: NEUTRAL['700'],
     'scrollbar-hover': NEUTRAL['600'],
+  },
+
+  /*
+   * 灰色模式。
+   *
+   * 面板底色 #525252：比近黑「亮」一档，绝对对比度更低（白字对它 7.9:1，对
+   * 暗色 surface-1 是 16:1），但可识别度仍然良好 —— 这正是 Office / Unity /
+   * Blender 那些「一坐一整天」的软件都在提供的一档。对全是故障特效的剪辑软件
+   * 更甚：画面本身已经高频闪烁，界面再压到近黑，眼睛没有休息的地方。
+   *
+   * 注意这里**只描述「深色chrome」**：弹窗 / 菜单 / Ribbon 是浅灰纸面（#BDBDBD
+   * + 黑字），见下面的 PAPER —— 纸面不是一个 surface 档位，而是一整块反相上下文，
+   * 单靠 surface-0..3 的深度表达不了「容器整体反相」。
+   */
+  gray: {
+    'surface-0': '#464646', // body / 时间轴底（比面板深一档，让轨道区「沉」下去）
+    'surface-1': '#525252', // 面板正色：顶栏 / 底栏 / 侧栏 / 抽屉
+    'surface-2': '#5b5b5b', // 工具条 / 轨道侧栏
+    'surface-3': '#616161', // 深色面板里的输入框
+    'surface-hover': '#6b6b6b',
+    'surface-active': '#7a7a7a',
+    border: '#6f6f6f',
+    'border-strong': '#8f8f8f',
+    'border-control': '#6f6f6f',
+    'border-icon': 'transparent',
+    'border-focus': '#ffffff',
+    'text-primary': '#ffffff',
+    'text-secondary': '#dedede',
+    'text-muted': '#c2c2c2',
+    'text-disabled': '#9a9a9a',
+    'accent': '#000000',
+    'accent-strong': '#000000',
+    'accent-weak': '#000000',
+    'accent-border': '#000000',
+    'accent-on': '#000000',
+    danger: '#ff9d9d',
+    'danger-weak': '#5a2c2c',
+    success: '#7ee0a8',
+    warning: '#ffd166',
+    overlay: 'rgba(0, 0, 0, 0.42)',
+    scrollbar: '#7d7d7d',
+    'scrollbar-hover': '#969696',
+  },
+
+  /*
+   * 高对比度模式。
+   *
+   * 只有 #000000 + #FFFFFF，**唯一的例外是 hover / active 的填充与彩色边框**：
+   *   - hover 若也停在纯黑，「这里能点」就完全没有反馈（比低对比度更糟）；
+   *   - 边框承担全部分类：结构线白、可点容器青（--border-control）。
+   * 文字三档全按 4.5:1 以上给（次级也是纯白，层级只靠字号与字重）。
+   */
+  contrast: {
+    'surface-0': '#000000',
+    'surface-1': '#000000',
+    'surface-2': '#000000',
+    'surface-3': '#000000',
+    'surface-hover': '#1c1c1c',
+    'surface-active': '#303030',
+    border: '#ffffff',
+    'border-strong': '#ffffff',
+    'border-control': '#00e5ff',
+    'border-icon': '#00e5ff',
+    'border-focus': '#ffffff',
+    'text-primary': '#ffffff',
+    'text-secondary': '#ffffff',
+    'text-muted': '#d0d0d0',
+    'text-disabled': '#8c8c8c',
+    'accent': '#000000',
+    'accent-strong': '#000000',
+    'accent-weak': '#000000',
+    'accent-border': '#000000',
+    'accent-on': '#000000',
+    danger: '#ff5c5c',
+    'danger-weak': '#2a0000',
+    success: '#33ff88',
+    warning: '#ffd400',
+    overlay: 'rgba(0, 0, 0, 0.78)',
+    scrollbar: '#ffffff',
+    'scrollbar-hover': '#00e5ff',
   },
 };
 
@@ -276,6 +396,79 @@ export const CONTENT: Record<ThemeMode, Record<ContentKey, string>> = {
     'clip-audio-bg': 'rgba(35, 48, 41, 0.42)',
     'clip-audio-border': '#3f6455',
     'clip-audio-text': '#cfe6da',
+  },
+  /* 灰色模式：片段底色要压在中灰网格（#464646）上，所以比暗色那套亮一档、
+     彩度更低。仍然是「三种片段能分开、但不跟主题色抢」。 */
+  gray: {
+    'clip-source-bg': '#5d5d5d',
+    'clip-source-border': '#8f8f8f',
+    'clip-source-text': '#f4f4f4',
+    'clip-effect-bg': '#615b6b',
+    'clip-effect-border': '#918aa6',
+    'clip-effect-text': '#f0ecfa',
+    'clip-audio-bg': 'rgba(92, 112, 100, 0.42)',
+    'clip-audio-border': '#93ab9e',
+    'clip-audio-text': '#e6f2ea',
+  },
+  /* 高对比度：底一律纯黑，**分类只靠边框色**（与界面同一条思路）。 */
+  contrast: {
+    'clip-source-bg': '#000000',
+    'clip-source-border': '#00e5ff',
+    'clip-source-text': '#d9fbff',
+    'clip-effect-bg': '#000000',
+    'clip-effect-border': '#ff70e0',
+    'clip-effect-text': '#ffe4fa',
+    'clip-audio-bg': 'rgba(0, 70, 40, 0.45)',
+    'clip-audio-border': '#5cff9d',
+    'clip-audio-text': '#d9ffe8',
+  },
+};
+
+/* ------------------------------------------------------------ 纸面（paper）
+ *
+ * 弹窗 / 菜单 / 下拉 / Ribbon 这一层在灰色模式下是**浅灰底 + 黑字**（#BDBDBD），
+ * 而面板是深灰 + 白字 —— 这不是某个 surface 档位的差别，是整块上下文反相。
+ *
+ * 用一套 `--paper-*` 承接：容器挂 `data-paper`，`theme-apply.ts` 注入的
+ * `[data-paper]` 规则把 semantic / component 变量全部指向 `--paper-*`。
+ * 于是**组件内部一行都不用改** —— 它们仍然写 `var(--text-primary)`。
+ *
+ * 亮 / 暗 / 高对比度三套的纸面就是它们自己的语义表（反相后与外面一致），
+ * 只有灰色模式真的换了另一套值。这条对称性很重要：它保证「加模式」不会
+ * 让某个容器莫名其妙变成另一种配色。
+ */
+export const PAPER: Record<ThemeMode, Record<SemanticKey, string>> = {
+  light: SEMANTIC.light,
+  dark: SEMANTIC.dark,
+  contrast: SEMANTIC.contrast,
+  gray: {
+    'surface-0': '#b0b0b0', // 纸面内的凹槽（列表斑马纹 / 画布外的衬底）
+    'surface-1': '#bdbdbd', // 纸面本体：弹窗 / Ribbon / 菜单
+    'surface-2': '#cccccc', // 纸面上的控件底（按钮）
+    'surface-3': '#ffffff', // 纸面上的输入框、再上一层的浮层
+    'surface-hover': '#aeaeae',
+    'surface-active': '#a0a0a0',
+    border: '#8a8a8a',
+    'border-strong': '#6b6b6b',
+    'border-control': '#8a8a8a',
+    'border-icon': 'transparent',
+    'border-focus': '#000000',
+    'text-primary': '#141414',
+    'text-secondary': '#333333',
+    'text-muted': '#4d4d4d',
+    'text-disabled': '#767676',
+    'accent': '#000000',
+    'accent-strong': '#000000',
+    'accent-weak': '#000000',
+    'accent-border': '#000000',
+    'accent-on': '#ffffff',
+    danger: '#b3261e',
+    'danger-weak': '#f2c6c2',
+    success: '#1b6b3d',
+    warning: '#7a5a00',
+    overlay: 'rgba(0, 0, 0, 0.30)',
+    scrollbar: '#8a8a8a',
+    'scrollbar-hover': '#6b6b6b',
   },
 };
 
@@ -398,6 +591,10 @@ export function resolveMotionTokens(enabled: boolean, speed: MotionSpeed): Recor
  * 组件绑定。值**必须**是 SemanticKey——想直接写 '--p-neutral-900' 会编译报错。
  * 这一层随组件落地逐步补齐；已经落地的都用它，避免组件 CSS 里散落 semantic
  * 名（那样改语义时组件是隐式跟随，看不出耦合点）。
+ *
+ * 输出成 `var(--semantic)` 而**不是**展开后的字面色，是为了让 `data-paper`
+ * 那类局部覆盖能连带生效：自定义属性的 var() 在**声明它的元素**上就完成了替换，
+ * 若这里写死颜色，纸面上下文里改 --surface-3 也追不到 --menu-bg。
  */
 
 export const COMPONENT: Record<string, Record<string, SemanticKey>> = {
@@ -421,7 +618,7 @@ export const COMPONENT: Record<string, Record<string, SemanticKey>> = {
   },
   input: {
     bg: 'surface-3',
-    border: 'border',
+    border: 'border-control',
     'border-hover': 'border-strong',
     fg: 'text-primary',
     placeholder: 'text-muted',
@@ -433,11 +630,13 @@ export const COMPONENT: Record<string, Record<string, SemanticKey>> = {
   btn: {
     bg: 'surface-2',
     'bg-hover': 'surface-hover',
-    border: 'border',
+    border: 'border-control',
     fg: 'text-primary',
     'fg-hover': 'text-primary',
     'ghost-fg': 'text-secondary',
     'ghost-fg-hover': 'text-primary',
+    /* 纯图标按钮：常规模式无框（透明），高对比度下靠它画出可点边界。 */
+    'icon-border': 'border-icon',
     disabled: 'text-disabled',
   },
   rail: {
@@ -475,6 +674,9 @@ export const COMPONENT: Record<string, Record<string, SemanticKey>> = {
   ribbon: {
     bg: 'surface-1',
     border: 'border',
+    /* Ribbon 里的按钮（大按钮 / 菜单 / 图库 / 颜色）共用一条：常规三套是透明
+       （Ribbon 的层次靠分组间距，不给每个按钮描边），高对比度下才画出边界。 */
+    'btn-border': 'border-icon',
     'tab-fg': 'text-secondary',
     'tab-fg-hover': 'text-primary',
     'tab-fg-active': 'accent',
@@ -566,14 +768,41 @@ export function contrastRatio(a: string, b: string): number {
  *  所以按正文标准（4.5:1）而不是图形标准（3:1）来要求。 */
 export const ACCENT_MIN_CONTRAST = 4.5;
 
-function rampFromHsl(h: number, s: number, l: number, mode: ThemeMode): AccentRamp {
+/**
+ * 每套模式的强调色政策。
+ *
+ * `gray` 把饱和度封顶在 0.55 —— 需求就是「更低饱和度、亮度更高的品牌色」：
+ * 中灰底上再叠一个饱和紫，界面会比深色模式更吵，正好抵消了护眼的意义。
+ * 其余三套沿用原来的口径（只兜底「全灰输入」，不额外压饱和）。
+ */
+export interface AccentPolicy {
+  /** 下限：全灰输入也要能产出一条合法色阶（退化为灰阶强调色）。 */
+  minS: number;
+  /** 上限：1 = 不压饱和。 */
+  maxS: number;
+}
+
+export const ACCENT_POLICY: Record<ThemeMode, AccentPolicy> = {
+  light: { minS: 0.28, maxS: 1 },
+  dark: { minS: 0.28, maxS: 1 },
+  gray: { minS: 0.28, maxS: 0.55 },
+  contrast: { minS: 0.28, maxS: 1 },
+};
+
+/** 底色是亮还是暗，决定强调色往哪边钳制。阈值取得很保守：纸面 #BDBDBD 与
+ *  深灰 #525252 都必须落在正确的一侧。 */
+function familyOfBg(bg: string): ThemeFamily {
+  const c = parseHex(bg);
+  return c && relativeLuminance(c) > 0.25 ? 'light' : 'dark';
+}
+
+function rampFromHsl(h: number, s: number, l: number, family: ThemeFamily): AccentRamp {
   const base = hslToRgb(h, s, l);
   const hex = rgbToHex(base);
 
-  const strong = hslToRgb(h, clamp01(s * 1.02), clamp01(mode === 'light' ? l - 0.1 : l + 0.09));
+  const strong = hslToRgb(h, clamp01(s * 1.02), clamp01(family === 'light' ? l - 0.1 : l + 0.09));
   // weak 是「选中底」这类极淡填充：亮色下提亮降饱和，暗色下压暗降饱和。
-  const weak =
-    mode === 'light' ? hslToRgb(h, s * 0.55, 0.955) : hslToRgb(h, s * 0.42, 0.2);
+  const weak = family === 'light' ? hslToRgb(h, s * 0.55, 0.955) : hslToRgb(h, s * 0.42, 0.2);
 
   const onWhite = contrastRatio('#ffffff', hex);
   const onInk = contrastRatio(PRIMITIVES['neutral-1000']!, hex);
@@ -588,29 +817,28 @@ function rampFromHsl(h: number, s: number, l: number, mode: ThemeMode): AccentRa
 }
 
 /**
- * 任意 hex → 一条完整色阶。
+ * 任意 hex → 一条完整色阶，**按与 `bg` 的对比度钳制明度**。
  *
- * 关键行为：**按对比度钳制明度**。用户给一个亮黄当主题色，直接用会在亮色
- * 背景上糊成一片；这里保持色相与饱和度，把明度二分到刚好满足
- * ACCENT_MIN_CONTRAST 的那一档，所以「可自定义」不会产出不可用主题。
+ * 用户给一个亮黄当主题色，直接用在亮底上会糊成一片；这里保持色相、按政策钳
+ * 饱和度，再把明度二分到刚好满足 ACCENT_MIN_CONTRAST 的那一档 —— 方向由
+ * `bg` 的亮度决定，所以同一支函数同时服务「深色面板」与「浅灰纸面」。
  */
-export function accentRampFromHex(hex: string, mode: ThemeMode): AccentRamp {
+export function accentRampOn(hex: string, bg: string, policy: AccentPolicy): AccentRamp {
+  const family = familyOfBg(bg);
   const rgb = parseHex(hex);
   // 解析失败不抛错：主题色是用户输入，坏值应该退化成默认紫而不是整个应用起不来。
-  if (!rgb) return rampFromHsl(260, 0.75, mode === 'light' ? 0.52 : 0.68, mode);
+  // 走**同一条**钳制路径（而不是另给一组写死的明度），否则默认色会在某套模式下不达标。
+  if (!rgb) return accentRampOn(ACCENT_PRESETS.violet.hex, bg, policy);
 
   const { h, s, l } = rgbToHsl(rgb.r, rgb.g, rgb.b);
-  const surface = SEMANTIC[mode]['surface-0'];
-
-  // 饱和度兜底：全灰的输入也能出一条合法的 ramp（退化为灰阶强调色）。
-  const sat = Math.max(s, 0.28);
+  const sat = Math.min(policy.maxS, Math.max(s, policy.minS));
   const hexAt = (ll: number): string => rgbToHex(hslToRgb(h, sat, ll));
 
-  const ok = (ll: number): boolean => contrastRatio(hexAt(ll), surface) >= ACCENT_MIN_CONTRAST;
+  const ok = (ll: number): boolean => contrastRatio(hexAt(ll), bg) >= ACCENT_MIN_CONTRAST;
 
-  const target = mode === 'light' ? -1 : 1; // 亮色要更暗，暗色要更亮
-  let lo = mode === 'light' ? 0 : l;
-  let hi = mode === 'light' ? l : 1;
+  const darker = family === 'light'; // 亮底要更暗，暗底要更亮
+  let lo = darker ? 0 : l;
+  let hi = darker ? l : 1;
   let best = l;
 
   if (ok(l)) {
@@ -621,23 +849,56 @@ export function accentRampFromHex(hex: string, mode: ThemeMode): AccentRamp {
       const mid = (lo + hi) / 2;
       if (ok(mid)) {
         best = mid;
-        if (target < 0) lo = mid;
+        if (darker) lo = mid;
         else hi = mid;
-      } else if (target < 0) {
+      } else if (darker) {
         hi = mid;
       } else {
         lo = mid;
       }
     }
-    if (!ok(best)) best = target < 0 ? 0 : 1;
+    if (!ok(best)) best = darker ? 0 : 1;
   }
 
-  return rampFromHsl(h, sat, best, mode);
+  /*
+   * 收尾：保证**叠在 accent 上的文字**也达标。
+   *
+   * 只钳「accent vs 底色」是不够的：明度落在中间带时，白字与近黑字对它的对比度
+   * 会同时卡在 4.4 附近（紫 #6f64ef 在纯黑底上就是这样 —— 需求里高对比度模式
+   * 那一档刚好把它暴露出来）。往远离底色的方向推一两个千分点就能跨出这条带，
+   * 而「离底色更远」这个方向永远同时满足第一条约束。
+   */
+  for (let i = 0; i < 24; i += 1) {
+    const ramp = rampFromHsl(h, sat, best, family);
+    if (contrastRatio(ramp.accentOn, ramp.accent) >= ACCENT_MIN_CONTRAST) return ramp;
+    const next = Math.min(1, Math.max(0, best + (darker ? -0.004 : 0.004)));
+    if (next === best || !ok(next)) break;
+    best = next;
+  }
+
+  return rampFromHsl(h, sat, best, family);
+}
+
+export function accentRampFromHex(hex: string, mode: ThemeMode): AccentRamp {
+  return accentRampOn(hex, SEMANTIC[mode]['surface-0'], ACCENT_POLICY[mode]);
 }
 
 export function accentRampOf(src: AccentSource, mode: ThemeMode): AccentRamp {
   if (src.kind === 'custom') return accentRampFromHex(src.hex, mode);
   return accentRampFromHex(ACCENT_PRESETS[src.id].hex, mode);
+}
+
+/**
+ * 纸面上下文里的强调色。
+ *
+ * 灰色模式的纸面是 #BDBDBD，主界面的强调色（按 #464646 钳出来的亮粉彩）放上去
+ * 会低到看不清；所以纸面单独按自己的底色钳一版。其余三套模式的纸面与外面一致，
+ * 直接复用 —— 它们必须是同一个值，否则弹窗内外会差半档色。
+ */
+export function paperRampOf(src: AccentSource, mode: ThemeMode): AccentRamp {
+  if (mode !== 'gray') return accentRampOf(src, mode);
+  const hex = src.kind === 'custom' ? src.hex : ACCENT_PRESETS[src.id].hex;
+  return accentRampOn(hex, PAPER.gray['surface-1'], ACCENT_POLICY.gray);
 }
 
 /* ------------------------------------------------------------ 解析 */
@@ -666,29 +927,61 @@ function flatten(
 /** 全量扁平化：`resolveTokens(spec)` → `{ '--surface-0': '#ffffff', ... }`。 */
 export function resolveTokens(spec: ThemeSpec): Record<string, string> {
   const ramp = accentRampOf(spec.accent, spec.mode);
+  const semantic = applyRamp({ ...SEMANTIC[spec.mode] }, ramp);
 
-  const semantic: Record<string, string> = { ...SEMANTIC[spec.mode] };
+  const paperRamp = paperRampOf(spec.accent, spec.mode);
+  const paperSemantic = applyRamp({ ...PAPER[spec.mode] }, paperRamp);
+  const paper: Record<string, string> = {};
+  for (const [k, v] of Object.entries(paperSemantic)) paper[`paper-${k}`] = v;
+  // 纸面自己的原生配色（滚动条 / 取色器 / 表单控件）。按**纸面底色**定，
+  // 而不是按模式：灰色模式的纸面是浅灰，`color-scheme: dark` 会画出深色滚动条。
+  paper['paper-color-scheme'] = familyOfBg(paperSemantic['surface-0']!);
+
+  /*
+   * component 层输出 `var(--semantic)` 而不是展开值。两个理由：
+   *   1. 局部覆盖能连带生效（纸面上下文靠它，见 PAPER 的注释）；
+   *   2. 组件与语义之间只剩一处耦合点，且被类型锁在 SemanticKey 上。
+   */
+  const component: Record<string, string> = {};
+  for (const [group, vars] of Object.entries(COMPONENT)) {
+    for (const [name, key] of Object.entries(vars)) {
+      if (semantic[key] !== undefined) component[`${group}-${name}`] = `var(--${key})`;
+    }
+  }
+
+  return flatten(
+    [STATIC, semantic, CONTENT[spec.mode], component, paper],
+    {} as Record<string, string>,
+  ) as Record<string, string>;
+}
+
+function applyRamp(semantic: Record<string, string>, ramp: AccentRamp): Record<string, string> {
   semantic['accent'] = ramp.accent;
   semantic['accent-strong'] = ramp.accentStrong;
   semantic['accent-weak'] = ramp.accentWeak;
   semantic['accent-border'] = ramp.accentBorder;
   semantic['accent-on'] = ramp.accentOn;
   semantic['border-focus'] = ramp.accent;
+  return semantic;
+}
 
-  // component 层在这里解析成具体值——组件 CSS 拿到的是最终色，
-  // 但耦合点仍然只有一处，且被类型锁在 semantic 上。
-  const component: Record<string, string> = {};
+/* ------------------------------------------------------------ 纸面作用域
+ *
+ * 容器挂 `data-paper` 就进入纸面上下文：这里把 semantic 与 component 变量整体
+ * 重指向 `--paper-*`。**规则文本由 TS 生成**，不是手写在 app.css 里 ——
+ * 加一个 semantic key 时，纸上那份手写清单必然会漏，而漏掉的表现是「弹窗里
+ * 有一个控件还是深色」，不报错、也说不清是哪一条。
+ */
+export const PAPER_ATTR = 'data-paper';
+
+export function paperScopeRule(): string {
+  const decls: string[] = [];
+  for (const key of Object.keys(SEMANTIC.light)) decls.push(`--${key}:var(--paper-${key})`);
   for (const [group, vars] of Object.entries(COMPONENT)) {
-    for (const [name, key] of Object.entries(vars)) {
-      const v = semantic[key];
-      if (v !== undefined) component[`${group}-${name}`] = v;
-    }
+    for (const [name, key] of Object.entries(vars)) decls.push(`--${group}-${name}:var(--${key})`);
   }
-
-  return flatten(
-    [STATIC, semantic, CONTENT[spec.mode], component],
-    {} as Record<string, string>,
-  ) as Record<string, string>;
+  decls.push('color-scheme:var(--paper-color-scheme)');
+  return `[${PAPER_ATTR}]{${decls.join(';')}}`;
 }
 
 /* ------------------------------------------------------------ Canvas 调色板
@@ -718,25 +1011,93 @@ export function withAlpha(hex: string, alpha: number): string {
   return `rgba(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)}, ${alpha})`;
 }
 
+/**
+ * 网格线的 alpha 与「用哪一档 surface 当底」。
+ *
+ * 四套模式各写一份是**必要**的：alpha 的合适值取决于底色亮度 —— 同样的 0.24
+ * 白线，在 #131518 上是清晰的网格，在 #525252 上几乎看不见。灰模式的网格要
+ * 抬到 0.34 才读得出格，而高对比度需要 0.6。
+ */
+const CANVAS_TUNING: Record<
+  ThemeMode,
+  {
+    grid: 'surface-0' | 'surface-1';
+    ruler: 'surface-1' | 'surface-2';
+    bar: number;
+    beat: number;
+    rowVisual: number;
+    rowAudio: number;
+    rowLine: number;
+    waveBody: number;
+    waveCenter: number;
+  }
+> = {
+  light: {
+    grid: 'surface-0',
+    ruler: 'surface-1',
+    bar: 0.26,
+    beat: 0.09,
+    rowVisual: 0.022,
+    rowAudio: 0.05,
+    rowLine: 0.14,
+    waveBody: 0.62,
+    waveCenter: 0.2,
+  },
+  dark: {
+    grid: 'surface-1',
+    ruler: 'surface-2',
+    bar: 0.24,
+    beat: 0.07,
+    rowVisual: 0.05,
+    rowAudio: 0.09,
+    rowLine: 0.16,
+    waveBody: 0.68,
+    waveCenter: 0.22,
+  },
+  /* 中灰底：所有线都要更实一点，否则「有格」和「没格」分不出来。 */
+  gray: {
+    grid: 'surface-0',
+    ruler: 'surface-2',
+    bar: 0.34,
+    beat: 0.12,
+    rowVisual: 0.04,
+    rowAudio: 0.07,
+    rowLine: 0.18,
+    waveBody: 0.78,
+    waveCenter: 0.32,
+  },
+  /* 纯黑底：一切都拉到「扫一眼就看见」，波形几乎不透明。 */
+  contrast: {
+    grid: 'surface-0',
+    ruler: 'surface-1',
+    bar: 0.6,
+    beat: 0.28,
+    rowVisual: 0.06,
+    rowAudio: 0.1,
+    rowLine: 0.32,
+    waveBody: 0.95,
+    waveCenter: 0.5,
+  },
+};
+
 export function canvasPalette(spec: ThemeSpec): CanvasPalette {
   const t = resolveTokens(spec);
-  const light = spec.mode === 'light';
-  // 时间轴底比 body 略深/略浅一档，让轨道区在视觉上「沉」下去。
-  const gridBg = light ? t['--surface-0']! : t['--surface-1']!;
+  const tune = CANVAS_TUNING[spec.mode];
+  const ink = t['--text-primary']!;
 
   return {
-    rulerBg: light ? t['--surface-1']! : t['--surface-2']!,
+    rulerBg: t[`--${tune.ruler}`]!,
     rulerText: t['--text-muted']!,
     // 拍线淡、小节线显著——读格靠这个层级，不靠颜色。
-    barLine: withAlpha(t['--text-primary']!, light ? 0.26 : 0.24),
-    beatLine: withAlpha(t['--text-primary']!, light ? 0.09 : 0.07),
-    gridBg,
-    rowVisual: withAlpha(t['--text-primary']!, light ? 0.022 : 0.05),
-    rowAudio: withAlpha(t['--text-primary']!, light ? 0.05 : 0.09),
-    rowLine: withAlpha(t['--text-primary']!, light ? 0.14 : 0.16),
+    barLine: withAlpha(ink, tune.bar),
+    beatLine: withAlpha(ink, tune.beat),
+    gridBg: t[`--${tune.grid}`]!,
+    rowVisual: withAlpha(ink, tune.rowVisual),
+    rowAudio: withAlpha(ink, tune.rowAudio),
+    rowLine: withAlpha(ink, tune.rowLine),
     // 波形要能透过音频片段的半透明底色读出来，所以比网格线明显得多
-    waveBody: withAlpha(t['--text-primary']!, light ? 0.62 : 0.68),
-    waveCenter: withAlpha(t['--text-primary']!, light ? 0.2 : 0.22),
+    waveBody: withAlpha(ink, tune.waveBody),
+    waveCenter: withAlpha(ink, tune.waveCenter),
     // 工程起点线用主题色：它是「当前位置」类标记，与播放头同类，
     // 属于本设计里允许动用主题色的少数场景之一。
     originLine: withAlpha(t['--accent']!, 0.85),

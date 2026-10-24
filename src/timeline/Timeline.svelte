@@ -1757,7 +1757,12 @@
   }
   .section-band {
     position: relative;
-    background: var(--tl-gutter);
+    /*
+     * 底色走 `--tl-side-bg`（行标题槽那档），**不能**用 `--tl-gutter`：后者映射到
+     * `border`，在常规三套里恰好是一层很淡的灰、看着像底色，但它同时是**分隔线**
+     * 的颜色 —— 高对比度下 `border` 是纯白，拿它填底就成了白底白字的段落名。
+     */
+    background: var(--tl-side-bg);
     border-bottom: 1px solid var(--tl-border);
     overflow: hidden;
   }

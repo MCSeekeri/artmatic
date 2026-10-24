@@ -158,9 +158,14 @@
     >
       <Icon name="flask-conical" size={14} />
     </a>
+    <!--
+      rail 这一颗**只切亮/暗**（按族判定）：灰色与高对比度只能从设置→外观里选，
+      它们出现在这里的话「点一下太阳」会跳到一个谁都没预期的第三种观感。
+      从灰/高对比度按它 = 回亮色（见 theme.toggleMode）。
+    -->
     <IconButton
-      icon={theme.mode === 'light' ? 'moon' : 'sun'}
-      label={tr(theme.mode === 'light' ? 'app.toDark' : 'app.toLight')}
+      icon={theme.family === 'light' ? 'moon' : 'sun'}
+      label={tr(theme.family === 'light' ? 'app.toDark' : 'app.toLight')}
       testid="theme-toggle"
       onclick={() => theme.toggleMode()}
     />

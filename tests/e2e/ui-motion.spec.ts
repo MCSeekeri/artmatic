@@ -21,6 +21,10 @@ async function openAppearance(page: Page): Promise<void> {
   await expect(page.getByTestId('settings-pane-appearance')).toBeVisible();
 }
 
+/**
+ * `--motion-distance` 是**负值**（`MOTION.distance = -2`）：消费处是
+ * `translateY(--motion-distance)`，负数才是「从下方 2px 滑上来」。关闭档是 `0px`。
+ */
 const motionVars = (page: Page): Promise<Record<string, string>> =>
   page.evaluate(() => {
     const cs = getComputedStyle(document.documentElement);
@@ -66,7 +70,7 @@ test('标准档：Modal、Select、Ribbon 消费同一组动效 token', async ({
     hover: '80ms',
     enter: '120ms',
     modal: '140ms',
-    distance: '2px',
+    distance: '-2px',
   });
 
   await openAppearance(page);
@@ -133,7 +137,7 @@ test('速度：取消不生效；保存后刷新仍保留', async ({ page }) => 
     hover: '80ms',
     enter: '120ms',
     modal: '140ms',
-    distance: '2px',
+    distance: '-2px',
   });
 
   await openAppearance(page);
@@ -144,7 +148,7 @@ test('速度：取消不生效；保存后刷新仍保留', async ({ page }) => 
     hover: '60ms',
     enter: '90ms',
     modal: '105ms',
-    distance: '2px',
+    distance: '-2px',
   });
 
   await page.reload();
@@ -153,7 +157,7 @@ test('速度：取消不生效；保存后刷新仍保留', async ({ page }) => 
     hover: '60ms',
     enter: '90ms',
     modal: '105ms',
-    distance: '2px',
+    distance: '-2px',
   });
   expect(
     await page.evaluate(() => JSON.parse(localStorage.getItem('artmatic.theme') ?? '{}')),
@@ -191,7 +195,7 @@ test('关闭：控件禁用且时长为 0；系统减少动态效果始终优先
     hover: '80ms',
     enter: '120ms',
     modal: '140ms',
-    distance: '2px',
+    distance: '-2px',
   });
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
