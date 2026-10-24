@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip as createTextClip, openDemo } from './_stage';
 
 /**
  * UI/UX 一轮改动的回归。
@@ -204,25 +204,16 @@ test('预览工具条能收成悬浮球再展开，且不再有播放状态读�
 
 /* ------------------------------------------------------------ 排版编辑器 */
 
-async function addTextClip(page: Page): Promise<void> {
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const id = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: { store: { project: { tracks: { clips: { id: string; source?: { type?: string } }[] }[] } } };
-    }).__artmatic;
-    for (const t of A.store.project.tracks) {
-      for (const c of t.clips) if (c.source?.type === 'text') return c.id;
-    }
-    return '';
-  });
-  await page.locator(`[data-testid=clip][data-clip-id="${id}"]`).dblclick();
+/** 新建排版片段并双击进编辑器（双击 = 打开，不是切分）。 */
+async function addTextClipAndOpen(page: Page): Promise<void> {
+  const clipId = await createTextClip(page);
+  await page.locator(`[data-testid=clip][data-clip-id="${clipId}"]`).dblclick();
   await expect(page.getByTestId('typo-editor')).toBeVisible();
 }
 
 test('排版 zoombar：高度固定、有缩放滑杆；画面尺寸在「设计」页', async ({ page }) => {
   await boot(page);
-  await addTextClip(page);
+  await addTextClipAndOpen(page);
 
   const bar = await page.locator('.zoombar').boundingBox();
   expect(bar, 'zoombar 应当存在').not.toBeNull();
@@ -251,7 +242,7 @@ test('排版 zoombar：高度固定、有缩放滑杆；画面尺寸在「设计
 
 test('Ribbon：纯小按钮的组排成两行', async ({ page }) => {
   await boot(page);
-  await addTextClip(page);
+  await addTextClipAndOpen(page);
 
   const ys = await page.evaluate(() =>
     ['typo-to-front', 'typo-forward', 'typo-backward', 'typo-to-back'].map((id) => {
@@ -270,7 +261,7 @@ test('Ribbon：纯小按钮的组排成两行', async ({ page }) => {
 
 test('无动画时：时序控件呈禁用态（既是功能上的也是视觉上的）', async ({ page }) => {
   await boot(page);
-  await addTextClip(page);
+  await addTextClipAndOpen(page);
   await page.getByTestId('typo-layer-row').first().click();
   await page.getByTestId('ribbon-tab-anim').click();
 
@@ -294,7 +285,7 @@ test('无动画时：时序控件呈禁用态（既是功能上的也是视觉�
 
 test('图层列表可拖曳排序，数组顺序跟着变', async ({ page }) => {
   await boot(page);
-  await addTextClip(page);
+  await addTextClipAndOpen(page);
 
   // 再插一个图形，凑出两行
   await page.getByTestId('typo-layer-row').first().click();
@@ -366,6 +357,17 @@ test('导出面板：MP4 / PNG / GIF 三个入口在同一行且水平居中', a
   expect(mp4Label).toBe('MP4');
   const hintBox = (await page.getByTestId('export-mp4-hint').boundingBox())!;
   expect(hintBox.y).toBeGreaterThanOrEqual(mp4.y + mp4.height - 1);
+
+  // 提示里得有**具体数值**（磁盘纪律的第一道防线：点之前就知道多大）。
+  // 原来这条住在 export-mp4.spec 的一条独立用例里，而那条除了可见性就只有这一行
+  // —— 可见性与布局这里都断过了，为一行正则单独起一次示例工程不值。
+  expect((await page.getByTestId('export-mp4-hint').textContent()) ?? '').toMatch(
+    /\d+(\.\d+)?\s*(KB|MB|B|GB)/,
+  );
+  // GIF 的提示同理（它原来是 `export-gif.spec` 里那条「三种入口在场」的全部增量）。
+  expect((await page.getByTestId('export-gif-hint').textContent()) ?? '').toMatch(
+    /\d+(\.\d+)?\s*(B|KB|MB|GB)/,
+  );
 });
 
 /* ------------------------------------------------ 轨道区高度 + 全屏预览 */

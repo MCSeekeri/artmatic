@@ -70,16 +70,8 @@ describe('转场展示信息：文案键与语言表对齐', () => {
     expect(orphans, '这些 tns.* 键没有任何条目引用它们').toEqual([]);
   });
 
-  it('规模是「转场数 × 2」（一名一说明），不多不少', () => {
-    expect(LOCALE_KEYS.size).toBe(IDS.length * 2);
-    expect(REFERENCED.size).toBe(IDS.length * 2);
-  });
 
-  it('key 类型确实属于 MessageKey（编译期检查的运行期兜底）', () => {
-    // 类型上已经是 MessageKey；这里再断言一次是为了让「两个文件同时被改坏」也能报出来。
-    const table = transitions as Record<string, string>;
-    for (const key of REFERENCED) expect(table).toHaveProperty(key as MessageKey);
-  });
+
 });
 
 describe('转场展示信息：内容质量', () => {

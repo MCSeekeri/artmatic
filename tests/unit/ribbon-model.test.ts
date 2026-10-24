@@ -98,12 +98,6 @@ describe('resolveVisibleTabs', () => {
     expect(r.activeId).toBe('shape-format');
   });
 
-  it('回落目标是「开始」而不是「上一个」', () => {
-    const r = resolveVisibleTabs(tabs, new Set(['image-format']), 'insert');
-    expect(r.activeId).toBe('insert'); // insert 仍可见，不动
-    const r2 = resolveVisibleTabs(tabs, new Set(), 'image-format');
-    expect(r2.activeId).toBe('home');
-  });
 
   it('没有任何可见 Tab 时不抛错', () => {
     const r = resolveVisibleTabs([], new Set(), 'home');

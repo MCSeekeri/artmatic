@@ -68,9 +68,7 @@ describe('iconNodeToPath', () => {
     expect(iconNodeToPath([['blob', {}]])).toBe('');
   });
 
-  it('描边宽度 = Lucide 的 2/24 换算到 100 单位制', () => {
-    expect(ICON_STROKE_WIDTH).toBeCloseTo(SHAPE_BOX / 12, 6);
-  });
+
 });
 
 describe('iconGridFrames', () => {

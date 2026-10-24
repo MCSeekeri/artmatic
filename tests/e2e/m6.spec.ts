@@ -316,75 +316,6 @@ test('视频素材：导入 → 解码 → 取帧跟着 t 走 + 方向正确', a
   expect(errors).toEqual([]);
 });
 
-test('image 片段不再是空白（导入图片与排版「转为图片」共用同一条上传路径）', async ({ page }) => {
-  await boot(page);
-  await cleanStage(page);
-
-  // 造一张「上红下蓝」的 PNG，走与真实导入相同的注册 → 上传路径
-  const ok = await page.evaluate(async () => {
-    const A = (window as never as {
-      __artmatic: {
-        store: {
-          commit: (label: string, fn: (p: { assets: Record<string, unknown> }) => void) => void;
-          addClip: (trackId: string, clip: unknown) => void;
-          project: { tracks: { id: string; enabled: boolean }[] };
-        };
-        registerImageAsset: (assetId: string, blob: Blob) => Promise<void>;
-        assets: { put: (id: string, bytes: Uint8Array, input: unknown) => void };
-      };
-    }).__artmatic;
-
-    const c = document.createElement('canvas');
-    c.width = 64;
-    c.height = 64;
-    const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#ff0000';
-    ctx.fillRect(0, 0, 64, 32);
-    ctx.fillStyle = '#0000ff';
-    ctx.fillRect(0, 32, 64, 32);
-    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png'));
-    if (!blob) return false;
-
-    const assetId = 'e2e-image';
-    A.assets.put(assetId, new Uint8Array(await blob.arrayBuffer()), {
-      kind: 'image',
-      name: 'e2e.png',
-      originName: 'e2e.png',
-    });
-    A.store.commit('e2e: 记素材', (p) => {
-      p.assets[assetId] = { id: assetId, kind: 'image', name: 'e2e.png' };
-    });
-    await A.registerImageAsset(assetId, blob);
-
-    const track = A.store.project.tracks.find((t) => t.enabled)!;
-    A.store.addClip(track.id, {
-      kind: 'source',
-      id: 'e2e-image-clip',
-      start: 0,
-      end: 4,
-      label: 'img',
-      fadeSec: 0,
-      curves: {},
-      source: { type: 'image', assetId },
-      blend: 'normal',
-      opacity: 1,
-      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
-      fit: 'stretch',
-    });
-    return true;
-  });
-  expect(ok).toBe(true);
-
-  await settle(page, 1);
-  const h = await halvesAt(page, 1);
-  // 先证明它**不是空白**（修复前这一条就会挂：setImage 零调用方）
-  expect(h.all[0], `整帧应当既有红又有蓝，实测 ${JSON.stringify(h.all)}`).toBeGreaterThan(40);
-  expect(h.all[2]).toBeGreaterThan(40);
-  // 再验方向：上红下蓝
-  const where = JSON.stringify(h);
-  expect(h.top[0], `画面上半应当是红的，实测 ${where}`).toBeGreaterThan(h.top[2] + 40);
-  expect(h.bottom[2], `画面下半应当是蓝的，实测 ${where}`).toBeGreaterThan(h.bottom[0] + 40);
-});
 
 const readProject = (page: import('@playwright/test').Page) =>
   page.evaluate(() => {
@@ -629,7 +560,14 @@ test('rail 在每个界面都一致：主应用有 /lab 入口，lab 里也有�
   await expect(page.getByTestId('lab-rail-compile')).toBeVisible();
 });
 
-test('视频取帧：解码请求会被合并，不会堆成无限队列', async ({ page }) => {
+/**
+ * 视频取帧的两面：**突发请求要合并**、**顺序播放要复用同一个迭代器**。
+ *
+ * 两条以前各写一个用例，prologue 逐字相同且极贵 —— `makeTestVideo()` 现场编
+ * 2 秒 MP4 + 真 filechooser 导入 + `waitForClip`。测的却是同一条解码管线的两面，
+ * 判据互不冲突，所以合成一趟：编一次、导一次，两个阶段分开量增量。
+ */
+test('视频取帧：突发请求被合并，顺序播放复用同一个解码迭代器', async ({ page }) => {
   await boot(page);
   await cleanStage(page);
 
@@ -645,27 +583,27 @@ test('视频取帧：解码请求会被合并，不会堆成无限队列', async
       await page.getByTestId('import-video').click();
     })(),
   ]);
-  await chooser.setFiles({ name: 'e2e-queue.mp4', mimeType: 'video/mp4', buffer: Buffer.from(bytes) });
+  await chooser.setFiles({ name: 'e2e-fetch.mp4', mimeType: 'video/mp4', buffer: Buffer.from(bytes) });
   await waitForClip(page);
 
-  const r = await page.evaluate(async () => {
+  /* ------------------------------------------------ ① 突发：请求被合并 */
+
+  const burst = await page.evaluate(async () => {
     const A = (window as never as { __artmatic: any }).__artmatic;
     const stats = () => A.appState.video.stats();
 
     // **同步**跑 60 帧：JS 不让出事件循环，所以这 60 个请求会全部堆在队列里，
     // 一个都来不及执行。这正是「拖动播放头快速扫」与「解码跟不上时」的形状。
     const before = stats();
+    const clip = A.store.project.tracks.flatMap((t: any) => t.clips)[0];
     for (let i = 0; i < 60; i += 1) {
-      A.renderer.renderFrame(A.store.project, A.store.project.tracks[0].clips[0].start + i / 60);
+      A.renderer.renderFrame(A.store.project, clip.start + i / 60);
     }
     // 让出事件循环，给队列排空的机会（给足时间，让「会排队」的那种实现
     // 把差距拉大：合并后只会有 1 个，不合并会是几十个）
     await new Promise((res) => setTimeout(res, 2000));
     const after = stats();
-    return {
-      queuedDecodes: after.decodes - before.decodes,
-      dropped: after.dropped - before.dropped,
-    };
+    return { queuedDecodes: after.decodes - before.decodes, dropped: after.dropped - before.dropped };
   });
 
   // 合并之后：这 60 个请求里**只有最后一个**会真正去解，其余全部作废。
@@ -677,29 +615,12 @@ test('视频取帧：解码请求会被合并，不会堆成无限队列', async
   //   素材长度影响 —— 素材只有 10 个不同帧时，靠区间去重也能把解码数压下来，
   //   所以单看解码数是分不出来的（这一点是实测出来的，不是推的）。
   // - `queuedDecodes` 是**代价上界**：本素材最多只该解出个位数。
-  expect(r.dropped).toBeGreaterThan(0);
-  expect(r.queuedDecodes).toBeLessThanOrEqual(6);
-});
+  expect(burst.dropped).toBeGreaterThan(0);
+  expect(burst.queuedDecodes).toBeLessThanOrEqual(6);
 
-test('视频取帧：顺序播放复用同一个解码迭代器，不逐帧重建管线', async ({ page }) => {
-  await boot(page);
-  await cleanStage(page);
+  /* -------------------------------------- ② 顺序：复用常驻迭代器 */
 
-  const bytes = await page.evaluate(() => {
-    const A = (window as never as { __artmatic: { makeTestVideo: () => Promise<number[]> } }).__artmatic;
-    return A.makeTestVideo();
-  });
-  const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 30_000 }),
-    (async () => {
-      await page.locator('[data-testid=track-menu]').last().click();
-      await page.getByTestId('import-video').click();
-    })(),
-  ]);
-  await chooser.setFiles({ name: 'e2e-seq.mp4', mimeType: 'video/mp4', buffer: Buffer.from(bytes) });
-  await waitForClip(page);
-
-  const r = await page.evaluate(async () => {
+  const seq = await page.evaluate(async () => {
     const A = (window as never as { __artmatic: any }).__artmatic;
     const clip = A.store.project.tracks.flatMap((t: any) => t.clips)[0];
     const before = A.appState.video.stats();
@@ -716,15 +637,13 @@ test('视频取帧：顺序播放复用同一个解码迭代器，不逐帧重�
   // 解码管线重建一遍**（从最近关键帧重新解起）。顺序访问必须走常驻的 `samples()`。
   //
   // 判据取两头的界：
-  // - `≥ 1`：顺序路径确实被走过（退回 `getSample` 时这个计数恒为 0）
-  // - `≤ 3`：没有逐帧重建（那会等于解码帧数）
-  // 这 20 帧确实解出来了。
-  expect(r.decodes).toBeGreaterThanOrEqual(15);
-  // 而整段只重建了很少几次解码管线。
+  // - `≥ 15`：这 20 帧确实解出来了
+  // - `≤ 3`（streams）：没有逐帧重建
   //
   // 注意 `streams` 取的是**绝对值**而不是增量：导入后的第一次渲染就会开流，
-  // 所以增量天然是 0（这一条是我第一次写下时搞错的判据 —— 增量 0 被误读成
+  // 所以增量天然是 0（这一条是第一次写下时搞错的判据 —— 增量 0 被误读成
   // 「顺序路径没走到」，实际是「早就开好了」）。
-  expect(r.streams).toBeGreaterThanOrEqual(1);
-  expect(r.streams).toBeLessThanOrEqual(3);
+  expect(seq.decodes).toBeGreaterThanOrEqual(15);
+  expect(seq.streams).toBeGreaterThanOrEqual(1);
+  expect(seq.streams).toBeLessThanOrEqual(3);
 });

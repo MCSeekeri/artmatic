@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openDemo } from './_stage';
+import { openDemo, waitForSourceReady } from './_stage';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,8 +35,14 @@ async function setupTinyProject(page: import('@playwright/test').Page): Promise<
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
   await openDemo(page);
-  // demo 含 bake 型生成器：被动等烘焙落地（见 determinism.spec 的注释）
-  await page.waitForTimeout(2500);
+  /*
+   * demo 含 bake 型生成器：等它真的落地，而不是睡固定 2.5s。
+   *
+   * 固定等待在这里是纯浪费 —— 这些用例断的是容器结构、文案与编码器阶梯，
+   * 与画面内容无关，但每条都要付一次「睡够为止」；而负载高时 2.5s 又未必够
+   * （`_stage.ts::waitForSourceReady` 的注释记了那次偶发失败的成因）。
+   */
+  await waitForSourceReady(page, 0);
   return page.evaluate(() => {
     const A = (window as never as {
       __artmatic: {
@@ -224,7 +230,7 @@ test('GIF 导出：产物是合法 GIF89a，尺寸 / 帧数 / 循环 / 色表与
   expect(bytes.byteLength).toBeLessThan(2_000_000);
 });
 
-test('GIF 面板：默认档位与尺寸换算，改宽度后输出尺寸跟着变', async ({ page }) => {
+test('GIF 面板：默认档位 / 尺寸换算 / 改宽度 / 改帧率，读数都跟着 plan 走', async ({ page }) => {
   await setupTinyProject(page);
   await page.getByTestId('rail-export').click();
 
@@ -237,34 +243,21 @@ test('GIF 面板：默认档位与尺寸换算，改宽度后输出尺寸跟着�
   await page.getByTestId('gif-width-opt-240').click();
   await expect(page.getByTestId('gif-size')).toHaveText('240×135');
   await expect(page.getByTestId('gif-width')).toContainText('240px');
-});
 
-test('GIF 面板：改帧率后帧数提示跟着变（参数真的进了 plan）', async ({ page }) => {
-  await setupTinyProject(page);
-  await page.getByTestId('rail-export').click();
-
+  /*
+   * 再改帧率：帧数提示必须跟着变。
+   *
+   * 这两段以前是两条用例 —— 同一形态（下拉换值 → 面板文本变），**都不渲画面**，
+   * 却各付一次示例工程的建立成本。合起来只开一次面板。
+   */
   const before = await gifPlannedFrames(page);
-
   await page.getByTestId('gif-fps').click();
   await page.getByTestId('gif-fps-opt-25').click();
-
   const after = await gifPlannedFrames(page);
   // 12.5fps 与 25fps 的抽帧步长必不相同（工程帧率至少 24），所以帧数必然变。
   expect(after).not.toBe(before);
 });
 
-test('导出面板：三种格式入口同时在场，GIF 显示帧数与体积', async ({ page }) => {
-  await setupTinyProject(page);
-  await page.getByTestId('rail-export').click();
-
-  await expect(page.getByTestId('export-mp4')).toBeVisible();
-  await expect(page.getByTestId('export-png')).toBeVisible();
-  await expect(page.getByTestId('export-gif')).toBeVisible();
-
-  await expect(page.getByTestId('gif-frames')).toContainText('帧');
-  const hint = (await page.getByTestId('export-gif-hint').textContent()) ?? '';
-  expect(hint).toMatch(/\d+(\.\d+)?\s*(B|KB|MB|GB)/);
-});
 
 test('GIF 区间：只导后半段，帧数与播放时长都跟着缩短', async ({ page }) => {
   await setupTinyProject(page);

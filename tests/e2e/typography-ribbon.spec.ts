@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 import { parsePathNodes } from '../../src/typography/path-nodes';
 
 /**
@@ -72,30 +72,6 @@ interface DocShape {
 interface Hooks {
   store: { project: { tracks: { clips: { id: string; source?: { type?: string; doc?: DocShape } }[] }[] } };
   appState: { playT: number };
-}
-
-/**
- * 这些读文档的辅助函数一律按 **`activeTypoClipId`** 取，不再「扫工程里第一个 text 片段」。
- *
- * 开箱 demo 自己就带一个标题排版片段，于是「第一个」永远是 demo 的，
- * 用例新加的那个根本读不到 —— 表现成「拖了但元素没动」，真因指不到这里。
- */
-async function addTextClip(page: Page): Promise<string> {
-  const ids = (): Promise<string[]> =>
-    page.evaluate(() => {
-      const A = (window as never as { __artmatic: Hooks }).__artmatic;
-      const out: string[] = [];
-      for (const t of A.store.project.tracks) {
-        for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
-      }
-      return out;
-    });
-  const before = await ids();
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const added = (await ids()).filter((id) => !before.includes(id));
-  expect(added, '「+ 排版片段」没有新增片段（落点可能被重叠策略挡了）').toHaveLength(1);
-  return added[0]!;
 }
 
 async function openEditor(page: Page, clipId: string): Promise<void> {
@@ -1358,12 +1334,6 @@ test('富文本：选中一段加粗只在那一段留覆盖，元素级样式�
 
   await enterTextEditing(page);
   await selectLeadingChars(page, 2);
-  console.log('DBG', JSON.stringify(await page.evaluate(() => ({
-    range: (globalThis as never as { __range?: unknown }).__range,
-    active: document.activeElement?.className,
-    sel: window.getSelection()?.toString(),
-    elid: document.querySelectorAll('.paper [data-el-id]').length,
-  }))));
   await page.keyboard.press('Control+b');
 
   const el = (await readDoc(page)).elements[0]!;

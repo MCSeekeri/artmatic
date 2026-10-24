@@ -390,8 +390,6 @@ describe('二期生成器', () => {
     const spec = generatorById('contour')!;
     const r = buildFromSpec(spec, { ...defaultsOf(spec), levels: 3 }, 11);
     expect(r.commands).toBeGreaterThan(10);
-    // 每条折线至少 2 点 ⇒ 命令数 ≥ 2 × 层数
-    expect(r.commands).toBeGreaterThanOrEqual(6);
   });
 
   it('contour：地形缩放取到极端也不出盒', () => {

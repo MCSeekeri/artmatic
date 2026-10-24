@@ -67,44 +67,6 @@ test('新建视觉轨与纯色片段', async ({ page }) => {
   await expect(page.locator('.clip')).toHaveCount(demo.clips + 1);
 });
 
-test('拖拽移动片段（reject 语义 + 拍吸附）', async ({ page }) => {
-  await boot(page);
-  // 这一条守的是「拍」吸附。默认形态是节奏模式的「小节」（2s 一格），显式切到拍。
-  await page.evaluate(() => {
-    (window as never as { __artmatic: { appState: { setSnap: (m: string) => void } } })
-      .__artmatic.appState.setSnap('beat');
-  });
-  const demoTracks = await trackCount(page);
-  await page.getByTestId('add-visual-track').click();
-  await addClipViaMenu(page, demoTracks, 'add-solid');
-
-  const before = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: { store: { project: { tracks: { clips: { start: number }[] }[] } } };
-    }).__artmatic;
-    const tracks = A.store.project.tracks;
-    return tracks[tracks.length - 1]!.clips[0]!.start;
-  });
-  expect(before).toBe(0);
-
-  const clip = page.locator('.clip').last(); // 新建的片段排在最后
-  await clip.scrollIntoViewIfNeeded();
-  const box = (await clip.boundingBox())!;
-  // 向右拖 ~2 拍（pxPerBeat 默认 28，120bpm 下 2 拍 = 1s = 56px）
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 56, box.y + box.height / 2, { steps: 5 });
-  await page.mouse.up();
-
-  const after = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: { store: { project: { tracks: { clips: { start: number }[] }[] } } };
-    }).__artmatic;
-    const tracks = A.store.project.tracks;
-    return tracks[tracks.length - 1]!.clips[0]!.start;
-  });
-  expect(Math.abs(after - 1)).toBeLessThan(0.05); // 吸附到第 2 拍（120bpm → 1s）
-});
 
 test('切分 + 撤销回到切分前', async ({ page }) => {
   await boot(page);

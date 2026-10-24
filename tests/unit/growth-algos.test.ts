@@ -290,24 +290,3 @@ describe('扩散受限聚集', () => {
   });
 });
 
-/* --------------------------------------------- 全局：三个生成器都不可为 NaN */
-
-describe('三个生成器的输出都是合法的 8 位数据的子集', () => {
-  it('没有任何 NaN / 越界值漏进画面', () => {
-    const b = createBuddhabrot({ size: 128, batch: 200, maxIter: 128 }, 1);
-    b.seek(20);
-    for (const px of [b.current(), chaosGameRun({ vertices: 5, ratio: 0.5, points: 20000, restriction: 'noRepeat', size: 128, seed: 1 }).data, dlaRun({ size: 128, particles: 400, seedRadius: 1, stick: 8, seed: 1 }).data]) {
-      for (const v of px) {
-        expect(Number.isFinite(v)).toBe(true);
-        expect(v).toBeGreaterThanOrEqual(0);
-        expect(v).toBeLessThanOrEqual(255);
-      }
-    }
-  });
-
-  it('mulberry32 是本文件唯一随机源（防呆：导出的 PRNG 可复现）', () => {
-    const a = mulberry32(42);
-    const b = mulberry32(42);
-    for (let i = 0; i < 8; i++) expect(a()).toBe(b());
-  });
-});

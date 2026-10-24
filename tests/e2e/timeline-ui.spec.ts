@@ -563,7 +563,13 @@ test('长音频：重绘只覆盖可见区，滚动补画、回滚可复现、�
   expect(moved.hash).not.toBe(a0.hash); // 波形跟着移位（不是缓存住不动）
 });
 
-test('长音频：位图尺寸与工程时长、缩放解耦（内存上界）', async ({ page }) => {
+/**
+ * 长音频的两面：**位图尺寸与时长/缩放解耦**、以及**缩放与改拍网格后可见区仍重画**。
+ *
+ * 两条以前各自 `seedLongAudio`（300s 工程 / 6000 桶 / 多次等待），
+ * 而第二段的判据（`ink > 200`）第一段末尾已经量过一次。合成一趟。
+ */
+test('长音频：位图尺寸与时长解耦，缩放与改拍网格后可见区仍正确重画', async ({ page }) => {
   await boot(page);
   await seedLongAudio(page);
   const a0 = await waveStats(page);
@@ -606,16 +612,11 @@ test('长音频：位图尺寸与工程时长、缩放解耦（内存上界）',
   expect(grown.mb).toBeLessThan(20); // 5 轨下仍是常数级
 
   // 改完之后可见区还是要画对（不能只是「尺寸没变但内容丢了」）
-  const after = await waveStats(page);
-  expect(after.ink).toBeGreaterThan(200);
-});
+  const afterGrow = await waveStats(page);
+  expect(afterGrow.ink).toBeGreaterThan(200);
 
-test('长音频：缩放与改拍网格后可见区仍然正确重画', async ({ page }) => {
-  await boot(page);
-  await seedLongAudio(page);
-  const before = await waveStats(page);
+  /* ------------------------------ 缩放 + 改拍网格：可见区必须正确重画 */
 
-  // 缩放 + 改拍网格（走真实 commit）→ 都必须让可见区正确重画，而不是留白
   await page.evaluate(() => {
     const a = (window as never as { __artmatic: AnyA }).__artmatic;
     a.store.setBeatGrid({ bpm: 180, beatsPerBar: 3 });
@@ -624,7 +625,7 @@ test('长音频：缩放与改拍网格后可见区仍然正确重画', async ({
   await page.waitForTimeout(250);
   const after = await waveStats(page);
   expect(after.ink).toBeGreaterThan(200); // 缩放后可见区有内容，不是空白
-  expect(after.hash).not.toBe(before.hash);
+  expect(after.hash).not.toBe(afterGrow.hash);
 
   /*
    * 顺带钉住一个容易误判的事实：**标尺不随 BPM 变**。
@@ -656,7 +657,7 @@ test('长音频：缩放与改拍网格后可见区仍然正确重画', async ({
  * 判据用**两侧 scrollTop 相等**而不是「有没有滚动条」：滚动条由内容高度决定
  * （那本来就对），错的是两者的同步。
  */
-test('轨道头列与画布竖直滚动合一：拖任一侧另一侧跟随', async ({ page }) => {
+test('轨道头列与画布竖直滚动合一：拖任一侧另一侧跟随，滚到底末行不被页脚压住', async ({ page }) => {
   await boot(page);
   // 叠到足够多：demo 本身若干轨，再加 14 条必然溢出轨道区
   await page.evaluate(() => {
@@ -710,23 +711,14 @@ test('轨道头列与画布竖直滚动合一：拖任一侧另一侧跟随', as
   await page.waitForTimeout(200);
   const settled = await tops();
   expect(settled.side).toBe(settled.canvas);
-});
 
-/*
- * 用户报的第二个形态：滚到底时「添加轨道」页脚把最后一条轨的名字盖住了。
- *
- * 根因不是页脚的位置，而是**两侧量程不等**：页脚占掉轨道头列 28px 视口，
- * 画布那列又有 s 像素被横向滚动条吃掉。量程不等时低位那侧会把高位那侧拽回来，
- * 于是最后一条轨永远差那几十像素。这里同时钉住「量程相等」与「名字完整露出」。
- */
-test('滚到底：最后一条轨的名字完整露在加轨页脚上方', async ({ page }) => {
-  await boot(page);
-  await page.evaluate(() => {
-    const a = (window as never as { __artmatic: AnyA }).__artmatic;
-    for (let i = 0; i < 14; i++) a.store.addTrack('visual');
-  });
-  await page.waitForTimeout(150);
-
+  /*
+   * 滚到底：最后一条轨的名字必须完整露在「添加轨道」页脚上方。
+   *
+   * 这一段以前是独立用例，又叠了 14 条轨 —— 同一份 setup 付两遍。根因不是页脚
+   * 的位置，而是**两侧量程不等**（页脚占掉轨道头列 28px 视口，画布那列又有
+   * s 像素被横向滚动条吃掉），量程不等时低位那侧会把高位那侧拽回来。
+   */
   const info = await page.evaluate(() => {
     const scroll = document.querySelector('[data-testid=tl-scroll]') as HTMLElement;
     const side = document.querySelector('.side') as HTMLElement;

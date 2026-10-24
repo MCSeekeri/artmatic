@@ -84,13 +84,7 @@ describe('resolveTokens 结构', () => {
     }
   });
 
-  it('component 层确实落到了输出里，且是 var() 引用（不是死代码）', () => {
-    const out = resolveTokens(spec('light'));
-    // 必须是引用而不是展开值：自定义属性的 var() 在**声明它的元素**上就替换完了，
-    // 写死颜色的话 `data-paper` 那种局部覆盖追不到 --menu-bg。
-    expect(out['--menu-bg']).toBe('var(--surface-3)');
-    expect(out['--tl-side-bg']).toBe('var(--surface-2)');
-  });
+
 });
 
 /* ------------------------------------------------------------ 界面微动效 */

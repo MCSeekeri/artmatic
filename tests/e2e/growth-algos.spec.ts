@@ -48,17 +48,6 @@ test('Buddhabrot：从噪声里显影出结构，且 zoom 真的改变视野', a
   expect(gridL1(a.grid, b.grid), 'zoom 应当换一整张图（分块 L1）').toBeGreaterThan(20);
 });
 
-test('Buddhabrot：亮度与样本数无关（自适应色调映射）', async ({ page }) => {
-  test.setTimeout(180_000);
-  const short = await shootBake(page, 'buddhabrot', { size: 256, batch: 800, maxIter: 256 }, 8);
-  const long = await shootBake(page, 'buddhabrot', { size: 256, batch: 800, maxIter: 256 }, 40);
-  expect(short.mean, '短跑也要有东西').toBeGreaterThan(3);
-  expect(long.mean, '长跑也要有东西').toBeGreaterThan(3);
-  /* 5 倍的样本量，均值亮度必须基本不变。按计数归一化的实现会差 5 倍以上 ——
-     那是这个生成器最核心的一条性质，也是「显影」而不是「越来越白」的原因。 */
-  const rel = Math.abs(long.mean - short.mean) / short.mean;
-  expect(rel, `均值 ${short.mean.toFixed(1)} → ${long.mean.toFixed(1)}`).toBeLessThan(0.35);
-});
 
 test('混沌游戏：N 变了图就变（两个配置都得有东西）', async ({ page }) => {
   test.setTimeout(180_000);

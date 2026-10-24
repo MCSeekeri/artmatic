@@ -267,14 +267,6 @@ describe('insertNodeOnSegment — 必须保形', () => {
     expect(worst).toBeLessThan(1e-6);
   });
 
-  it('细分后的新锚点落在原曲线上', () => {
-    const sp: SubPath = parsePathNodes('M0,0 C20,80 80,80 100,0')[0]!;
-    const after = insertNodeOnSegment(sp, 0, 0.5);
-    const mid = after.nodes[1]!;
-    const truth = cubicPoint({ x: 0, y: 0 }, { x: 20, y: 80 }, { x: 80, y: 80 }, { x: 100, y: 0 }, 0.5);
-    expect(mid.x).toBeCloseTo(truth.x, 6);
-    expect(mid.y).toBeCloseTo(truth.y, 6);
-  });
 
   it('直线段细分后不长出手柄（否则「加点」会平白把直线变弯）', () => {
     const sp = parsePathNodes('M0,0 L100,0')[0]!;

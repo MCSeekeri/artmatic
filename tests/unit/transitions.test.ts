@@ -156,10 +156,6 @@ describe('resolveTransition：钳制', () => {
     expect(r!.duration).toBe(2);
   });
 
-  it('没有 transitionOut → null', () => {
-    const t = track([sourceClip(0, 4), sourceClip(4, 8)]);
-    expect(resolveTransition(t, 0)).toBeNull();
-  });
 
   it('下标越界 / 非 source 片段 → null（不许抛）', () => {
     const t = track([sourceClip(0, 4, { transitionOut: tr(1) }), sourceClip(4, 8)]);

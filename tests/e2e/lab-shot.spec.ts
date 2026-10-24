@@ -71,7 +71,17 @@ test('lab 导出截图：文件名是特效 id，内容是合法 PNG', async ({ 
   expect(bytes.byteLength).toBeGreaterThan(2000);
 });
 
-test('lab 批量导出：一个 zip，与注册表一一对应，每张都是 WebP', async ({ page }) => {
+/**
+ * 批量导出的**一整趟**：命名/格式 + 方向 + 频谱没顶掉链输入。
+ *
+ * 这三件事以前分在两条用例里，各自点一次「批量导出」—— 而那是 50+ 特效 ×
+ * （渲帧 → readPixels → WebP 编码 → zip），两条各挂 300s 超时。
+ * 下载的是同一个文件，没有理由付两遍。
+ *
+ * 第二条（方向 / 频谱）守的是**导出这条渲染路径**本身：渲染 → 读回 → 翻行 → 编码。
+ * 选择器的 E2E 不管这些 —— 那边贴的是静态资源，压根没有渲染。
+ */
+test('lab 批量导出：zip 与注册表一一对应、每张是 WebP，且方向与链输入都没坏', async ({ page }) => {
   test.setTimeout(300_000);
   await boot(page);
 
@@ -80,7 +90,7 @@ test('lab 批量导出：一个 zip，与注册表一一对应，每张都是 We
   )) as string[];
   expect(effectIds.length).toBeGreaterThan(50);
 
-  // 用小档位跑：这条用例验的是「遍历 + 打包 + 命名 + 编码」，不是画质
+  // 用小档位跑：这条用例验的是「遍历 + 打包 + 命名 + 编码 + 方向」，不是画质
   await page.getByTestId('lab-shot-height').click();
   await page.getByTestId('lab-shot-height-opt-128').click();
 
@@ -92,6 +102,9 @@ test('lab 批量导出：一个 zip，与注册表一一对应，每张都是 We
   expect(download.suggestedFilename()).toBe('effect-thumbnails-128p.zip');
 
   const files = unzipSync(await readDownload(download));
+
+  /* ---------------------------------------------------- ① 命名与格式 */
+
   const names = Object.keys(files).sort();
   // 注意**先加后缀再排序**：`channel-split` 与 `channel-split-prism` 的先后
   // 会因为比的是 `-`(0x2D) 还是 `.`(0x2E) 而翻转 —— 排 id 再拼后缀得到的是另一个顺序。
@@ -104,23 +117,8 @@ test('lab 批量导出：一个 zip，与注册表一一对应，每张都是 We
     expect(isWebp(files[name]!), `${name} 不是 WebP`).toBe(true);
     expect(files[name]!.byteLength, `${name} 太小`).toBeGreaterThan(200);
   }
-});
 
-/**
- * 守的是**导出这条渲染路径**本身：渲染 → 读回 → 翻行 → 编码。
- * 选择器的 E2E 不管这些 —— 那边贴的是静态资源，压根没有渲染。
- */
-test('lab 批量导出：产出的图方向正确，且频谱类没把链输入顶掉', async ({ page }) => {
-  test.setTimeout(300_000);
-  await boot(page);
-
-  await page.getByTestId('lab-shot-height').click();
-  await page.getByTestId('lab-shot-height-opt-128').click();
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByTestId('lab-shot-all').click(),
-  ]);
-  const files = unzipSync(await readDownload(download));
+  /* ------------------------------------------------ 像素探针（解 WebP） */
 
   /**
    * 把 zip 里的一个条目解码到 canvas 上读回像素。
@@ -165,7 +163,7 @@ test('lab 批量导出：产出的图方向正确，且频谱类没把链输入�
   };
 
   /*
-   * ① 方向。
+   * ② 方向。
    *
    * `readPixels` 是自下而上的（GL 原点在左下），而 `ImageData` 第 0 行在顶部 ——
    * 漏了翻行的话每张都是倒的。探针用 `pixelate`：它的目录底图是 `ramp`
@@ -178,7 +176,7 @@ test('lab 批量导出：产出的图方向正确，且频谱类没把链输入�
   expect(gap, '下半该比上半彩色 —— 反过来就说明导出被上下翻转了').toBeGreaterThan(0.2);
 
   /*
-   * ② 频谱纹理没顶掉链输入。
+   * ③ 频谱纹理没顶掉链输入。
    *
    * `u_spectrum` 是 R8，被当成 RGBA 读会得到 `(r,0,0,1)` —— 一整片红。
    * 实测过的事故：`SpectrumTextures.bindTo` 首次为实例建纹理时，

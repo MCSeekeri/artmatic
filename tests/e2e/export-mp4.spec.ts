@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openDemo } from './_stage';
+import { openDemo, waitForSourceReady } from './_stage';
 import { readFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -40,8 +40,14 @@ async function setupTinyProject(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
   await openDemo(page);
-  // demo 含 bake 型生成器：被动等烘焙落地（见 determinism.spec 的注释）
-  await page.waitForTimeout(2500);
+  /*
+   * demo 含 bake 型生成器：等它真的落地，而不是睡固定 2.5s。
+   *
+   * 固定等待在这里是纯浪费 —— 这些用例断的是容器结构、文案与编码器阶梯，
+   * 与画面内容无关，但每条都要付一次「睡够为止」；而负载高时 2.5s 又未必够
+   * （`_stage.ts::waitForSourceReady` 的注释记了那次偶发失败的成因）。
+   */
+  await waitForSourceReady(page, 0);
   await page.evaluate(() => {
     const A = (window as never as {
       __artmatic: { store: { setResolution: (w: number, h: number) => void; setDuration: (s: number) => void } };
@@ -51,8 +57,25 @@ async function setupTinyProject(page: import('@playwright/test').Page) {
   });
 }
 
-test('导出 MP4：产物存在、是合法 MP4 容器、帧数与工程一致', async ({ page }) => {
+/**
+ * MP4 产物的一整趟：容器合法 + **带音轨** + 体积上限。
+ *
+ * 这三件事以前分在两条用例里、各导一次同一份 demo 工程（demo 自带音频轨），
+ * 下载的是同样的字节 —— 合并后只导一次，断言一条不少。
+ */
+test('导出 MP4：容器合法、帧数与工程一致、且产物里真有音轨', async ({ page }) => {
   await setupTinyProject(page);
+
+  // demo 工程带程序生成的节拍：先确认音频片段在场，否则「有音轨」这条会空转
+  const audioCount = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { project: { tracks: { kind: string; enabled: boolean; clips: unknown[] }[] } } };
+    }).__artmatic;
+    return A.store.project.tracks
+      .filter((t) => t.kind === 'audio' && t.enabled)
+      .reduce((n, t) => n + t.clips.length, 0);
+  });
+  expect(audioCount).toBeGreaterThan(0);
 
   // 走真实下载路径。文件名断言在下载事件上，字节在下载文件上。
   await page.getByTestId('rail-export').click();
@@ -81,59 +104,24 @@ test('导出 MP4：产物存在、是合法 MP4 容器、帧数与工程一致',
   const head = bytes.subarray(0, 4096).toString('latin1');
   expect(head).toContain('moov');
 
-  // 4. 文件名 = 工程名 + .mp4（默认工程名兜底为 'artmatic'）
-  //    —— 这里不断言具体名字，只断言扩展名，上面已断。
-
-  // 体积上限：320×180×15 帧 应该在几十 KB 量级。
-  // 这条断言是**磁盘纪律的守卫**：一旦有人把测试分辨率调大，
-  // 这条会先失败提醒，而不是安静地每次写 100 MB。
-  expect(bytes.byteLength).toBeLessThan(1_000_000);
-});
-
-test('导出 MP4：带音轨（工程有音频片段 → 产物含音频轨）', async ({ page }) => {
-  await setupTinyProject(page);
-
-  // 先确认工程里确实有音频片段（demo 工程带程序生成的节拍）。
-  const audioCount = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: { store: { project: { tracks: { kind: string; enabled: boolean; clips: unknown[] }[] } } };
-    }).__artmatic;
-    return A.store.project.tracks
-      .filter((t) => t.kind === 'audio' && t.enabled)
-      .reduce((n, t) => n + t.clips.length, 0);
-  });
-  expect(audioCount).toBeGreaterThan(0);
-
-  await page.getByTestId('rail-export').click();
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('export-mp4').click();
-  const download = await downloadPromise;
-
-  await mkdir(TMP_DIR, { recursive: true });
-  const dest = join(TMP_DIR, 'audio.mp4');
-  await download.saveAs(dest);
-  const bytes = await readFile(dest);
-
-  // 音轨的证据：整段文件里应能找到 'mp4a'（esds 里的 objectTypeIndication
-  // 编码成 mp4a）或 'soun'（hdlr 里的 handler type）。
-  // 这是字节级的粗判据 —— 够证明「不是纯视频轨」。
+  /*
+   * 4. 音轨的证据：整段文件里应能找到 'mp4a'（esds 里的 objectTypeIndication）
+   *    或 'soun'（hdlr 里的 handler type）。
+   *
+   * 这是字节级的粗判据 —— 够证明「不是纯视频轨」。它必须**落在下载到磁盘的那个
+   * 文件上**：`export-mp4.spec` 里那条读页面内 blob 的 probe 抓不到「重封装时
+   * 把音轨丢掉」这类缺陷。
+   */
   const text = bytes.toString('latin1');
-  expect(text.includes('mp4a') || text.includes('soun')).toBe(true);
+  expect(
+    text.includes('mp4a') || text.includes('soun'),
+    '下载产物里找不到音轨标记 —— 要么混流没接上，要么重封装丢轨',
+  ).toBe(true);
+
+  // 5. 体积上限：320×180×15 帧 + 半秒音频应该在几十 KB 到几百 KB 量级。
+  //    这条断言是**磁盘纪律的守卫**：一旦有人把测试分辨率调大，
+  //    这条会先失败提醒，而不是安静地每次写 100 MB。
   expect(bytes.byteLength).toBeLessThan(2_000_000);
-});
-
-test('导出面板：同时提供 MP4 与 PNG 两个入口，且 MP4 显示预计体积', async ({ page }) => {
-  await setupTinyProject(page);
-  await page.getByTestId('rail-export').click();
-
-  // 两个按钮都在
-  await expect(page.getByTestId('export-mp4')).toBeVisible();
-  await expect(page.getByTestId('export-png')).toBeVisible();
-
-  // MP4 的体积估计挂在按钮**下方**的说明里（磁盘纪律的第一道防线：
-  // 点之前就知道多大）。原来它被塞进按钮标签，现在标签只留「MP4」。
-  const hint = await page.getByTestId('export-mp4-hint').textContent();
-  expect(hint).toMatch(/\d+(\.\d+)?\s*(KB|MB|B|GB)/);
 });
 
 test('Main 被拒时退到 Constrained Baseline，且产物能被解码器读回（W0.5）', async ({ page }) => {

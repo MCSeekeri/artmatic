@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 
 /**
  * 排版文档里的图片元素：**元素级抠图（色键）与四角透视**。
@@ -51,16 +51,6 @@ interface DocShape {
     key?: unknown;
     quad?: { tl: [number, number]; tr: [number, number]; br: [number, number]; bl: [number, number] };
   }[];
-}
-
-/** 轨道 ⋯ 菜单 → 新建排版片段。 */
-async function addTextClip(page: Page): Promise<string> {
-  const before = await textClipIds(page);
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const added = (await textClipIds(page)).filter((id) => !before.includes(id));
-  expect(added, '「新建排版片段」没有新增片段（落点可能被重叠策略挡了）').toHaveLength(1);
-  return added[0]!;
 }
 
 /** 128×128：绿底 + 中心 64×64 红块。 */

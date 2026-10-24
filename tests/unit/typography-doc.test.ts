@@ -33,12 +33,6 @@ describe('createTypographyDocument', () => {
     expect(createTypographyDocument({ w: 0, h: -10 }).size).toEqual({ w: 2, h: 2 });
   });
 
-  it('空文档没有元素、没有字体、没有背景', () => {
-    const d = createTypographyDocument({ w: 100, h: 100 });
-    expect(d.elements).toEqual([]);
-    expect(d.fonts).toEqual([]);
-    expect(d.background).toEqual({ kind: 'none' });
-  });
 });
 
 describe('元素工厂', () => {

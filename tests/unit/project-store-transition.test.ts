@@ -143,8 +143,5 @@ describe('ProjectStore：转场落库', () => {
     expect(store.version).toBe(v);
   });
 
-  it('MIN_CLIP_LENGTH 仍然是几何层的常数（转场不改变它）', () => {
-    // 守住「转场没有偷偷改动片段几何约束」这件事
-    expect(MIN_CLIP_LENGTH).toBeGreaterThan(0);
-  });
+
 });

@@ -21,7 +21,7 @@ import { openDemo, rgbaAt, setTrackEnabled, settle } from './_stage';
  *      —— 说明中心这一点上 blend 结果原样保留。
  *   2. 「有 transform-3d 时，blend=screen 与 blend=normal 是否仍给出不同结果」：
  *      仍不同 ⇒ blend 没被抹掉（判据是分通道 L1，不是亮度）。
- *   3. 平面外（左上角，旋转后落到画幅之外）：加特效后变黑、不加特效是品红
+ *   3. 平面外（左侧，旋转后落到画幅之外）：加特效后变黑、不加特效是品红
  *      —— 这条同时证明「特效真的在跑」（否则 1、2 会在一个 no-op 上假通过）
  *      并给出用户实际看到的退化。
  *
@@ -34,11 +34,11 @@ import { openDemo, rgbaAt, setTrackEnabled, settle } from './_stage';
  * |---|---|---|
  * | 中心 (0.5,0.5)，V2=screen | `[255,0,255]`（品红） | `[255,0,255]`（品红） |
  * | 中心 (0.5,0.5)，V2=normal | `[0,0,255]`（蓝） | — |
- * | 左上角 (0.02,0.02)，V2=screen | `[0,0,0]`（黑，平面外） | `[255,0,255]`（品红） |
+ * | 左侧 (0.02,0.02)，V2=screen | `[0,0,0]`（黑，平面外） | `[255,0,255]`（品红） |
  *
  * ⇒ 中心加特效前后逐通道 **L1 = 0**；screen 与 normal 在有特效时 R 通道差 **255**
- * —— **blend 没有被抹掉**。用户看到的是「左上角等平面外区域被裁成透明」。
- * `edge='clamp'` 时左上角落回 `[0,0,255]`（蓝，边缘像素铺满）⇒ 画幅重新填满。
+ * —— **blend 没有被抹掉**。用户看到的是「左侧等平面外区域被裁成透明」。
+ * `edge='clamp'` 时左侧落回 `[0,0,255]`（蓝，边缘像素铺满）⇒ 画幅重新填满。
  */
 
 interface BlendStage {
@@ -179,8 +179,13 @@ function l1(a: readonly number[], b: readonly number[]): number {
 
 /** 画面正中：必定落在旋转平面内（中心像素反向投射回 (0.5,0.5)）。 */
 const CENTER: [number, number] = [0.5, 0.5];
-/** 左上角：绕 Y 轴 25° 后落到画幅之外（左边 / 上边被裁掉），是「几何被裁」的探针。 */
-const CORNER: [number, number] = [0.02, 0.02];
+/**
+ * 左侧靠下：绕 Y 轴 25° 后落到画幅之外（**左边**被裁掉），是「几何被裁」的探针。
+ *
+ * 名字不能再叫「左上角」—— `rgbaAt` 是按 GL 行序取的，`fy = 0` 是底部。
+ * 写「上」会让人以为量的是上边，而 rotY 只裁左右，读到结论只能靠猜。
+ */
+const LEFT_CORNER: [number, number] = [0.02, 0.02];
 
 test('transform-3d 不抹掉下层 blend；中心分通道一致，screen/normal 仍可分', async ({ page }) => {
   await page.goto('/');
@@ -192,12 +197,12 @@ test('transform-3d 不抹掉下层 blend；中心分通道一致，screen/normal
 
   // ① 有特效（默认参数）时的中心与角落
   const centerScreenFx = await rgbaAt(page, 1, CENTER[0], CENTER[1]);
-  const cornerScreenFx = await rgbaAt(page, 1, CORNER[0], CORNER[1]);
+  const cornerScreenFx = await rgbaAt(page, 1, LEFT_CORNER[0], LEFT_CORNER[1]);
 
   // ② 关掉特效轨拿基线
   await setTrackEnabled(page, stage.fxTrack, false);
   const centerScreenNoFx = await rgbaAt(page, 1, CENTER[0], CENTER[1]);
-  const cornerScreenNoFx = await rgbaAt(page, 1, CORNER[0], CORNER[1]);
+  const cornerScreenNoFx = await rgbaAt(page, 1, LEFT_CORNER[0], LEFT_CORNER[1]);
   await setTrackEnabled(page, stage.fxTrack, true);
 
   // ③ 把 V2 换成 normal（其余不变），再量中心
@@ -238,17 +243,17 @@ test('transform-3d 不抹掉下层 blend；中心分通道一致，screen/normal
 
   /* --------------------- 3) 平面外：几何被裁 ⇒ 用户实际看到的现象 */
 
-  // 左上角落在旋转平面之外（edge='none' 默认）⇒ 透明 ⇒ 黑。
+  // 左侧落在旋转平面之外（edge='none' 默认）⇒ 透明 ⇒ 黑。
   expect(
     cornerScreenFx[0]! + cornerScreenFx[1]! + cornerScreenFx[2]!,
-    `左上角应在旋转平面之外（默认 edge='none'）而变黑，实测 ${cornerScreenFx.join(',')}`,
+    `左侧应在旋转平面之外（默认 edge='none'）而变黑，实测 ${cornerScreenFx.join(',')}`,
   ).toBeLessThan(60);
   // 而关掉特效时它是品红（= ② 已经量过）—— 两条合起来证明特效确实在跑。
 
   /* ------------------- 4) 换 edge='clamp' 能把画幅重新填满（建议的依据） */
 
   await setEdge(page, stage.fxTrack, 'clamp');
-  const cornerClampFx = await rgbaAt(page, 1, CORNER[0], CORNER[1]);
+  const cornerClampFx = await rgbaAt(page, 1, LEFT_CORNER[0], LEFT_CORNER[1]);
   expect(
     cornerClampFx[0]! + cornerClampFx[1]! + cornerClampFx[2]!,
     `edge='clamp' 时角落应被边缘像素填满而不是透明，实测 ${cornerClampFx.join(',')}`,

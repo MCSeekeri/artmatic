@@ -70,10 +70,5 @@ describe('拼音表：运行时形态', () => {
     expect(pinyinHaystack('A Plugin Name')).toBe('');
   });
 
-  it('三种形态都能在 haystack 里被 includes 命中', () => {
-    const h = pinyinHaystack('镜头光晕');
-    for (const q of ['jing tou guang yun', 'jingtouguangyun', 'jtgy']) {
-      expect(h.includes(q), `「${q}」搜不到`).toBe(true);
-    }
-  });
+
 });

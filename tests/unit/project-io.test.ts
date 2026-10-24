@@ -131,7 +131,6 @@ describe('saveProject', () => {
     const r = await saver(f, { ledger: empty });
     // 文件留下当孤儿，「点保存顺手销毁源文件」这条链因此断掉。
     expect(f.root.inspect('p/assets/img1.png')).not.toBeNull();
-    expect(r.assetsRemoved).toBe(0);
   });
 
   it('内存里没有字节的素材跳过写入并给警告', async () => {

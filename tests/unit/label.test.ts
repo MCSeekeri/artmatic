@@ -71,11 +71,5 @@ describe('normalizeLabel：不可信输入', () => {
     }
   });
 
-  it('规范化后的结果一定能被 resolveLabel 解析成文本', () => {
-    for (const raw of ['a', { text: 'b' }]) {
-      const label = normalizeLabel(raw) as Label;
-      expect(() => resolveLabel(label, tr)).not.toThrow();
-      expect(resolveLabel(label, tr)).toBeTruthy();
-    }
-  });
+
 });

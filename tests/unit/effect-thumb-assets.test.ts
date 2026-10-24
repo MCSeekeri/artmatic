@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { isWebp } from './_thumb-assets';
 import { listBuiltinEffects } from '../../src/effects/registry';
 
 /**
@@ -20,13 +21,6 @@ import { listBuiltinEffects } from '../../src/effects/registry';
 
 const DIR = fileURLToPath(new URL('../../src/assets/effect-thumbnails', import.meta.url));
 
-/** WebP：`RIFF` + 4 字节长度 + `WEBP`。 */
-function isWebp(bytes: Uint8Array): boolean {
-  if (bytes.length < 12) return false;
-  const ascii = (at: number, n: number): string =>
-    String.fromCharCode(...bytes.subarray(at, at + n));
-  return ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP';
-}
 
 const FILES = readdirSync(DIR).filter((f) => f.endsWith('.webp'));
 const IDS = FILES.map((f) => f.replace(/\.webp$/, '')).sort();

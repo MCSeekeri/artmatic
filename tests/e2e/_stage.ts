@@ -112,6 +112,43 @@ export async function openDemo(page: Page): Promise<void> {
   );
 }
 
+/**
+ * 工程里全部排版片段的 id（按轨道顺序）。
+ *
+ * 别用「工程里第一个 text 片段」代替差集：开箱 demo 自带一个标题排版片段，
+ * 「第一个」永远是它，新加的那个读不到 —— 表现是「新建之后拖动纹丝不动」，
+ * 而真因完全指不到这里。
+ */
+export async function textClipIds(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { project: { tracks: { clips: { id: string; source?: { type?: string } }[] }[] } } };
+    }).__artmatic;
+    const out: string[] = [];
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
+    }
+    return out;
+  });
+}
+
+/**
+ * 轨道 ⋯ 菜单 → 新建排版片段，返回新建的那一个（差集里多出来的）。
+ *
+ * 抛普通 Error 而不是 `expect`：本文件只 import 类型，不把断言库拖进来；
+ * 调用点在测试里，异常照样会把用例判红并带上这句话。
+ */
+export async function addTextClip(page: Page): Promise<string> {
+  const before = await textClipIds(page);
+  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
+  await page.getByTestId('add-text').click();
+  const added = (await textClipIds(page)).filter((id) => !before.includes(id));
+  if (added.length !== 1) {
+    throw new Error(`「+ 排版片段」没有新增片段（落点可能被重叠策略挡了）：实测新增 ${added.length} 条`);
+  }
+  return added[0]!;
+}
+
 /* ------------------------------------------------------------------ API */
 
 /**
@@ -518,10 +555,13 @@ export async function setEffectDepth(page: Page, clipId: string, depth: number):
 }
 
 /**
- * 取一个像素（**归一化坐标**，`0..1`，左上角为原点）。
+ * 取一个像素（**归一化坐标**，`0..1`，**GL 行序：`fy = 0` 是画面底部**）。
  *
  * 用归一化坐标而不是像素下标：预览尺寸随窗口变，写死下标会在别的机器上量错位置。
  * 返回 `[r, g, b, a]`（0–255）。
+ *
+ * ⚠️ 想按「人眼的左上角」取点请用 `rgbaAtTopLeft`。这一版直接按行取，不做翻转，
+ * 所以上下两半不同色的判据会读反 —— 那是历史接口，别再往新用例里用。
  */
 export async function rgbaAt(
   page: Page,

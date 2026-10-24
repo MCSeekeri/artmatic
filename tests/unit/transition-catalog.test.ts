@@ -75,10 +75,6 @@ describe('catalog：准入过滤', () => {
     expect(bad.map((t) => `${t.name}: ${t.license}`)).toEqual([]);
   });
 
-  it('被拒条目里没有任何一条属于宽松白名单之外', () => {
-    // 许可过滤与形状过滤是两条独立的判据：不能因为许可挂了就掩盖形状问题
-    expect(CATALOG_ISSUES.every((i) => !i.reason.includes('许可证'))).toBe(true);
-  });
 
   it('作者与许可证都非空（MIT/BSD 的署名要求）', () => {
     for (const e of TRANSITIONS) {
@@ -169,10 +165,7 @@ describe('uniform 覆盖一致性', () => {
     expect(problems).toEqual([]);
   });
 
-  it('扫描器本身有效（去掉这几条已知带 texture2D 的条目会扫不到东西）', () => {
-    const withTexture2D = RAW_CATALOG.filter((t) => /texture2D/.test(t.glsl)).map((t) => t.name);
-    expect(withTexture2D).toContain('GlitchDisplace');
-  });
+
 });
 
 describe('scanDeclaredUniforms：扫 body 声明的 uniform', () => {

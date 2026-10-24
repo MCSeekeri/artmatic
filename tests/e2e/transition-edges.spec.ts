@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { openDemo, rgbMeanAt } from './_stage';
 
 /**
  * 零片段转场（v13）的 E2E：片段前面 / 后面没有邻居时，那一侧是全透明。
@@ -72,28 +72,6 @@ async function oneClipStage(page: Page): Promise<StageInfo> {
   });
 }
 
-async function rgbMeanAt(page: Page, t: number): Promise<[number, number, number]> {
-  return page.evaluate((tt) => {
-    const A = (window as never as {
-      __artmatic: {
-        renderer: { onSeek: () => void };
-        renderFrame: (t: number) => void;
-        readPixels: () => { data: number[] };
-      };
-    }).__artmatic;
-    A.renderer.onSeek();
-    A.renderFrame(tt);
-    const d = A.readPixels().data;
-    const sum = [0, 0, 0];
-    const n = d.length / 4;
-    for (let i = 0; i < d.length; i += 4) {
-      sum[0]! += d[i]!;
-      sum[1]! += d[i + 1]!;
-      sum[2]! += d[i + 2]!;
-    }
-    return [sum[0]! / n, sum[1]! / n, sum[2]! / n] as [number, number, number];
-  }, t);
-}
 
 async function pickTransition(page: Page, side: 'in' | 'out', id: string): Promise<void> {
   await page.getByTestId(side === 'out' ? 'open-transition-picker' : 'open-transition-picker-in').click();

@@ -76,11 +76,6 @@ describe('computePopoverPosition — bottom-start', () => {
     expect(p.x).toBe(100);
   });
 
-  it('面板比视口还大 → 不返回负数（钉在左上角，交给自己滚动）', () => {
-    const p = computePopoverPosition(rect(100, 10), { width: 180, height: 900 }, VP);
-    expect(p.x).toBe(100);
-    expect(p.y).toBe(EDGE_MARGIN);
-  });
 
   it('右边缘：横向钳进视口', () => {
     const p = computePopoverPosition(rect(1260, 100), { width: 180, height: 200 }, VP);

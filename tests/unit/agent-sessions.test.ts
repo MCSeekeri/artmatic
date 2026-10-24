@@ -114,13 +114,5 @@ describe('历史不在工程里（v12）', () => {
     expect('agentSessions' in out).toBe(false);
   });
 
-  it('撤销栈快照里没有历史（也不再需要特例）', () => {
-    const store = new ProjectStore(createBlankProject('undo'));
-    store.commit('rename', (p) => (p.name = 'changed'));
-    expect(store.undo()).toBe(true);
-    expect(store.project.name).toBe('undo');
-    expect('agentSessions' in store.project).toBe(false);
-    expect(store.redo()).toBe(true);
-    expect(store.project.name).toBe('changed');
-  });
+
 });

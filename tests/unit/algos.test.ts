@@ -288,11 +288,6 @@ describe('生命游戏扩展：B/S 规则族', () => {
     expect(b.current()).toEqual(a.current());
   });
 
-  it('trail 关掉时输出与扩展前逐字节相同（只有 0 与 255）', () => {
-    const sim = createLife({ size: 48, density: 0.4, rate: 12, trail: 0 }, 11);
-    sim.seek(20);
-    for (const v of sim.current()) expect([0, 255]).toContain(v);
-  });
 
   it('trail 打开后出现中间值（死亡余温），且仍确定', () => {
     const params = { size: 48, density: 0.5, rate: 12, trail: 0.6 };

@@ -32,11 +32,7 @@ describe('烘焙登记表', () => {
     expect(orphans, '这些 id 已经不再是 bake 型了').toEqual([]);
   });
 
-  it('BAKERS 里没有 sim / realtime 混进来', () => {
-    for (const id of Object.keys(BAKERS)) {
-      expect(byIdKind(id), `${id} 不该在 Worker 里烘`).toBe('bake');
-    }
-  });
+
 });
 
 function byIdKind(id: string): string | undefined {

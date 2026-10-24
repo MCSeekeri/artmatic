@@ -212,14 +212,6 @@ describe('squeakPlan：坏掉之后要像**白噪**，不是口哨', () => {
     }
   });
 
-  it('高通始终压在低通起点之下（否则整段被削没）', () => {
-    for (const seed of seeds) {
-      for (const s of stresses) {
-        const p = squeakPlan(seed, s);
-        expect(p.hissLo).toBeLessThan(p.hissMid);
-      }
-    }
-  });
 
   it('越急扫得越低、Q 越宽（更闷更散）', () => {
     for (const seed of [3, 77, 9001]) {

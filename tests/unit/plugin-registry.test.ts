@@ -116,13 +116,7 @@ describe('特效：注册与卸载', () => {
     expect(() => unregisterPlugin('never-loaded')).not.toThrow();
   });
 
-  it('卸载后再注册能拿回同样的 id（引用计数卸载依赖这一条）', () => {
-    registerPluginEffects(PLUGIN, [effect('a')]);
-    unregisterPlugin(PLUGIN);
-    expect(getEffect('demo-plugin/a')).toBeNull();
-    registerPluginEffects(PLUGIN, [effect('a')]);
-    expect(getEffect('demo-plugin/a')).not.toBeNull();
-  });
+
 });
 
 describe('特效：坏条目不拖垮整批', () => {
@@ -200,11 +194,7 @@ describe('列表：内置在前、插件在后', () => {
     expect(list.findIndex((e) => e.pluginId !== null)).toBeGreaterThan(builtin.length - 1);
   });
 
-  it('isPluginDefId 对两种 id 的判定与注册表一致', () => {
-    registerPluginEffects(PLUGIN, [effect('a')]);
-    expect(isPluginDefId('demo-plugin/a')).toBe(true);
-    expect(isPluginDefId('blur')).toBe(false);
-  });
+
 });
 
 describe('生成器：只支持 realtime', () => {

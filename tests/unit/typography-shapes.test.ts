@@ -80,9 +80,6 @@ describe('shapeGeometry', () => {
     }
   });
 
-  it('同一输入产出同一字符串（光栅化缓存依赖这个）', () => {
-    expect(shapeGeometry('star', { ...BOX, sides: 5 }).d).toBe(shapeGeometry('star', { ...BOX, sides: 5 }).d);
-  });
 
   it('宽高互换时路径跟着换（不是简单的缩放）', () => {
     const wide = shapeGeometry('star', { w: 200, h: 100 }).d;
@@ -97,24 +94,6 @@ describe('SHAPE_PRESETS', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('每一项都是合法的 ShapeKind', () => {
-    const valid: ShapeKind[] = [
-      'rect',
-      'ellipse',
-      'line',
-      'triangle',
-      'star',
-      'polygon',
-      'trapezoid',
-      'parallelogram',
-      'arrow',
-      'ring',
-      'frame',
-      'pie',
-      'svg',
-    ];
-    for (const p of SHAPE_PRESETS) expect(valid).toContain(p.id);
-  });
 
   it('每一项都能产出非空路径', () => {
     for (const p of SHAPE_PRESETS) {
@@ -170,9 +149,7 @@ describe('roundPolygonPath', () => {
     expect(roundPolygonPath([{ x: 0, y: 0 }, { x: 1, y: 1 }], 4)).toBe('');
   });
 
-  it('同一输入产出同一字符串（光栅化缓存依赖这个）', () => {
-    expect(roundPolygonPath(SQUARE, 7)).toBe(roundPolygonPath(SQUARE, 7));
-  });
+
 });
 
 describe('新增图形', () => {

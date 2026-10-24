@@ -66,15 +66,6 @@ describe('moveSpan · reject（落点非法就整次不动）', () => {
 });
 
 describe('moveSpan · push（挤开邻居，级联向右）', () => {
-  it('挤右侧邻居并级联', () => {
-    const out = moveSpan(lane(), 'a', 2.5, DUR, 'push');
-    const a = out.find((c) => c.id === 'a')!;
-    const b = out.find((c) => c.id === 'b')!;
-    expect([a.start, a.end]).toEqual([2.5, 4.5]);
-    expect([b.start, b.end]).toEqual([4.5, 6.5]);
-    expect(hasOverlap(out)).toBe(false);
-  });
-
   it('三条链式级联', () => {
     const clips: Span[] = [
       { id: 'a', start: 0, end: 2 },

@@ -317,8 +317,5 @@ describe('multiToPath', () => {
     expect(d.match(/Z/g)!.length).toBe(2);
   });
 
-  it('同一输入产出同一字符串（光栅化缓存的稳定性依赖它）', () => {
-    const mp = booleanOp('union', [rect(0, 0, 100, 100), rect(50, 50, 100, 100)]);
-    expect(multiToPath(mp)).toBe(multiToPath(mp));
-  });
+
 });

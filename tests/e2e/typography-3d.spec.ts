@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 
 /**
  * 排版元素的 3D 变换（元素属性面板 → CSS transform）。
@@ -50,24 +50,6 @@ const SQUARE_DOC = {
   ],
   fonts: [],
 };
-
-async function addTextClip(page: Page): Promise<string> {
-  const ids = (): Promise<string[]> =>
-    page.evaluate(() => {
-      const A = (window as never as { __artmatic: Hooks }).__artmatic;
-      const out: string[] = [];
-      for (const t of A.store.project.tracks) {
-        for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
-      }
-      return out;
-    });
-  const before = await ids();
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const added = (await ids()).filter((id) => !before.includes(id));
-  expect(added, '「+ 排版片段」没有新增片段').toHaveLength(1);
-  return added[0]!;
-}
 
 async function openEditor(page: Page, clipId: string): Promise<void> {
   await page.locator(`[data-testid=clip][data-clip-id="${clipId}"]`).dblclick();

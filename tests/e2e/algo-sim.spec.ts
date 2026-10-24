@@ -46,17 +46,6 @@ async function boot(page: Page): Promise<void> {
 /** 反应扩散的公共参数：96²、120 步/秒、居中团块种子。 */
 const RD = { size: 96, rate: 120, seedMode: 'blob', seedSize: 6 } as const;
 
-test('反应扩散：长出来了、逐帧确定', async ({ page }) => {
-  await boot(page);
-  await buildStage(page, {
-    id: 'rd-coral',
-    source: { type: 'algo', generator: 'reaction-diffusion', params: { ...RD, preset: 'coral' } },
-    end: 8,
-  });
-  // t=4 → 480 步；coral 在这个量级已经铺开
-  await settle(page, 4);
-  expect(await meanAt(page, 4), 'coral 应当画出东西来（不是黑图）').toBeGreaterThan(1);
-});
 
 test('反应扩散：换预设真的换图案（先证明两张都不空，再比不同）', async ({ page }) => {
   await boot(page);

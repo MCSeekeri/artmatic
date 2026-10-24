@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 
 /**
  * 排版片段「画幅 / 大小」的 E2E 守卫（画布尺寸弹层）。
@@ -34,23 +34,6 @@ async function boot(page: Page): Promise<void> {
   await openDemo(page);
 }
 
-/** 新建一个排版片段并双击进编辑器（与 ui-ux 的手势一致：双击 = 打开编辑器）。 */
-async function addTextClip(page: Page): Promise<string> {
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const id = await page.evaluate(() => {
-    const A = (window as never as { __artmatic: TextClipApi }).__artmatic;
-    for (const t of A.store.project.tracks) {
-      for (const c of t.clips) if (c.source?.type === 'text') return c.id;
-    }
-    return '';
-  });
-  expect(id, '应当新建出一个排版片段').not.toBe('');
-  await page.locator(`[data-testid=clip][data-clip-id="${id}"]`).dblclick();
-  await expect(page.getByTestId('typo-editor')).toBeVisible();
-  return id;
-}
-
 function readDoc(page: Page, clipId: string) {
   return page.evaluate((id) => {
     const A = (window as never as { __artmatic: TextClipApi }).__artmatic;
@@ -69,6 +52,12 @@ function readDoc(page: Page, clipId: string) {
  * 这两步一起测，是因为「按钮在哪」本身是产品决定的一部分：它从画布下方的
  * 缩放条搬到了 Ribbon（缩放条上的读数已经删掉，见用例 1 的第一条断言）。
  */
+/** 双击进编辑器：画布尺寸只能从编辑器里的「设计」页打开。 */
+async function openEditor(page: Page, clipId: string): Promise<void> {
+  await page.locator(`[data-testid=clip][data-clip-id="${clipId}"]`).dblclick();
+  await expect(page.getByTestId('typo-editor')).toBeVisible();
+}
+
 async function openCanvasPanel(page: Page): Promise<void> {
   await page.getByTestId('ribbon-tab-design').click();
   await page.getByTestId('ribbon-canvas-size').click();
@@ -78,6 +67,7 @@ async function openCanvasPanel(page: Page): Promise<void> {
 test('画幅预设：1:1 → 文档尺寸 1080×1080，读数与占位同步', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
 
   // 缩放条上不再有尺寸读数（它现在住在「设计 → 画布大小」里）。
   await expect(page.getByTestId('typo-canvas-size')).toHaveCount(0);
@@ -106,7 +96,7 @@ test('画幅预设：1:1 → 文档尺寸 1080×1080，读数与占位同步', a
 
 test('「画布大小」是开合：再点一次关掉', async ({ page }) => {
   await boot(page);
-  await addTextClip(page);
+  await openEditor(page, await addTextClip(page));
 
   await openCanvasPanel(page);
   /*
@@ -120,6 +110,7 @@ test('「画布大小」是开合：再点一次关掉', async ({ page }) => {
 test('上屏大小：缩放 50% 写进 transform.sx/sy，占位读数减半', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
 
   await openCanvasPanel(page);
   await page.getByTestId('typo-canvas-scale-num').fill('50');
@@ -137,6 +128,7 @@ test('上屏大小：缩放 50% 写进 transform.sx/sy，占位读数减半', as
 test('缩放内容：开着按比例重排，关掉则元素留在原像素位置', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
 
   const before = (await readDoc(page, clipId))!.source!.doc!.elements[0]!.frame;
 

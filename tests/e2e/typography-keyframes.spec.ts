@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 
 /**
  * 关键帧面板（预览下方，与预览同宽）。
@@ -44,24 +44,6 @@ interface AnimShape {
 
 interface DocShape {
   elements: { id: string; animations: AnimShape[] }[];
-}
-
-async function addTextClip(page: Page): Promise<string> {
-  const ids = (): Promise<string[]> =>
-    page.evaluate(() => {
-      const A = (window as never as { __artmatic: Hooks }).__artmatic;
-      const out: string[] = [];
-      for (const t of A.store.project.tracks) {
-        for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
-      }
-      return out;
-    });
-  const before = await ids();
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const added = (await ids()).filter((id) => !before.includes(id));
-  expect(added, '「+ 排版片段」没有新增片段').toHaveLength(1);
-  return added[0]!;
 }
 
 async function openEditor(page: Page, clipId: string): Promise<void> {
@@ -140,13 +122,19 @@ test('面板在预览下方、与预览同宽；只读的「动画」选项卡�
   await page.mouse.wheel(0, 200);
   await expect.poll(() => lanes.evaluate((el) => el.scrollLeft)).toBeGreaterThan(sl0);
 
-  // 滚到中段：属性列必须整列盖住（播放头不许从它下面露出来）。
-  await lanes.evaluate((el) => {
-    el.scrollLeft = Math.round((el.scrollWidth - el.clientWidth) * 0.6);
-  });
-  await page.getByTestId('typo-kf-panel').screenshot({
-    path: '.codebuddy/tmp/2026-10-24/kf-zoom.png',
-  });
+  /*
+   * 滚到中段后，播放头 `left` 会变成负值 —— 它落在属性列底下。
+   *
+   * 让它「不露出来」的不是层叠（`.vscroll` 在 DOM 里排在 `.props` 之后，
+   * 真要叠起来是播放头在上面），而是 `.vscroll` 的 overflow 裁剪。
+   * 所以这里断的是裁剪本身：改成 `visible` 就会看到播放头从属性列上盖过去。
+   * 原来的写法是截一张图、没有断言 —— 那种「只截图」的探针永远绿。
+   */
+  const overflowX = await page
+    .getByTestId('typo-kf-lanes')
+    .evaluate((el) => getComputedStyle(el).overflowX);
+  // `auto` / `hidden` / `scroll` 都会裁剪；只有 `visible` 会把播放头漏出来。
+  expect(overflowX, '改成 visible 后播放头会盖到属性列上').not.toBe('visible');
 });
 
 test('加属性 = 一条轨道两根帧；双击轨道补帧；三样都进文档', async ({ page }) => {
@@ -190,9 +178,6 @@ test('加属性 = 一条轨道两根帧；双击轨道补帧；三样都进文�
 
   doc = await readDoc(page);
   expect(doc.elements[0]!.animations[0]!.keys).toHaveLength(3);
-
-  await page.screenshot({ path: '.codebuddy/tmp/2026-10-24/kf-panel.png' });
-  await page.getByTestId('typo-kf-panel').screenshot({ path: '.codebuddy/tmp/2026-10-24/kf-panel-crop.png' });
 });
 
 test('关键帧自由拖曳（Shift 才吸附）；框选多帧；一笔撤销；改值', async ({ page }) => {
@@ -290,7 +275,6 @@ test('选中关键帧弹浮层：值可改；curve / steps 都写进样式表（
   await page.getByTestId('typo-kf-step-n').press('Enter');
   expect(await sheet()).toContain('steps(6,end)');
 
-  await page.screenshot({ path: '.codebuddy/tmp/2026-10-24/kf-ease.png' });
   await page.getByTestId('typo-kf-pop').press('Escape');
   await expect(page.getByTestId('typo-kf-pop')).toHaveCount(0);
 });

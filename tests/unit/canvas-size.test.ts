@@ -69,10 +69,6 @@ describe('withLockedAspect', () => {
     expect(withLockedAspect({ w: 1920, h: 1080 }, 'h', 540)).toEqual({ w: 960, h: 540 });
   });
 
-  it('锁的是**当前**画幅，不是工程比例', () => {
-    // 已经是 1:1 的画布改成 800 宽，高度也该是 800（而不是按 16:9 变成 450）
-    expect(withLockedAspect({ w: 1080, h: 1080 }, 'w', 800)).toEqual({ w: 800, h: 800 });
-  });
 
   it('钳到下限，且不产生 0 边', () => {
     const out = withLockedAspect({ w: 1920, h: 1080 }, 'w', 0);

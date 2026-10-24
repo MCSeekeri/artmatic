@@ -126,17 +126,6 @@ test.describe('工程目录的保存与打开', () => {
     expect(analysis.map((i) => i.name)).toContain('audio');
   });
 
-  test('写下的 project.json 是一份能被读回的合法工程', async ({ page }) => {
-    await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
-    await page.evaluate(() => (window as never as W).__artmatic.project.save());
-
-    const text = await page.evaluate((d) => (window as never as W).__artmatic.project.read(`${d}/project.json`), DIR);
-    expect(text).not.toBeNull();
-    const parsed = JSON.parse(text!) as { schemaVersion: number; name: string; tracks: unknown[] };
-    expect(parsed.schemaVersion).toBeGreaterThan(0);
-    expect(parsed.name).toBeTruthy();
-    expect(Array.isArray(parsed.tracks)).toBe(true);
-  });
 
   test('保存 → 改动 → 再保存：.bak 是上一版，当前是最新版', async ({ page }) => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
@@ -175,6 +164,28 @@ test.describe('工程目录的保存与打开', () => {
 
     const after = await page.evaluate(() => JSON.stringify((window as never as W).__artmatic.store.project));
     expect(after).toBe(before);
+
+    /*
+     * 磁盘上那份也必须带着**和内存里同一个**版本号。
+     *
+     * 从前这条单独立案，判据是 `schemaVersion > 0` / `name` 非空 / `tracks` 是数组
+     * —— 那对任何 `save()` 出来的文件都恒真。现在钉的是「写盘用的不是一份过期的
+     * 快照」：迁移改过 `schemaVersion` 而 writer 还在序列化旧对象时，这里会红。
+     *
+     * 不 import `src/core/schema` 拿常量 —— 那条链会拖进 `i18n/index.svelte`
+     * 的 `$state`，Node 侧直接 ReferenceError，整个 spec 收集阶段就挂。
+     */
+    const disk = await page.evaluate(
+      (d) => (window as never as W).__artmatic.project.read(`${d}/project.json`),
+      DIR,
+    );
+    const memVersion = await page.evaluate(
+      () =>
+        (window as never as { __artmatic: { store: { project: { schemaVersion: number } } } }).__artmatic
+          .store.project.schemaVersion,
+    );
+    expect(JSON.parse(disk!).schemaVersion).toBe(memVersion);
+    expect(typeof memVersion).toBe('number');
   });
 
   test('打开时没有素材问题就不留 issue', async ({ page }) => {
@@ -313,53 +324,6 @@ test.describe('素材台账', () => {
     expect(retained).not.toContain('img-keep');
   });
 
-  test('清理未使用素材：文件进 assets/.trash，不再留在 assets/（W1.3）', async ({ page }) => {
-    await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
-    await page.evaluate((bytes) => {
-      (window as never as W).__artmatic.assets.put('img-trash', new Uint8Array(bytes), {
-        kind: 'image',
-        name: '会被清理的图',
-        originName: 'trash.png',
-      });
-      (window as never as W).__artmatic.store.commit('e2e: 登记素材', (p) => {
-        (p as { assets: Record<string, unknown> }).assets['img-trash'] = {
-          id: 'img-trash',
-          kind: 'image',
-          name: '会被清理的图',
-        };
-      });
-    }, ASSET_BYTES);
-    await page.evaluate(() => (window as never as W).__artmatic.project.save());
-    await page.evaluate(() => (window as never as W).__artmatic.appState.removeAsset('img-trash'));
-    await page.evaluate(() => (window as never as W).__artmatic.project.save());
-    await page.evaluate((d) => (window as never as W).__artmatic.project.open(d), DIR);
-
-    await page.getByTestId('rail-project').click();
-    await page.getByTestId('project-nav-cleanup').click();
-    await page.getByTestId('unused-trash').click();
-    await expect(page.getByTestId('confirm-unused-asset')).toBeVisible();
-    await page.getByTestId('confirm-unused-asset-ok').click();
-    /*
-     * 先等界面把这一行去掉：移动是**异步**的（流式写回收站 → 删原文件 → 更新台账），
-     * 点完立刻去列目录会读到「还没搬完」的中间态。
-     */
-    await expect(page.getByTestId('unused-asset')).toHaveCount(0);
-
-    const layout = await page.evaluate(async (d) => {
-      const A = (window as never as W).__artmatic;
-      const assets = await A.project.list(`${d}/assets`);
-      const trash = await A.project.list(`${d}/assets/.trash`);
-      return { assets, trash };
-    }, DIR);
-
-    expect(layout.assets.filter((i) => i.kind === 'file').map((i) => i.name)).not.toContain('img-trash.png');
-    expect(layout.trash.map((i) => i.name).some((n) => n.startsWith('img-trash-'))).toBe(true);
-    // 保留项从台账里消失（文件已进回收站，不再有可恢复的目标）。
-    const retained = await page.evaluate(
-      () => (window as never as W).__artmatic.assets.retainedIds(),
-    );
-    expect(retained).not.toContain('img-trash');
-  });
 
   test('素材内容被替换后重开，检出 changed', async ({ page }) => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);

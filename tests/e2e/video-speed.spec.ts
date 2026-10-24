@@ -49,7 +49,13 @@ async function cleanStage(page: Page): Promise<string> {
   });
 }
 
-/** 等启用轨上出现片段。 */
+/**
+ * 等启用轨上出现片段。
+ *
+ * ⚠️ **这里不许再调 `openDemo`。** 曾经有这么一行，语义是「导入把工程弄没了
+ * 就把 demo 重新打开」——它会把「导入后工程被关掉」这种真回归掩盖成绿，
+ * 因为欢迎界面又出现了、条件又满足了。现在如果工程真的没了，这里会超时。
+ */
 async function waitForClip(page: Page, timeout = 60_000): Promise<void> {
   await page.waitForFunction(
     () => {
@@ -61,7 +67,6 @@ async function waitForClip(page: Page, timeout = 60_000): Promise<void> {
     undefined,
     { timeout },
   );
-  await openDemo(page);
 }
 
 /** 上半的平均色满足 `want` 时返回 true（下半必须是蓝，方向判据与 m6 一致）。 */

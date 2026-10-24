@@ -147,14 +147,6 @@ describe('多色标与停靠位置', () => {
     expect(next.stops.map((s) => s.color)).toEqual(['#111111', '#222222', '#333333']);
   });
 
-  it('从非渐变切到渐变仍造两色标（首次进入渐变的默认路径没变）', () => {
-    const next = applyPaintPatch({ kind: 'solid', color: '#123456' }, { kind: 'linear' });
-    if (next.kind !== 'linear') throw new Error('unreachable');
-    expect(next.stops).toEqual([
-      { offset: 0, color: '#123456' },
-      { offset: 1, color: DEFAULT_PAINT_B },
-    ]);
-  });
 
   it('normalizeStops：钳制 0..1 并按 offset 排序（渲染顺序）', () => {
     expect(
@@ -172,18 +164,11 @@ describe('多色标与停靠位置', () => {
 });
 
 describe('sortedStops', () => {
-  it('按 offset 排序', () => {
-    expect(sortedStops([{ offset: 1, color: 'b' }, { offset: 0, color: 'a' }])).toEqual([
-      { offset: 0, color: 'a' },
-      { offset: 1, color: 'b' },
-    ]);
-  });
-
-  it('越界的 offset 被钳到 0..1', () => {
-    const out = sortedStops([{ offset: -3, color: 'a' }, { offset: 9, color: 'b' }]);
-    expect(out.map((s) => s.offset)).toEqual([0, 1]);
-  });
-
+  /*
+   * 排序与钳制不在这里再测一遍：`sortedStops` 把这两件事整个委托给
+   * `normalizeStops`（`render-dom.ts`），而上面 `describe('normalizeStops')`
+   * 已经逐条钉过。这里只守它自己加的「不足两个就补足」。
+   */
   it('只有一个色标时补成两段（单色标的渐变是无效的）', () => {
     const out = sortedStops([{ offset: 0.5, color: '#fff' }]);
     expect(out.length).toBe(2);

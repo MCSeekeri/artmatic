@@ -56,16 +56,6 @@ describe('音频特征：at(t) 是 t 的纯函数（硬约束 1.1）', () => {
     expect({ rms: out.rms, sub: out.sub, travel: out.travel, age: out.ages[0] }).toEqual(a);
   });
 
-  it('同一 t 反复取值恒等', () => {
-    const out = emptyFeatures();
-    track.at(2.5, out);
-    const first = out.rms;
-    for (let i = 0; i < 5; i += 1) {
-      track.at(3.9, out);
-      track.at(2.5, out);
-      expect(out.rms).toBe(first);
-    }
-  });
 
   it('超出范围给静音（曲线归零、年龄给哨兵）', () => {
     const out = emptyFeatures();

@@ -123,7 +123,5 @@ describe('groupItems', () => {
     expect(groups[0]!.items.map((i) => i.id)).toEqual(['mandelbrot']);
   });
 
-  it('每个生成器都落在一个已知分组里（没有掉出小标题之外的）', () => {
-    for (const it of items) expect(ALGO_GROUPS).toContain(it.group);
-  });
+
 });

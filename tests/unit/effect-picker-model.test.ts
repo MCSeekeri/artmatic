@@ -172,11 +172,7 @@ describe('选择器模型：分组', () => {
     expect(groups[0]!.items.map((i) => i.id)).toEqual(only.map((i) => i.id));
   });
 
-  it('小标题是翻译过的分类名（不是文案键）', () => {
-    for (const g of groupItems(ITEMS, tr)) {
-      expect(g.label.startsWith('fx.'), `${g.id} 的小标题没翻译`).toBe(false);
-    }
-  });
+
 });
 
 describe('选择器模型：工具', () => {

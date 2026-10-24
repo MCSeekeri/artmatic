@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo, buildStage, hashAt, meanAt, renderTwiceDiff, waitForSourceReady } from './_stage';
+import { openDemo, buildStage, hashAt, meanAt, renderTwiceStats, waitForSourceReady } from './_stage';
 
 async function boot(page: Page): Promise<void> {
   await page.goto('/');
@@ -33,8 +33,17 @@ test('Rule 110 上轨：非黑、逐像素确定、生长前沿随 t 推进', as
   const mean6 = await meanAt(page, 6);
   expect(mean6).toBeGreaterThan(20);
 
-  // 确定性：同一历史状态下同一 t 必须同帧
-  expect(await renderTwiceDiff(page, 6, true)).toBe(0);
+  /*
+   * 确定性：同一历史状态下同一 t 必须同帧。
+   *
+   * 判据取**比例**而不是 `diff === 0`：rule110 默认 1024×512 → 预览正是
+   * 「非整数倍缩放采样」那一类，逐字节相等做不到（`_stage.ts::renderTwiceStats`
+   * 与 `AGENTS.md` §1.3 都记了这条）；`algo-pattern.spec` 对同一生成器用的也是 1%。
+   * 写 `=== 0` 时这条只是碰巧绿，换台机器就会偶发红。
+   */
+  const twice = await renderTwiceStats(page, 6, true);
+  expect(twice.total, '两次读回的字节数为 0 —— 判据没有分母，下面那条是空转').toBeGreaterThan(0);
+  expect(twice.bytes / twice.total).toBeLessThan(0.01);
 
   // 生长前沿：t=1（front 小）与 t=7（front 大）的亮度差
   const early = await meanAt(page, 1);
@@ -98,6 +107,8 @@ test('Mandelbrot：zoom 关键帧曲线改变画面且逐帧确定', async ({ pa
   // zoom 曲线确实改变了画面
   expect(await hashAt(page, 0)).not.toBe(await hashAt(page, 3));
 
-  // 确定性：同一历史状态下同一 t 必须同帧
-  expect(await renderTwiceDiff(page, 1.5, true)).toBe(0);
+  // 确定性：同一历史状态下同一 t 必须同帧（判据同上：比例，不是逐字节 0）
+  const twiceZoom = await renderTwiceStats(page, 1.5, true);
+  expect(twiceZoom.total).toBeGreaterThan(0);
+  expect(twiceZoom.bytes / twiceZoom.total).toBeLessThan(0.01);
 });

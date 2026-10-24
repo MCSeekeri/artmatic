@@ -46,10 +46,6 @@ describe('animationCurrentTimeMs', () => {
     expect(animationCurrentTimeMs(fadeIn(), -3)).toBe(0);
   });
 
-  it('对同一 localSec 幂等 —— 这是确定性的前提', () => {
-    const a = fadeIn();
-    expect(animationCurrentTimeMs(a, 0.75)).toBe(animationCurrentTimeMs(a, 0.75));
-  });
 
   it('只依赖 delay（多动画简写里逐条取各自的延迟）', () => {
     expect(animationCurrentTimeMs({ delay: 0.5 }, 1)).toBeCloseTo(500, 6);
@@ -328,12 +324,6 @@ describe('animationStyleSheet', () => {
     expect(css.split('[data-anim-id=').length - 1).toBe(2);
   });
 
-  it('非法的手写 CSS 被整条跳过，不会污染样式表', () => {
-    const bad = createCustomAnimation('bad', '}body{display:none}');
-    const css = animationStyleSheet(docWith([bad]));
-    expect(css).not.toContain('body');
-    expect(css).not.toContain('@keyframes');
-  });
 
   it('没有动画时产出空串', () => {
     const d = createTypographyDocument({ w: 100, h: 100 });

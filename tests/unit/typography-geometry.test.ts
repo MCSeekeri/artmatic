@@ -98,13 +98,7 @@ describe('snapMove', () => {
     expect(snapMove([], 10, 10, [], CANVAS, 6).frames.size).toBe(0);
   });
 
-  it('对同一输入幂等（确定性）', () => {
-    const moving = [rect('a', 0, 0, 100, 100)];
-    const r1 = snapMove(moving, 498, 12, [], CANVAS, 6);
-    const r2 = snapMove(moving, 498, 12, [], CANVAS, 6);
-    expect([...r1.frames.values()]).toEqual([...r2.frames.values()]);
-    expect(r1.guides).toEqual(r2.guides);
-  });
+
 });
 
 describe('alignElements', () => {
@@ -227,11 +221,7 @@ describe('scaleFrames', () => {
     expect(scaleFrames([rect('z', 0, 0, 0, 0)], 'se', 10, 10, noMods).get('z')).toEqual(rect('z', 0, 0, 0, 0));
   });
 
-  it('同一输入幂等', () => {
-    const a = scaleFrames(orig, 'se', 33, 17, noMods).get('a')!;
-    const b = scaleFrames(orig, 'se', 33, 17, noMods).get('a')!;
-    expect(a).toEqual(b);
-  });
+
 });
 
 describe('rotateFrames', () => {

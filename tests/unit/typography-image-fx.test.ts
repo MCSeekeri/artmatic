@@ -116,9 +116,6 @@ describe('imageNeedsFx', () => {
 describe('fxKey', () => {
   const url = 'blob:probe';
 
-  it('同样的输入 → 同样的键（缓存能命中）', () => {
-    expect(fxKey(img(), url)).toBe(fxKey(img(), url));
-  });
 
   it('每个影响像素的输入都会换键', () => {
     const base = fxKey(img(), url);

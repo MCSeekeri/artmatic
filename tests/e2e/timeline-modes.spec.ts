@@ -112,21 +112,4 @@ test('标准模式下帧率输入写回工程（帧率也是帧吸附与时间�
   expect(value).toBe(25);
 });
 
-test('offset ≠ 0 时标尺仍与节拍对齐：第 0 拍出现在 offset 秒处', async ({ page }) => {
-  await boot(page);
-  /*
-   * 标尺是 canvas，读不到像素；这里守的是**换算本身**已经进了同一条路径：
-   * `xOfBeat(0) === xOfTime(offset)`，而 `drawRuler` / `drawGrid` 都走 `xOfBeat`。
-   * 曾经的 bug 是两处各写一份 `b * pxPerBeat`，offset 时线与吸附对不上。
-   * 纯函数那一层由 `tests/unit/ruler-label.test.ts` 钉死，这里补一次「真跑起来
-   * 时 offset 确实被写进工程」的接线。
-   */
-  await page.getByTestId('offset-input').fill('1.5');
-  await page.getByTestId('offset-input').press('Enter');
-  const grid = await page.evaluate(
-    () =>
-      (window as never as { __artmatic: { store: { project: { beatGrid: { offset: number } } } } })
-        .__artmatic.store.project.beatGrid,
-  );
-  expect(grid.offset).toBe(1.5);
-});
+

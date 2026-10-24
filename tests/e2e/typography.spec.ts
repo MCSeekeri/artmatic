@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 
 /**
  * M4 排版：编辑器页宿主的生命周期与交互。
@@ -17,12 +17,20 @@ async function boot(page: Page): Promise<void> {
 interface Hooks {
   store: {
     project: {
+      assets: Record<string, { id: string; kind: string }>;
       tracks: {
         id: string;
-        clips: { id: string; start: number; end: number; source?: { type?: string; doc?: DocShape } }[];
+        clips: {
+          id: string;
+          start: number;
+          end: number;
+          source?: { type?: string; assetId?: string; doc?: DocShape };
+        }[];
       }[];
     };
+    undo: () => boolean;
   };
+  assets: { size: (id: string) => number | null };
   renderer: {
     renderFrame: (p: unknown, t: number) => void;
     readPixels: () => { data: Uint8Array; w: number; h: number };
@@ -94,16 +102,6 @@ async function textClipIds(page: Page): Promise<string[]> {
     }
     return out;
   });
-}
-
-/** 通过轨道 ⋯ 菜单新建一个排版片段，返回它的 id（= 差集里多出来的那一个）。 */
-async function addTextClip(page: Page): Promise<string> {
-  const before = await textClipIds(page);
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const added = (await textClipIds(page)).filter((id) => !before.includes(id));
-  expect(added, '「+ 排版片段」没有新增片段（落点可能被重叠策略挡了）').toHaveLength(1);
-  return added[0]!;
 }
 
 async function openEditor(page: Page, clipId: string): Promise<void> {
@@ -452,4 +450,73 @@ test('脚本页签：新增 / 删除脚本后列表立刻刷新', async ({ page 
   await expect(rows).toHaveCount(1);
   await page.getByTestId('typo-script-remove').first().click();
   await expect(rows).toHaveCount(0);
+});
+
+/**
+ * 「转为图片」：整段排版权 → 一张 image 素材，`clip.source` 从 text 换成 image。
+ *
+ * 这是**唯一**覆盖这条链的用例。删掉 `m6.spec.ts` 里那条手工
+ * `registerImageAsset()` 的用例之后（它测的是 image 片段的渲染，不是这个入口），
+ * 没有第二个地方能发现「烘出来的图没登记」或「换源之后撤销坏了」。
+ */
+test('转为图片：源变 image、素材已登记、且是一笔撤销', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  await page.getByTestId('ribbon-tab-anim').click();
+  await page.getByTestId('typo-flatten').click();
+
+  // 源已经不是 text，编辑页必须自己关掉（留着会指向不存在的文档）。
+  await expect(page.getByTestId('typo-editor')).toHaveCount(0);
+
+  const after = await page.evaluate((id) => {
+    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) {
+        if (c.id !== id) continue;
+        const assetId = c.source?.assetId ?? null;
+        return {
+          type: c.source?.type ?? null,
+          assetId,
+          registered: assetId ? (A.store.project.assets[assetId]?.kind ?? null) : null,
+          bytes: assetId ? A.assets.size(assetId) : 0,
+        };
+      }
+    }
+    return null;
+  }, clipId);
+
+  expect(after, '片段在工程里找不到了').not.toBeNull();
+  expect(after!.type).toBe('image');
+  expect(after!.registered, '素材没登记 → 重开工程后这张图丢失').toBe('image');
+  // 空图 / toBlob 失败时的极小数：1920×1080 的文字图不可能低于这个量级。
+  expect(after!.bytes ?? 0, '烘出来的 PNG 小到不像有内容（空图也会「成功」）').toBeGreaterThan(2000);
+
+  /*
+   * **一笔撤销必须同时回退「换源」与「登记」**。
+   *
+   * 这两笔曾经是两个独立 commit：栈顶是登记，第一下 Ctrl+Z 只把 `assets[assetId]`
+   * 撤掉，而片段已经指向它 —— 画面当场变离线占位符，再撤一次才回到文字。
+   * 所以下面两条断言必须同时成立，只断 source 的话，那个缺陷会以
+   * 「撤销一次后图没了」的形式漏过去。
+   */
+  const undone = await page.evaluate((id) => {
+    const A = (window as never as { __artmatic: Hooks }).__artmatic;
+    A.store.undo();
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) {
+        if (c.id !== id) continue;
+        const assetId = c.source?.assetId ?? null;
+        return {
+          type: c.source?.type ?? null,
+          stillRegistered: assetId ? Boolean(A.store.project.assets[assetId]) : null,
+        };
+      }
+    }
+    return null;
+  }, clipId);
+
+  expect(undone!.type, '撤销一次没回到文字 → 那次操作被拆成了多笔').toBe('text');
+  expect(undone!.stillRegistered, '撤销后素材登记还在 → 留下一条孤儿').not.toBe(true);
 });

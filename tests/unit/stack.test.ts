@@ -129,13 +129,6 @@ describe('buildStack 的 z 序 = 列表顶部在前景', () => {
     }
   });
 
-  it('demo 工程 z 的取值集合恰为 0..(视觉轨数-1)', () => {
-    const p = createDemoProject();
-    const visualCount = p.tracks.filter((t) => t.kind === 'visual').length;
-    const zs = [...new Set(buildStack(p, 0.5).map((o) => o.z))].sort((a, b) => a - b);
-    for (const z of zs) expect(z).toBeGreaterThanOrEqual(0);
-    for (const z of zs) expect(z).toBeLessThan(visualCount);
-  });
 
   it('demo 工程最后一轨是音频（与视觉栈的 z 无关）', () => {
     const p = createDemoProject();

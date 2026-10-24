@@ -412,13 +412,34 @@ function stripCommentsAndImports(src: string): string {
  * ⚠️ **必须对整份源码跑，不能逐行。** 跨行的模板字符串
  * （`throw new Error(`foo` + `bar`)` 换行写的那种）逐行扫会整条漏掉 ——
  * 这是实测踩过的：改之前有 570 条，逐行扫只找到 566 条。
+ *
+ * ⚠️ **不能用 `/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g` 这种带反向引用的写法。**
+ * 语义上它是对的，但在 V8 上对 577 个文件跑一遍要 **13.3 s**（同样的正则
+ * 在 bun/JSC 上 333 ms）—— `(?!\1)` 在这个量词里触发回溯，成本随文件大小超线性。
+ * 后果是这条守卫撞 vitest 默认 `testTimeout: 20000` 超时，看起来像「查出了违规」。
+ * 手写单遍扫描是 O(n)、零回溯，且语义与那条正则逐字等价：
+ * 从左往右，未转义的同类引号就是结尾。
  */
 function literalsWithCjk(file: string): string[] {
-  const re = /(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  const s = stripCommentsAndImports(readFileSync(file, 'utf8'));
   const out: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(stripCommentsAndImports(readFileSync(file, 'utf8'))))) {
-    if (CJK.test(m[2]!) && m[2]!.length >= 2) out.push(m[2]!);
+  for (let i = 0; i < s.length; i++) {
+    const quote = s[i];
+    if (quote !== "'" && quote !== '"' && quote !== '`') continue;
+    let j = i + 1;
+    while (j < s.length) {
+      if (s[j] === '\\') {
+        j += 2;
+        continue;
+      }
+      if (s[j] === quote) break;
+      j += 1;
+    }
+    // 未闭合（到文件尾都没有同类引号）时不当作字面量 —— 正则版本也匹配不到。
+    if (j >= s.length) break;
+    const body = s.slice(i + 1, j);
+    if (CJK.test(body) && body.length >= 2) out.push(body);
+    i = j;
   }
   return out;
 }

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 
 /**
  * M4 排版：右侧「元素属性」面板 + 填充的多色标 / 停靠位置 + 文本框背景。
@@ -43,24 +43,6 @@ interface DocShape {
 interface Hooks {
   store: { project: { tracks: { clips: { id: string; source?: { type?: string; doc?: DocShape } }[] }[] } };
   appState: { activeTypoClipId: string | null };
-}
-
-async function addTextClip(page: Page): Promise<string> {
-  const ids = (): Promise<string[]> =>
-    page.evaluate(() => {
-      const A = (window as never as { __artmatic: Hooks }).__artmatic;
-      const out: string[] = [];
-      for (const t of A.store.project.tracks) {
-        for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
-      }
-      return out;
-    });
-  const before = await ids();
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const added = (await ids()).filter((id) => !before.includes(id));
-  expect(added, '「+ 排版片段」没有新增片段').toHaveLength(1);
-  return added[0]!;
 }
 
 async function openEditor(page: Page, clipId: string): Promise<void> {

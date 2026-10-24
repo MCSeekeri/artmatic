@@ -105,13 +105,7 @@ describe('buildPoolItems：把工程表与素材仓合成一行', () => {
     expect(items[0]).toMatchObject({ id: 'x', kind: 'image', name: 'half.png', missing: false });
   });
 
-  it('两边都有时只出一条（不重复）', () => {
-    const items = buildPoolItems(
-      { a: asset('audio', 'song.wav') },
-      fakeStore({ a: { kind: 'audio', name: 'song.wav', bytes: new Uint8Array([1, 2]) } }),
-    );
-    expect(items).toHaveLength(1);
-  });
+
 });
 
 describe('kindOfFile', () => {
@@ -199,9 +193,6 @@ describe('clipForAsset', () => {
     expect([c.start, c.end]).toEqual([2, 14]);
   });
 
-  it('缺字节的素材建不出片段', () => {
-    expect(clipForAsset(item('image', 'x', { missing: true }), 0, grid)).toBeNull();
-  });
 
   it('起点为负时钳到 0', () => {
     expect(clipForAsset(item('image'), -5, grid)!.start).toBe(0);

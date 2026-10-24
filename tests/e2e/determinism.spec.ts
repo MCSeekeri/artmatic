@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openDemo, SETTLE_FRAMES } from './_stage';
+import { openDemo, SETTLE_FRAMES, waitForSourceReady } from './_stage';
 
 /**
  * 确定性测试——本项目最有价值的一类测试（AGENTS.md §6.1 / §6.2）。
@@ -10,9 +10,14 @@ test('同一工程同一 t，连续求值 100 次逐像素一致（M0 验收）'
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
   await openDemo(page);
-  // demo 含 bake 型生成器（Rule 110）：被动等烘焙落地，否则中途从「缺席」
-  // 切到「在场」会被误判成非确定（这不是非确定，是异步就绪）。
-  await page.waitForTimeout(2500);
+  /*
+   * demo 含 bake 型生成器（Rule 110）：**等它真的落地**，否则中途从「缺席」
+   * 切到「在场」会被误判成非确定（这不是非确定，是异步就绪）。
+   *
+   * 这里原来睡固定 2500ms —— 那正是 `_stage.ts::waitForSourceReady` 要替换的写法：
+   * 负载高时睡不够、空闲时白等。
+   */
+  await waitForSourceReady(page, 0.5);
 
   const result = await page.evaluate((settleFrames: number) => {
     const A = (window as never as {

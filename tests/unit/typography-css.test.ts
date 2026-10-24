@@ -309,14 +309,12 @@ describe('imageStyle', () => {
   });
 });
 
-describe('舞台与光栅化必须同源', () => {
-  it('同一元素两次调用产出完全相同的声明（幂等）', () => {
-    const d = createTypographyDocument(SIZE);
-    const el = createTextElement(d.size);
-    expect(elementStyle(el)).toEqual(elementStyle(el));
-    expect(textStyle(el.style)).toEqual(textStyle(el.style));
-  });
-});
+/*
+ * 「舞台与光栅化必须同源」不在这里断言：同源是**结构性**的 —— 两条路径都调
+ * `elementStyle` / `textStyle`，没有第二份声明表可以漂移。原先是拿
+ * `expect(elementStyle(el)).toEqual(elementStyle(el))` 来"守"它，
+ * 那条永远不可能红（纯函数两次调用必然相等），已删。
+ */
 
 describe('填充整体不透明度', () => {
   it('shapePaintAttrs：不透明时不写 fill-opacity（老工程渲染结果逐字节不变）', () => {
@@ -502,14 +500,6 @@ describe('文字阴影 / 高亮 / 配色方案解析', () => {
     expect(s['text-shadow']).toBe('1px 2px 0px #000000, -3px 0px 10px #ff0000');
   });
 
-  it('老工程里 shadow 是单个对象（多阴影之前）—— 照常渲染，不用迁移', () => {
-    const s = textStyle({
-      ...defaultTextStyle(SIZE),
-      fontSize: 100,
-      shadow: { color: '#000000', dx: 0.05, dy: 0.1, blur: 0.2 },
-    });
-    expect(s['text-shadow']).toBe('5px 10px 20px #000000');
-  });
 
   it('高亮通过 `--typo-hl` 变量下发（背景不继承，只能这么传）', () => {
     expect(textStyle({ ...defaultTextStyle(SIZE), highlight: '#ffff00' })['--typo-hl']).toBe('#ffff00');

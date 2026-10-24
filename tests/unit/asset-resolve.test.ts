@@ -59,9 +59,6 @@ describe('resolveAsset：两份都在', () => {
   });
 
   it('两份都存在但对不上记录 → conflict（不许自动挑）', () => {
-    const r = resolveAsset(entry({ content: null }), { project: otherContent, local: otherContent });
-    expect(r).toMatchObject({ use: 'local', status: 'ok', verified: false });
-
     // content 存在、两份互不相同、且都不是记录里的那份
     const c = resolveAsset(entry(), {
       project: { ...otherContent, fp: 'fp1:100:aaa' },

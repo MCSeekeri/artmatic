@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openDemo } from './_stage';
+import { addTextClip, openDemo } from './_stage';
 
 /**
  * 「文字转路径」。
@@ -53,25 +53,6 @@ interface DocShape {
     pathUnit?: string;
     clipFrame?: boolean;
   }[];
-}
-
-/** 与 `typography-ribbon.spec.ts` 同一条路径：+ 排版片段 → 双击进编辑器。 */
-async function addTextClip(page: Page): Promise<string> {
-  const ids = (): Promise<string[]> =>
-    page.evaluate(() => {
-      const A = (window as never as { __artmatic: Hooks }).__artmatic;
-      const out: string[] = [];
-      for (const t of A.store.project.tracks) {
-        for (const c of t.clips) if (c.source?.type === 'text') out.push(c.id);
-      }
-      return out;
-    });
-  const before = await ids();
-  await page.locator('[data-testid=track-side-row]').nth(0).getByTestId('track-menu').click();
-  await page.getByTestId('add-text').click();
-  const added = (await ids()).filter((id) => !before.includes(id));
-  expect(added).toHaveLength(1);
-  return added[0]!;
 }
 
 async function openEditor(page: Page, clipId: string): Promise<void> {
