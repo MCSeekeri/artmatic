@@ -49,6 +49,7 @@
   import { reorder } from '../ui/drag-reorder';
   import { theme } from '../ui/theme.svelte';
   import { appState } from '../ui/app-state.svelte';
+  import { addToAgentContext, clipContextRefs } from '../ui/agent/context-bridge';
   import { openCurveEditor } from '../ui/curve-editor/curve-editor-state.svelte';
   import { registryRevision } from '../ui/registry-revision.svelte';
   import { statusHint } from '../ui/status-hint.svelte';
@@ -1004,7 +1005,28 @@
       });
     }
 
+    /*
+     * 「添加进上下文」：右键的片段若在选区里，钉的是**整个选区** —— 多选的
+     * 含义就是「这一组」，只钉一个会让用户以为漏了。取选区在 `onselect` 里做，
+     * 菜单开着的时候选择还可能变。
+     */
+    const inSelection = appState.selectedClipIds.includes(found.clip.id);
+    const selectedCount = inSelection ? appState.selectedClipIds.length : 1;
+
     return [
+      {
+        id: 'ctx-add-context',
+        label: selectedCount > 1 ? tr('agent.addToContextMany', { n: selectedCount }) : tr('agent.addToContext'),
+        icon: 'message-circle-plus',
+        testid: 'ctx-add-context',
+        onselect: () => {
+          const ids = appState.selectedClipIds.includes(found.clip.id)
+            ? appState.selectedClipIds
+            : [found.clip.id];
+          addToAgentContext(clipContextRefs(ids));
+        },
+      },
+      separator('ctx-context-sep'),
       {
         id: 'ctx-edit-curves',
         label: tr('curve.openMenu'),

@@ -47,6 +47,7 @@ import ClipboardPaste from '@lucide/svelte/icons/clipboard-paste';
 import Clock from '@lucide/svelte/icons/clock';
 import Combine from '@lucide/svelte/icons/combine';
 import Copy from '@lucide/svelte/icons/copy';
+import CornerDownRight from '@lucide/svelte/icons/corner-down-right';
 import Crop from '@lucide/svelte/icons/crop';
 import Diamond from '@lucide/svelte/icons/diamond';
 import Download from '@lucide/svelte/icons/download';
@@ -202,6 +203,7 @@ export const ICONS = {
   clock: Clock,
   combine: Combine,
   copy: Copy,
+  'corner-down-right': CornerDownRight,
   crop: Crop,
   diamond: Diamond,
   download: Download,

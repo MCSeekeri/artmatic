@@ -122,10 +122,49 @@ export interface WireMessage {
   providerMeta?: WireProviderMeta;
 }
 
+/**
+ * 服务端 usage。**各家口径不同，字段也不统一** —— 归一化在 `usage.ts`。
+ *
+ * 三种家族（2026-10 实测文档）：
+ *   DeepSeek         `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`（prompt_tokens = 两者之和）
+ *   OpenAI 兼容家族  `prompt_tokens_details.cached_tokens`（智谱 / Kimi / 阿里 / OpenRouter）；
+ *                    阿里部分模型（新加坡地域）把 `cached_tokens` 放在顶层
+ *   Anthropic        `cache_read_input_tokens` / `cache_creation_input_tokens`，
+ *                    且 `input_tokens` **不含**这两者
+ *
+ * 没上报缓存的实现这些字段一个都没有 —— 那时**不显示命中率**，而不是显示 0%。
+ */
 export interface LlmUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  /** DeepSeek：命中 / 未命中。 */
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+  /** OpenAI 兼容家族的嵌套口径（部分实现还带缓存写入数）。 */
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+  /** 少数实现（阿里部分模型 / 地域）把命中数放在顶层。 */
+  cached_tokens?: number;
+  /** Anthropic：不含缓存读写的输入、以及缓存读 / 写。 */
+  input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  output_tokens?: number;
+}
+
+/**
+ * 一条「插话」：模型正在干活时用户发来的内容。
+ *
+ * 它不进历史里的旧位置，而是在**下一次模型调用之前**追加成一条 user 消息 ——
+ * 见 `session.ts` 的 `drainInterjections`。
+ */
+export interface InterjectionInput {
+  text: string;
+  images?: { base64: string; mimeType: string }[];
 }
 
 export interface ToolCallResult {
@@ -180,6 +219,25 @@ export class LlmError extends Error {
 
 export type AgentStatus = 'idle' | 'thinking' | 'tool' | 'awaiting-approval' | 'awaiting-user' | 'error';
 
+/**
+ * 缓存账本：一轮里**所有请求**的输入 token 与命中 token 之和。
+ *
+ * 单次请求的命中率会误导人：工具循环里第一步几乎必然 0%（它是最长的前缀，
+ * 第一次见），后几步接近 100%。用户关心的是「这一轮我少付了多少」。
+ */
+export interface CacheStats {
+  /** 命中（按折扣价计费）的输入 token。 */
+  hit: number;
+  /** 未命中（按原价计费）的输入 token。 */
+  newTokens: number;
+  /** 输入 token 总数 = hit + newTokens。 */
+  total: number;
+  /** 缓存写入 token（Anthropic / Kimi 会单独计费）。 */
+  writes: number;
+  /** 命中率 0–1。 */
+  rate: number;
+}
+
 export interface ToolCallEvent {
   kind: 'tool';
   /** 工具调用 id（同一个 call 的 running / done 两条事件用它配对）。 */
@@ -206,7 +264,7 @@ export type SessionEvent =
   | { kind: 'context'; tokens: number; limit: number }
   | ToolCallEvent
   | { kind: 'error'; message: string; code?: string }
-  | { kind: 'turn-end'; writes: number; ms: number };
+  | { kind: 'turn-end'; writes: number; ms: number; cache?: CacheStats };
 
 /* ------------------------------------------------------------------ 工具结果 */
 

@@ -468,6 +468,18 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   消息区用 `bind:clientHeight` 量出来的真实高度留底部内边距。它内部有附图、
   模型 / 思考强度的二级菜单。消息列表里每个子项必须 `flex: 0 0 auto`
   （工具卡组件自己也钉了），否则 flex column 会把它们压扁、滚动条永不出现。
+- **输入框上方是「标注胶囊」**（`agentState.contextRefs`）：时间轴片段与排版元素的
+  右键菜单都有「添加进上下文」，点了就打开抽屉、焦点交给输入框（按数量判断，
+  去重后数量不变就不抢焦点）。状态必须放 `agentState` 而不是抽屉组件里 —— 抽屉是
+  条件渲染的，关着的时候用户也会右键。发送后清空（它已经进了那条 user 消息）、
+  `×` 只撤一条、换工程整批清掉（旧 id 在别的工程里是悬空的）。
+  id 与显示名的解析在 `ui/agent/context-bridge.ts`。
+- **运行期间输入框不锁**：`busy` 时发送 = **插话**，进 `agentState.queued`，
+  虚线卡片贴在输入框上方（可编辑 / 撤销），由 session 在**下一次模型调用之前**
+  取走。按钮在 busy 时同时给「停止」与「插话」—— 只剩停止的话，用户会先停再发，
+  等于白丢一次已经跑完一半的工具循环。
+- **轮末摘要带缓存命中率**（`agent.cache`，`data-pct`）：`agentState.lastCache` 为
+  `null` 时整段不渲染（服务商不上报 ≠ 命中 0%）。
 - **Agent 的历史入口在 Agent 抽屉顶栏、面板本身是根级 modal**：抽屉带 z-index 是
   层叠上下文，modal 挂进去会被检查器盖住遮罩。会话记录在工程目录的
   `agent/sessions/<id>.json`（不在 `project.json` 里，见 `src/agent/AGENTS.md`），

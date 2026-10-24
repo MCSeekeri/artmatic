@@ -72,6 +72,7 @@
   import type { MenuItem } from '../controls/menu-model';
   import MediaPoolDrawer from '../MediaPoolDrawer.svelte';
   import AgentDrawer from '../agent/AgentDrawer.svelte';
+  import { addToAgentContext, elementContextRefs } from '../agent/context-bridge';
   import { ASSET_DRAG_MIME, poolItemById, type PoolItem } from '../media-pool';
   import { animationSpecs, seekAnimations } from '../../typography/bake-animation';
   import { runScripts } from '../../typography/script/run';
@@ -1413,6 +1414,19 @@
       fn();
     };
     return [
+      /*
+       * 标注：把选中的元素钉进 Agent 的那一条消息。放在最前面 —— 它不是编辑动作，
+       * 混在「复制 / 成组 / 层级」中间会被当成又一个改文档的项。
+       */
+      {
+        id: 'add-to-context',
+        label: n > 1 ? tr('agent.addToContextElements', { n }) : tr('agent.addToContext'),
+        icon: 'message-circle-plus',
+        testid: 'typo-ctx-add-context',
+        disabled: none,
+        onselect: run(() => addToAgentContext(elementContextRefs(clipId, selection))),
+      },
+      { id: 'sep-ctx', separator: true },
       {
         id: 'copy',
         label: tr('typo.menu.copy'),

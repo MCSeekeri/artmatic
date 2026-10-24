@@ -27,13 +27,20 @@ import type { BuildBodyArgs, ProtocolAdapter, StreamHandlers, StreamReducer } fr
 
 /* ------------------------------------------------------------------ 形状 */
 
-export type OutBlock =
-  | { type: 'text'; text: string }
-  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
-  | { type: 'thinking'; thinking: string; signature: string }
-  | { type: 'redacted_thinking'; data: string };
+/** 缓存断点标记。Anthropic 的提示词缓存是**显式**的：没有它一个字节都不会被缓存。 */
+export interface CacheControl {
+  cache_control?: { type: 'ephemeral' };
+}
+
+export type OutBlock = CacheControl &
+  (
+    | { type: 'text'; text: string }
+    | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } }
+    | { type: 'tool_use'; id: string; name: string; input: unknown }
+    | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+    | { type: 'thinking'; thinking: string; signature: string }
+    | { type: 'redacted_thinking'; data: string }
+  );
 
 export interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -200,6 +207,34 @@ export function serializeAnthropicMessages(
   return { system: system.join('\n\n'), messages };
 }
 
+/** 能承载 `cache_control` 的块（thinking 系列不行，规格明确排除）。 */
+const CACHEABLE = new Set<OutBlock['type']>(['text', 'image', 'tool_result', 'tool_use']);
+
+/**
+ * 把缓存断点打在**最后一个 user 回合的最后一个可缓存块**上。
+ *
+ * 为什么必须有这一步：Anthropic 的提示词缓存**不开就不会发生**（与 DeepSeek /
+ * 智谱 / Kimi / 阿里的隐式缓存相反 —— 那几家什么都不用做）。不打断点的话
+ * `usage` 里永远是 `cache_read_input_tokens: 0`，用户看到「命中率 0%」而以为是 bug。
+ *
+ * 为什么只打一个、且每轮往后移：官方推荐「断点跟着对话尾部走」。命中判定是
+ * 「每个断点向前找最长匹配前缀」，所以上一轮写在旧位置的缓存**仍然**会被新断点
+ * 覆盖到；而历史消息的字节保持不变（断点只加在最后一条），前缀缓存不会被打断。
+ */
+export function markCacheBreakpoint(messages: AnthropicMessage[]): void {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== 'user') continue;
+    for (let j = m.content.length - 1; j >= 0; j--) {
+      const block = m.content[j]!;
+      if (!CACHEABLE.has(block.type)) continue;
+      m.content[j] = { ...block, cache_control: { type: 'ephemeral' } };
+      return;
+    }
+    return;
+  }
+}
+
 /**
  * 出站前的结构自检（**纯函数**，单测断言无违规；生产路径只 console.warn）。
  *
@@ -271,6 +306,8 @@ export function anthropicTools(tools: readonly ToolSpec[]): Record<string, unkno
 
 export function buildAnthropicBody({ config, provider, messages, tools }: BuildBodyArgs): Record<string, unknown> {
   const payload = serializeAnthropicMessages(messages, provider);
+  // 显式缓存：断点打在尾部（见 `markCacheBreakpoint` 的注释）。
+  markCacheBreakpoint(payload.messages);
 
   const body: Record<string, unknown> = { model: config.model };
   if (payload.system) body.system = payload.system;

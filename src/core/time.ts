@@ -36,6 +36,20 @@ export function beatAtTime(t: number, g: BeatGrid): number {
   return (t - g.offset) / beatDur(g);
 }
 
+/**
+ * 时间 → 小节 / 拍（都**从 1 起**，与标尺上的读数、用户嘴里的「第 4 小节」一致）。
+ *
+ * 负拍（offset 落在 0 秒之后，即音乐还没开始）落到第 0 小节 —— 这是 DAW 的惯例：
+ * 「第 0 小节第 4 拍」明确表示「在第一小节之前」，比钳成第 1 小节诚实。
+ */
+export function barBeatAt(t: number, g: BeatGrid): { bar: number; beat: number } {
+  const b = beatAtTime(t, g);
+  if (!Number.isFinite(b)) return { bar: 1, beat: 1 };
+  const per = Math.max(1, g.beatsPerBar);
+  const barIndex = Math.floor(b / per);
+  return { bar: barIndex + 1, beat: Math.floor(b - barIndex * per) + 1 };
+}
+
 export const SNAP_MODES = {
   bar: { labelKey: 'tl.snapBar', stepBeats: (bpb: number) => bpb },
   beat: { labelKey: 'tl.snapBeat', stepBeats: () => 1 },

@@ -59,6 +59,7 @@ import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
 import { createControlPlane } from './agent/index';
 import { agentState, registerControlPlane } from './ui/agent/agent-state.svelte';
+import { buildUiContext } from './ui/agent/context-bridge';
 import type { ControlContext, OpenProjectView } from './agent/types';
 import type { Renderer } from './engine/renderer';
 
@@ -369,6 +370,12 @@ const controlContext: ControlContext = {
   openProject: (name) => (name ? projectDebug.open(name) : openProjectPicker()),
   cancelPendingGesture: () => appState.cancelGesture(),
   refreshPreview: () => appState.refreshPreview(),
+  /*
+   * 用户此刻的界面（播放头 / 在哪一页 / 选中了什么）。每轮对话开工前读一次，
+   * 拼进系统提示 —— 用户说「改这个」时，模型只有这一处坐标系。
+   * 装配在 `ui/agent/context-bridge.ts`：id → 显示名要走 i18n，控制平面不 import ui。
+   */
+  getUiContext: buildUiContext,
 
   /*
    * 排版 / 插件的接缝。控制平面不 import `ui/` 与 `project/plugins`，

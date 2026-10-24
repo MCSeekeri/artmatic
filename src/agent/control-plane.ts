@@ -130,6 +130,7 @@ import {
   type TypographyMeasure,
   type UndoState,
 } from './types';
+import type { UiContextSnapshot } from './context';
 
 /* --------------------------------------------------------------- 小工具 */
 
@@ -306,6 +307,14 @@ export interface AgentControlPlane {
    * 「你调用过三次了」拦住。
    */
   sceneVersion(): Promise<ControlResult<SceneVersion>>;
+  /**
+   * 用户此刻的界面状态（播放头 / 在哪一页 / 选中了什么）。
+   *
+   * **不是工具**：只在会话层拼系统提示时被读一次（`context.ts::renderUiContext`）。
+   * 模型不该自己调它 —— 它拿到的那段就是最新的，多一次往返只会更旧。
+   * 同步返回：读的是宿主注入的钩子（`ControlContext.getUiContext`），没有异步步骤。
+   */
+  getUiContext(): UiContextSnapshot | null;
   /** 按需取协议 / 模型说明（plugin-api · timeline · typography · workflow · images）。 */
   help(topic?: string): Promise<ControlResult<{ topic: string; text: string }>>;
   /**
@@ -877,6 +886,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'getAssetRanges'
     | 'undoState'
     | 'sceneVersion'
+    | 'getUiContext'
     | 'help'
     | 'compileAll'
     | 'exportState'
@@ -978,6 +988,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         const fps = store.project.fps;
         return { version: store.version, playT: timeOf(frameOf(ctx.getPlayT(), fps), fps) };
       });
+    },
+
+    getUiContext() {
+      return ctx.getUiContext?.() ?? null;
     },
 
     async compileAll() {

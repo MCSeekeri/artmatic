@@ -27,6 +27,7 @@
 import type { Curve } from '../core/curve';
 import type { BlendMode } from '../core/schema';
 import type { AlignAxis } from '../typography/geometry';
+import type { UiContextSnapshot } from './context';
 
 /* ------------------------------------------------------------------ 结果 */
 
@@ -973,6 +974,16 @@ export interface ControlContext {
   cancelPendingGesture(): void;
   /** 让界面重新同步（导出 / 出图改过渲染尺寸之后调）。 */
   refreshPreview(): void;
+  /**
+   * 用户**此刻**的界面状态：播放头 / 在哪一页 / 选中了什么。
+   *
+   * 每轮对话开工前被读一次，拼进系统提示（`agent/context.ts::renderUiContext`）。
+   * 没有它时，用户说「把**这个**片段改一下」，模型只能猜 —— 而猜错的表现是
+   * 「改了一个看起来对的东西」，从回执里看不出来。
+   *
+   * 缺省 = 这个宿主没有界面（headless / CLI），提示里就不带那段。
+   */
+  getUiContext?: () => UiContextSnapshot | null;
 
   /* -------------------------------------------------- 排版 / 插件的接缝 */
 

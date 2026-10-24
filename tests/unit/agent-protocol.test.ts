@@ -13,7 +13,7 @@
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { anthropicAdapter, normalizeSchemaForAnthropic, serializeAnthropicMessages, validateAnthropicMessages, anthropicTools } from '../../src/agent/llm/protocol/anthropic';
+import { anthropicAdapter, markCacheBreakpoint, normalizeSchemaForAnthropic, serializeAnthropicMessages, validateAnthropicMessages, anthropicTools } from '../../src/agent/llm/protocol/anthropic';
 import { createAnthropicReducer } from '../../src/agent/llm/protocol/anthropic-stream';
 import { buildOpenAiBody, serializeOpenAiMessages } from '../../src/agent/llm/protocol/openai';
 import { createOpenAiReducer } from '../../src/agent/llm/protocol/openai-stream';
@@ -195,6 +195,46 @@ describe('Anthropic 消息序列化', () => {
     ]);
   });
 
+  it('缓存断点只打在最后一个 user 回合：历史字节不因此改变', () => {
+    const messages: WireMessage[] = [
+      { role: 'user', content: '第一句' },
+      { role: 'assistant', content: '第一句的回答' },
+      { role: 'user', content: '第二句' },
+    ];
+    const payload = serializeAnthropicMessages(messages, anthropic);
+    markCacheBreakpoint(payload.messages);
+
+    // 只有尾部的块带标记 —— 断点每轮往后移，旧消息的字节保持不变（前缀缓存的前提）
+    expect(payload.messages[0]!.content[0]).toEqual({ type: 'text', text: '第一句' });
+    expect(payload.messages[2]!.content[0]).toEqual({
+      type: 'text',
+      text: '第二句',
+      cache_control: { type: 'ephemeral' },
+    });
+  });
+
+  it('工具轮的缓存断点落在 tool_result 上（thinking 块不能承载它）', () => {
+    const payload = serializeAnthropicMessages(
+      [
+        { role: 'user', content: '看看场景' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'tu_1', type: 'function', function: { name: 'get_scene', arguments: '{}' } }],
+        },
+        { role: 'tool', tool_call_id: 'tu_1', content: '{"ok":true}' },
+      ],
+      anthropic,
+    );
+    markCacheBreakpoint(payload.messages);
+    const last = payload.messages[payload.messages.length - 1]!;
+    expect(last.content[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'tu_1',
+      cache_control: { type: 'ephemeral' },
+    });
+  });
+
   it('空 assistant 被丢弃，孤立 tool_use 自动补一条 is_error 结果', () => {
     const payload = serializeAnthropicMessages(
       [
@@ -326,7 +366,18 @@ describe('Anthropic 流归约', () => {
     r.push(ev({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } }));
     const out = r.finish();
     expect(out.toolCalls[0]).toEqual({ id: 'tu_1', name: 'add_clip', arguments: '{"name":"x"}' });
-    expect(out.usage).toEqual({ prompt_tokens: 14, completion_tokens: 5, total_tokens: 19 });
+    /*
+     * 缓存字段**无条件写**（含 0）：`usage.ts` 靠「字段存在」判断这家会汇报缓存，
+     * 只写非零值会把「命中 0% 的第一轮」误判成「不支持缓存」。
+     */
+    expect(out.usage).toEqual({
+      prompt_tokens: 14,
+      completion_tokens: 5,
+      total_tokens: 19,
+      input_tokens: 11,
+      cache_read_input_tokens: 3,
+      cache_creation_input_tokens: 0,
+    });
     expect(out.finishReason).toBe('tool_use');
     expect(started).toEqual([]);
   });

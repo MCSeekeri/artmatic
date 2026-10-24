@@ -32,6 +32,14 @@
 import { tr } from '../../i18n/index.svelte';
 import type { AgentControlPlane } from '../control-plane';
 import type { ControlResult } from '../types';
+import {
+  interjectionText,
+  renderAttachedRefs,
+  renderUiContext,
+  type ContextRef,
+  type UiContextSnapshot,
+} from '../context';
+import { cacheStatsOf, mergeCacheStats } from './usage';
 import { AGENT_TOOLS, TOOL_BY_NAME, type ToolSpec } from '../tools';
 import { SUMMARY_SYSTEM, SYSTEM_PROMPT, summaryRequest } from './prompt';
 import { LLM_TIMEOUT_MS, streamChat } from './transport';
@@ -41,6 +49,8 @@ import type { ToolExecutor } from './executor';
 import {
   LlmError,
   type AgentStatus,
+  type CacheStats,
+  type InterjectionInput,
   type LlmConfig,
   type LlmUsage,
   type SessionEvent,
@@ -177,6 +187,13 @@ export interface SessionOptions {
   screenshots?(): boolean;
   /** 单轮最多几次「模型 → 工具」往返。给函数则每轮重新读（设置里改了立刻生效）。 */
   maxSteps?: number | (() => number);
+  /**
+   * 取走用户在本轮进行中插入的消息（「插话」）。**每次模型调用之前**调一次。
+   *
+   * 返回即视为送达（面板那边同时清空排队与卡片）。session 负责把它们追加成
+   * `role:'user'` 消息并发 `kind:'user'` 事件 —— 面板不要自己再插一条气泡。
+   */
+  takeInterjections?(): InterjectionInput[];
 }
 
 export interface SessionSnapshot {
@@ -289,10 +306,35 @@ export class AgentSession {
   lastError: { code: string; message: string; status?: number; detail?: string } | null = null;
   /** 「这个模型收不了图片」只提示一次，别每轮刷屏。 */
   private warnedImages = false;
+  /** 本轮所有请求的缓存账（见 `CacheStats`）。 */
+  private turnCache: CacheStats | null = null;
 
   constructor(private readonly opts: SessionOptions) {
-    // 思考强度走原生参数（见 provider 的 thinkingParams），系统提示不随档位变。
+    // 系统提示是**纯常量**，见 `uiSnapshotText` 的注释（缓存纪律）。
     this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+  }
+
+  /**
+   * 这一轮开始时「用户在哪」（播放头 / 视图 / 选区）。
+   *
+   * **拼在 user 消息尾部，不拼进系统提示** —— 这是缓存纪律的核心。
+   * 各家的前缀缓存（DeepSeek 硬盘缓存 / 智谱 / Kimi / 阿里的隐式缓存 /
+   * Anthropic 的显式断点）都以**逐字节相同的前缀**为前提，而 `messages[0]`
+   * 一旦每轮变化，**整段历史都会 miss**（DeepSeek 文档的例子 2：A+B → A+C
+   * 命中不了，只能等第三次才认出公共前缀 A）。
+   *
+   * 摆在句尾也更贴切：播放头与选区本来就是「这句请求的语境」，不是对话的规则。
+   * 快照缺席（没有工程 / 宿主没接钩子）时返回空串，不编造。
+   */
+  private uiSnapshotText(): string {
+    let snap: UiContextSnapshot | null = null;
+    try {
+      snap = this.opts.control.getUiContext?.() ?? null;
+    } catch {
+      // 界面状态是「锦上添花」：钩子挂了不该让整轮对话发不出去。
+      snap = null;
+    }
+    return snap ? renderUiContext(snap) : '';
   }
 
   /* ------------------------------------------------------------- 查询 */
@@ -354,6 +396,55 @@ export class AgentSession {
     return false;
   }
 
+  /* ------------------------------------------------------------- 插话 */
+
+  /**
+   * 把排队的插话注入成 user 消息，返回注入了几条。
+   *
+   * **只在两次模型调用之间注入**：工具批跑完、截图注入完之后（OpenAI 要求
+   * `tool` 消息紧跟 `assistant.tool_calls`，夹在中间等于把整段历史弄成 400），
+   * 或者模型这一步已经说完、但用户还插了话的时候（那就再请求一次）。
+   *
+   * 注入的是普通 `role:'user'` 消息：它是对话里真实发生过的发言，位置要留在
+   * 历史里 —— 不是系统提示那种可以随时重写的旁白（那会毁掉前缀缓存）。
+   */
+  private drainInterjections(): number {
+    const take = this.opts.takeInterjections;
+    if (!take) return 0;
+    const items = take().filter((i) => i.text.trim());
+    if (!items.length) return 0;
+    for (const item of items) this.pushInterjection(item);
+    return items.length;
+  }
+
+  private pushInterjection(item: InterjectionInput): void {
+    const text = item.text.trim();
+    const images = item.images ?? [];
+    const marked = interjectionText(text);
+    if (images.length) {
+      const keep = this.imagesAllowed();
+      const parts: WirePart[] = [
+        {
+          type: 'text',
+          text: keep
+            ? marked
+            : `${marked}\n[the user attached ${images.length} image(s); this model cannot read images]`,
+        },
+        ...(keep
+          ? images.map<WirePart>((img) => ({
+              type: 'image_url',
+              image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'low' as const },
+            }))
+          : []),
+      ];
+      this.messages.push({ role: 'user', content: parts });
+    } else {
+      this.messages.push({ role: 'user', content: marked });
+    }
+    // 面板上仍显示用户自己打的字（标注 / 说明是给模型的）。
+    this.opts.onEvent({ kind: 'user', text, ...(images.length ? { images } : {}) });
+  }
+
   /* ------------------------------------------------------------- 一轮 */
 
   /**
@@ -407,8 +498,26 @@ export class AgentSession {
     }
   }
 
-  async send(text: string, images: { base64: string; mimeType: string }[] = []): Promise<void> {
-    const content = text.trim();
+  /**
+   * 发一条用户消息。
+   *
+   * `refs` 是用户从界面里**标注**的对象（右键 → 添加进上下文）。它们不作为独立
+   * 消息存在，而是拼在这条 user 消息末尾 —— 独立成一条会让模型把它当成
+   * 「之前某个用户说过的话」，而它其实是这句话的宾语。
+   */
+  async send(
+    text: string,
+    images: { base64: string; mimeType: string }[] = [],
+    refs: readonly ContextRef[] = [],
+  ): Promise<void> {
+    const typed = text.trim();
+    /*
+     * 这一句的语境 = 用户标注的对象 + 此刻的界面，**全部贴在消息尾部**。
+     * 顺序固定（标注在前、界面在后）：同样的输入必须生成同样的字节，
+     * 否则第二轮的前缀就不是第一轮的严格前缀，缓存直接失效。
+     */
+    const suffix = [renderAttachedRefs(refs), this.uiSnapshotText()].filter(Boolean).join('\n\n');
+    const content = suffix ? (typed ? `${typed}\n\n${suffix}` : suffix) : typed;
     if (!content && !images.length) return;
     if (this.busy) {
       this.opts.onEvent({ kind: 'error', message: tr('agent.llm.busy'), code: 'busy' });
@@ -417,13 +526,19 @@ export class AgentSession {
 
     this.busy = true;
     this.lastError = null;
+    this.turnCache = null;
     const startedAt = Date.now();
     this.abort = new AbortController();
     const signal = this.abort.signal;
     let writes = 0;
 
-    // 系统提示是常量；思考强度由请求体里的 thinking / reasoning_effort 决定。
-    this.messages[0] = { role: 'system', content: SYSTEM_PROMPT };
+    /*
+     * ⚠️ **不要在这里重写 `messages[0]`。** 系统提示必须是整个会话不变的常量：
+     * 前缀缓存按字节比较，而各家（DeepSeek / 智谱 / Kimi / 阿里 / Anthropic）
+     * 的第一条消息就是缓存前缀的开头。早先这里每轮把播放头拼进系统提示，
+     * 代价是**每一轮全部历史按未命中计费**，而且从回执上看不出来。
+     * 动态语境一律进 user 消息尾部（见上面 `suffix`）。
+     */
 
     if (images.length) {
       const keep = this.imagesAllowed();
@@ -445,7 +560,8 @@ export class AgentSession {
     } else {
       this.messages.push({ role: 'user', content });
     }
-    this.opts.onEvent({ kind: 'user', text: content, ...(images.length ? { images } : {}) });
+    // 面板上只显示用户自己打的字：标注块是给模型的，铺进气泡里只是噪声。
+    this.opts.onEvent({ kind: 'user', text: typed, ...(images.length ? { images } : {}) });
 
     // 整轮包一笔撤销。失败（例如已经有事务开着）不致命：退回逐笔撤销。
     await this.opts.control.beginTx();
@@ -473,6 +589,12 @@ export class AgentSession {
           onReasoning: (d) => this.opts.onEvent({ kind: 'reasoning', text: d }),
         });
         if (result.usage) this.usage = result.usage;
+        /*
+         * 缓存账按**这一轮的所有请求**累加：工具循环里第一步几乎必然 0%
+         * （整段前缀第一次见），后几步接近 100%。单看最后一次会高得离谱，
+         * 单看第一次又会低得离谱 —— 用户要的是「这轮我少付了多少」。
+         */
+        this.turnCache = mergeCacheStats(this.turnCache, cacheStatsOf(result.usage));
         // usage 是服务端的真实计数；没有时按字符估算（压缩后的第一轮就是这种）。
         if (result.usage?.prompt_tokens) {
           this.contextTokens = result.usage.prompt_tokens + (result.usage.completion_tokens ?? 0);
@@ -511,7 +633,15 @@ export class AgentSession {
         };
         this.messages.push(assistant);
 
-        if (!result.toolCalls.length) break;
+        /*
+         * 模型这一步说完了 —— 但如果用户在这期间插了话，就当「下一次调用」
+         * 把它带上继续跑（否则用户得再按一次发送，而他要的正是「不用再按」）。
+         */
+        if (!result.toolCalls.length) {
+          // 用掉最后一步时不再 continue：插话已经进了历史，下一轮模型会看到它。
+          if (this.drainInterjections() && step < maxSteps - 1) continue;
+          break;
+        }
         if (signal.aborted) throw new LlmError('cancelled', tr('agent.llm.cancelled'));
         this.setStatus('tool');
 
@@ -735,6 +865,11 @@ export class AgentSession {
         if (step === maxSteps - 1) {
           throw new LlmError('bad-response', tr('agent.llm.maxSteps', { n: maxSteps }));
         }
+        /*
+         * 工具结果与截图都拼完之后才注入插话：OpenAI 要求 `tool` 消息紧跟在
+         * `assistant.tool_calls` 之后，夹在中间会让整段历史 400。
+         */
+        this.drainInterjections();
       }
     } catch (e) {
       this.lastError =
@@ -772,7 +907,13 @@ export class AgentSession {
       }
       this.busy = false;
       this.abort = null;
-      this.opts.onEvent({ kind: 'turn-end', writes, ms: Date.now() - startedAt });
+      this.opts.onEvent({
+        kind: 'turn-end',
+        writes,
+        ms: Date.now() - startedAt,
+        // 这家不上报缓存时缺席（面板据此决定显不显示命中率，而不是显示 0%）。
+        ...(this.turnCache ? { cache: this.turnCache } : {}),
+      });
       this.setStatus('idle');
     }
   }

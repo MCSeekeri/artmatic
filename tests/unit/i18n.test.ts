@@ -189,6 +189,22 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
    * **匹配模式**而不是界面文案 —— 不进 `tr()`，用户看到的是 `agent.llm.balance`。
    */
   'agent/llm/providers/errors.ts': ['账户余额', '余额不足'],
+  /*
+   * 注进 user 消息与系统提示的**提示词片段**：模型读它，用户永远看不到
+   * （面板气泡只显示用户自己打的字）。所以它不是文案，不该进 `tr()` ——
+   * 反过来说，走 `tr()` 才是错的：提示词不能跟着界面语言变（同一段指令被
+   * 翻译成两种语言，等于两份要各自维护的行为规范）。
+   *
+   * 标题用中文是刻意的：用户说中文时模型必须稳定地用中文回，而「## 用户标注
+   * 的片段」这种小标题是它最省事的锚点。
+   */
+  'agent/context.ts': [
+    'When they say "this clip" / "this element" (这个片段 / 这个元素), it means one of them;',
+    '## 用户标注的片段',
+    '- 【${labelOf(ref.name, ref.id)}】 id: ${ref.id}',
+    '## 用户标注的排版元素',
+    '### 位于片段【${labelOf(g.clipName, g.clipId)}】（id: ${g.clipId}）',
+  ],
   // 同理：SnapshotRing 的「第 0 帧不见了」。它在正常路径上**不可达** ——
   // 构造函数就放了第 0 帧，而抽稀显式跳过它。只有别人绕过 API 掏了内部 Map
   // 才会抛。属于「代码被改坏了」的诊断，不是用户能看到的提示。

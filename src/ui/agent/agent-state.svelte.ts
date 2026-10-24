@@ -22,7 +22,14 @@
 
 import { tr } from '../../i18n/index.svelte';
 import type { AgentControlPlane } from '../../agent/control-plane';
-import type { AgentStatus, LlmConfig, ReasoningEffort, SessionEvent } from '../../agent/llm/types';
+import type {
+  AgentStatus,
+  CacheStats,
+  InterjectionInput,
+  LlmConfig,
+  ReasoningEffort,
+  SessionEvent,
+} from '../../agent/llm/types';
 import {
   AgentSession,
   canDisableThinking,
@@ -34,6 +41,7 @@ import {
 } from '../../agent/llm/index';
 import type { ProviderDef } from '../../agent/llm/index';
 import type { AgentSessionRecord, AgentStoredMessage } from '../../agent/history';
+import { contextRefKey, mergeContextRefs, type ContextRef } from '../../agent/context';
 import {
   PREFS_REV,
   activeApiKey,
@@ -110,6 +118,13 @@ export interface PendingAsk {
   allowFreeText: boolean;
 }
 
+/** 排队中的插话（模型还在干活，本轮的下一次调用之前才注入）。 */
+export interface QueuedInterjection {
+  id: string;
+  text: string;
+  images?: { base64: string; mimeType: string }[];
+}
+
 let seq = 0;
 const nextId = (): string => `m${++seq}`;
 
@@ -159,6 +174,32 @@ class AgentUiState {
   pendingAsk = $state<PendingAsk | null>(null);
   /** 本轮耗时（结束时写；摘要行用）。 */
   lastMs = $state(0);
+  /**
+   * 用户从界面里**标注**进这一条消息的对象（时间轴片段 / 排版元素）。
+   *
+   * 存在这里而不是抽屉组件内部：抽屉是条件渲染的（关掉就卸载），而「添加进
+   * 上下文」的入口在时间轴与排版页的右键菜单上 —— 状态放组件里会在打开抽屉
+   * 的那一刻丢掉。发送后清空，它们已经进了那条 user 消息。
+   */
+  contextRefs = $state<ContextRef[]>([]);
+  /**
+   * 排队中的插话。本轮运行期间用户发的东西都落在这里，
+   * 由 session 在**下一次模型调用之前**取走（`takeInterjections`）。
+   *
+   * 放这里而不是 session 内部：用户要能在等待期间**编辑 / 撤销**（卡片在输入框上方），
+   * 而 session 不该认识 UI 的编辑语义。
+   */
+  queued = $state<QueuedInterjection[]>([]);
+  /**
+   * 上一轮的缓存账（`null` = 这家没上报缓存字段）。
+   *
+   * 显示判据就是这个 null：不支持的实现**什么都不显示**，而不是假装 0% ——
+   * 「0%」是一个陈述（这次真的一句都没命中），而「没这项数据」是另一件事。
+   */
+  lastCache = $state<CacheStats | null>(null);
+
+  /** 本轮是用户主动停的：剩下的插话留在卡片里让他改，不自动发出去。 */
+  private stopRequested = false;
 
   private session: AgentSession | null = null;
   private control: AgentControlPlane | null = null;
@@ -244,6 +285,8 @@ class AgentUiState {
     this.session?.stop();
     this.session = null;
     this.messages = [];
+    // 标注指向的是上一个工程的片段 / 元素，留着就是一批悬空 id。
+    this.clearContextRefs();
     this.activeSessionId = null;
     this.sessionCreatedAt = 0;
     this.pending = null;
@@ -254,6 +297,8 @@ class AgentUiState {
     this.lastWrites = 0;
     this.lastMs = 0;
     this.usage = null;
+    this.lastCache = null;
+    this.queued = [];
     this.toolCalls = 0;
     this.context = { tokens: 0, limit: this.contextLimit };
     this.historyOpen = false;
@@ -302,6 +347,7 @@ class AgentUiState {
         },
         onApproval: (req) => this.askApproval(req),
         onAskUser: (req) => this.askUser(req),
+        takeInterjections: () => this.takeInterjections(),
       });
     }
     return this.session;
@@ -445,10 +491,68 @@ class AgentUiState {
     }
   }
 
+  /* ------------------------------------------------------- 上下文标注 */
+
+  /**
+   * 「添加进上下文」的落点。去重与封顶都在 `mergeContextRefs`（纯函数）。
+   *
+   * 重复钉同一个对象不是错误，只是没有意义 —— 静默去重比弹一句提示好：
+   * 用户点第二次时想的是「怎么没反应」，而画面里那个胶囊本来就在。
+   */
+  addContextRefs(refs: readonly ContextRef[]): void {
+    if (!refs.length) return;
+    this.contextRefs = mergeContextRefs(this.contextRefs, refs);
+  }
+
+  removeContextRef(key: string): void {
+    this.contextRefs = this.contextRefs.filter((ref) => contextRefKey(ref) !== key);
+  }
+
+  clearContextRefs(): void {
+    if (this.contextRefs.length) this.contextRefs = [];
+  }
+
+  /* ------------------------------------------------------------- 插话 */
+
+  /**
+   * session 在每次模型调用之前来取（**返回即清空**）。
+   *
+   * 面板不自己插气泡：注入后的 user 消息由 session 发 `kind:'user'` 事件回来。
+   * 两边都插会看到两条一模一样的。
+   */
+  private takeInterjections(): InterjectionInput[] {
+    if (!this.queued.length) return [];
+    const items = this.queued.map((q) => ({
+      text: q.text,
+      ...(q.images?.length ? { images: q.images } : {}),
+    }));
+    this.queued = [];
+    return items;
+  }
+
+  removeQueued(id: string): void {
+    this.queued = this.queued.filter((q) => q.id !== id);
+  }
+
   /* ------------------------------------------------------------ 对话 */
 
   async send(text: string, images: { base64: string; mimeType: string }[] = []): Promise<void> {
-    if (this.busy) return;
+    /*
+     * 运行期间发的东西是**插话**，不是错误：排队，等 session 在下一次模型调用
+     * 之前取走（`takeInterjections`）。用户因此不必「等它跑完再按一次」，
+     * 而且随时能撤销 —— 排队期间它还在输入框上方的卡片里。
+     */
+    if (this.busy) {
+      const trimmed = text.trim();
+      if (!trimmed && !images.length) return;
+      this.queued = [
+        ...this.queued,
+        { id: nextId(), text: trimmed, ...(images.length ? { images } : {}) },
+      ];
+      return;
+    }
+    this.stopRequested = false;
+    this.lastCache = null;
     // 设置可能刚被改过（key / 模型 / 温度 / 思考强度）—— 会话持有的是同一个对象。
     this.syncConfig();
     const session = this.ensureSession();
@@ -460,6 +564,19 @@ class AgentUiState {
       this.push({ id: nextId(), role: 'error', text: tr('agent.llm.noKey') });
       return;
     }
+    /*
+     * 上一轮被用户按停之后可能还留着排队卡片（那时故意不自动发）。新一轮开始
+     * 就把它并进这一条 —— 让用户打的字永远跟着一条真实的消息走，
+     * 而不是在别的轮次里半路冒出来。
+     */
+    if (this.queued.length) {
+      const pending = this.queued;
+      this.queued = [];
+      const merged = [pending.map((q) => q.text).join('\n\n'), text].filter((s) => s.trim()).join('\n\n');
+      text = merged;
+      const queuedImages = pending.flatMap((q) => q.images ?? []);
+      if (queuedImages.length) images = [...queuedImages, ...images];
+    }
     this.busy = true;
     this.lastWrites = 0;
     this.lastMs = 0;
@@ -470,8 +587,12 @@ class AgentUiState {
       this.activeSessionId = `as-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       this.sessionCreatedAt = started;
     }
+    // 标注随这一条消息发出去，随后清空 —— 留着会让下一条消息莫名其妙地
+    // 又带上同样的宾语。清空放在真正要发之后：没有 key 时不吞掉用户钉的东西。
+    const refs = this.contextRefs;
+    this.contextRefs = [];
     try {
-      await session.send(text, images);
+      await session.send(text, images, refs);
     } finally {
       this.busy = false;
       this.status = 'idle';
@@ -485,9 +606,23 @@ class AgentUiState {
       }
       this.saveSession();
     }
+
+    /*
+     * 收尾时还有没被注入的插话（模型已经给完答案 / 步数用尽）：当成下一条消息
+     * 直接发出去 —— 用户打的字不该停在队列里。**用户主动停的不算**：那时他多半
+     * 是想改这句，卡片留着让他编辑。
+     */
+    if (!this.stopRequested && this.queued.length) {
+      const pending = this.queued;
+      this.queued = [];
+      const text = pending.map((q) => q.text).join('\n\n');
+      const imgs = pending.flatMap((q) => q.images ?? []);
+      void this.send(text, imgs);
+    }
   }
 
   stop(): void {
+    this.stopRequested = true;
     this.session?.stop();
   }
 
@@ -512,6 +647,8 @@ class AgentUiState {
     this.lastMs = 0;
     this.toolCalls = 0;
     this.usage = null;
+    this.lastCache = null;
+    this.queued = [];
     this.pending = null;
     this.pendingAsk = null;
     this.askResolve?.(null);
@@ -753,6 +890,8 @@ class AgentUiState {
       case 'turn-end':
         this.lastWrites = e.writes;
         this.lastMs = e.ms;
+        // 这家不上报缓存时保持 null（面板不显示），不要写成 0。
+        this.lastCache = e.cache ?? null;
         break;
     }
   }

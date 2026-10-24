@@ -364,6 +364,25 @@ export const agent = {
   'agent.composer.model': '模型',
   'agent.composer.effort': '思考强度',
   'agent.composer.more': '模型与思考强度',
+
+  /* ------------------------------------------------- 上下文标注（右键加入） */
+  'agent.addToContext': '添加进上下文',
+  'agent.addToContextMany': '添加 {n} 个片段进上下文',
+  'agent.addToContextElements': '添加 {n} 个元素进上下文',
+  'agent.contextRef.clip': '片段',
+  'agent.contextRef.element': '排版元素',
+  'agent.contextRef.inClip': '位于片段【{name}】',
+  'agent.contextRef.remove': '从上下文移除',
+
+  /* ------------------------------------------------- 插话与缓存（2026-10-24） */
+  'agent.interject.send': '插话',
+  'agent.interject.tip': '本轮的下一次调用前交给模型',
+  'agent.interject.waiting': '等待插入',
+  'agent.interject.edit': '编辑',
+  'agent.interject.cancel': '撤销',
+  'agent.interject.images': '+{n} 图',
+  'agent.cache': '缓存 {pct}%',
+  'agent.cacheTip': '本轮命中 {hit} / {total} 输入 token（服务商上报）',
   'agent.status.awaitingUser': '等你回答',
   'agent.history': 'Agent 历史',
   'agent.historyTip': '查看这个工程的 Agent 对话',

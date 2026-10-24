@@ -258,6 +258,60 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   加 uniform 时文档自动跟上；单测断言「两个头的每个 uniform 都出现在文档里」。
 - 插件是单文件、不能 import，所以说明书里要带可直接粘贴的 helper。
 
+## 上下文注入（`context.ts`）
+
+三件事共用一份纯函数（单测 `tests/unit/agent-context.test.ts` /
+`agent-usage.test.ts`）：
+
+- **用户标注**（右键「添加进上下文」）：片段 / 排版元素拼进**那条 user 消息的末尾**，
+  不独立成一条 —— 独立消息会被模型当成「之前某轮说过的话」，而它其实是这句话的宾语。
+  元素按所属片段分组（`typo_*` 都要 `clipId`）。**id 与显示名必须同时写**：只给名字
+  模型定位不了，只给 id 它读不懂「这个」指的是哪个。
+- **界面快照**（`renderUiContext`）：播放头（秒 / 帧号 / 小节拍）+ 在哪一页 +
+  选中了什么，**同样只贴在 user 消息尾部，绝不进系统提示**。数据源是注入的
+  `ControlContext.getUiContext`（装配在 `ui/agent/context-bridge.ts`：id → 显示名
+  要走 i18n）。它**不是工具** —— 多一次往返只会拿到更旧的状态。
+- **插话**（`interjectionText`）：模型干活期间用户发的话，在**下一次模型调用之前**
+  追加成一条 user 消息（见下节）。
+
+### 缓存纪律（2026-10-24 核实四家文档）
+
+**系统提示必须是整个会话不变的纯常量。** 前缀缓存按**字节**比前缀，而
+`prompt_tokens` 就是账本：`messages[0]` 一变，后面全部历史按未命中计费
+（DeepSeek 文档的例子 2：`A+B` → `A+C` 命中不了，要等第三次认出公共前缀）。
+所以动态语境（播放头 / 选区 / 标注）只能加在**尾部**，且同一输入的拼装顺序固定。
+
+其余会打碎前缀的动作，都是「必须付」的代价，别在上面做优化：
+`maybeCompact`（历史被摘要替换）、`trimMessages`（硬裁剪）、400 后清空历史。
+它们一旦发生，这一轮的命中率会掉到 0 —— 那是**真的**，不是显示 bug。
+
+各家机制（细节与出处见 `docs/provider-matrix.md` §8）：
+
+| 家 | 开启 | 上报字段 |
+|---|---|---|
+| DeepSeek | 自动（默认开） | `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` |
+| 智谱 / Kimi / 通义 / OpenAI | 自动（隐式，无法关） | `prompt_tokens_details.cached_tokens` |
+| Anthropic | **必须打 `cache_control` 断点** | `cache_read_input_tokens` / `cache_creation_input_tokens` |
+
+Anthropic 的断点由 `protocol/anthropic.ts::markCacheBreakpoint` 打在**最后一个
+user 回合的最后一个可缓存块**上（每轮往后移；旧消息字节不变，所以旧缓存仍然命中）。
+
+命中率由 `llm/usage.ts` 归一（各家分母口径不同，直接混读会算出 >100%），
+按**一轮所有请求**求和后在 `turn-end` 事件里上报；面板只在有数据时显示 ——
+「没上报」与「命中 0%」是两件事，不要合并。
+
+## 插话（模型干活时用户说话）
+
+- 面板不阻塞输入：`agentState.send` 在 `busy` 时**入队**（`queued`，卡片可编辑 /
+  撤销），session 在每次模型调用之前用 `takeInterjections()` 取走。
+- 注入时机只有两处，都在 `session.send` 的循环里：**工具批 + 截图注入之后**
+  （OpenAI 要求 `tool` 消息紧跟 `assistant.tool_calls`，夹在中间 = 400）、
+  以及**模型这一步说完但用户还插了话时**（那就再请求一次，不结束本轮）。
+- 注入的是普通 `role:'user'` 消息（带一行 `interjection` 说明）。**不要**把它塞进
+  系统提示或改写历史：那是缓存杀手，而且模型会以为这是上一轮的旧话。
+- 轮末还没送出去的（模型已收尾 / 步数用尽）由面板当**下一条消息**自动发出；
+  用户主动按停时不发 —— 那时他多半是想改这句话。
+
 ## 模型运行时（`llm/`）
 
 分层：`transport`（fetch / SSE 取帧 / 直连降级）→ `protocol/*`（请求体 · 鉴权 ·

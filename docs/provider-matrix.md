@@ -136,7 +136,40 @@ Anthropic 的 `thinking` 块**必须整段复用**，不能重建：重建会丢
 
 ---
 
-## 7. 待实测
+## 7. 上下文缓存（2026-10 核实官方文档）
+
+前缀缓存直接决定成本：一次多轮对话里，输入 token 通常是主要开销，而命中价
+往往是原价的 10%–50%。各家的机制**不一样**，但只有一条共同前提：**前缀逐字节相同**。
+
+| 家 | 开启方式 | 命中口径 | 最小前缀 | 有效期 | 命中价 |
+|---|---|---|---|---|---|
+| DeepSeek | 默认开，零代码 | `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` | 文档未给数字 | 数小时到数天（闲置清理） | 官方价格页 |
+| 通义（百炼） | 隐式默认开；显式需 `cache_control` | `prompt_tokens_details.cached_tokens`（部分模型在顶层 `cached_tokens`） | 1024（智谱/MiniMax 部署为 512） | 隐式无固定；显式 5 分钟（命中续期） | 隐式约 20%，显式 10% |
+| 智谱 GLM | 隐式，无法配置 | `prompt_tokens_details.cached_tokens` | 建议 ≥500（非硬门槛） | 文档未提 | 约 50% |
+| Kimi | 隐式；`prompt_cache_options` 可调 TTL | `prompt_tokens_details.cached_tokens`（+ `cache_write_tokens`） | 按块存储，不足一块不写 | 5m / 1h（首次写入锁定） | 1/10 |
+| Anthropic | **必须显式 `cache_control` 断点** | `cache_read_input_tokens` / `cache_creation_input_tokens` | 1024 起（Sonnet 一族） | 5 分钟（命中续期） | 10%（写入 125%） |
+
+三条必须记住的差异：
+
+1. **「自动」不等于「一定命中」**：DeepSeek 明说「尽力而为」，阿里说「达到 1024
+   只代表具备条件」。所以命中率是**观测量**，不能当成契约去断言。
+2. **Anthropic 是唯一一家不打标记就完全没缓存的**。断点打在最后一个 user 回合的
+   最后一个可缓存块（`markCacheBreakpoint`），每轮往后移；历史消息不带标记，
+   它们的字节因此不变，旧缓存照样命中。
+3. **Anthropic 的 `input_tokens` 不含缓存读写**（其余各家 `prompt_tokens` 含），
+   分母必须分开算 —— `llm/usage.ts` 是唯一归一的地方。
+
+### 本项目的实现约束
+
+- **系统提示是常量**。播放头 / 选区 / 用户标注一律贴在**最后一条 user 消息**尾部
+  （`agent/context.ts`）。曾经把播放头拼进 `messages[0]`，代价是每轮整段历史按未命中计费。
+- **工具表、消息顺序、拼装顺序都不许按请求变化**（`openai.ts` 的键序是契约）。
+- 压缩（`maybeCompact`）与硬裁剪（`trimMessages`）会重写历史 = 缓存清零。它们是
+  兜底手段，不是优化手段；不要在 75% 以下主动压缩。
+- 面板在轮末显示命中率（`turn-end.cache`）。**没上报**（老模型 / 自建服务）时
+  什么都不显示 —— 不要用 0% 冒充「没有这项数据」。
+
+## 8. 待实测
 
 以下项没有官方文档或文档与实现不一致，代码里按保守值处理，实测之后再改注册表：
 

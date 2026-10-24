@@ -24,7 +24,8 @@
   import ReasoningBlock from './ReasoningBlock.svelte';
   import { renderMarkdown } from './markdown';
   import ProviderLogo from './ProviderLogo.svelte';
-  import { agentState, type AgentEffort } from './agent-state.svelte';
+  import { agentState, type AgentEffort, type QueuedInterjection } from './agent-state.svelte';
+  import { contextRefKey } from '../../agent/context';
   import { appState } from '../app-state.svelte';
   import { DENSITY } from '../tokens';
   import { tr } from '../../i18n/index.svelte';
@@ -63,18 +64,39 @@
 
   /* ------------------------------------------------------------- 发送 */
 
-  const canSend = $derived(
-    !agentState.busy && (input.trim().length > 0 || attachments.length > 0),
-  );
+  /*
+   * 运行期间**也能发**：那时它是一句「插话」，进队列等本轮的下一次模型调用
+   * （见 `agentState.queued` 与 `session.drainInterjections`）。
+   * 所以这里不看 `busy` —— 按钮在两种状态下都可用，只是标签与图标不同。
+   */
+  const canSend = $derived(input.trim().length > 0 || attachments.length > 0);
 
   function send(): void {
     const text = input.trim();
-    if ((!text && !attachments.length) || agentState.busy) return;
+    if (!text && !attachments.length) return;
     const images = attachments.map((a) => ({ base64: a.base64, mimeType: a.mimeType }));
     input = '';
     attachments = [];
     if (textarea) textarea.style.height = '';
     void agentState.send(text, images);
+  }
+
+  /** 撤回排队中的插话，接着改（附图一并放回）。 */
+  function editQueued(q: QueuedInterjection): void {
+    agentState.removeQueued(q.id);
+    input = input ? `${q.text}\n${input}` : q.text;
+    if (q.images?.length) {
+      attachments = [
+        ...attachments,
+        ...q.images.map((img) => ({
+          name: tr('agent.image'),
+          mimeType: img.mimeType,
+          base64: img.base64,
+          url: `data:${img.mimeType};base64,${img.base64}`,
+        })),
+      ];
+    }
+    textarea?.focus();
   }
 
   function onKeydown(e: KeyboardEvent): void {
@@ -101,6 +123,18 @@
     input = text;
     textarea?.focus();
   }
+
+  /*
+   * 右击「添加进上下文」之后要能直接接着打字，所以引用变多就把焦点交给输入框
+   * （抽屉刚打开时也走这条路：组件挂载时引用已经在了）。
+   * 比较的是**数量**：同一个对象被去重后数量不变 —— 那时用户还在看图，不该抢焦点。
+   */
+  let refsSeen = 0;
+  $effect(() => {
+    const n = agentState.contextRefs.length;
+    if (n > refsSeen) textarea?.focus();
+    refsSeen = n;
+  });
 
   function retry(): void {
     for (let i = agentState.messages.length - 1; i >= 0; i--) {
@@ -339,6 +373,17 @@
   const totalTokens = $derived(
     agentState.usage ? agentState.usage.prompt + agentState.usage.completion : 0,
   );
+
+  /* 缓存命中率：`null` = 这家不上报（不显示），不是 0%。 */
+  const cachePct = $derived(agentState.lastCache ? Math.round(agentState.lastCache.rate * 100) : 0);
+  const cacheTitle = $derived(
+    agentState.lastCache
+      ? tr('agent.cacheTip', {
+          hit: fmtTokens(agentState.lastCache.hit),
+          total: fmtTokens(agentState.lastCache.total),
+        })
+      : '',
+  );
 </script>
 
 <aside
@@ -507,6 +552,15 @@
           {#if totalTokens > 0}{tr('agent.usage', { prompt: agentState.usage?.prompt ?? 0, completion: agentState.usage?.completion ?? 0 })}{/if}
           {#if totalTokens > 0 && agentState.lastMs > 0}<span class="sep">·</span>{/if}
           {#if agentState.lastMs > 0}{tr('agent.turnTime', { s: (agentState.lastMs / 1000).toFixed(1) })}{/if}
+          {#if agentState.lastCache}
+            <span class="sep">·</span>
+            <span
+              class="cache"
+              title={cacheTitle}
+              data-testid="agent-cache"
+              data-pct={cachePct}
+            >{tr('agent.cache', { pct: cachePct })}</span>
+          {/if}
           {#if agentState.lastWrites > 0}
             <span class="sep">·</span>{tr('agent.writes', { n: agentState.lastWrites })}
           {/if}
@@ -526,6 +580,36 @@
 
   <!-- 悬浮输入框：绝对定位，消息区用它的真实高度留出底部空间。 -->
   <div class="composer" bind:clientHeight={composerH} data-testid="agent-composer">
+    <!--
+      插话队列：已经发出去但还在等本轮的下一次模型调用。放在输入框上沿而不是
+      消息流里 —— 它还没进对话（可以改、可以撤），而消息流里的是历史。
+    -->
+    {#if agentState.queued.length}
+      <div class="queued" data-testid="agent-queued">
+        {#each agentState.queued as q (q.id)}
+          <div class="queued-item" data-testid="agent-queued-item">
+            <span class="queued-tag">{tr('agent.interject.waiting')}</span>
+            <span class="queued-text">{q.text}</span>
+            {#if q.images?.length}
+              <span class="queued-n">{tr('agent.interject.images', { n: q.images.length })}</span>
+            {/if}
+            <button
+              type="button"
+              class="queued-btn"
+              data-testid="agent-queued-edit"
+              onclick={() => editQueued(q)}
+            >{tr('agent.interject.edit')}</button>
+            <button
+              type="button"
+              class="queued-btn"
+              data-testid="agent-queued-cancel"
+              onclick={() => agentState.removeQueued(q.id)}
+            >{tr('agent.interject.cancel')}</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     {#if attachments.length}
       <div class="attachments">
         {#each attachments as a, i (a.url)}
@@ -598,6 +682,34 @@
     {/if}
 
     <div class="input-box">
+      <!-- 标注进上下文的片段 / 排版元素：随这一条消息发出去，× 可单独撤掉。 -->
+      {#if agentState.contextRefs.length}
+        <div class="ctx-refs" data-testid="agent-context-refs">
+          {#each agentState.contextRefs as ref (contextRefKey(ref))}
+            <span class="ctx-ref" data-testid="agent-context-ref" data-kind={ref.kind}>
+              <Icon name={ref.kind === 'clip' ? 'video' : 'type'} size={10} />
+              <span
+                class="ctx-ref-name"
+                title={ref.kind === 'element'
+                  ? tr('agent.contextRef.inClip', { name: ref.clipName })
+                  : tr('agent.contextRef.clip')}
+              >
+                {ref.name || tr(ref.kind === 'clip' ? 'agent.contextRef.clip' : 'agent.contextRef.element')}
+              </span>
+              <button
+                type="button"
+                class="ctx-ref-x"
+                aria-label={tr('agent.contextRef.remove')}
+                data-testid="agent-context-ref-remove"
+                onclick={() => agentState.removeContextRef(contextRefKey(ref))}
+              >
+                <Icon name="x" size={9} />
+              </button>
+            </span>
+          {/each}
+        </div>
+      {/if}
+
       <textarea
         bind:this={textarea}
         bind:value={input}
@@ -664,12 +776,22 @@
           </svg>
         </span>
         {#if agentState.busy}
+          <!-- 停止与插话并存：运行期间仍然要能发（进队列），不能只剩「停」。 -->
           <IconButton
             icon="square"
             label={tr('agent.stop')}
             size="sm"
             testid="agent-stop"
             onclick={() => agentState.stop()}
+          />
+          <IconButton
+            icon="corner-down-right"
+            label={tr('agent.interject.send')}
+            tipText={tr('agent.interject.tip')}
+            size="sm"
+            testid="agent-send"
+            disabled={!canSend}
+            onclick={send}
           />
         {:else}
           <IconButton
@@ -1080,6 +1202,108 @@
   }
   .input-box:focus-within {
     border-color: var(--accent);
+  }
+  /*
+   * 标注胶囊。与附图缩略图是两种东西：附图是**内容**（要模型看），胶囊是
+   * **宾语**（这句话在说谁）—— 所以用 accent 淡底而不是缩略图边框。
+   */
+  .ctx-refs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 2px var(--sp-2) 4px;
+  }
+  .ctx-ref {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 100%;
+    padding: 1px 2px 1px 5px;
+    background: var(--accent-weak);
+    border: 1px solid var(--accent-border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 10px;
+    line-height: 16px;
+  }
+  .ctx-ref-name {
+    min-width: 0;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ctx-ref-x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .ctx-ref-x:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+  }
+
+  /*
+   * 插话卡片：**虚线**边框 —— 它不是消息流里的历史，而是「还没送出去的话」，
+   * 跟输入框是一伙的。实线会让人以为它已经进了对话。
+   */
+  .queued {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 0 0 var(--sp-2);
+  }
+  .queued-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px var(--sp-2);
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .queued-tag {
+    flex: none;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+  .queued-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .queued-n {
+    flex: none;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+  .queued-btn {
+    flex: none;
+    padding: 0 4px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 10px;
+    cursor: pointer;
+  }
+  .queued-btn:hover {
+    color: var(--text-primary);
+  }
+  .cache {
+    color: var(--text-secondary);
   }
   textarea {
     display: block;

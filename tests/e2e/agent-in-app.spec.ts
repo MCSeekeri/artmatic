@@ -863,3 +863,222 @@ test('插件试挂未确认时不执行源码，确认后才产生实例（W0.4�
   expect(probe.confirmed.ok).toBe(true);
   expect(probe.confirmed.data?.effects).toContain('e2e-try-approval/tint');
 });
+
+test('右键片段「添加进上下文」：胶囊进输入框，消息里带 id 与界面快照（系统提示保持常量）', async ({ page }) => {
+  const llm = await stubLlm(page, [textChunk('收到。') + DONE]);
+
+  await page.goto('/');
+  await page.waitForFunction(
+    () => Boolean((window as never as { __artmatic?: { control?: unknown } }).__artmatic?.control),
+  );
+  await openDemo(page);
+
+  const clip = await page.evaluate(() => {
+    const p = (
+      window as never as {
+        __artmatic: { store: { project: { tracks: { kind: string; clips: { id: string; label: string }[] }[] } } };
+      }
+    ).__artmatic.store.project;
+    for (const tk of p.tracks) {
+      if (tk.kind === 'visual' && tk.clips.length) return { id: tk.clips[0]!.id, label: tk.clips[0]!.label };
+    }
+    return null;
+  });
+  expect(clip).not.toBeNull();
+
+  await page.locator(`[data-clip-id="${clip!.id}"]`).click({ button: 'right' });
+  await page.getByTestId('ctx-add-context').click();
+
+  // 抽屉自动打开；胶囊显示的是**名字**（id 在提示词里，界面上不需要），焦点已交给输入框。
+  await expect(page.getByTestId('agent-drawer')).toBeVisible();
+  const pill = page.getByTestId('agent-context-ref');
+  await expect(pill).toHaveCount(1);
+  await expect(pill).toContainText(clip!.label);
+  await expect(page.getByTestId('agent-input')).toBeFocused();
+
+  await configureKey(page);
+  await send(page, '改一下这个片段');
+  await expect.poll(() => llm.calls()).toBeGreaterThan(0);
+
+  const messages = llm.bodies()[0]!.messages as { role: string; content: unknown }[];
+  /*
+   * 系统提示是**纯常量**（缓存纪律）：界面快照不在里面，否则每一轮都会把
+   * 整段前缀缓存作废。动态语境只能贴在 user 消息尾部。
+   */
+  const system = JSON.stringify(messages[0]);
+  expect(system).not.toContain('Where the user is right now');
+
+  // user 消息：界面快照 + 标注块（标注里必须有可直接拿去调工具的 id）。
+  const user = JSON.stringify(messages.filter((m) => m.role === 'user').pop());
+  expect(user).toContain('Where the user is right now');
+  expect(user).toContain('Playhead:');
+  expect(user).toContain('View: the timeline');
+  expect(user).toContain('用户标注的片段');
+  expect(user).toContain(`id: ${clip!.id}`);
+  expect(user).toContain('改一下这个片段');
+
+  // 发送后清空：它已经进了那条消息，留着会让下一条莫名其妙又带上它。
+  await expect(page.getByTestId('agent-context-ref')).toHaveCount(0);
+});
+
+test('排版元素右键「添加进上下文」：按所属片段分组，界面快照写明在排版页', async ({ page }) => {
+  const llm = await stubLlm(page, [textChunk('收到。') + DONE]);
+
+  await page.goto('/');
+  await page.waitForFunction(
+    () => Boolean((window as never as { __artmatic?: { control?: unknown } }).__artmatic?.control),
+  );
+  await openDemo(page);
+
+  const clipId = await page.evaluate(async () => {
+    const A = (
+      window as never as {
+        __artmatic: {
+          control: { getScene: (o?: unknown) => Promise<{ ok: boolean; data: { tracks: { clips: { id: string; source?: { type: string } }[] }[] } }> };
+          appState: { openTypographyTab: (c: string) => void };
+        };
+      }
+    ).__artmatic;
+    // 用完整快照：`ids` 档的片段视图没有 `source`，判断不出哪一个是文本片段。
+    const r = await A.control.getScene();
+    for (const t of r.data.tracks) {
+      for (const c of t.clips) {
+        if (c.source?.type === 'text') {
+          A.appState.openTypographyTab(c.id);
+          return c.id;
+        }
+      }
+    }
+    return '';
+  });
+  expect(clipId).not.toBe('');
+
+  const stage = page.getByTestId('typo-stage');
+  await expect(stage).toBeVisible();
+  const el = page.locator('.paper [data-el-id]').first();
+  await expect(el).toBeVisible();
+  const elementId = (await el.getAttribute('data-el-id'))!;
+  const box = (await el.boundingBox())!;
+
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
+  await page.getByTestId('typo-ctx-add-context').click();
+
+  const pill = page.getByTestId('agent-context-ref');
+  await expect(pill).toHaveCount(1);
+  await expect(pill).toHaveAttribute('data-kind', 'element');
+
+  await configureKey(page);
+  await send(page, '把这个元素放大');
+  await expect.poll(() => llm.calls()).toBeGreaterThan(0);
+
+  const messages = llm.bodies()[0]!.messages as { role: string; content: unknown }[];
+  // 视图信息在 user 消息里（系统提示是常量，见上一条用例的注释）。
+  expect(JSON.stringify(messages[0])).not.toContain('View:');
+  const user = JSON.stringify(messages.filter((m) => m.role === 'user').pop());
+  expect(user).toContain('View: the typography editor');
+  expect(user).toContain('用户标注的排版元素');
+  expect(user).toContain(`位于片段`);
+  expect(user).toContain(clipId);
+  expect(user).toContain(`id: ${elementId}`);
+});
+
+/* ------------------------------------------------ 前缀缓存与插话（2026-10-24） */
+
+/** DeepSeek 口径的 usage：命中 / 未命中分开报。 */
+function usageCache(hit: number, miss: number): string {
+  return `data: ${JSON.stringify({
+    choices: [],
+    usage: {
+      prompt_tokens: hit + miss,
+      completion_tokens: 5,
+      prompt_cache_hit_tokens: hit,
+      prompt_cache_miss_tokens: miss,
+    },
+  })}\n\n`;
+}
+
+test('前缀缓存：第二轮是上一轮的严格前缀，界面快照只在 user 消息里，命中率按轮显示', async ({ page }) => {
+  const llm = await stubLlm(page, [
+    textChunk('第一轮。') + usageCache(0, 1_000) + DONE,
+    textChunk('第二轮。') + usageCache(900, 100) + DONE,
+  ]);
+  await openPanel(page);
+  await configureKey(page);
+
+  await send(page, '第一句');
+  await expect(page.getByTestId('agent-msg-assistant')).toContainText('第一轮', { timeout: 20_000 });
+  // 有字段但命中 0：这是「第一次请求必然全 miss」，要显示 0%，而不是不显示
+  await expect(page.getByTestId('agent-cache')).toHaveAttribute('data-pct', '0');
+
+  await send(page, '第二句');
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('第二轮', {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId('agent-cache')).toHaveAttribute('data-pct', '90');
+
+  const bodies = llm.bodies();
+  expect(bodies).toHaveLength(2);
+  const firstMsgs = bodies[0]!.messages as unknown[];
+  const secondMsgs = bodies[1]!.messages as unknown[];
+  /*
+   * 严格前缀。这条是整份 spec 里最重要的断言：前缀一旦被改写（例如把播放头
+   * 拼进系统提示），DeepSeek / 智谱 / Kimi / 阿里 / Anthropic 的缓存**整段失效**，
+   * 而回执上完全看不出来 —— 只有账单会变。
+   */
+  expect(secondMsgs.slice(0, firstMsgs.length)).toEqual(firstMsgs);
+  expect(secondMsgs[0]).toEqual(firstMsgs[0]);
+
+  // 动态语境必须在最后一条 user 消息里，**不能**进系统提示
+  expect(JSON.stringify(firstMsgs[0])).not.toContain('Where the user is right now');
+  expect(JSON.stringify(firstMsgs[firstMsgs.length - 1])).toContain('Where the user is right now');
+});
+
+test('插话：运行期间可发送，卡片可编辑/撤销，内容在下一次调用前注入', async ({ page }) => {
+  const llm = await stubLlm(page, [
+    toolCall('q1', 'ask_user', { question: '继续吗？', options: ['继续'] }) + DONE,
+    textChunk('收到插话。') + DONE,
+  ]);
+  await openPanel(page);
+  await configureKey(page);
+
+  await send(page, '先问我一句');
+  await expect(page.getByTestId('agent-ask')).toBeVisible({ timeout: 20_000 });
+
+  const INTERJECT = '顺便把标题改成红的';
+
+  // 运行期间发送 = 插话：不报错、不进对话，先挂在输入框上方
+  await page.getByTestId('agent-input').fill(INTERJECT);
+  await page.getByTestId('agent-send').click();
+  await expect(page.getByTestId('agent-queued-item')).toHaveCount(1);
+  await expect(page.getByTestId('agent-queued-item')).toContainText(INTERJECT);
+
+  // 编辑：回到输入框，卡片撤下
+  await page.getByTestId('agent-queued-edit').click();
+  await expect(page.getByTestId('agent-queued-item')).toHaveCount(0);
+  await expect(page.getByTestId('agent-input')).toHaveValue(INTERJECT);
+
+  // 撤销：排队里的直接丢掉
+  await page.getByTestId('agent-send').click();
+  await expect(page.getByTestId('agent-queued-item')).toHaveCount(1);
+  await page.getByTestId('agent-queued-cancel').click();
+  await expect(page.getByTestId('agent-queued-item')).toHaveCount(0);
+
+  // 再插一次，这回让它送到模型
+  await page.getByTestId('agent-input').fill(INTERJECT);
+  await page.getByTestId('agent-send').click();
+  await expect(page.getByTestId('agent-queued-item')).toHaveCount(1);
+
+  // 回答问答卡 → 本轮继续 → 插话在**下一次请求**里
+  await page.getByTestId('agent-ask-option').first().click();
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('收到插话', {
+    timeout: 20_000,
+  });
+
+  const injected = JSON.stringify(llm.bodies()[1]!.messages);
+  expect(injected).toContain(INTERJECT);
+  expect(injected).toContain('interjection');
+
+  // 送达后卡片撤下，消息流里出现一条用户气泡
+  await expect(page.getByTestId('agent-queued-item')).toHaveCount(0);
+  await expect(page.getByTestId('agent-msg-user').last()).toContainText(INTERJECT);
+});

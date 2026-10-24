@@ -173,12 +173,20 @@ export function createAnthropicReducer(_def: ProviderDef, handlers: StreamHandle
         .map(([index, s]) => ({ id: s.id || `tool-${index}`, name: s.name, arguments: s.json || '{}' }));
 
       const prompt = inputTokens + cacheRead + cacheCreate;
+      /*
+       * 三个缓存字段**无条件写**（含 0）：`usage.ts` 靠「这个字段存在」判断
+       * 这家会汇报缓存。只写非零值的话，命中率为 0 的第一轮会被当成
+       * 「这家不支持缓存」，面板上什么都不显示。
+       */
       const usage: LlmUsage | null =
         prompt || outputTokens
           ? {
               prompt_tokens: prompt,
               completion_tokens: outputTokens,
               total_tokens: prompt + outputTokens,
+              input_tokens: inputTokens,
+              cache_read_input_tokens: cacheRead,
+              cache_creation_input_tokens: cacheCreate,
             }
           : null;
 
