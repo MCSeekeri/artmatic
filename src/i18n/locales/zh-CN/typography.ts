@@ -97,6 +97,7 @@ export const typography = {
   'typo.undo.keyValue': '修改关键帧',
   'typo.undo.keyMove': '移动关键帧',
   'typo.undo.keyEase': '修改缓动',
+  'typo.undo.keyColor': '标记关键帧颜色',
   'typo.undo.removeKey': '删除关键帧',
   'typo.undo.trackLoop': '设置循环',
   'typo.undo.trackTarget': '切换动画作用层',
@@ -289,6 +290,8 @@ export const typography = {
   'typo.animPause': '暂停',
   'typo.animRewind': '回到片段起点',
   'typo.anim.custom': '自定义',
+  // 预设插入后的回执：插在哪里是用户下一步要确认的事（播放头可能在别处）。
+  'typo.animInserted': '已插入「{name}」· {at}s',
 
   /* ------------------------------------------------ 关键帧面板（KeyframePanel） */
   'typo.kfPanel': '关键帧',
@@ -309,6 +312,8 @@ export const typography = {
   'typo.kfKeyValue': '值',
   'typo.kfEase': '缓动',
   'typo.kfKeyDelete': '删除关键帧',
+  // 关键帧的**标记色**：只给编辑器做记号，不影响动画（不写进样式表）。
+  'typo.kfKeyColor': '关键帧颜色',
   'typo.kfAddKeyHint': '双击轨道加点',
   'typo.kfMarquee': '框选关键帧',
   'typo.kfSnap': '吸附',

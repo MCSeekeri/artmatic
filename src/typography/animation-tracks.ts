@@ -42,6 +42,28 @@ export interface TrackKey {
   v: number | string;
   /** 出向缓动：本帧 → 下一帧。缺省 = 条目 `easing`。 */
   ease?: TrackEase | null;
+  /**
+   * **标记色**（`#rrggbb`）。只给编辑器用，**绝不进 CSS** —— 它是「这一帧是
+   * 关键节点，记得它」的记号，不影响求值（`channelDeclaration` / `emitTracks`
+   * 都不读这个字段）。
+   *
+   * 为什么存在文档里而不是面板本地：标记属于内容的编排意图，换一台机器、换一次
+   * 会话都该还在（与选中集这类纯视图状态相反）。
+   */
+  color?: string;
+}
+
+/**
+ * 标记色的格式闸门：只认 `#rrggbb`。
+ *
+ * 非法值返回 `null`（调用方据此删掉字段而不是写一个坏色）。收紧到一个形状是
+ * 刻意的 —— 这个值会直接进 `style:background`，放行任意字符串等于开了一条
+ * 往界面上写任意 CSS 的口子（与 `isValidPropValue` 同一条理由）。
+ */
+export function normalizeKeyColor(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  return /^#[0-9a-f]{6}$/i.test(s) ? s.toLowerCase() : null;
 }
 
 /**

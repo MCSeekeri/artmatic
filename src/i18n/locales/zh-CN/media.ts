@@ -1333,6 +1333,10 @@ export const media = {
   'paint.wave': '波浪',
 
   /* ------------------------------------------------ 排版动画预设（typography/animation） */
+  // 图库分组（与 PPT 的「进入 / 强调 / 退出」同构，见 ui/typography/anim-catalog.ts）
+  'anim.groupEnter': '进入',
+  'anim.groupEmphasis': '强调',
+  'anim.groupExit': '退出',
   'anim.fadeIn': '淡入',
   'anim.fadeOut': '淡出',
   'anim.fadeInOut': '淡入淡出',

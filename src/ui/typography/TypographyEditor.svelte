@@ -469,15 +469,6 @@
     return groupById(d, gid);
   });
 
-  /** 选中元素挂着的唯一预设动画（决定动画图库里哪一项高亮）。 */
-  const activePreset = $derived.by(() => {
-    void appState.version;
-    const anims = selection.flatMap((e) => e.animations);
-    if (anims.length !== 1) return null;
-    const only = anims[0]!;
-    return only.kind === 'preset' ? only.preset : null;
-  });
-
   const tabs = $derived.by(() => {
     void appState.version;
     void appState.typoAlignTarget;
@@ -491,7 +482,6 @@
         fontFamilies: appState.fontFamilies,
         localFontFamilies: appState.localFontFamilies,
         supportsLocalFonts: appState.supportsLocalFonts,
-        activePreset,
         onOpenCustomCss: () => (customCssOpen = true),
         onOpenIconPicker: () => (iconPickerOpen = true),
         onOpenGenPicker: () => (genPickerOpen = true),

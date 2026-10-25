@@ -32,7 +32,7 @@ import {
   type TypographyTheme,
 } from '../../typography/theme';
 import type { MessageKey } from '../../i18n/locales';
-import { ANIM_PRESETS } from '../../typography/animation';
+import type { AnimPreset } from '../../typography/animation';
 import { GRID_LIMITS, type TypoGridPrefs } from '../../typography/grid';
 import {
   SHAPE_PRESETS,
@@ -48,9 +48,6 @@ import { loadRecentFonts, orderByRecent, rememberFont } from './recent-fonts';
 import { cssFamily } from '../../typography/font/css-family';
 import type { SelectOption } from '../controls/select-model';
 import { tr } from '../../i18n/index.svelte';
-
-/** 「动作型」下拉的占位值：选完不改变显示值，所以可以连点。 */
-const ANIM_PICK = '__pick-anim';
 
 /**
  * 「设计」页「画布大小」按钮的 testid。
@@ -90,8 +87,6 @@ export interface TypographyRibbonInput {
   localFontFamilies: string[];
   /** 当前环境支不支持读本机字体（入口按钮据此置灰）。 */
   supportsLocalFonts: boolean;
-  /** 当前激活的动画预设（若选中元素只挂了一个预设动画）。 */
-  activePreset: string | null;
   /** 打开「自定义 CSS」弹窗（界面状态，所以由编辑器提供）。 */
   onOpenCustomCss: () => void;
   /** 打开「插入图标」选择器（同上）。 */
@@ -1267,25 +1262,45 @@ export function buildTypographyTabs(
           ],
         },
         {
-          id: 'presets',
-          label: tr('rib.group.presets'),
+          /*
+           * 「动画」组 = **常驻的一条宽条**（PPT 同款），切到这个 Tab 就在。
+           *
+           * 与右边「高级动画」里的「添加动画」弹层并存：这条给「十四个预设一眼
+           * 挑一个」，弹层给分组目录（预设将来变多时它才是可扩展的那一层）。
+           * 两处都是「在播放头插一段」，可以连点往后接（`actions.applyPreset`）。
+           */
+          id: 'anim-strip',
+          label: tr('rib.anim'),
           items: [
             {
-              kind: 'select',
+              kind: 'animStrip',
+              id: 'anim-inline',
+              label: tr('rib.group.presets'),
+              testid: 'typo-anim-strip',
+              disabled: none,
+              onselect: (id) => a.applyPreset(id as AnimPreset),
+            },
+          ],
+        },
+        {
+          id: 'presets',
+          label: tr('rib.group.advancedAnim'),
+          items: [
+            {
+              /*
+               * 图标图库，不是下拉：十四个动画按名字挑不出来（见
+               * `ui/ribbon/RibbonAnimGallery.svelte` 的文件头）。点一下 = **在播放头
+               * 位置插一段**，可以连点，前一段不丢（`actions.applyPreset`）。
+               *
+               * testid：入口沿用旧下拉的名字 `typo-anim-preset`，卡片是
+               * `typo-anim-preset-card-<预设 id>`（与形状图库同一套后缀）。
+               */
+              kind: 'animGallery',
               id: 'anim-preset',
-              label: tr('rib.anim'),
+              label: tr('rib.addAnim'),
               testid: 'typo-anim-preset',
-              optionTestidPrefix: 'typo-anim-option',
-              width: 140,
-              value: input.activePreset ?? ANIM_PICK,
-              options: [
-                { value: ANIM_PICK, label: tr('rib.pickAnim') },
-                ...ANIM_PRESETS.map((p) => ({ value: p.id, label: tr(p.labelKey) })),
-              ],
-              onchange: (v) => {
-                const preset = ANIM_PRESETS.find((p) => p.id === v);
-                if (preset) a.applyPreset(preset.id);
-              },
+              disabled: none,
+              onselect: (id) => a.applyPreset(id as AnimPreset),
             },
             {
               kind: 'button',
@@ -1310,15 +1325,6 @@ export function buildTypographyTabs(
               testid: 'typo-anim-css',
               disabled: none,
               onselect: () => input.onOpenCustomCss(),
-            },
-            {
-              kind: 'button',
-              id: 'clear-anim',
-              label: tr('rib.clearAnim'),
-              icon: 'rotate-cw',
-              testid: 'typo-anim-clear',
-              disabled: none,
-              onselect: () => a.clearAnimations(),
             },
             {
               kind: 'button',

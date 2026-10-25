@@ -39,8 +39,18 @@
     `{ steps: n, jump }`，发射时统一由 `animation.ts::easingCss` 拼成 CSS 值）。
     想让几个属性异步起落就发**多条**
     动画，各带自己的 `animation-delay`。同一元素**不许两条动画动同一 (属性, 作用层)**
-    （同层互相覆盖、嵌套层矩阵相乘，语义都不可预期）——UI 拒绝，`applyPreset` 按
-    `(prop, target)` 替换。**跨层各一条是合法的**（它们落在不同 DOM 节点上）。
+    （同层互相覆盖、嵌套层矩阵相乘，语义都不可预期）——所以「再加一个动画」不是
+    再挂一条同属性动画，而是**往那条轨道里接一段关键帧**：`applyPreset` 走
+    `animation-insert.ts::insertAnimationsAt(existing, incoming, at)`，插入点 =
+    播放头（片段内相对秒），插入点之前的帧一帧不动、之后的帧整体右移新动画时长
+    （用户 2026-10-25 定的「增量插入、不破坏先前动画」）。插入点会夹进片段
+    （`min(播放头, 片段时长 − 动画时长)`）—— 否则「插进去了但画面里永远看不到」。
+    同 (属性, 作用层) 的**替换**语义只剩 `addTrack` / `setTrackTarget` 这两条手工路径。
+    **跨层各一条是合法的**（它们落在不同 DOM 节点上）。
+  - 关键帧的 `color`（`#rrggbb`）是**编辑器标记**，只画在关键帧面板的菱形上，
+    **绝不进样式表**（`channelDeclaration` / `emitTracks` 都不读它）。
+    `normalizeKeyColor()` 是唯一闸门；agent 的读回形状会带上它（否则「读一遍再写回」
+    会把标记抹掉）。
   - **`target` 只有两个值，缺省是 `box`**：
     `box`（不写键）落在 `.typo-box`（外壳**之外**，文本框底板与边框一起动 ——
     `clip-path` 才裁得到框、`rot` 才转整块）；`content` 落在 `.typo-anim`

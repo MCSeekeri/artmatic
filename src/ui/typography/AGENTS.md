@@ -128,6 +128,38 @@
 
 ---
 
+## 动画预设（「动画」页的常驻条 + 弹层，2026-10-25）
+
+预设不再是一个 `<select>`，而是**两个并存的入口**（用户要求「两个东西并行存在」）：
+
+| 入口 | 组件 | 形态 | 什么时候用 |
+|---|---|---|---|
+| 「动画」组的**常驻条** | `ui/ribbon/RibbonAnimStrip.svelte` | 640px 宽的凹槽，一排卡片，两端翻页键 + 滚轮翻页 | 切到这一页就想挑一个（主入口） |
+| 「高级动画」组的**添加动画** | `ui/ribbon/RibbonAnimGallery.svelte` | 弹层，按「进入 / 强调 / 退出」分组 | 预设变多之后它是目录 |
+
+- 两者的卡片是**同一份图标 + 同一份名字**，图标都由 `ui/ribbon/AnimPresetIcon.svelte`
+  渲染 —— 两处各写一遍图元循环的话，改一次描边宽度就要改两处，而用户会并列看到它们。
+- **十四个动画按名字挑不出来**（「弹一下」得先在脑子里翻成一段动效），所以卡片 =
+  **示意图形 + 名字**。分组与图标住在 `ui/typography/anim-catalog.ts`，**不在**
+  `typography/animation.ts` 的模型表里：那张表被渲染层、schema 迁移、agent 一起读，
+  改一个图标不该动模型。代价是「新增预设要两处登记」，由
+  `tests/unit/anim-catalog.test.ts` 变成明确失败。
+- **示意图形是圆角方形**（用户定的，不是五角星）：`sq` 实心 = 终态、低透明度 =
+  起始态、虚线 = 「将要变化」的框；`path` 画运动提示（箭头 / 圆弧 / 抖动线）。
+  坐标在 `0 0 32 32`，颜色只来 `currentColor`（不另建一套图标配色）。
+- **常驻条的滚轮必须自己接管**：`Ribbon.svelte` 把纵向滚轮换成了面板级横向滚动，
+  不 `stopPropagation` 的话「在这条上滚一下，整排按钮跑到左边去了」。一次滚轮 =
+  翻一页（160ms 内只认第一次，滚轮与触控板都会连发事件）。
+- **点一下 = 在播放头插一段**（`actions.applyPreset` → 增量插入），所以卡片是
+  **一次性动作**、不是「当前值」：卡片上高亮的只是「刚插进去的那一个」（本地状态），
+  真相在预览下方的关键帧面板里。**别再给它加 `value` / 选中态** —— 那会误导成
+  「这个元素只有这一条动画」。
+- testid：条是 `typo-anim-strip` / `-card-<id>` / `-prev` / `-next` / `-track`，
+  弹层沿用旧下拉的入口名（`typo-anim-preset` / `typo-anim-preset-pop` /
+  `typo-anim-preset-card-<id>`），改名会让所有涉及动画的 E2E 一起碎。
+
+---
+
 ## 关键帧面板（`KeyframePanel.svelte` / `KeyframePopover.svelte`，2026-10-24）
 
 - **位置在预览下方、与预览同宽**：`.main` 的中间列包一层 `.center`（viewport + 4px 横向
@@ -148,7 +180,12 @@
   下方放不下就翻到上方并夹在视口内。双击空白补帧**只选中、不弹浮层**（连续补帧时它
   会挡住刚加的点）。
 - 关键帧形状 = 缓动种类：缺省菱形、`cubic-bezier`/关键字圆形、`steps()` 方形
-  （`easeKindOf`）。填充用 `--surface-0`、描边 `--text-secondary`，选中换 `--accent`。
+  （`easeKindOf`）。描边 `--text-secondary`，选中换 `--accent`。
+- **关键帧可以标色**（`TrackKey.color`）：填充走 `--key-c`（没有标记时退回
+  `--surface-0`），入口是顶栏的 `typo-kf-key-color`（`ColorField`，选中帧时才出现，
+  框选的一批刷同一个颜色 = 一笔撤销）。它**只做记号**：不进 `@keyframes`、
+  不改求值、不影响导出（守卫 `tests/e2e/typography-keyframes.spec.ts` 断「样式表逐字没变」）。
+  不要把它做成「按颜色分组 / 按颜色筛选」—— 那会让一个纯展示字段变成第二个真源。
 - **一条动画 = 一个属性**（见 `src/typography/AGENTS.md` 的 tracks 一节）。不同属性要
   异步就分别占一条轨道，各自的首帧决定 `delay`；断言要读计算样式 `animationDelay`，
   文档字段只是意图。

@@ -934,12 +934,13 @@ export const TOOLS = [
     kind: 'write',
     description:
       '设置 / 替换 / 清除元素动画（与编辑器同一套 CSS 动画，导出里同样生效）。' +
-      '**首选**结构化轨道：{ prop, keys:[{ t, v, ease? }], loop?, easing? } ——' +
+      '**首选**结构化轨道：{ prop, keys:[{ t, v, ease?, color? }], loop?, easing? } ——' +
       '一条动画只动一个属性。prop = x | y | sx | sy | rot | opacity | blur，或任意 CSS 属性名' +
       '（kebab-case：letter-spacing / clip-path / color / transform）。' +
       't 是**相对片段起点的绝对秒**（不是 0..1、不是帧号），也接受 { beat: n }；' +
       'v 是数字（x/y 为 px、sx/sy 为倍数、rot 为度、opacity 0..1、blur 为 px）或任意属性的原始字符串；' +
-      'ease 是「从本帧到下一帧」那一段的缓动（关键字或 [x1,y1,x2,y2]），不填则继承条目 easing。' +
+      'ease 是「从本帧到下一帧」那一段的缓动（关键字或 [x1,y1,x2,y2]），不填则继承条目 easing；' +
+      'color 是可选的 #rrggbb **标记色**（只给编辑器做记号，不进样式表，读回时原样带回）。' +
       'delay / duration 由第一帧与最后一帧派生（传了也不改变时序）。' +
       '要让几个属性错开起落，就发多条动画（mode:"add"）—— 每条各自是一条 CSS 动画、各有各的 delay；' +
       '同一作用层（target）里不要对同一属性发两条。' +

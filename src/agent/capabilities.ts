@@ -421,6 +421,9 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
           t: 'ABSOLUTE SECONDS from the clip start (not 0..1, not frames) or { beat: n }',
           v: 'number for channels (px / factor / degrees / 0..1), raw CSS string for any other property',
           ease: 'easing of the segment starting at this key (keyword or [x1,y1,x2,y2]); omit to inherit',
+          color:
+            'optional #rrggbb marker colour for the keyframe list in the editor — purely visual, ' +
+            'it never reaches the style sheet',
         },
         derived:
           'delay = first key, duration = last key − first key. Passing delay / duration does not ' +

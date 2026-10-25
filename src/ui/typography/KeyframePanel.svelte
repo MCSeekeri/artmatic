@@ -20,6 +20,8 @@
   import IconButton from '../controls/IconButton.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
   import Select from '../controls/Select.svelte';
+  import ColorField from '../controls/ColorField.svelte';
+  import { themeById } from '../../typography/theme';
   import { tick } from 'svelte';
   import { appState } from '../app-state.svelte';
   import { editorState } from './editor-state.svelte';
@@ -128,6 +130,25 @@
   );
 
   const selTrack = $derived(tracks.find((a) => a.id === kfPanel.animId) ?? tracks[0] ?? null);
+
+  /** 取色卡的配色网格（标记色本身存的是裸 hex，但色格要跟文档的配色方案走）。 */
+  const theme = $derived(themeById(editorState.doc?.theme, appState.project.customThemes));
+
+  /**
+   * 选中帧的**标记色**：全部选中帧同色才显示那个颜色，否则显示「无」
+   * （混色时点开会把整批统一成新选的颜色 —— 那是用户的下一步意图）。
+   */
+  const selKeyColor = $derived.by(() => {
+    const sel = kfPanel.keys;
+    if (!sel.length) return '';
+    const found: string[] = [];
+    for (const s of sel) {
+      const a = tracks.find((x) => x.id === s.animId);
+      const k = a?.keys.find((x) => Math.abs(x.t - s.t) < 1e-6);
+      if (k?.color) found.push(k.color);
+    }
+    return found.length === sel.length && new Set(found).size === 1 ? found[0]! : '';
+  });
 
   const keyIndex = (anim: TracksAnimation, t: number): number =>
     anim.keys.findIndex((x) => Math.abs(x.t - t) < 1e-6);
@@ -655,6 +676,21 @@
         <span class="lab">{tr('typo.kfNoKey')}</span>
       {/if}
 
+      {#if kfPanel.keys.length}
+        <!--
+          标记色：只给编辑时做记号，**不影响动画**（不进样式表，见 actions.setKeysColor）。
+          放在这一格是因为它作用于「选中的帧」，与左边的时刻 / 删除同一组。
+        -->
+        <ColorField
+          label={tr('typo.kfKeyColor')}
+          value={selKeyColor}
+          {theme}
+          allowNone
+          testid="typo-kf-key-color"
+          onchange={(v) => actions.setKeysColor(kfPanel.keys, v || null)}
+        />
+      {/if}
+
       {#if selTrack}
         <IconButton
           icon="trash"
@@ -824,6 +860,7 @@
                       class:square={kind === 'step'}
                       class:on={isSel(a.id, k.t)}
                       style:left={`${keyX(k.t)}px`}
+                      style:--key-c={k.color}
                       data-testid="typo-kf-key"
                       data-t={k.t}
                       aria-label={`${propLabel(a.prop)} ${k.t.toFixed(2)}s`}
@@ -1180,8 +1217,12 @@
     width: 9px;
     height: 9px;
     padding: 0;
-    /* 白（浅色）/ 近底（深色）填充 + 深灰描边：不再是一块纯黑。 */
-    background: var(--surface-0);
+    /*
+     * 填充 = **标记色**（`--key-c`，用户自己刷的），没有标记时退回
+     * 「白（浅色）/ 近底（深色）」+ 深灰描边：不再是一块纯黑。
+     * 标记色只在编辑器里生效 —— 它从不进动画样式表。
+     */
+    background: var(--key-c, var(--surface-0));
     border: 1px solid var(--text-secondary);
     border-radius: 0;
     transform: translate(-50%, -50%);

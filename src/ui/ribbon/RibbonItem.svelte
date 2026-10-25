@@ -18,6 +18,8 @@
   import RibbonColor from './RibbonColor.svelte';
   import RibbonSegment from './RibbonSegment.svelte';
   import RibbonGallery from './RibbonGallery.svelte';
+  import RibbonAnimGallery from './RibbonAnimGallery.svelte';
+  import RibbonAnimStrip from './RibbonAnimStrip.svelte';
   import RibbonMenu from './RibbonMenu.svelte';
   import RibbonThemes from './RibbonThemes.svelte';
   import { itemWidth, type RibbonItemSpec } from './ribbon-model';
@@ -137,6 +139,22 @@
     cards={item.cards}
     label={item.label}
     columns={item.columns}
+    disabled={item.disabled}
+    testid={item.testid}
+    onselect={item.onselect}
+  />
+{:else if item.kind === 'animGallery'}
+  <RibbonAnimGallery
+    label={item.label}
+    width={w}
+    disabled={item.disabled}
+    testid={item.testid}
+    onselect={item.onselect}
+  />
+{:else if item.kind === 'animStrip'}
+  <RibbonAnimStrip
+    label={item.label}
+    width={w}
     disabled={item.disabled}
     testid={item.testid}
     onselect={item.onselect}

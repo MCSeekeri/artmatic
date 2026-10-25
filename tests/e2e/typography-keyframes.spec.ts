@@ -42,7 +42,7 @@ interface AnimShape {
   duration: number;
   /** `Infinity` 过不了 evaluate 的序列化，读它要单独的布尔断言。 */
   iterations?: number;
-  keys?: { t: number; v: number | string; ease?: unknown }[];
+  keys?: { t: number; v: number | string; ease?: unknown; color?: string }[];
 }
 
 interface DocShape {
@@ -559,4 +559,120 @@ test('动画延迟只算一遍：0.4s 起的轨道在 0.65s 已走一半（不�
   expect(await translateYAt(0.9)).toBeCloseTo(-100, 0);
   // 老实现「翻倍」后的落点：修复后必须早就是末帧。
   expect(await translateYAt(1.65)).toBeCloseTo(-100, 0);
+});
+
+/** 把播放头挪到「片段内第 sec 秒」。 */
+async function seekLocal(page: Page, sec: number): Promise<void> {
+  await page.evaluate(
+    ({ s }) => {
+      const A = (window as never as { __artmatic: Hooks }).__artmatic;
+      const id = A.appState.activeTypoClipId;
+      for (const t of A.store.project.tracks) {
+        for (const c of t.clips) {
+          if (c.id === id) {
+            A.appState.seek(c.start + s);
+            return;
+          }
+        }
+      }
+      throw new Error('找不到当前片段');
+    },
+    { s: sec },
+  );
+}
+
+/** 舞台上那份动画样式表（`<style>` 的唯一注入点）。 */
+function animSheet(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('.paper style'))
+      .map((s) => s.textContent ?? '')
+      .join('\n'),
+  );
+}
+
+/**
+ * 动画预设图库：**在播放头处增量插入**，先前排好的关键帧一帧不丢。
+ *
+ * 旧实现是「按 (prop, target) 替换」—— 在 1s 处再加一个淡出会把 0~0.6s 的淡入
+ * 整条删掉，而界面上只会看到「轨道还在、动画变了」。这条用例断两件事：
+ * 轨道**没有变多**（同属性合并成一条，不是两条互相覆盖的动画），
+ * 且旧的时刻 / 值原样留在前面。
+ */
+test('动画预设：在播放头增量插入，先前动画的关键帧一帧不丢', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+
+  const span = await clipSpan(page);
+  const dur = span.end - span.start;
+  // 这条用例要在片段里放下两段 0.6s 的动画；片段变短了就该改这里而不是放宽断言。
+  expect(dur, '新建排版片段太短，放不下两段动画').toBeGreaterThan(1.4);
+
+  // 插入点就是播放头，所以先把播放头放到片段起点（打开编辑器时它在哪儿不确定）。
+  await seekLocal(page, 0);
+  await page.getByTestId('ribbon-tab-anim').click();
+  // 图库是「示意图形 + 名字」的卡片，不是下拉。
+  await page.getByTestId('typo-anim-preset').click();
+  await expect(page.getByTestId('typo-anim-preset-pop')).toBeVisible();
+  await page.getByTestId('typo-anim-preset-card-fade-in').click();
+  await expect(page.getByTestId('typo-anim-preset-pop')).toHaveCount(0);
+
+  await expect(page.getByTestId('typo-kf-track')).toHaveCount(1);
+  let doc = await readDoc(page);
+  expect(doc.elements[0]!.animations[0]!.keys!.map((k) => k.t)).toEqual([0, 0.6]);
+
+  // 播放头挪到片段内 0.8s，再插一个淡出。
+  await seekLocal(page, 0.8);
+  await page.getByTestId('typo-anim-preset').click();
+  await page.getByTestId('typo-anim-preset-card-fade-out').click();
+
+  // 还是**一条** opacity 轨道（同一层里两条同属性动画会互相覆盖）。
+  await expect(page.getByTestId('typo-kf-track')).toHaveCount(1);
+  await expect(page.getByTestId('typo-kf-key')).toHaveCount(4);
+
+  doc = await readDoc(page);
+  const anim = doc.elements[0]!.animations[0]!;
+  // 插入点 = 播放头绝对时间 − 片段起点，浮点余量取到毫秒。
+  const times = anim.keys!.map((k) => Math.round(k.t * 1000) / 1000);
+  expect(times).toEqual([0, 0.6, 0.8, 1.4]);
+  expect(anim.keys!.map((k) => k.v)).toEqual([0, 1, 1, 0]);
+  // 先前那一段（0 → 0.6）逐字未动 —— 这就是「增量插入」的判据。
+  expect(anim.keys!.slice(0, 2).map((k) => k.v)).toEqual([0, 1]);
+});
+
+/**
+ * 关键帧**标记色**：只给编辑器做记号，**不影响动画**。
+ *
+ * 断言两半：文档里存了颜色、轨道上的菱形真的换了填充（DOM 表现，不是只改了数据），
+ * 而动画样式表**逐字没变** —— 它一旦混进 CSS，「标记色」就变成了改画面。
+ */
+test('关键帧标记色：只做记号，不动动画', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await page.getByTestId('typo-kf-add-prop').click();
+
+  const before = await animSheet(page);
+
+  // 选中一帧 → 顶栏出现取色入口（没有选中帧时它不该占位置）。
+  await page.getByTestId('typo-kf-key').first().click();
+  await expect(page.getByTestId('typo-kf-key-color')).toBeVisible();
+  await page.getByTestId('typo-kf-key-color').click();
+
+  const swatch = page.locator('[data-testid^="typo-kf-key-color-palette-std-"]').first();
+  const hex = (await swatch.getAttribute('data-testid'))!.split('-std-')[1]!;
+  await swatch.click();
+
+  const doc = await readDoc(page);
+  expect(doc.elements[0]!.animations[0]!.keys![0]!.color).toBe(`#${hex}`);
+  // 菱形真的换了填充色（只改文档不改 DOM 的话，用户什么都看不见）。
+  await expect(page.getByTestId('typo-kf-key').first()).toHaveAttribute('style', /--key-c/);
+  // 动画本身一个字都没动。
+  expect(await animSheet(page)).toBe(before);
+
+  // 一笔撤销退回无标记。
+  await page.keyboard.press('Control+z');
+  expect((await readDoc(page)).elements[0]!.animations[0]!.keys![0]!.color).toBeUndefined();
 });

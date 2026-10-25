@@ -44,7 +44,7 @@ function clipSpan(page: Page, clipId: string): Promise<{ start: number; end: num
 async function applyFadeIn(page: Page): Promise<void> {
   await page.getByTestId('ribbon-tab-anim').click();
   await page.getByTestId('typo-anim-preset').click();
-  await page.getByTestId('typo-anim-option-fade-in').click();
+  await page.getByTestId('typo-anim-preset-card-fade-in').click();
 }
 
 /** 舞台上那个动画层被 seek 到的毫秒（WAAPI currentTime）。没有动画层时返回 null。 */

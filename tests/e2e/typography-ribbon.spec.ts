@@ -985,7 +985,8 @@ test('动画窗格已删除；Ribbon 的预设展开成属性轨道，关键帧�
 
   await page.getByTestId('ribbon-tab-anim').click();
   await page.getByTestId('typo-anim-preset').click();
-  await page.getByTestId('typo-anim-option-slide-in-left').click();
+  await expect(page.getByTestId('typo-anim-preset-pop')).toBeVisible();
+  await page.getByTestId('typo-anim-preset-card-slide-in-left').click();
 
   // slide-in-left 动 translateX + opacity ⇒ **两条轨道**（一条动画一个属性），
   // 每条两根关键帧。
@@ -993,6 +994,54 @@ test('动画窗格已删除；Ribbon 的预设展开成属性轨道，关键帧�
   await expect(page.getByTestId('typo-kf-lane')).toHaveCount(2);
   await expect(page.getByTestId('typo-kf-key')).toHaveCount(4);
   await expect(page.getByTestId('typo-kf-clock')).toBeVisible();
+});
+
+/**
+ * 「动画」页的**常驻预设条**（与「添加动画」弹层并存）。
+ *
+ * 三件事各自会静默失效：
+ *  1. 条子必须真的在 Ribbon 里、**宽度够宽**（缩成一行图标就没法「一眼挑」了）；
+ *  2. 滚轮翻的是**这一条**，不是整条 Ribbon —— 面板把纵向滚轮改成了横向滚动，
+ *     没拦住的话「在这条上滚一下，整排按钮跑到左边去了」；
+ *  3. 卡片上图形与名字都在（纯文字就是退回到当年那个 select 了）。
+ */
+test('动画页的常驻预设条：在 Ribbon 里、滚轮翻自己的页、点卡即插入', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+
+  const el = (await page.locator('.paper [data-el-id]').first().boundingBox())!;
+  await page.mouse.click(el.x + el.width / 2, el.y + el.height / 2);
+  await expect(page.getByTestId('typo-selection')).toBeVisible();
+  await page.getByTestId('ribbon-tab-anim').click();
+
+  const strip = page.getByTestId('typo-anim-strip');
+  await expect(strip).toBeVisible();
+  const box = (await strip.boundingBox())!;
+  // 「很宽」：至少放得下六七张卡，而且不超出一行面板的高度（否则会把舞台挤下去）。
+  expect(box.width).toBeGreaterThan(400);
+  const bodyH = (await page.getByTestId('ribbon-body').boundingBox())!.height;
+  expect(box.height).toBeLessThanOrEqual(bodyH);
+
+  const card = page.getByTestId('typo-anim-strip-card-fade-in');
+  await expect(card.locator('svg')).toHaveCount(1);
+  await expect(card).toContainText('淡入');
+
+  // 滚轮 = 翻这一条；面板自己不许跟着滚。
+  const track = page.getByTestId('typo-anim-strip-track');
+  const ribbon = page.getByTestId('ribbon-body');
+  const ribbonBefore = await ribbon.evaluate((n) => n.scrollLeft);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 200);
+  await expect.poll(() => track.evaluate((n) => n.scrollLeft)).toBeGreaterThan(100);
+  expect(await ribbon.evaluate((n) => n.scrollLeft)).toBe(ribbonBefore);
+
+  // 翻回第一页（两端各有一枚翻页键），点一张卡：插入 + 这张卡高亮。
+  await page.getByTestId('typo-anim-strip-prev').click();
+  await expect.poll(() => track.evaluate((n) => n.scrollLeft)).toBeLessThan(50);
+  await card.click();
+  await expect(page.getByTestId('typo-kf-track')).toHaveCount(1);
+  await expect(card).toHaveClass(/\bon\b/);
 });
 
 test('右栏宽度可拖曳', async ({ page }) => {

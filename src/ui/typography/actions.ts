@@ -49,11 +49,13 @@ import {
 } from '../../typography/geometry';
 import { applyElementAnimations, applyElementFormat } from '../../typography/format-painter';
 import {
+  ANIM_PRESETS,
   animTargetOf,
   createCustomAnimation,
   createPresetAnimation,
   createTracksAnimation,
   parseCustomCss,
+  presetLabel,
   type AnimPreset,
   type AnimTarget,
   type AnimTiming,
@@ -62,10 +64,12 @@ import {
 import {
   applyTrackTiming,
   identityValue,
+  normalizeKeyColor,
   sampleKeys,
   type TrackEase,
 } from '../../typography/animation-tracks';
 import { presetToTracks } from '../../typography/animation-migrate';
+import { insertAnimationsAt } from '../../typography/animation-insert';
 import { kfPanel } from './keyframe-panel-state.svelte';
 import { hasImageAsset, putImageBytes, mimeForImageFilename } from '../../typography/image-assets';
 import { defaultKeySettings, identityQuad, type KeySettings } from '../../core/image-fx';
@@ -1087,6 +1091,13 @@ export interface TypographyActions {
   /** 精确改一帧的时刻（拖动走 `moveKey`，那是手势、不拍快照）。 */
   setKeyTime(animId: string, t: number, nextT: number): void;
   setKeyEase(animId: string, t: number, ease: TrackEase | null): void;
+  /**
+   * 关键帧的**标记色**（`#rrggbb`；`null` = 去掉标记）。
+   *
+   * 只给编辑器看，**不影响动画**：`channelDeclaration` 与样式表都不读它。
+   * 一次写一批（框选后刷同一个颜色 = **一笔撤销**），逐个 commit 会灌满撤销栈。
+   */
+  setKeysColor(keys: { animId: string; t: number }[], color: string | null): void;
   /** 缓动浮层拖动中的实时写入（不进撤销栈，松手由手势结算）。 */
   liveKeyEase(animId: string, t: number, ease: TrackEase | null): void;
   /** 拖动关键帧：手势里调（`live`，不 commit）。 */
@@ -2585,31 +2596,40 @@ export function createTypographyActions(): TypographyActions {
     /* ---------------------------------------------------------- 动画 */
 
     applyPreset(preset) {
+      /*
+       * **在播放头处增量插入**（用户 2026-10-25 定）：点预设不再替换同属性轨道，
+       * 而是往那条轨道里接一段关键帧 —— 播放头之前的编排一帧不动。
+       * 合并规则（含「插入点之后整体右移」与衔接处的保持）在
+       * `typography/animation-insert.ts`，纯函数 + 单测。
+       *
+       * 插入点用**片段内相对秒**（与关键帧同口径）；插到片段末尾之外没有意义，
+       * 所以夹一下让整段动画落在片段里 —— 播放头在 3.9s、片段 4s、动画 0.6s 时
+       * 落在 3.4s，而不是「插进去了但看不见」。
+       */
+      const clip = editorState.clip;
+      const span = ANIM_PRESETS.find((p) => p.id === preset)?.duration ?? 0.6;
+      const playAt = clip ? appState.playT - clip.start : 0;
+      const limit = clip ? Math.max(0, clip.end - clip.start - span) : playAt;
+      const at = Math.max(0, Math.min(playAt, limit));
+
+      let trackIds: string[] = [];
       editorState.commit(tr('typo.undo.addAnim'), (doc) => {
         for (const el of anyElement(doc)) {
           const incoming = presetToTracks(createPresetAnimation(preset, newId()), {
             dropAnimations: [],
             dropProps: [],
           });
-          /*
-           * 预设动到的属性**替换**同属性轨道（同一作用层内）。
-           *
-           * 同一层里两条同属性动画会互相覆盖（后写的赢）；而 `content` 与 `box`
-           * 是两条独立的 DOM 层、不互相覆盖 —— 按 prop 一刀切会把用户设在整块上的
-           * 轨道顺手删掉。面板里也会出现两行同名属性（那一行有方块标记）。
-           */
-          const keep = el.animations.filter(
-            (a) =>
-              !incoming.some(
-                (t) =>
-                  a.kind === 'tracks' &&
-                  a.prop === t.prop &&
-                  animTargetOf(a) === animTargetOf(t),
-              ),
-          );
-          el.animations = [...keep, ...incoming];
+          const res = insertAnimationsAt(el.animations, incoming, at);
+          el.animations = res.animations;
+          // 面板显示的是「列表里第一个元素」，第一个写到的元素就够了。
+          if (!trackIds.length) trackIds = res.trackIds;
         }
       });
+      if (trackIds.length) kfPanel.selectTrack(trackIds[0]!);
+      appState.flash(
+        tr('typo.animInserted', { name: presetLabel(preset), at: at.toFixed(2) }),
+        'success',
+      );
     },
 
     clearAnimations() {
@@ -2786,6 +2806,27 @@ export function createTypographyActions(): TypographyActions {
           const k = a.keys.find((x) => Math.abs(x.t - t) < 1e-6);
           if (k) k.ease = ease;
         });
+      });
+    },
+
+    setKeysColor(keys, color) {
+      if (!keys.length) return;
+      // 非法色当成「去掉标记」：宁可没有颜色，也不要写一个会让界面上出现怪颜色的值。
+      const hex = normalizeKeyColor(color);
+      const want = new Set(keys.map((k) => `${k.animId}@${k.t.toFixed(6)}`));
+      editorState.commit(tr('typo.undo.keyColor'), (doc) => {
+        // 遍历全部元素而不是选择集：面板里可以操作**没在舞台上选中**的元素
+        // （元素列列出一切有动画的元素）。
+        for (const el of doc.elements) {
+          for (const a of el.animations) {
+            if (a.kind !== 'tracks') continue;
+            for (const k of a.keys) {
+              if (!want.has(`${a.id}@${k.t.toFixed(6)}`)) continue;
+              if (hex) k.color = hex;
+              else delete k.color;
+            }
+          }
+        }
       });
     },
 

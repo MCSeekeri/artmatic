@@ -259,6 +259,32 @@ export interface RibbonGallerySpec extends RibbonItemBase {
 }
 
 /**
+ * 动画预设图库（「动画」页 → 添加动画）。
+ *
+ * 与 `gallery` 分开一个 kind：那个是「一张 path = 一个形状」，卡片里只有一个
+ * 图元；动画卡片是**若干图元拼出的示意动效 + 分组小标题 + 当前态高亮**，
+ * 硬塞进同一套渲染只会立刻长出两个 if 分支（与 `themes` 的理由相同）。
+ *
+ * 也**不是 `select`**：十四个动画按名字挑不出来 —— 用户得先把「弹一下」翻成
+ * 一段动效，而 PPT 的做法是给一排示意图形，看一眼就知道要哪个。
+ */
+export interface RibbonAnimGallerySpec extends RibbonItemBase {
+  kind: 'animGallery';
+  onselect: (id: string) => void;
+}
+
+/**
+ * **常驻**的动画预设条（「动画」页里那条很宽的框，PPT 同款）。
+ *
+ * 与 `animGallery` 不是二选一：那条是常驻的一排卡（切到页面就看得到全部预设，
+ * 滚轮翻页），弹层是分组目录（预设再多也装得下）。两者走同一个动作。
+ */
+export interface RibbonAnimStripSpec extends RibbonItemBase {
+  kind: 'animStrip';
+  onselect: (id: string) => void;
+}
+
+/**
  * 纯布局元素：吃掉一行里的剩余空间，把它后面的项推到行尾。
  *
  * 用途是**让两排的右边缘对齐**（字体组：第一排是宽下拉、第二排是图标 +
@@ -280,6 +306,8 @@ export type RibbonItemSpec =
   | RibbonSegmentSpec
   | RibbonNumberSpec
   | RibbonGallerySpec
+  | RibbonAnimGallerySpec
+  | RibbonAnimStripSpec
   | RibbonMenuSpec
   | RibbonThemesSpec
   | RibbonSpacerSpec;
@@ -335,6 +363,14 @@ export const COLOR_ITEM_W = DEFAULT_ITEM_W;
 export const NUMBER_ITEM_W = 88;
 /** 分段控件按选项数计费：每项 34px。 */
 export const SEGMENT_OPTION_W = 34;
+/**
+ * 常驻动画条缺省宽度。
+ *
+ * 640 减去两端翻页键（14×2）与内边距，正好露出**十张出头**的卡片 —— 末张被
+ * 切掉半张是「后面还有」的唯一提示（这条没有可见滚动条）。再窄就只露得下六七张，
+ * 翻页会变成常态操作。
+ */
+export const ANIM_STRIP_W = 640;
 
 /**
  * 标签的估算宽度（px）。
@@ -396,7 +432,13 @@ export function itemWidth(item: RibbonItemSpec): number {
     case 'color':
     case 'gallery':
       return sizedWidth(item.size);
-    // 这两档的文字写在按钮上，宽度必须容得下它。
+    // 这两档的文字写在按钮上，宽度必须容得下它
+    // （动画图库多留 10px：右下角还有一枚「会展开」的箭头）。
+    case 'animGallery':
+      return sizedWidth(item.size, item.label) + 10;
+    // 常驻的动画条：整条宽度是内容区，卡片自己排在里面。
+    case 'animStrip':
+      return ANIM_STRIP_W;
     case 'toggle':
     case 'button':
       return sizedWidth(item.size, item.label);

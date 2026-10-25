@@ -230,7 +230,7 @@ test('动画刷：把源元素的动画整份刷给目标（不动它的填充�
   await page.mouse.click(ps.x, ps.y);
   await page.getByTestId('ribbon-tab-anim').click();
   await page.getByTestId('typo-anim-preset').click();
-  await page.getByTestId('typo-anim-option-fade-in').click();
+  await page.getByTestId('typo-anim-preset-card-fade-in').click();
   await expect(page.getByTestId('typo-kf-track')).toHaveCount(1);
 
   // 动画刷在「动画」页最左侧

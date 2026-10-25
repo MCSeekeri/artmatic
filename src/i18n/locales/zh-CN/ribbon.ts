@@ -38,6 +38,7 @@ export const ribbon = {
   'rib.group.shapes': '图形',
   'rib.group.media': '图片',
   'rib.group.presets': '预设',
+  'rib.group.advancedAnim': '高级动画',
   'rib.group.fill': '填充',
   'rib.group.stroke': '描边',
   'rib.group.shape': '形状',
@@ -192,8 +193,12 @@ export const ribbon = {
   'rib.mediaPool': '媒体池',
 
   /* ------------------------------------------------ 动画 → 预设 */
-  'rib.pickAnim': '选择预设…',
+  // 图库触发按钮（PPT 的「添加动画」）。点一下 = 在播放头插一段，不是「选择当前值」。
+  'rib.addAnim': '添加动画',
   'rib.clearAnim': '清除动画',
+  // 常驻预设条两端的翻页键（只有无障碍名，界面上是 < > 两个箭头）。
+  'rib.animPagePrev': '上一页',
+  'rib.animPageNext': '下一页',
 
   /* ------------------------------------------------ 动画 → 编辑 */
   'rib.customCss': '自定义 CSS',

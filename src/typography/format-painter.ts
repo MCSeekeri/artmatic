@@ -213,6 +213,8 @@ export function cloneAnimations(list: readonly ElementAnimation[]): ElementAnima
         t: k.t,
         v: k.v,
         ...(k.ease === undefined ? {} : { ease: k.ease === null ? null : copy(k.ease) }),
+        // 标记色是「编排意图」的一部分，刷子一并搬过去（漏了就是静默丢标记）。
+        ...(k.color ? { color: k.color } : {}),
       })),
     };
   });

@@ -75,6 +75,7 @@ import {
 } from './animation';
 import {
   identityValue,
+  normalizeKeyColor,
   type AnimChannel,
   type StepEase,
   type TrackEase,
@@ -1177,6 +1178,11 @@ export interface AnimationTrackKeyInput {
    * `{ steps: 4, jump: 'end' }` / 原文 `"steps(4, end)"`。`null` = 跟随条目 easing。
    */
   ease?: string | number[] | { steps: number; jump?: string } | null;
+  /**
+   * 关键帧的**标记色**（`#rrggbb`）—— 只给编辑器做记号，**不影响动画**。
+   * 读回形状（`animationView`）会带上它，所以「读一遍再写回」不会丢。
+   */
+  color?: string;
 }
 
 /** 一条结构化轨道：**一个属性** + 一串绝对秒关键帧。 */
@@ -1396,7 +1402,14 @@ function parseTrackKeys(raw: unknown[], timing: Partial<AnimTiming>): TrackKey[]
     if (typeof v !== 'string' && !Number.isFinite(Number(v))) return null;
     const ease = easeOf(item.ease);
     if (ease === undefined) return null;
-    out.push({ t, v: typeof v === 'string' ? v : Number(v), ...(ease ? { ease } : {}) });
+    // 标记色是可选的**纯展示**字段：坏值直接丢（不因此整条拒绝 —— 它不影响画面）。
+    const color = normalizeKeyColor(item.color);
+    out.push({
+      t,
+      v: typeof v === 'string' ? v : Number(v),
+      ...(ease ? { ease } : {}),
+      ...(color ? { color } : {}),
+    });
   }
   return out;
 }
@@ -1546,7 +1559,14 @@ export function animationView(a: ElementAnimation): Record<string, unknown> {
     ...(a.kind === 'tracks'
       ? {
           prop: a.prop,
-          keys: a.keys.map((k) => ({ t: k.t, v: k.v, ease: k.ease ?? null })),
+          // `color` 是**标记色**（只给编辑器做记号），但它必须原样读回 ——
+          // 少了它，「读一遍再写回」会把用户标好的关键帧颜色全抹掉。
+          keys: a.keys.map((k) => ({
+            t: k.t,
+            v: k.v,
+            ease: k.ease ?? null,
+            ...(k.color ? { color: k.color } : {}),
+          })),
         }
       : {}),
     duration: a.duration,

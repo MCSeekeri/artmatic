@@ -822,14 +822,16 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'Attach / replace / clear element animations (the same CSS animation system the editor ' +
       'uses — it renders in exports too, driven by the project clock).\n' +
       'PREFERRED form (structured track):\n' +
-      '  { prop: "<channel | css-property>", keys: [ { t, v, ease? }, ... ], loop?, easing?, ' +
-      'direction?, fill? }\n' +
+      '  { prop: "<channel | css-property>", keys: [ { t, v, ease?, color? }, ... ], loop?, ' +
+      'easing?, direction?, fill? }\n' +
       'ONE animation animates ONE property. prop is x | y | sx | sy | rot | opacity | blur, or any ' +
       'CSS property name in kebab-case ("letter-spacing", "clip-path", "color", "transform"). ' +
       'keys[].t is ABSOLUTE SECONDS from the clip start (not 0..1 and not frames); { beat: n } is ' +
       'also accepted. keys[].v is a number (x/y px, sx/sy factor, rot degrees, opacity 0..1, blur ' +
       'px) or a raw CSS string for custom properties. keys[].ease is the easing of the segment that ' +
       'STARTS at that key (keyword or [x1,y1,x2,y2]); omit it to inherit the animation easing. ' +
+      'keys[].color is an optional #rrggbb marker for the keyframe list in the editor — purely ' +
+      'visual (it never reaches the style sheet), and it is echoed back on read. ' +
       'delay / duration are DERIVED from the first and last key (passing them changes nothing). ' +
       'To stagger properties, send SEVERAL animations with mode:"add" — each one becomes its own ' +
       'CSS animation with its own delay, so opacity and movement can start at different times. ' +
