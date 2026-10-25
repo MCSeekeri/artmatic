@@ -17,6 +17,7 @@
 
 import {
   createTracksAnimation,
+  isPresetId,
   keyframeBlocksOf,
   parseAnimationShorthand,
   parseCustomCss,
@@ -445,14 +446,13 @@ export function customToTracks(anim: CustomAnimation, report: MigrationReport): 
   return out;
 }
 
-const PRESET_NAMES = new Set([
-  'fade-in', 'fade-out', 'fade-in-out',
-  'slide-in-left', 'slide-in-right', 'slide-in-up', 'slide-in-down',
-  'zoom-in', 'zoom-out', 'pop', 'spin', 'pulse', 'shake', 'blur-in',
-]);
-
+/*
+ * 预设名**不在这里另抄一份**：抄的那份在预设变多时不会报错，只会让手写 CSS 里
+ * 引用新预设名（`animation: stretch-in-x 1s …`）解析失败 —— 而失败是静默的
+ * （那条动画整条丢掉）。判定统一走 `animation.ts` 的 `isPresetId`。
+ */
 function isPresetName(name: string): name is Parameters<typeof presetKeyframes>[0] {
-  return PRESET_NAMES.has(name);
+  return isPresetId(name);
 }
 
 /**
@@ -480,7 +480,7 @@ export function migrateAnimations(raw: unknown[], report: MigrationReport): unkn
       direction: (a.direction as AnimTiming['direction']) ?? 'normal',
       fill: (a.fill as AnimTiming['fill']) ?? 'both',
     };
-    if (kind === 'preset' && typeof a.preset === 'string' && PRESET_NAMES.has(a.preset)) {
+    if (kind === 'preset' && typeof a.preset === 'string' && isPresetId(a.preset)) {
       out.push(
         ...presetToTracks(
           { ...timing, id, kind: 'preset', preset: a.preset as PresetAnimation['preset'], params: a.params as Record<string, number> | undefined },

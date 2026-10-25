@@ -194,9 +194,17 @@
     opacity: 0.7;
   }
 
+  /*
+   * 五十多个预设 + 三个分组标题会超过一屏：**必须给自己留一道滚动**。
+   * 弹层是 `position: fixed`，面板（`.ribbon-body`）裁不到它 —— 但没有
+   * max-height 时它会从视口底下伸出去，最后两排（退出的那几页）永远点不到。
+   */
   .ag-pop {
     position: fixed;
     z-index: var(--z-menu);
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: var(--sp-2);
     background: var(--menu-bg);
     border: 1px solid var(--menu-border);
@@ -211,9 +219,10 @@
   .grp + .grid {
     margin-bottom: var(--sp-2);
   }
+  /* 七列：三组共五十多条，五列会排成十一行（滚动条比翻页累）。 */
   .grid {
     display: grid;
-    grid-template-columns: repeat(5, 56px);
+    grid-template-columns: repeat(7, 56px);
     gap: 2px;
   }
   .card {

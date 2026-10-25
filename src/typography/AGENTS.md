@@ -34,6 +34,14 @@
   `get_typography_capabilities().units.defaults` 里。
 - **元素动画是文档模型的一部分**（`ElementAnimation[]`，`animation.ts`）。
   三种 `kind` 并存，但**编辑器只产 `tracks`**：
+  - **预设库在 `animation-presets/`**（进入 / 强调 / 退出三个模块，各带定义与
+    keyframes 体；`animation.ts` 只做汇总与派发）。加一条预设 = **四处**：
+    `animation.ts::ANIM_PRESET_IDS`（联合类型的唯一真源）、分组模块的 `defs` +
+    `keyframes`、图标（`ui/typography/anim-icons/<group>.ts`）、文案
+    （`i18n/locales/zh-CN/media.ts` 的 `anim.*`）。漏一处全是**静默**失效，
+    `tests/unit/anim-presets*.test.ts` 逐条点名（**含「展开成轨道时零丢弃」**）。
+    预设只能写解析器吃得下的写法 —— 清单见 `animation-presets/types.ts` 的头注释，
+    违反的后果是动画少一段而不是报错。
   - `tracks`（主模型，`animation-tracks.ts`）：**一条动画 = 一个属性**，关键帧存
     **绝对秒（相对片段起点）**，每帧可带出向 `ease`（关键字 / `[x1,y1,x2,y2]` /
     `{ steps: n, jump }`，发射时统一由 `animation.ts::easingCss` 拼成 CSS 值）。

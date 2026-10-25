@@ -215,10 +215,15 @@
     color: var(--ribbon-btn-fg-disabled);
     cursor: default;
   }
+  /* 名字一律 ≤4 个汉字（见 i18n 的 `anim.*`），截断只是兜底：
+     预设多到五字以上时宁可显示「圆形展…」，也不要让它压到邻居卡上。 */
   .nm {
+    max-width: 100%;
     font-size: var(--fs-xs);
     line-height: 1.1;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .page {
     display: flex;

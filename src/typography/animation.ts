@@ -25,6 +25,8 @@ import {
   type TracksAnimation,
   type TrackKey,
 } from './animation-tracks';
+import { PRESET_MODULES } from './animation-presets';
+import type { PresetDef, KeyframeBuilder } from './animation-presets';
 import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 
@@ -46,21 +48,81 @@ export type Easing =
   /** cubic-bezier(x1, y1, x2, y2) */
   | [number, number, number, number];
 
-export type AnimPreset =
-  | 'fade-in'
-  | 'fade-out'
-  | 'fade-in-out'
-  | 'slide-in-left'
-  | 'slide-in-right'
-  | 'slide-in-up'
-  | 'slide-in-down'
-  | 'zoom-in'
-  | 'zoom-out'
-  | 'pop'
-  | 'spin'
-  | 'pulse'
-  | 'shake'
-  | 'blur-in';
+/**
+ * 预设 id 清单 —— **`AnimPreset` 联合类型的唯一真源**。
+ *
+ * 顺序 = 图库顺序：进入 → 强调 → 退出（与 PPT 一致，也与 Ribbon 那条常驻条
+ * 的排列一致）。加一个预设的完整动作是 **四处**：这张表、对应分组模块的
+ * `defs` + `keyframes`（`animation-presets/`）、图标（`ui/typography/anim-icons/`）
+ * 与文案（`i18n/locales/zh-CN/media.ts` 的 `anim.*`）。
+ * 漏一处不会静默：`tests/unit/anim-presets.test.ts` 逐条点名，其中
+ * **图标与分组**那一半由 `tests/unit/anim-catalog.test.ts` 守。
+ */
+export const ANIM_PRESET_IDS = [
+  /* ---- 进入 ---- */
+  'fade-in',
+  'slide-in-left',
+  'slide-in-right',
+  'slide-in-up',
+  'slide-in-down',
+  'zoom-in',
+  'zoom-out',
+  'pop',
+  'blur-in',
+  'flip-in-x',
+  'flip-in-y',
+  'swivel-in',
+  'stretch-in-x',
+  'stretch-in-y',
+  'sweep-in',
+  'iris-in',
+  'skew-in',
+  'bounce-in',
+  'drop-in',
+  'tracking-in',
+  'roll-in',
+
+  /* ---- 强调 ---- */
+  'fade-in-out',
+  'pulse',
+  'spin',
+  'shake',
+  'contract',
+  'beat',
+  'flash',
+  'swing',
+  'wobble',
+  'jello',
+  'float',
+  'circulate',
+  'swirl',
+  'flip',
+  'hue-cycle',
+  'brightness-pulse',
+  'glow',
+  'blur-pulse',
+  'tracking-out',
+  'jitter',
+  'squash',
+  'hop',
+
+  /* ---- 退出 ---- */
+  'fade-out',
+  'slide-out-left',
+  'slide-out-right',
+  'slide-out-up',
+  'slide-out-down',
+  'shrink-out',
+  'grow-out',
+  'flip-out-x',
+  'flip-out-y',
+  'sweep-out',
+  'iris-out',
+  'blur-out',
+  'roll-out',
+] as const;
+
+export type AnimPreset = (typeof ANIM_PRESET_IDS)[number];
 
 /**
  * 动画作用在元素的哪一层。
@@ -163,33 +225,20 @@ export type { AnimChannel, TracksAnimation, TrackKey };
 
 /* ------------------------------------------------------------ 预设表 */
 
-export interface AnimPresetDef {
-  id: AnimPreset;
-  /** 存文案键（见 effects/types.ts 的注释）。 */
-  labelKey: MessageKey;
-  duration: number;
-  easing: Easing;
-  params?: Record<string, number>;
-}
+export interface AnimPresetDef extends PresetDef {}
 
-export const ANIM_PRESETS: AnimPresetDef[] = [
-  { id: 'fade-in', labelKey: 'anim.fadeIn', duration: 0.6, easing: 'ease-out' },
-  { id: 'fade-out', labelKey: 'anim.fadeOut', duration: 0.6, easing: 'ease-in' },
-  { id: 'fade-in-out', labelKey: 'anim.fadeInOut', duration: 1.2, easing: 'ease-in-out' },
-  { id: 'slide-in-left', labelKey: 'anim.slideInLeft', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  { id: 'slide-in-right', labelKey: 'anim.slideInRight', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  // 注意 id 与文案的对应关系是原样保留的：id 描述**运动方向**，文案描述**来向**，
-  // 所以 slide-in-up 配「下方滑入」。改文案时别顺手把它「修正」成上方。
-  { id: 'slide-in-up', labelKey: 'anim.slideInUp', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  { id: 'slide-in-down', labelKey: 'anim.slideInDown', duration: 0.6, easing: 'ease-out', params: { dist: 80 } },
-  { id: 'zoom-in', labelKey: 'anim.zoomIn', duration: 0.6, easing: 'ease-out', params: { z0: 0.8 } },
-  { id: 'zoom-out', labelKey: 'anim.zoomOut', duration: 0.6, easing: 'ease-out', params: { z1: 1.25 } },
-  { id: 'pop', labelKey: 'anim.pop', duration: 0.45, easing: 'ease-in-out', params: { z1: 1.15 } },
-  { id: 'spin', labelKey: 'anim.spin', duration: 1, easing: 'linear' },
-  { id: 'pulse', labelKey: 'anim.pulse', duration: 1, easing: 'ease-in-out' },
-  { id: 'shake', labelKey: 'anim.shake', duration: 0.5, easing: 'linear' },
-  { id: 'blur-in', labelKey: 'anim.blurIn', duration: 0.7, easing: 'ease-out', params: { blur: 12 } },
-];
+/**
+ * 预设表。**由三个分组模块按「进入 → 强调 → 退出」拼出来**，不在这里手写：
+ * 这张表的每一项都配着一段 keyframes 体，两者分在两个文件里一定会错位，
+ * 所以定与画放在同一个模块里（`animation-presets/<group>.ts`）。
+ */
+export const ANIM_PRESETS: AnimPresetDef[] = PRESET_MODULES.flatMap((m) => m.defs);
+
+/** id → keyframes 体。散在三个模块里，这里只负责按 id 找到那一个。 */
+const PRESET_KEYFRAMES: Record<string, KeyframeBuilder> = Object.assign(
+  {},
+  ...PRESET_MODULES.map((m) => m.keyframes),
+);
 
 const PRESET_IDS = new Set<string>(ANIM_PRESETS.map((d) => d.id));
 
@@ -248,43 +297,15 @@ export function isAnimationActiveAt(anim: ElementAnimation, localSec: number): b
   return elapsed <= anim.duration * anim.iterations + 1e-9;
 }
 
-/** 预设 → @keyframes 的**体**（不含 `@keyframes ...{}` 外壳）。纯函数。 */
+/**
+ * 预设 → @keyframes 的**体**（不含 `@keyframes ...{}` 外壳）。纯函数。
+ *
+ * 找不到就返回空串（而不是抛错）：`AnimPreset` 是封闭联合，正常情况下不可能
+ * 找不到；这里兜的是**运行时**的脏数据（旧工程里存过已删掉的预设名），空白
+ * 让那条动画静静消失，好过让整份文档打不开。
+ */
 export function presetKeyframes(preset: AnimPreset, params: Record<string, number> = {}): string {
-  const dist = params.dist ?? 80;
-  const z0 = params.z0 ?? 0.8;
-  const z1 = params.z1 ?? 1.25;
-  const blur = params.blur ?? 12;
-
-  switch (preset) {
-    case 'fade-in':
-      return 'from{opacity:0}to{opacity:1}';
-    case 'fade-out':
-      return 'from{opacity:1}to{opacity:0}';
-    case 'fade-in-out':
-      return '0%{opacity:0}50%{opacity:1}100%{opacity:0}';
-    case 'slide-in-left':
-      return `from{transform:translateX(${-dist}px);opacity:0}to{transform:translateX(0);opacity:1}`;
-    case 'slide-in-right':
-      return `from{transform:translateX(${dist}px);opacity:0}to{transform:translateX(0);opacity:1}`;
-    case 'slide-in-up':
-      return `from{transform:translateY(${dist}px);opacity:0}to{transform:translateY(0);opacity:1}`;
-    case 'slide-in-down':
-      return `from{transform:translateY(${-dist}px);opacity:0}to{transform:translateY(0);opacity:1}`;
-    case 'zoom-in':
-      return `from{transform:scale(${z0});opacity:0}to{transform:scale(1);opacity:1}`;
-    case 'zoom-out':
-      return `from{transform:scale(${z1});opacity:0}to{transform:scale(1);opacity:1}`;
-    case 'pop':
-      return `0%{transform:scale(1)}60%{transform:scale(${z1})}100%{transform:scale(1)}`;
-    case 'spin':
-      return 'from{transform:rotate(0)}to{transform:rotate(360deg)}';
-    case 'pulse':
-      return '0%{opacity:1}50%{opacity:0.35}100%{opacity:1}';
-    case 'shake':
-      return '0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}';
-    case 'blur-in':
-      return `from{filter:blur(${blur}px);opacity:0}to{filter:blur(0);opacity:1}`;
-  }
+  return PRESET_KEYFRAMES[preset]?.(params ?? {}) ?? '';
 }
 
 /* ------------------------------------------------------------ 手写 CSS 的解析 */

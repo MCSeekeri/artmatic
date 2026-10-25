@@ -642,6 +642,58 @@ test('动画预设：在播放头增量插入，先前动画的关键帧一帧�
 });
 
 /**
+ * 新增预设的全链路（2026-10-25 大批扩充之后）。
+ *
+ * 三条代表性写法各走一遍 —— 它们分别落在**三种不同的轨道形状**上，坏掉的方式
+ * 完全不同，而且都不会报错：
+ *  1. `clip-path`（擦除）→ 原始字符串属性轨道，值必须原样进样式表；
+ *  2. `perspective(…) rotateY(…)`（3D 翻转）→ `transform` 拆不动，整条存字符串；
+ *  3. `filter:hue-rotate(…)`（彩色脉冲）→ 同样整条存字符串，且**不能**被当成
+ *     blur 通道（否则那一条会被写成 `blur(0)`，画面完全不动）。
+ */
+test('新增预设走通全链路：clip-path / 3D transform / 滤镜各成一类轨道', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await openEditor(page, clipId);
+  await selectFirst(page);
+  await seekLocal(page, 0);
+  await page.getByTestId('ribbon-tab-anim').click();
+
+  const props = async (): Promise<string[]> =>
+    (await readDoc(page)).elements[0]!.animations.map((a) => a.prop ?? '');
+
+  // 1) 擦除：clip-path 原样进样式表
+  await page.getByTestId('typo-anim-strip-card-sweep-in').click();
+  expect(await props()).toEqual(['clip-path']);
+  expect(await animSheet(page)).toContain('clip-path:inset(0 100% 0 0)');
+
+  // 2) 3D 翻转：整条 transform（含 perspective）
+  await page.getByTestId('typo-anim-strip-card-flip-in-y').click();
+  expect(await props()).toContain('transform');
+  expect(await animSheet(page)).toContain('perspective(700px)');
+
+  // 3) 彩色脉冲：filter 的字符串轨道（不是 blur 通道）
+  await page.getByTestId('typo-anim-strip-card-hue-cycle').click();
+  expect(await props()).toContain('filter');
+  expect(await animSheet(page)).toContain('hue-rotate(180deg)');
+
+  /*
+   * 三条预设动的是**不同属性**（flip-in-y 自带 opacity ⇒ 共 4 条轨道），
+   * 所以共存而不是互相覆盖。同时确认它们真的挂到了 DOM 上：只改文档不写
+   * 样式表的形态是「面板有轨道、画面一动不动」。
+   */
+  const names = await props();
+  expect(names).toEqual(['clip-path', 'transform', 'opacity', 'filter']);
+  const applied = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('.paper [data-anim-id]')).map(
+      (el) => getComputedStyle(el).animationName,
+    ),
+  );
+  expect(applied.length).toBe(names.length);
+  expect(applied.every((n) => n !== 'none')).toBe(true);
+});
+
+/**
  * 关键帧**标记色**：只给编辑器做记号，**不影响动画**。
  *
  * 断言两半：文档里存了颜色、轨道上的菱形真的换了填充（DOM 表现，不是只改了数据），

@@ -1352,4 +1352,56 @@ export const media = {
   'anim.pulse': '脉冲',
   'anim.shake': '抖动',
   'anim.blurIn': '模糊进入',
+
+  /*
+   * 2026-10-25 大批扩充（进入 +12 / 强调 +18 / 退出 +12）。
+   *
+   * **卡片上只有 58px**（常驻条），所以预设名一律 ≤ 4 个汉字：五字以上会被
+   * 截成「方形展…」，而两张卡长得一样时用户只能靠猜。名字不解释原理，
+   * 只描述「看起来会怎样」—— 原理在图标里。
+   */
+  'anim.flipInX': '上翻入',
+  'anim.flipInY': '侧翻入',
+  'anim.swivelIn': '旋转进入',
+  'anim.stretchInX': '横向展开',
+  'anim.stretchInY': '纵向展开',
+  'anim.sweepIn': '擦除进入',
+  'anim.irisIn': '圆形展开',
+  'anim.skewIn': '斜切进入',
+  'anim.bounceIn': '弹跳进入',
+  'anim.dropIn': '落下',
+  'anim.trackingIn': '字距收拢',
+  'anim.rollIn': '滚动进入',
+
+  'anim.contract': '收缩',
+  'anim.beat': '心跳',
+  'anim.flash': '闪烁',
+  'anim.swing': '摇摆',
+  'anim.wobble': '晃动',
+  'anim.jello': '果冻',
+  'anim.float': '漂浮',
+  'anim.circulate': '环绕',
+  'anim.swirl': '陀螺旋转',
+  'anim.flip': '翻转',
+  'anim.hueCycle': '彩色脉冲',
+  'anim.brightnessPulse': '亮度脉冲',
+  'anim.glow': '发光',
+  'anim.blurPulse': '模糊脉冲',
+  'anim.trackingOut': '字距展开',
+  'anim.jitter': '颤抖',
+  'anim.squash': '压扁',
+  'anim.hop': '弹跳',
+
+  'anim.slideOutLeft': '向左滑出',
+  'anim.slideOutRight': '向右滑出',
+  'anim.slideOutUp': '向上滑出',
+  'anim.slideOutDown': '向下滑出',
+  'anim.shrinkOut': '缩小退出',
+  'anim.growOut': '放大退出',
+  'anim.flipOutX': '上翻出',
+  'anim.flipOutY': '侧翻出',
+  'anim.sweepOut': '擦除退出',
+  'anim.irisOut': '圆形收拢',
+  'anim.blurOut': '模糊退出',
+  'anim.rollOut': '滚动退出',
 } as const;
