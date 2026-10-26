@@ -1,0 +1,38 @@
+/* 字体只在 latin 子集里（取自 @fontsource，未改动）：
+ * 中文一律落回系统字体，这是刻意的 —— 一款算法艺术工具的标题不该被中文字形牵着走。
+ * url() 用相对路径，交给 Vite 处理并自动加 base（`public/` 里的绝对路径不会加）。 */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./inter-latin-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./inter-latin-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./outfit-latin-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./outfit-latin-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./jetbrains-mono-latin-400.woff2') format('woff2');
+}

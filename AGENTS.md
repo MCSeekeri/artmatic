@@ -298,6 +298,21 @@ bun run mcp          # MCP server（stdio）：stdout 是 JSON-RPC 通道，不�
 bun run desktop      # Electron 探针壳（先 build）；desktop:probe 加探针 + 截图
 ```
 
+官网是独立子项目 `site/`（Astro + Starlight），**不进主构建**，也不共用 `dist/`：
+
+```bash
+bun run site:dev     # site/ 的 dev server（http://localhost:4321）
+bun run site:build   # 产出 site/dist（CI 里由 .github/workflows/pages.yml 发布）
+```
+
+三条容易踩的：
+
+- **`bun run site:*` 会自动先跑 `gen`**：`tokens.css` / `stats.json` / `content/docs/api/` 都是生成物（已 gitignore），分别来自 `src/ui/tokens.ts`、`src/` 的实数、TypeDoc。
+- **本地验子路径部署要关掉 MSYS 的路径转换**：`MSYS_NO_PATHCONV=1 BASE_PATH=/artmatic bun run site:build`。不关的话 Git Bash 会把 `/artmatic` 改写成 `C:/Program Files/.../artmatic`，构建会在 `api/agent` 路由上报 `NoMatchingStaticPathFound`。
+- **首页的界面图是脚本截的**：`cd site && bun run shots`（先起 `bun run dev`）。手截的图会随界面变化悄悄过期，脚本至少能重跑。
+- **首页版式只有一套坐标**：`.board`（单一宽度 1200）负责左右竖线与横线的外延短头，`.row` 是 12 栏网格，**竖线只写在带 `.vr` 的单元上**。别在 section 上另加 border —— 那正是「两端不接触其它线条的悬空分隔线」的来源。
+- **首页的动态画面不 import 主应用任何模块**：`home/AlgoCanvas.svelte`（WebGL2，lyapunov / mandelbrot，`data-theme=light` 时把同一张图换算成「纸上的墨」）与 `home/AsciiField.svelte`（2D canvas 字符场）。那条 import 链会经 i18n 拉到 `$state`，在 Astro 下编译不过。
+
 **构建期注入**（`vite.config.ts`，dev 与 preview 两侧，`build` 里没有）：`__APP_VERSION__` 由
 `package.json` 注入；`GET /__capacity.json` 给本机真实内存 / 显存（拉不到则退回保守默认）；
 `/__llm/*` 是直连失败时的同源代理回落。纯静态部署按「三项都不存在」理解。

@@ -24,3 +24,10 @@ pnpm-lock.yaml
 # 本地探针/临时日志（desktop 探针与一次性脚本用）
 .tmp-*
 .tmp/
+
+# 官网（site/）：生成物不入库，build 前由 `bun run gen` 重算。
+# dist/ 与 node_modules/ 的规则没有前导斜杠，已经覆盖 site/ 下的同名目录。
+site/src/styles/tokens.css
+site/src/data/stats.json
+site/src/content/docs/api/
+site/.astro/

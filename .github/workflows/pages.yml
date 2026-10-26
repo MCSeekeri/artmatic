@@ -1,0 +1,83 @@
+name: Pages
+
+# 官网（site/）单独发布到 GitHub Pages。
+#
+# 为什么不用「Settings → Pages → Deploy from a branch」：
+#   1. 那个选项只认仓库根的 `/` 或 `/docs`。本仓库根的 `docs/` 是给维护者的设计笔记
+#      （agent 控制面 / Electron 兼容 / 0.3 加固计划），不是官网 —— 误选会把手记发布出去。
+#   2. 产物在 `site/dist`，不在任何分支上。要让 Pages 拿到构建结果，只有 Artifact 一条路。
+#
+# `paths` 过滤的作用：`site/` 还没建起来时这个 workflow 永远不会触发，不会在每次
+# 推主应用代码时跑一次红的。`workflow_dispatch` 是第一次建站时手动跑一次用的。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+      # API 文档由 src/ 生成，站点也吃 src/assets 里的缩略图 ——
+      # 只监听 site/** 会让文档在源码改了之后静默过期。
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+      - 'bun.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时刻只跑一个部署。cancel-in-progress: false 是刻意的：
+# 半路取消会留下一个传了一半的站点。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      # 这个 action 只有一个不可替代的产出：`base_path`。
+      #   project site（oxygennine.github.io/artmatic）→ `/artmatic`
+      #   自定义域名（artmatic.xxx.com）      → `/`
+      # 把它注入构建，`site/` 自己不需要知道部署到哪，换域名也不用改代码。
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      # 前提：`site/` 是 bun workspace 成员（根 package.json 的 `workspaces` 里带上它），
+      # 锁文件共用根 `bun.lock` —— 项目约定只有一份 lockfile。
+      # 如果哪天 `site/` 改成独立依赖树，这一步要改成 working-directory: site。
+      - run: bun install --frozen-lockfile
+
+      - name: Build site
+        working-directory: site
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: |
+          bun run build
+          # Actions 部署本身不跑 Jekyll（2024-07 起），`.nojekyll` 不是必需的。
+          # 留着只为防一件事：以后有人图省事改回 branch 部署，`_astro/` 这类下划线
+          # 目录会被 Jekyll 吃掉，症状是「页面能开、样式全丢」。
+          touch dist/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

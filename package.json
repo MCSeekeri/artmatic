@@ -5,6 +5,9 @@
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "bun@1.4.2",
+  "workspaces": [
+    "site"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/check-bundle.mjs",
@@ -20,7 +23,9 @@
     "desktop": "electron desktop/main.mjs",
     "desktop:probe": "electron desktop/main.mjs --probe",
     "desktop:artifact": "bun run build && node desktop/build.mjs",
-    "desktop:smoke": "node desktop/smoke.mjs"
+    "desktop:smoke": "node desktop/smoke.mjs",
+    "site:dev": "bun run --cwd site dev",
+    "site:build": "bun run --cwd site build"
   },
   "trustedDependencies": [
     "electron"

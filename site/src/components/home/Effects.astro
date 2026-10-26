@@ -1,0 +1,156 @@
+---
+/**
+ * 02 特效：文字在板上，缩略图在屏幕两侧。
+ *
+ * 缩略图直接引产品里的 81 张真实预览（`src/assets/effect-thumbnails/`），
+ * 跨目录 glob 引用，不在 site/ 里再存一份 —— 同一张图存两处必然会漂。
+ *
+ * 「由滚轮驱动」的实现刻意**不做逐帧插值**：滚动只写一个 `--p`（视差用），
+ * 入场靠一次性 class + 逐格 transition-delay。逐帧改 14 个元素的 transform
+ * 在低端机上会掉帧，而掉帧正是这种页面最容易被看穿的地方。
+ */
+import stats from '../../data/stats.json';
+import AsciiField from './AsciiField.svelte';
+
+const files = import.meta.glob<string>('../../../../src/assets/effect-thumbnails/*.webp', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+});
+
+const byId = new Map(
+  Object.entries(files).map(([path, url]) => [path.split('/').pop()!.replace('.webp', ''), url]),
+);
+
+/** 挑的是「一眼看得出不是滤镜」的那批，外加几个基础型做对照 */
+const PICKS = [
+  'pixel-sort',
+  'kino-datamosh',
+  'ascii',
+  'optical-flow',
+  'feedback',
+  'channel-split',
+  'rgb-burst',
+  'scanlines',
+  'vhs',
+  'liquid-light',
+  'smear',
+  'halftone',
+  'posterize',
+  'duotone',
+  'kaleido',
+  'tunnel',
+  'swirl',
+  'melt',
+  'shockwave',
+  'pixelate',
+];
+
+const tiles = PICKS.map((id) => ({ id, url: byId.get(id) })).filter((tile) => tile.url);
+const left = tiles.slice(0, Math.ceil(tiles.length / 2));
+const right = tiles.slice(Math.ceil(tiles.length / 2));
+---
+
+<section class="sec" id="effects">
+  <div class="board">
+    <div class="row">
+      <div class="c-3 aside">
+        <p class="kicker"><b>02</b> 特效</p>
+      </div>
+
+      <div class="c-9 vr">
+        <h2 class="h2">旗舰级别的故障艺术库。</h2>
+        <p class="sub">Datamosh、像素排序，在数据混沌中涌现出艺术感。</p>
+
+        <p class="body">
+          把你花在寻找十几个破解版收费插件的时间用在真正的创作上。Artmatic 提供数量庞大的故障艺术库，且可调参数的数量与代码的变量数相差无几。
+        </p>
+
+        <p class="body">
+          由时间作为种子，导出的每一帧都与预览丝毫不差<sup>*</sup>。实时预览只是我们的基操，所见即所得才是驯服故障艺术的核心。
+        </p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="c-12 flush">
+        <div class="flow" data-flow>
+          <div class="flow-wing flow-wing--l">
+            {
+              left.map((tile, i) => (
+                <figure class="flow-tile" style={`--i:${i}`}>
+                  <img src={tile.url} alt={`${tile.id} 特效预览`} width="640" height="360" loading="lazy" />
+                  <figcaption>{tile.id}</figcaption>
+                </figure>
+              ))
+            }
+          </div>
+
+          <div class="flow-core">
+            <div class="flow-core-art"><AsciiField client:visible /></div>
+            <p><b>{stats.effects}</b> 个特效 · 全部可调</p>
+          </div>
+
+          <div class="flow-wing flow-wing--r">
+            {
+              right.map((tile, i) => (
+                <figure class="flow-tile" style={`--i:${i}`}>
+                  <img src={tile.url} alt={`${tile.id} 特效预览`} width="640" height="360" loading="lazy" />
+                  <figcaption>{tile.id}</figcaption>
+                </figure>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="c-12">
+        <p class="note">
+          * Datamosh 等操作视频关键帧编码的特效，可能因为画质不同而产生不同结果。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const bands = [...document.querySelectorAll<HTMLElement>('[data-flow]')];
+  if (bands.length) {
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+    let queued = false;
+
+    const measure = () => {
+      queued = false;
+      for (const band of bands) {
+        const rect = band.getBoundingClientRect();
+        const view = innerHeight || 1;
+        /* 0：带的顶刚好到视口底部；1：带已经进到视口里 60% */
+        const p = Math.min(1, Math.max(0, (view - rect.top) / (view * 0.6)));
+        band.style.setProperty('--p', p.toFixed(3));
+        if (p > 0.28) band.classList.add('is-in');
+        else if (p === 0 && rect.top > view) band.classList.remove('is-in');
+      }
+    };
+
+    const kick = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(measure);
+    };
+
+    if (reduced.matches) {
+      for (const band of bands) {
+        band.style.setProperty('--p', '1');
+        band.classList.add('is-in');
+      }
+    } else {
+      /* 先武装（藏起缩略图）再测量：反过来的话首帧会闪一下全部内容 */
+      for (const band of bands) band.dataset.armed = '';
+      addEventListener('scroll', kick, { passive: true });
+      addEventListener('resize', kick);
+      measure();
+    }
+  }
+</script>

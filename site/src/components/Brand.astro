@@ -1,0 +1,37 @@
+---
+/**
+ * 内联品牌标记。`variant` 对应 src/assets/brand 下的三档：
+ *   small   143×163   2×2 小标记（顶栏、Hero、页脚）
+ *   fonttype 1218×260 字标（只在 Hero 与页脚，不和大标记同框）
+ *   main    1280×1251 3×3 大标记（首页下载区单独出现）
+ */
+import small from '../assets/brand/artmatic-small-dark.svg?raw';
+import fonttype from '../assets/brand/artmatic-fonttype-dark.svg?raw';
+import main from '../assets/brand/artmatic-main-dark.svg?raw';
+import { inlineBrand } from '../lib/brand';
+
+interface Props {
+  variant?: 'small' | 'fonttype' | 'main';
+  height?: string;
+  class?: string;
+}
+
+const { variant = 'small', height = '1.5rem', class: cls = '' } = Astro.props;
+const raw = { small, fonttype, main }[variant];
+---
+
+<span class:list={['brand', cls]} style={`--brand-h:${height}`} set:html={inlineBrand(raw)} />
+
+<style>
+  .brand {
+    display: inline-block;
+    height: var(--brand-h);
+    line-height: 0;
+    color: var(--text-primary);
+  }
+  .brand :global(svg) {
+    display: block;
+    height: 100%;
+    width: auto;
+  }
+</style>

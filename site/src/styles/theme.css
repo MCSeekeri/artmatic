@@ -1,0 +1,299 @@
+/*
+ * theme.css — 把 tokens.css 里的设计令牌接到 Starlight 的变量契约上。
+ *
+ * 单向映射：`--sl-*` 只读 `var(--token)`，不写死任何颜色。改品牌色只改 tokens.ts。
+ * 这些规则**不加 @layer**，因为 Starlight 自己的样式全在 `@layer starlight.core`
+ * 里 —— 未分层的规则一律胜出，所以不需要和它的选择器比特异度。
+ */
+
+:root {
+  /* ---- 颜色 ---- */
+  --sl-color-bg: var(--surface-0);
+  --sl-color-bg-nav: var(--surface-0);
+  --sl-color-bg-sidebar: var(--surface-0);
+  --sl-color-bg-inline-code: var(--surface-2);
+  --sl-color-bg-accent: var(--accent);
+
+  --sl-color-text: var(--text-primary);
+  --sl-color-text-accent: var(--accent);
+  --sl-color-text-invert: var(--accent-on);
+
+  --sl-color-accent: var(--accent);
+  --sl-color-accent-low: var(--accent-weak);
+  --sl-color-accent-high: var(--accent-strong);
+
+  --sl-color-hairline: var(--border);
+  --sl-color-hairline-light: var(--surface-2);
+  --sl-color-hairline-shade: var(--border);
+
+  /* Starlight 拿 white/black 当「最高对比前景 / 页面底色」，不是字面黑白 */
+  --sl-color-white: var(--text-primary);
+  --sl-color-black: var(--surface-0);
+
+  /* 七档灰全写：它只在亮色块里定义 gray-7，漏一个就会在暗色下继承上游值 */
+  --sl-color-gray-1: var(--text-primary);
+  --sl-color-gray-2: var(--text-secondary);
+  --sl-color-gray-3: var(--text-muted);
+  --sl-color-gray-4: var(--border-strong);
+  --sl-color-gray-5: var(--border);
+  --sl-color-gray-6: var(--surface-2);
+  --sl-color-gray-7: var(--surface-1);
+
+  --sl-color-backdrop-overlay: var(--overlay);
+
+  /* ---- 字体 ---- */
+  --sl-font: 'Inter', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --sl-font-heading: 'Outfit', var(--sl-font);
+
+  /* ---- 版式 ---- */
+  --sl-line-height: 1.75;
+  --sl-line-height-headings: 1.2;
+  --sl-sidebar-width: 17rem;
+  --sl-content-width: 46rem;
+
+  /* 站点自己的量具（首页与文档都吃） */
+  --site-frame: 1160px;
+  --site-gutter: clamp(1rem, 4vw, 2.5rem);
+  --site-heading-tracking: -0.02em;
+}
+
+/* 标题一律 Outfit；正文里 h4/h5 也用，避免中英混排时字重乱跳 */
+h1,
+h2,
+h3,
+h4,
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+.sl-markdown-content h5 {
+  font-family: var(--sl-font-heading);
+  font-weight: 700;
+  letter-spacing: var(--site-heading-tracking);
+}
+
+/* ---------------------------------------------------------------- 站点外壳 */
+
+header.header {
+  border-bottom: 1px solid var(--border);
+}
+
+/* 字标容器：Starlight 的 logo 是 <img>，按高度定尺，宽度随比例 */
+.site-title img {
+  height: 20px;
+  width: auto;
+}
+
+/* 顶栏右侧的导航：只在 ≥50em 出现，窄屏靠 Starlight 的移动菜单 */
+.site-nav {
+  display: none;
+  align-items: center;
+  gap: 1.5rem;
+  margin-inline-start: auto;
+  margin-inline-end: 1rem;
+}
+@media (min-width: 50em) {
+  .site-nav {
+    display: flex;
+  }
+}
+.site-nav a {
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-decoration: none;
+  transition: color var(--motion-duration-hover) var(--motion-ease);
+}
+.site-nav a:hover {
+  color: var(--text-primary);
+}
+.site-nav a[aria-current='page'] {
+  color: var(--text-primary);
+}
+
+/* 主按钮：品牌紫实底。整个站点只有「下载」用这个形态 */
+.site-nav .nav-cta,
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 32px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background var(--motion-duration-hover) var(--motion-ease);
+}
+.site-nav .nav-cta:hover,
+.btn-primary:hover {
+  background: var(--accent-strong);
+  color: var(--accent-on);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 32px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-decoration: none;
+  transition:
+    border-color var(--motion-duration-hover) var(--motion-ease),
+    background var(--motion-duration-hover) var(--motion-ease);
+}
+.btn-secondary:hover {
+  background: var(--surface-2);
+  border-color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- 文档三栏 */
+
+/* 侧栏不是卡片，是纸边：只有一条竖线 */
+.sidebar-pane {
+  border-inline-end: 1px solid var(--border);
+}
+[data-theme='dark'] .sidebar-pane {
+  background: var(--surface-0);
+}
+
+.sidebar-content .group-label,
+.sidebar-content summary {
+  font-family: var(--sl-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.sidebar-content a {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.sidebar-content a:hover {
+  color: var(--text-primary);
+}
+.sidebar-content a[aria-current='page'] {
+  /* Starlight 默认给当前项铺一块实底品牌色 —— 在纸面语言里太重了，
+     换成浅底 + 左侧一条竖线 */
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-weight: 700;
+  box-shadow: inset 2px 0 0 var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+/* 右栏目录：小一号，链接不做下划线 */
+.right-sidebar {
+  border-inline-start: 1px solid var(--border);
+}
+.right-sidebar-panel :global(a),
+#starlight__on-this-page--mobile + nav a {
+  font-size: 12px;
+}
+starlight-toc a {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+starlight-toc a:hover,
+starlight-toc a[aria-current='true'] {
+  color: var(--text-primary);
+}
+
+/* 正文里的链接：变色 + 一条细下划线，不用默认的粗线 */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--accent-border);
+}
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-color: currentColor;
+}
+
+/* 文档标题层级：h2 不该比 h1 还抢眼 */
+.sl-markdown-content h2 {
+  font-size: clamp(1.25rem, 1.8vw, 1.5rem);
+  margin-top: 2.5rem;
+}
+.sl-markdown-content h3 {
+  font-size: 1.0625rem;
+  margin-top: 2rem;
+}
+.sl-markdown-content p,
+.sl-markdown-content li {
+  font-size: 15px;
+}
+
+/* 正文里的表格：横向 1px 线，无斑马纹 */
+.sl-markdown-content table {
+  font-size: 14px;
+}
+.sl-markdown-content th,
+.sl-markdown-content td {
+  border-color: var(--border);
+}
+
+/* 行内代码与代码块：跟产品里的等宽字同一族 */
+.sl-markdown-content code:not(pre code) {
+  font-family: var(--sl-font-mono);
+  font-size: 0.86em;
+  padding: 0.1em 0.32em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+/* Expressive Code：去掉它默认的投影盒，融入纸面 */
+.expressive-code .frame {
+  --ec-frm-frameBoxShdw: none;
+  --ec-frm-edBg: var(--surface-1);
+  --ec-frm-trmBg: var(--surface-2);
+}
+
+/* Pagefind 搜索框：贴纸面的描边式，不是浮起式 */
+site-search button[data-open-modal] {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+site-search button[data-open-modal]:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+/* 焦点环统一用品牌色，键盘导航时看得见 */
+:where(a, button, summary, input, select):focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ 工具类 */
+
+.mono {
+  font-family: var(--sl-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.eyebrow {
+  font-family: var(--sl-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}

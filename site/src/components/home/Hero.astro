@@ -1,0 +1,72 @@
+---
+/**
+ * 首屏。背景的算法艺术铺满整屏，文字落在它左下角的板里 ——
+ * 「扩宽到全屏」指的是画面，不是文字：文字始终对齐到全站那一个板。
+ *
+ * 右半边刻意空着：那一格只画一条竖线，剩下的交给画面。
+ */
+import AlgoCanvas from './AlgoCanvas.svelte';
+import { DOWNLOAD, GITHUB, url } from '../../data/site';
+import stats from '../../data/stats.json';
+
+const facts = [
+  { label: '特效', value: String(stats.effects) },
+  { label: '生成器', value: String(stats.generators) },
+  { label: '转场', value: String(stats.transitions) },
+  { label: '许可', value: 'Apache-2.0' },
+];
+---
+
+<header class="hero">
+  <div class="hero-art"><AlgoCanvas scene="lyapunov" budget={1250000} client:load /></div>
+  <div class="hero-veil"></div>
+
+  <div class="board">
+    <div class="row">
+      <div class="c-7">
+        <h1>创建秩序和混沌的美</h1>
+        <p class="hero-lead">开箱即用的剪辑软件，轻点鼠标创建华丽的算法和故障艺术。</p>
+
+        <div class="cta-row">
+          <a class="btn-primary" href={DOWNLOAD.url}>下载 Windows 桌面版</a>
+          <a class="btn-secondary" href={GITHUB}>GitHub 仓库</a>
+        </div>
+
+        <p class="note">
+          {
+            DOWNLOAD.available
+              ? `v${stats.appVersion} · ${DOWNLOAD.label}`
+              : `v${stats.appVersion} · 首批便携包尚未发布，仓库里已有全部源码`
+          }
+          <a href={url('/guide/install/')}>安装说明</a>
+        </p>
+      </div>
+
+      <div class="c-5 vr"></div>
+    </div>
+
+    <div class="row hero-facts">
+      {
+        facts.map((fact) => (
+          <div class="c-3">
+            <b>{fact.value}</b>
+            <span>{fact.label}</span>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</header>
+
+<style>
+  .note a {
+    margin-inline-start: 0.6rem;
+    color: var(--text-secondary);
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
+  }
+  .note a:hover {
+    color: var(--text-primary);
+  }
+</style>
