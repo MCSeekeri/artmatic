@@ -1,27 +1,12 @@
 # Artmatic
 
-面向算法艺术与故障艺术的 Web 原生时间轴工具 —— 把算法艺术和故障艺术**按音乐结构编排**起来：
-统一时间轴、按拍吸附、可打关键帧、确定性逐帧导出。
+<p align="center">
+<img src="./src/assets/brand/artmatic-small-light.svg" width=64px"> <img src="./src/assets/brand/artmatic-fonttype-light.svg" height="64px">
+<br/><br/>
+<em>创建秩序与混沌的美</em>
+</p>
 
-纯前端，无后端、无账号、不需要联网。工程是**磁盘上的一个目录**，整个目录可以直接拷走。
-
-> 想改代码请看 [AGENTS.md](AGENTS.md) —— 架构、硬约束、数据模型与测试约定都在那里，
-> 改架构 / 构建方式 / 测试约定之前先更新它。
-
----
-
-## 前置依赖
-
-| 项 | 要求 |
-|---|---|
-| 运行时 | Node.js 20.19+ / 22.12+（跑构建与脚本） |
-| 包管理器 | [bun](https://bun.sh) —— **只有它**。lockfile 只有 `bun.lock` 一份，见下方说明 |
-| 浏览器 | **Chrome / Edge 最新版**。依赖 File System Access（工程读写）、WebCodecs（MP4 编码）、WebGL2（合成） |
-| 运行环境 | 必须处于 **secure context**（`localhost` 或 HTTPS）。`file://` 打开不行 —— 上述 API 在非安全上下文里不存在 |
-| 部署 | 无后端，`build` 产物是纯静态文件，可放任意静态托管 |
-
-**发行版是桌面应用**（`desktop/` 的 Electron 宿主，免安装便携目录），不需要装浏览器。
-浏览器版只作开发与试玩：Firefox / Safari 缺 File System Access 与 WebCodecs 的 H.264，不可用。
+Artmatic 是一款面向算法艺术与故障艺术的 Web 原生开源剪辑软件，有丰富的内置特效库和生成器，并支持 AI Agent 实时编辑工程。
 
 ---
 
@@ -45,11 +30,23 @@
 
 ---
 
+## 前置依赖（WebUI）
+
+发行版无需考虑，但开发此项目需要配置下列环境。
+
+| 项 | 要求 |
+|---|---|
+| 运行时 | Node.js 20.19+ / 22.12+ |
+| 包管理器 | [bun](https://bun.sh) |
+| 浏览器 | **Chrome / Edge**，暂不支持 Safari / Firefox。依赖 File System Access（工程读写）、WebCodecs（MP4 编码）、WebGL2（合成） |
+| 运行环境 | 必须处于 **secure context**（`localhost` 或 HTTPS）。`file://` 打开不行 —— 上述 API 在非安全上下文里不存在 |
+| 部署 | 无后端，`build` 产物是纯静态文件，可放任意静态托管 |
+
+---
+
 ## 快速开始
 
 ```bash
-# 安装依赖。**只用 bun**：npm / yarn / pnpm 会写出各自的 lockfile 与 bun.lock
-# 分叉，而两边版本不一致时不会有任何报错（详见 AGENTS.md §6）。
 bun install
 
 # 开发
