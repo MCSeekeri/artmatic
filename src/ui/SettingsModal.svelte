@@ -13,11 +13,15 @@
    * 已更改的项在标签前标一个主题色星号：**与打开面板时的值比较**，不是与
    * 默认值比较 —— 用户关心的是「我这次动了什么」，不是「这份配置离出厂设置多远」。
    *
-   * ## 四个分页
+   * ## 五个分页
    *
-   * 当前工程 / 外观 / 操作习惯 / 编辑器行为。分页而不是一长条滚动：这四块
+   * 当前工程 / 外观 / 操作习惯 / 编辑器行为 / 许可。分页而不是一长条滚动：这几块
    * 服务的时刻不同（调工程、调自己看得舒服、调习惯、调行为），一长条会把
    * 「工程级」和「界面级」混在一起。
+   *
+   * 许可页是唯一**只读**的一页：没有草稿、没有可写回的东西，底栏因此只留「关闭」。
+   * 第三方名称与许可证放在这里而不是「关于」那张五行小卡片里 —— 「这东西里有什么」
+   * 是设置面板该回答的问题，而关于只回答「这是什么」。
    *
    * 从 Rail.svelte 抽出来：那已经是第四个面板了，再往里塞会让 rail 文件
    * 同时承担导航、面板内容、导出编排三件事。
@@ -49,17 +53,55 @@
   }
   const { onclose }: Props = $props();
 
-  type Section = 'project' | 'appearance' | 'habits' | 'editor';
+  type Section = 'project' | 'appearance' | 'habits' | 'editor' | 'license';
   let section = $state<Section>('project');
 
-  const SECTIONS: { id: Section; labelKey: 'app.settingsNavProject' | 'app.settingsNavAppearance' | 'app.settingsNavHabits' | 'app.settingsNavEditor' }[] = [
+  const SECTIONS: { id: Section; labelKey: 'app.settingsNavProject' | 'app.settingsNavAppearance' | 'app.settingsNavHabits' | 'app.settingsNavEditor' | 'app.settingsNavLicense' }[] = [
     { id: 'project', labelKey: 'app.settingsNavProject' },
     { id: 'appearance', labelKey: 'app.settingsNavAppearance' },
     { id: 'habits', labelKey: 'app.settingsNavHabits' },
     { id: 'editor', labelKey: 'app.settingsNavEditor' },
+    { id: 'license', labelKey: 'app.settingsNavLicense' },
   ];
   // 分页名在这里解析：`SECTIONS` 是模块级常量，直接在表里调 tr() 会把语言冻结。
   const navItems = $derived(SECTIONS.map((s) => ({ id: s.id, label: tr(s.labelKey) })));
+
+  /**
+   * 许可页的内容：**只列名称**，移植细节与各自条款全在仓库根的 `CREDITS.md`。
+   *
+   * 名字是标识符（包名 / 字体名 / 上游仓库），许可证是 SPDX 短名 —— 两者都不翻译，
+   * 所以留在组件里而不用进语言文件。
+   *
+   * `wawoff2`（MIT）不在列表里：它只是 build 期把 woff2 还原成 TTF 的 devDependency，
+   * 不进产物，用户拿到的这份东西里没有它。字体那四族本身是 OFL-1.1，随包分发。
+   */
+  const LICENSE_GROUPS: {
+    titleKey: 'app.licenseMeta' | 'app.licenseCode' | 'app.licenseAssets' | 'app.licenseDeps';
+    items: { name: string; license: string }[];
+  }[] = [
+    { titleKey: 'app.licenseMeta', items: [{ name: 'OxygenNine/artmatic', license: 'Apache 2.0' }] },
+    { titleKey: 'app.licenseCode', items: [{ name: 'zivavu/openmosh', license: 'MIT' }] },
+    {
+      titleKey: 'app.licenseAssets',
+      items: [
+        { name: 'lobehub/lobe-icons', license: 'MIT' },
+        { name: 'Inter · JetBrains Mono · Lora · Outfit', license: 'OFL-1.1' },
+      ],
+    },
+    {
+      titleKey: 'app.licenseDeps',
+      items: [
+        { name: '@lucide/svelte', license: 'ISC' },
+        { name: '@zumer/snapdom', license: 'MIT' },
+        { name: 'fflate', license: 'MIT' },
+        { name: 'gifenc', license: 'MIT' },
+        { name: 'gl-transitions', license: 'MIT' },
+        { name: 'harfbuzzjs', license: 'MIT' },
+        { name: 'mediabunny', license: 'MPL-2.0' },
+        { name: 'polygon-clipping', license: 'MIT' },
+      ],
+    },
+  ];
 
   /*
    * 打开时的基准值，**只在挂载那一刻读一次** —— 不是 `$derived`。
@@ -277,8 +319,13 @@
   {onclose}
 >
   {#snippet footer()}
-    <Button label={tr('common.cancel')} variant="outline" testid="settings-cancel" onclick={onclose} />
-    <Button label={tr('app.applySettings')} variant="accent" testid="settings-apply" onclick={apply} />
+    {#if section === 'license'}
+      <!-- 只读页：没有可保存的东西，就不给一个按了什么也不发生的「保存并应用」。 -->
+      <Button label={tr('common.close')} variant="outline" testid="settings-license-close" onclick={onclose} />
+    {:else}
+      <Button label={tr('common.cancel')} variant="outline" testid="settings-cancel" onclick={onclose} />
+      <Button label={tr('app.applySettings')} variant="accent" testid="settings-apply" onclick={apply} />
+    {/if}
   {/snippet}
 
   <div class="set">
@@ -602,7 +649,7 @@
           <span class="set-td muted">{tr('app.shortcutSplit')}</span>
           <span class="set-td mono">{tr(currentScheme.splitKeysKey)}</span>
         </div>
-      {:else}
+      {:else if section === 'editor'}
         <div class="set-row">
           <span class="set-lbl">
             {#if overlapChanged}<i class="star" title={tr('app.changedMark')} aria-hidden="true">*</i>{/if}
@@ -662,6 +709,23 @@
           </div>
         </div>
         <p class="set-note">{tr('typo.scriptRisk')}</p>
+      {:else if section === 'license'}
+        <!--
+          三组：代码 / 素材 / 依赖。每组只有「名称 + 许可证」两列 —— 用途与移植
+          细节属于 `CREDITS.md`，抄一份到界面上就是第二份会过期的账。
+        -->
+        {#each LICENSE_GROUPS as group, i (group.titleKey)}
+          <h3 class:set-gap={i > 0}>{tr(group.titleKey)}</h3>
+          {#each group.items as item (item.name)}
+            <div class="lic-row">
+              <span>{item.name}</span>
+              <span class="lic-tag">{item.license}</span>
+            </div>
+          {/each}
+        {/each}
+        <p class="set-note lic-foot" data-testid="settings-license-full">
+          {tr('app.licenseFull')}
+        </p>
       {/if}
     </div>
   </div>
@@ -786,5 +850,28 @@
   }
   .set-td.muted {
     color: var(--text-secondary);
+  }
+  /*
+   * 许可页的一行：名称在左、许可证在右，靠底部发丝线连成一张表。
+   * 用 flex 而不是 <table>：没有表头，也没有列宽要算。
+   */
+  .lic-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-4);
+    padding: var(--sp-2) 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+  }
+  .lic-tag {
+    flex: none;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+  }
+  /* `.set-note` 平时贴在某个控件下面，这里它是整页的收尾指针。 */
+  .set-note.lic-foot {
+    margin: var(--sp-5) 0 0;
   }
 </style>

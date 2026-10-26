@@ -220,6 +220,7 @@ export const app = {
   'app.settingsNavAppearance': '外观',
   'app.settingsNavHabits': '操作习惯',
   'app.settingsNavEditor': '编辑器行为',
+  'app.settingsNavLicense': '许可',
   'app.applySettings': '保存并应用',
   'app.changedMark': '本次已更改',
   'app.renameProject': '重命名工程',
@@ -286,6 +287,17 @@ export const app = {
   'app.beatAnchorNew': '新关键帧默认锚到拍',
   'app.beatAnchorTip': '锚到拍：改 BPM / offset 时卡点自动跟随',
   'app.inspector': '检查器',
+
+  /* —— 许可 —— */
+  /*
+   * 这一页**只列名称**：包名 / 字体名 / 上游仓库与 SPDX 短名都是标识符，留在
+   * 组件里不进语言文件；要翻译的只有这三个分组标题和末尾那一句指针。
+   */
+  'app.licenseMeta': '项目名称和许可证类型',
+  'app.licenseCode': '代码',
+  'app.licenseAssets': '素材',
+  'app.licenseDeps': '依赖',
+  'app.licenseFull': '完整内容见 OxygenNine/artmatic 的 CREDITS.md',
 
   /* ------------------------------------------------ 顶栏与关闭确认 */
   'app.openProjects': '打开的工程',

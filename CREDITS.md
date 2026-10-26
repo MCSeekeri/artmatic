@@ -1,22 +1,22 @@
 # CREDITS
 
-移植与参考的来源登记（AGENTS.md §1.8）。
+本项目自有代码以 **Apache-2.0** 授权（`LICENSE`），登记规则见 AGENTS.md §1.8。
+本文件同时是第三方归属声明（Apache-2.0 §4(c)），因此不另设 `NOTICE`。
 
-## 代码移植
+## 引用的第三方源代码
 
-**openmosh**（MIT）——除另注外，以下均移植自它。
+### zivavu/openmosh（MIT）
 
-渲染基础设施：
+**基础设施**
 
-- `gl/effect-shaders.ts` 的 blend mode switch、`LAYER_BOX_GLSL`、`EffectShaderDef` / `PrePassDef` 协议、`HASH_GLSL` → `src/engine/blend.frag.ts`、`src/engine/placement.frag.ts`、`src/effects/shader-def.ts`
+- `gl/effect-shaders.ts` 的 blend mode switch、`LAYER_BOX_GLSL`、`EffectShaderDef` / `PrePassDef` 协议、`HASH_GLSL`&`HASH_PLAIN_GLSL` → `src/engine/blend.frag.ts`、`src/engine/placement.frag.ts`、`src/effects/shader-def.ts`
 - `BOUNCE_GLSL`、`HSV_GLSL`、`HUE_ROTATE_GLSL` → `src/effects/shader-def.ts`
 - `gl/preview-size.ts` → `src/engine/preview-size.ts`
 - `timeline/clips.ts` → `src/core/clips.ts`
 - `effects/types.ts` 的参数定义类型 → `src/effects/types.ts`
 - `vite.config.ts` 的 `labRedirect()` → `vite.config.ts`
-- `lab/` 的信息架构（三栏布局、按住旁路看源、分辨率档位、批量编译）—— 仅参照，未复制代码
 
-特效，落点均为 `src/effects/defs/*` 与 `src/effects/glsl/*`：
+**特效**
 
 - 色彩与色调：posterize、solarize、bleach、color-correction、duotone、thermal、color-halves、hsv-swap、trio-tone
 - 几何与采样：edges、neon-edges、sharpen、mirror、kaleido、polar、zoom、circle-warp、radial-blur
@@ -29,61 +29,20 @@
 - `petri`
 - ISF 端口：godray、reflection、flash-glitch、kino-feedback
 
-音频：
+**音频**
 
 - `audio/spectrum-range.ts`、`audio/spectrum-frames.ts`、`engine/spectrum-texture.ts`、`effects/{defs,glsl}/audio-bars.ts`
 
-以上若干条是 openmosh 从别处按行为重写的端口，非逐行复制，二级来源：
+**openmosh的二级来源**
 
 - Vidvox/ISF-Files（MIT）：hsv-swap、trio-tone、circle-warp、pixel-shifter、rgb-strobe、ring-warp、shockwave、resize-glitch、stylize-glitch、ghosting、fast-mosh、motion-mask
 - QianMo/X-PostProcessing-Library（MIT）：rgb-burst、screen-jump、sobel-neon
 - keijiro（Unlicense）：flash-glitch、kino-feedback
 - pixijs/filters（MIT）：godray、reflection
 
-> `HASH_FAST_GLSL` 用的是 Dave Hoskins 风格的无 sin hash（`p * 0.1031` 那一族），在 Shadertoy / MIT 圈通行，上游源码未署名，这里补记出处。
+### lobehub/lobe-icons（`src/assets/providers/`，MIT）
 
-## 镜头光晕（`src/effects/{defs,glsl}/lens-flare.ts`）
-
-**自写，没有复制代码。** 移植前读了两份公开实现，只取「有哪些光学分量」这一层：
-
-- [BetterLensFlare](https://github.com/polincdev/BetterLensFlare)（MIT）：鬼影沿
-  「光源 → 画面中心」的轴排布、逐通道错位做色散、横向拉丝的胶囊形衰减。
-- Anderson Mancini 的 *Ultimate Lens Flare*（Shadertoy 上的公开实现）：星芒来自
-  `atan` 角度乘条数后取幂，光圈叶片的六边形边。
-
-亮部检测（32×32 分格扫描 + 亚格加权质心，单 fragment 归约）是本项目自己的做法：
-上面两份都需要外部传入光源位置。
-
-## 文本转路径（`src/typography/text-outline.ts`）
-
-**只参照思路，没有复制代码**：`tooooools/html-to-svg`（MIT）的 text 渲染器用
-Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置测量沿用这两条
-公开技法，字形轮廓与字体选择走自己的 `FontRegistry` + HarfBuzz（`glyphToPath`），
-没有引入 opentype.js，也没有取用它的任何源码或字体表。
-
-## SVG 素材生成器（`src/typography/svg-gen/`）
-
-一期 20 + 二期 2（`motif` / `contour`）共 **22 个生成器全部自写**，没有复制任何
-第三方源码或形状数据。算法来源只到「公开技法」这一层：
-
-- 10 PRINT 斜纹网格（`tenprint`）：公开的 Commodore 64 单行程序；
-- Catmull-Rom → 三次贝塞尔（`blobs / waveband / squiggle / globe`）：公开的样条公式；
-- 阿基米德螺旋、等距（30°）轴测投影、正交经纬球投影：教科书公式；
-- 刻度盘 / 条码 / HUD 刻度：按 `rahoo.online` **导出的 SVG 结构**归纳出的几何做法
-  （逐图元 `<circle>` / `<line>` / `<path>`），未取其源码与任何资产。
-
-明确**未使用**（许可与产品判断，详见 `.workbuddy/analysis-1017/REPORT.md` §0.2 / §10）：
-
-- fffuel 的形状文件与生成结果 —— 许可禁止再分发；
-- `rahoo.online` 的 canvas 实现代码 —— 无许可声明（默认保留），只参考了算法思路；
-- `pattern.monster` / `svelte-svg-patterns` 的 476 条 tile 数据 —— 一期不做策展层，
-  二期若接入需按 MIT 边界逐条筛选并在此登记。
-
-## 品牌图标素材（`src/assets/providers/`）
-
-16 张 AI 提供商品牌图取自 [Lobe Icons](https://github.com/lobehub/lobe-icons)
-（`@lobehub/icons-static-svg`，MIT），文件名按本项目的 provider id 重命名后入库，
-没有改图内容。逐个来源：
+16 张 AI 提供商品牌图取自 [Lobe Icons](https://github.com/lobehub/lobe-icons)（`@lobehub/icons-static-svg`，MIT），文件名按本项目的 provider id 重命名后入库。品牌标志的版权属于对应的版权所有者。
 
 | 本项目 id | 上游图标 |
 |---|---|
@@ -104,10 +63,53 @@ Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置�
 | `openrouter` | `openrouter` |
 | `xai` | `xai` |
 
-> 集合是 MIT，但**品牌标识本身是各家商标**，此处仅用于「让用户认出自己在跟谁说话」。
-> 不暗示任何背书；要对外分发这份产物时应自行复核各家的商标使用政策。
+### 内置字体（`public/fonts/`，OFL-1.1）
 
-## 依赖库
+- Inter
+- JetBrains Mono
+- Lora
+- Outfit
+
+版权行与许可原文见 `public/fonts/OFL.txt`；`*.ttf` 是同一份 `*.woff2` 的无损解压，供 HarfBuzz 取轮廓；woff2 取自 `@fontsource/*` 的 latin 子集，未改动字体。
+
+### angel-echo（内部移植）
+
+angel-echo是未公开的内部项目。
+
+- `src/core/prng.ts` —— `js/util.js::mulberry32`
+- `src/core/commands.ts` —— `angel-echo-splitter` 的 `store.js` 快照模式
+- `src/core/curve.ts` —— `Impulse` / `follower` 两条包络（闭式递推是本项目改的，见文件注释）
+- `src/engine/kit.ts` —— `js/gl.js`（282 行）
+- `src/algos/` —— `scenes.ts`（`js/scenes.js`）、`shader-lib.ts` 的 `ALGO_HEAD`（`LIB` 那套噪声 / 特征工具）、`rule110.ts` · `lsystem.ts` · `langtons-ant.ts` · `bifurcation.ts`（`js/automata.js`）、`menger.ts`（`mathfield` mode 6）
+- `src/audio/tempo.ts` —— `tools/analyze_audio.py` 的谱通量 + 自相关
+- `src/effects/glsl/echo.ts` —— `post.js::ECHO_FS` 的简化版（去掉 camera 段）
+- `src/effects/shader-def.ts` —— `HASH_FAST_GLSL`、`FBM6_GLSL`（6 阶 fbm + `ridge`）、`DISC_GLSL`（黄金角 8 tap 圆盘采样）、`HSV_GLSL`（与 openmosh 同源写法，两边都有）
+
+---
+
+## 参考致谢
+
+在Artmatic的开发过程中，Agent 参考了下列项目的实现，但并未复制源代码。
+
+### 镜头光晕（`src/effects/{defs,glsl}/lens-flare.ts`）
+
+- [BetterLensFlare](https://github.com/polincdev/BetterLensFlare)（MIT）：鬼影沿「光源 → 画面中心」的轴排布、逐通道错位做色散、横向拉丝的胶囊形衰减。
+- Anderson Mancini 的 *Ultimate Lens Flare*（Shadertoy 上的公开实现）：星芒来自 `atan` 角度乘条数后取幂，光圈叶片的六边形边。
+
+### 文本转路径（`src/typography/text-outline.ts`）
+
+`tooooools/html-to-svg`（MIT）的 text 渲染器用 Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置测量沿用这两条公开技法，字形轮廓与字体选择走自己的 `FontRegistry` + HarfBuzz（`glyphToPath`），没有引入 opentype.js。
+
+### SVG 素材生成器（`src/typography/svg-gen/`）
+
+- 10 PRINT 斜纹网格（`tenprint`）：公开的 Commodore 64 单行程序；
+- Catmull-Rom → 三次贝塞尔（`blobs / waveband / squiggle / globe`）：公开的样条公式；
+- 阿基米德螺旋、等距（30°）轴测投影、正交经纬球投影：教科书公式；
+- 刻度盘 / 条码 / HUD 刻度：按 `rahoo.online` **导出的 SVG 结构**归纳出的几何做法（逐图元 `<circle>` / `<line>` / `<path>`），未取其源码与任何资产。
+
+---
+
+## 附 A：项目依赖
 
 | 包 | 许可 | 用途 |
 |---|---|---|
@@ -120,20 +122,21 @@ Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置�
 | `gl-transitions` | MIT | 转场 |
 | `polygon-clipping` | MIT | 图形布尔运算 |
 | `wawoff2` | MIT | **仅 devDependency**：`scripts/fonts-woff2-to-sfnt.mjs` 把内置 woff2 无损还原成 TTF |
-| Inter · JetBrains Mono · Lora · Outfit（`public/fonts/`） | OFL-1.1 | 内置西文字体（无衬线 / 等宽 / 衬线 / 装饰，各 400+700）。版权行与许可原文见 `public/fonts/OFL.txt`；`*.ttf` 是同一份 `*.woff2` 的无损解压（字形与度量逐字节相同），供 HarfBuzz 取轮廓。woff2 取自 `@fontsource/*` 的 latin 子集（未改动字体） |
 
 以上均按依赖引入，不复制源码入库。
 
-> `mediabunny` 是 MPL-2.0，文件级弱 copyleft：不修改其源文件再分发就没有义务。AGENTS.md 早先把它的许可误记为 MIT，2026-10-02 更正。
+`mediabunny` 以 MPL-2.0 方式授权，仓库地址见 https://github.com/Vanilagy/mediabunny 。
 
-> `gl-transitions` 包本身是 MIT，但集合内条目逐条自带 `license` 字段。1.71.0 的 125 条 = MIT 123 + BSD-3 1 + BSD-2 1，全部宽松。
-> `src/effects/transitions/catalog.ts` 是唯一 import 它的文件，目录层有 `PERMISSIVE_LICENSES` 白名单兜底（`transition-catalog.test.ts` 同时断言）。
-> 运行时把 `texture2D` / `gl_FragColor` 改写成 ES 3.00 写法，不改上游文件。
-> 拒收 3 条：`luma`、`displacement`（声明了规范之外的额外贴图输入），`burn`（`vec3 color` 不在 `paramsTypes` 里，拿不到默认值）。
+仅引入了 `gl-transitions` 的 MIT 子集。
 
-> 内置字体只有 OFL 的四族西文（Inter / JetBrains Mono / Lora / Outfit），且都只含 latin 子集。系统字体（simhei / msyh 等）不允许随软件分发，中文字体由用户自行导入或走本机字体。
+---
 
-## 明确不使用
+## 附 B：评估后不使用
+
+评估后放弃引入下面的项目，供 Agent 参考。
 
 - `hydra-synth`（AGPL-3.0）
 - `Coollab`（GPL-3.0）
+- fffuel 的形状文件与生成结果 —— 许可禁止再分发
+- `rahoo.online` 的 canvas 实现代码 —— 无许可声明（默认保留）；只参考了算法思路，代码未取
+- `pattern.monster` / `svelte-svg-patterns` 的 476 条 tile 数据 —— 一期不做策展层，二期若接入需按 MIT 边界逐条筛选并在此登记

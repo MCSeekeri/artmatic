@@ -191,6 +191,9 @@ Esc 退出并取消这次拖动。
 
 ## 许可与致谢
 
-第三方依赖与移植代码的登记见 [CREDITS.md](CREDITS.md)。本项目不引 AGPL / GPL 代码。
+本项目以 **Apache License 2.0** 授权，全文见 [LICENSE](LICENSE)。
+
+引入的第三方依赖与移植代码**各自保留原许可**（MIT / ISC / OFL 等），登记见 [CREDITS.md](CREDITS.md)。
+本项目不引 AGPL / GPL 代码。
 
 This project is NOT affiliated with U&I Software ArtMatic.

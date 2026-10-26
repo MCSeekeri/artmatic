@@ -78,6 +78,10 @@ for (const f of ['main.mjs', 'preload.cjs', 'host.mjs']) {
 fs.mkdirSync(path.join(APP, 'scripts'), { recursive: true })
 fs.copyFileSync(path.join(ROOT, 'scripts', 'capacity.mjs'), path.join(APP, 'scripts', 'capacity.mjs'))
 fs.cpSync(WEB_DIST, path.join(APP, 'dist'), { recursive: true })
+// 许可与第三方归属随发行目录一起走（Apache-2.0 §4(a) 要求随分发附带许可副本）。
+for (const f of ['LICENSE', 'CREDITS.md']) {
+  fs.copyFileSync(path.join(ROOT, f), path.join(APP, f))
+}
 fs.writeFileSync(
   path.join(APP, 'package.json'),
   JSON.stringify(

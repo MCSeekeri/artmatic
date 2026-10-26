@@ -93,6 +93,11 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
 
 ### 1.8 不引 AGPL / GPL 代码
 
+**本项目自身以 Apache-2.0 授权**（根 `LICENSE`，`package.json` 的 `license` 字段同值）；
+引进来或移植进来的东西**保留原许可**、登记在 `CREDITS.md`。Apache-2.0 与 MIT / ISC / BSD /
+OFL 兼容，所以下面这套取舍成立；**换成任何 copyleft 主许可前先重新推一遍**（移植的 MIT 代码
+可以留在 Apache-2.0 工程里，反过来不行）。
+
 - 禁止：`hydra-synth`（AGPL-3.0）、`Coollab`（GPL-3.0）
 - 可用：`gl-transitions`（MIT）、openmosh（MIT）、`lucide`（ISC）、
   `mediabunny`（MPL-2.0 —— 文件级弱 copyleft，本项目 npm 装、不改其源、不分发它，因此无义务）
@@ -100,6 +105,9 @@ IndexedDB 只放可丢弃的东西（缩略图缓存、UI 状态、目录句柄�
   `effects/transitions/catalog.ts` 有许可白名单把非宽松许可挡在目录外（测试同时断言），
   明细见 `CREDITS.md`。
 - 移植 MIT 代码必须登记到 `CREDITS.md`（含二级移植来源）。这个账越拖越贵。
+- `CREDITS.md` 按「**源码 / 资产有没有进仓库**」分两节：进仓库的进 §一（保留原声明），
+  只借了做法的进 §二。**「仅参照，未复制」不许写在 §一** —— 那是这份账最容易变糊的地方
+  （读者要能只看节标题就判断「这段抄了没有」）。
 
 ### 1.9 新功能必须 Agent 可达
 

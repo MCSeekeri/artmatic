@@ -145,7 +145,7 @@ test('轨道行可拖曳排序，且时间轴上的轨道顺序跟着变', async
 
 /* ------------------------------------------------------------ 设置面板 */
 
-test('设置面板：navside 四个分页可切换，且草稿态有主题色星号', async ({ page }) => {
+test('设置面板：navside 五个分页可切换，且草稿态有主题色星号', async ({ page }) => {
   await boot(page);
   await page.getByTestId('rail-settings').click();
   await expect(page.getByTestId('modal-settings')).toBeVisible();
@@ -157,6 +157,15 @@ test('设置面板：navside 四个分页可切换，且草稿态有主题色星
   await expect(page.getByTestId('settings-pane-habits')).toBeVisible();
   await page.getByTestId('settings-nav-editor').click();
   await expect(page.getByTestId('settings-pane-editor')).toBeVisible();
+
+  // 许可页只读：底栏不该有「保存并应用」，第三方名称按组列出，最后指向 CREDITS.md
+  await page.getByTestId('settings-nav-license').click();
+  const license = page.getByTestId('settings-pane-license');
+  await expect(license).toContainText('zivavu/openmosh');
+  await expect(license).toContainText('OFL-1.1');
+  await expect(license).toContainText('MPL-2.0');
+  await expect(page.getByTestId('settings-license-full')).toContainText('CREDITS.md');
+  await expect(page.getByTestId('settings-apply')).toHaveCount(0);
 
   // 只列真正有差异的那一项按键
   await page.getByTestId('settings-nav-habits').click();
