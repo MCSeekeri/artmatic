@@ -9,7 +9,7 @@
  * 等桌面壳通过验收再引。
  *
  * 用法：
- *   bun run build && node desktop/build.mjs
+ *   pnpm run build && node desktop/build.mjs
  */
 
 import fs from 'node:fs'
@@ -42,8 +42,8 @@ function fail(msg) {
   process.exit(1)
 }
 
-if (!fs.existsSync(ELECTRON_DIST)) fail('找不到 node_modules/electron/dist，先 bun install')
-if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) fail('找不到 dist/index.html，先 bun run build')
+if (!fs.existsSync(ELECTRON_DIST)) fail('找不到 node_modules/electron/dist，先 pnpm install')
+if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) fail('找不到 dist/index.html，先 pnpm run build')
 
 // Windows 上杀毒/索引器会短暂锁住刚跑过的 exe 与 asar；删不掉就改名让路，
 // 下次再清。直接失败会让「改一行重打一次」变成要手动去删目录。

@@ -13,7 +13,7 @@
  *   node scripts/cli.mjs render <dir> --out FILE [--format mp4|png|gif]
  *        [--range from:to] [--size WxH] [--url http://localhost:5173]
  *
- * `--url` 是**旁挂**：指向一个已经在跑的 dev / preview（例如用户开着 `bun run dev`），
+ * `--url` 是**旁挂**：指向一个已经在跑的 dev / preview（例如用户开着 `pnpm run dev`），
  * 于是这次渲染落在「用户正看着的那个实例」上。省略则自己起一套无头的。
  */
 

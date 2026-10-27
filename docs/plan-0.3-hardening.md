@@ -405,7 +405,7 @@ audio buffer 在淡变区首尾能量低于中段 —— 走离线混流，不�
 >   「运行错误 N」段，点开 Modal 看消息 / 栈 / 最近 10 条 `console.error`，
 >   可复制诊断信息（版本 / URL / UA / 错误）。
 > - 构建守卫：`scripts/check-bundle.mjs` 断言首屏 preload、entry script、
->   lucide 分片数与 `dist/assets` 总数；`bun run build` 与 `scripts/e2e.mjs` 都跑。
+>   lucide 分片数与 `dist/assets` 总数；`pnpm run build` 与 `scripts/e2e.mjs` 都跑。
 >
 > 判据：`tests/unit/color.test.ts`、`tests/e2e/runtime-errors.spec.ts`、
 > `scripts/check-bundle.mjs`；`param-row` / lab / 检查器 / 三个选择器的 E2E 全绿。
@@ -511,5 +511,5 @@ WebKit 没有 WebCodecs H.264，跨平台会退化成本文里的「Firefox 处�
 ## 4. 开始前
 
 1. `git tag backup/pre-0.3`，之后每波开始前同样打一个。
-2. 基线：`bun run check` + `bun run test`（当前 2729 全绿）+ 一次完整 E2E。
+2. 基线：`pnpm run check` + `pnpm run test`（当前 2729 全绿）+ 一次完整 E2E。
 3. 每波结束更新对应子系统的 `AGENTS.md`；根文件只在**硬约束**变化时改（W5 有一条）。

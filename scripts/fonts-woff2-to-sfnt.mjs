@@ -13,8 +13,8 @@
  *
  * ## 用法
  *
- *   bun run fonts:sfnt            # 转换 public/fonts/*.woff2 → 同名 .ttf
- *   bun run fonts:sfnt --check    # 只校验 .ttf 存在且是合法 SFNT
+ *   pnpm run fonts:sfnt            # 转换 public/fonts/*.woff2 → 同名 .ttf
+ *   pnpm run fonts:sfnt --check    # 只校验 .ttf 存在且是合法 SFNT
  *
  * 产物**已提交**（字体不会变），脚本只在换字体版本时重跑。
  * `--check` 刻意**不比 mtime**：git 不保存修改时间，新克隆里 TTF 永远比 woff2 旧。
@@ -52,7 +52,7 @@ for (const file of files) {
       ((head[0] === 0x00 && head[1] === 0x01 && head[2] === 0x00 && head[3] === 0x00) ||
         head.toString('latin1') === 'OTTO');
     if (!outStat || !sfnt) {
-      console.error(`[fonts] ${out} 缺失或不是 SFNT —— 跑一次 bun run fonts:sfnt`);
+      console.error(`[fonts] ${out} 缺失或不是 SFNT —— 跑一次 pnpm run fonts:sfnt`);
       missing += 1;
     }
     continue;

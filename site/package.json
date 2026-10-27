@@ -3,23 +3,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run gen && astro dev",
-    "build": "bun run gen && astro build",
-    "gen": "bun scripts/gen-tokens.ts && bun scripts/gen-stats.mjs && bun scripts/gen-api.mjs && node scripts/check-content.mjs",
-    "gen:api": "bun scripts/gen-api.mjs",
+    "dev": "pnpm run gen && astro dev",
+    "build": "pnpm run gen && astro build",
+    "gen": "tsx scripts/gen-tokens.ts && tsx scripts/gen-stats.mjs && node scripts/gen-api.mjs && node scripts/check-content.mjs",
+    "gen:api": "node scripts/gen-api.mjs",
     "preview": "astro preview",
-    "shots": "bun scripts/shots.mjs"
+    "shots": "node scripts/shots.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "0.39.3",
     "@astrojs/svelte": "8.1.2",
-    "@lucide/astro": "^1.61.0",
+    "@lucide/astro": "1.61.0",
     "astro": "6.4.8",
-    "svelte": "^5.43.6"
+    "svelte": "5.57.1"
   },
   "devDependencies": {
-    "typedoc": "^0.28.20",
-    "typedoc-plugin-frontmatter": "^1.3.3",
-    "typedoc-plugin-markdown": "^4.14.1"
+    "tsx": "^4.23.15",
+    "typedoc": "0.28.20",
+    "typedoc-plugin-frontmatter": "1.3.3",
+    "typedoc-plugin-markdown": "4.14.1"
   }
 }

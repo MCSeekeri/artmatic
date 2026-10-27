@@ -1,7 +1,7 @@
 /**
  * desktop/smoke.mjs — 一键验证**打包产物**里的宿主接线。
  *
- * 前提：`dist/` 已构建（`bun run build`）。本脚本会重打便携目录，然后跑
+ * 前提：`dist/` 已构建（`pnpm run build`）。本脚本会重打便携目录，然后跑
  * `Artmatic.exe --host-smoke`：
  *   - preload 桥存在；
  *   - IPC 按范围读；
@@ -10,7 +10,7 @@
  *     mediabunny CustomSource → 打包收集」整条链。
  *
  * 用法：
- *   bun run build && node desktop/smoke.mjs
+ *   pnpm run build && node desktop/smoke.mjs
  *   $env:ARTMATIC_SMOKE_VIDEO='D:\path\clip.mp4'; node desktop/smoke.mjs
  */
 

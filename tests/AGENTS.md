@@ -1,7 +1,7 @@
 # tests/ —— 测试约定（单测 / 守卫 / 变异测试）
 
 vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在 `tests/e2e/AGENTS.md`）。
-**守卫必须被验证过才算守卫** —— 纯函数层用 `bun run test:mutate` 自动验。
+**守卫必须被验证过才算守卫** —— 纯函数层用 `pnpm run test:mutate` 自动验。
 
 **何时读我**：加一个测试或守卫；改断言口径；**跑回归之前**（分层表在本文件里）。
 
@@ -66,12 +66,12 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
     hex）。`tests/e2e/runtime-errors.spec.ts` —— 未捕获错误 / rejection 必须能落到底栏，
     详情 Modal 可清空。
   - `scripts/check-bundle.mjs` —— 构建产物守卫（首屏 preload / lucide 分片 /
-    `dist/assets` 总数）。`bun run build` 与 `scripts/e2e.mjs` 都会跑；改构建配置后
+    `dist/assets` 总数）。`pnpm run build` 与 `scripts/e2e.mjs` 都会跑；改构建配置后
     先看它的输出。
     ⚠️ **空转探针红旗**：任何「两个配置 hash 不同」的断言，前面必须先有一条
     `meanAt > 阈值` —— 否则两张黑图不同也会「通过」。
 
-- **新守卫必须被验证过才算守卫**。**纯函数层用 `bun run test:mutate` 自动验（见本文件）；
+- **新守卫必须被验证过才算守卫**。**纯函数层用 `pnpm run test:mutate` 自动验（见本文件）；
   手工 A/B 只留给你够不到的那一层 —— E2E 的 GPU 读回标量。** 下面这些是手工跑过的样本：
   - 位表行序守卫：把 `bitRows` 的 `'eca'` 改成低位在前 → `tests/unit/bitmask.test.ts` 变红。
   - codec 越界守卫：拿掉尺寸上限那一行 → 「坏头部 → null」变红。
@@ -151,14 +151,14 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
 
 ## 变异测试（测试的测试）
 
-`bun run test:mutate` 走 **Stryker**：把源码逐处改错（一个 mutant = 一处改动）再跑测试。
+`pnpm run test:mutate` 走 **Stryker**：把源码逐处改错（一个 mutant = 一处改动）再跑测试。
 测试挂了 = **killed**（守卫有效）；测试照样绿 = **survivor**（守卫其实没挡住）。
 这就是「把 bug 改回去、看它红不红」那件事的自动化版本，也是 本文件那条纪律的执行者。
 
 ```bash
-bun run test:mutate -- --mutate src/core/bitmask.ts    # 单文件（秒级）
-STRYKER_MUTATE=src/core/curve.ts bun run test:mutate   # 或走环境变量
-bun scripts/mutate-triage.mjs --diff HEAD              # 只看本次改动命中的行
+pnpm run test:mutate -- --mutate src/core/bitmask.ts    # 单文件（秒级）
+STRYKER_MUTATE=src/core/curve.ts pnpm run test:mutate   # 或走环境变量
+node scripts/mutate-triage.mjs --diff HEAD              # 只看本次改动命中的行
 ```
 
 - 配置在 `stryker.config.mjs`：`testRunner: 'vitest'` + `vitest.configFile: 'vite.config.ts'` +
@@ -168,7 +168,7 @@ bun scripts/mutate-triage.mjs --diff HEAD              # 只看本次改动命�
   Google 是**只变异本次 changelist 涉及的行**、并在代码评审时增量跑。
 - `.stryker-report.json` 是 200KB 级，**别直接读**。`scripts/mutate-triage.mjs` 压成
   「一行一条」，`--diff <ref>` 只留改动命中的行，`--limit N` 截断，`--json` 给上层脚本。
-  用 `bun` 跑它（个别沙箱里 node 起不了 git，脚本会降级成不过滤并提示）。
+  用 `pnpm run` 的脚本入口跑它（个别沙箱里 node 起不了 git，脚本会降级成不过滤并提示）。
 - ⚠️ **survivor 只有三种成因，必须靠「补一条候选测试再重跑」来判，不能眼看行号推断**：
 
   | 成因 | 判据 | 处置 |
@@ -185,6 +185,6 @@ bun scripts/mutate-triage.mjs --diff HEAD              # 只看本次改动命�
 - **边界**：Stryker 只覆盖 vitest 那一层（纯函数，`test.include` 限死 `tests/unit`）。
   E2E 的 GPU 读回标量它够不到 —— 那层要么继续手工 A/B，要么把已知 buggy 的输出录成
   **负样本 fixture**，让守卫在 CI 里自证。
-- 环境：`node_modules/.bin` 里只有 `stryker.bunx` / `stryker.exe`（**没有裸 `stryker`**），
-  `bunx` 也不在 PATH —— 一律走 `bun run test:mutate` 或 `bun x`。
+- 环境：一律走 `pnpm run test:mutate`（或 `pnpm exec stryker run`）—— 裸 `stryker` 依赖
+  PATH，在不同 shells 下不可靠。
   `.stryker-tmp/` 与报告产物已 gitignore。

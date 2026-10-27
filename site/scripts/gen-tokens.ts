@@ -4,7 +4,7 @@
  * 为什么不手抄一份：设计令牌的真源在主应用里，抄一份的后果是「改了 token、
  * 官网没变」，而且这种漂移没有任何测试能发现。这里直接 import 那个模块跑
  * `resolveTokens()` —— 它是纯数据 + 纯函数（只额外 import `core/color`），
- * 不碰 DOM，所以能在 bun 里跑。
+ * 不碰 DOM，所以能在 node 里跑（`tsx` 负责去掉类型）。
  *
  * 两段都必须**完整**：
  *   - Starlight 的 SSR 输出固定写 `<html data-theme="dark">`，再由首屏前的内联
@@ -13,10 +13,11 @@
  *
  * 生成物 `src/styles/tokens.css` 进 .gitignore —— 每次 build 先跑这个脚本。
  */
-import { resolveTokens, type ThemeSpec } from '../../src/ui/tokens';
+import { writeFile } from 'node:fs/promises';
+import { resolveTokens, type ThemeSpec } from '../../src/ui/tokens.ts';
 
 const HEADER = `/* 由 site/scripts/gen-tokens.ts 生成，不要手改。
- * 真源：src/ui/tokens.ts（跑 \`bun run gen\` 重新生成） */`;
+ * 真源：src/ui/tokens.ts（跑 \`pnpm run gen\` 重新生成） */`;
 
 /** 站点只做单品牌：品牌紫总是 violet 预设。 */
 const spec = (mode: 'light' | 'dark'): ThemeSpec => ({
@@ -42,6 +43,6 @@ const css = [
 ].join('\n');
 
 const out = new URL('../src/styles/tokens.css', import.meta.url);
-await Bun.write(out, css);
+await writeFile(out, css);
 
 console.log(`tokens.css  ${Object.keys(light).length} 个变量 × 2 套`);

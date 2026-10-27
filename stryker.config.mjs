@@ -5,8 +5,8 @@
  * 只变异**本次改动**涉及的文件，而不是整个代码库（见 AGENTS §6 的守卫一节）。
  *
  * 用法：
- *   bunx stryker run --mutate src/core/bitmask.ts      # 探针
- *   bunx stryker run                                   # 走本文件的 mutate 范围
+ *   pnpm exec stryker run --mutate src/core/bitmask.ts      # 探针
+ *   pnpm exec stryker run                                   # 走本文件的 mutate 范围
  *
  * 注意：`coverageAnalysis: 'perTest'` 是关键 —— 它让每个 mutant 只跑
  * 「覆盖到它的那几个测试」，而不是整套（官方数据 5–10× 提速）。

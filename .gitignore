@@ -16,16 +16,17 @@ test-results/
 # 机器能力覆盖文件：**每台机器不一样**，属于本地配置（见 scripts/capacity.mjs）。
 artmatic.capacity.json
 
-# 包管理器是 bun：真源是 bun.lock（见 AGENTS §6）。
+# 包管理器是 pnpm：真源是 pnpm-lock.yaml（见 AGENTS §6）。
 # 别的包管理器一旦被顺手用上，产物就是下面这些 —— 它们只会制造分叉。
 package-lock.json
 yarn.lock
-pnpm-lock.yaml
+bun.lock
+bun.lockb
 # 本地探针/临时日志（desktop 探针与一次性脚本用）
 .tmp-*
 .tmp/
 
-# 官网（site/）：生成物不入库，build 前由 `bun run gen` 重算。
+# 官网（site/）：生成物不入库，build 前由 `pnpm -C site run gen` 重算。
 # dist/ 与 node_modules/ 的规则没有前导斜杠，已经覆盖 site/ 下的同名目录。
 site/src/styles/tokens.css
 site/src/data/stats.json

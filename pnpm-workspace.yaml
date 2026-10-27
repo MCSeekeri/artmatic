@@ -1,0 +1,8 @@
+packages:
+  - site
+
+# pnpm 默认不跑依赖的构建脚本；这几个的 postinstall 产出必须要有。
+allowBuilds:
+  electron: true
+  esbuild: true
+  sharp: true

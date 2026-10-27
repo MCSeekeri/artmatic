@@ -398,9 +398,9 @@
   实例）；没有轴又要 600+ → 浏览器是合成粗体，**拒绝转换**。合成斜体没有对应
   的轴（`slnt` 不等于 CSS 的 italic），一律拒绝。
 - **HarfBuzz 只认 SFNT**：每套内置字体因此同时提供 `*.ttf`（由同名 woff2
-  **无损解压**，`bun run fonts:sfnt` 重新生成）与 woff2（E2E 当用户字体用）。
+  **无损解压**，`pnpm run fonts:sfnt` 重新生成）与 woff2（E2E 当用户字体用）。
   新增内置字体 = 往 `public/fonts/` 放 `<family>-latin-<weight>.woff2` → 跑
-  `bun run fonts:sfnt` → 在 `BUILTIN_FONTS` 加一行 → 更新 `public/fonts/OFL.txt`
+  `pnpm run fonts:sfnt` → 在 `BUILTIN_FONTS` 加一行 → 更新 `public/fonts/OFL.txt`
   与 `CREDITS.md`。
   用户导入的 woff2 拿不到轮廓（`sfntBytes` 返回 null），会落到本机字体查询，
   再失败才拒绝 —— 提示里让用户导入 TTF/OTF，绝不能转出半个字形。
