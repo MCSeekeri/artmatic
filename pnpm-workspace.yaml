@@ -1,0 +1,20 @@
+packages:
+  - site
+
+# 允许执行安装脚本的依赖（pnpm 12 的字段是 allowBuilds，且要写成 mapping；
+# 旧的 onlyBuiltDependencies 已不生效）。两者都是下载/校验平台二进制：
+#   esbuild → vite / tsx 的转译器
+#   sharp   → site/scripts/shots.mjs 的图片缩放
+#
+# electron 不在这里：它 44.x 起没有 postinstall，二进制走单独的
+# `install-electron` bin（desktop / desktop:artifact 脚本已内置这一步）。
+allowBuilds:
+  esbuild: true
+  sharp: true
+
+# pnpm 12 会扫描依赖包里的 agent 指令文件（AGENTS.md / skills 之类）并要求批准，
+# 否则每次 install 都提示 "awaiting approval"。gl-transitions 是纯 GLSL 数据包，
+# 已审阅，这里一次性放行。
+permissions:
+  gl-transitions:
+    skills: true

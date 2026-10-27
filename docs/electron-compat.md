@@ -292,7 +292,7 @@ console.log((await showDirectoryPicker({ mode: 'readwrite' })).name)
 复现：
 
 ```bash
-bun run build                 # web 产物
+pnpm run build                 # web 产物
 node desktop/build.mjs        # → release/Artmatic-<version>-win32-x64/
 ```
 

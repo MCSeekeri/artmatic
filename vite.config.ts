@@ -27,7 +27,7 @@ const pkg = JSON.parse(
  *
  * ## 为什么两边都注册
  *
- * 与 `labRedirect` 同一条理由：E2E 与 `bun run preview` 跑的是 preview 服务，
+ * 与 `labRedirect` 同一条理由：E2E 与 `pnpm run preview` 跑的是 preview 服务，
  * 只注册 dev 那侧等于让自动化测试永远拿不到真实容量（也就永远测不到「预算不足时
  * 的降级路径」）。
  *

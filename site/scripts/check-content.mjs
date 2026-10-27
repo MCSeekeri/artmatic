@@ -40,7 +40,7 @@ for (const [path, min] of EXPECT) {
 
 if (problems.length) {
   console.error('生成物不完整：\n  - ' + problems.join('\n  - '));
-  console.error('\n先跑 `bun run gen:api`（或整条 `bun run gen`）。');
+  console.error('\n先跑 `pnpm run gen:api`（或整条 `pnpm run gen`）。');
   process.exit(1);
 }
 

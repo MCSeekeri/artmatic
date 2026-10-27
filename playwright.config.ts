@@ -16,5 +16,5 @@ export default defineConfig({
   },
   // 注意：不用 webServer 配置。它经 shell spawn 长驻进程，在某些沙箱里
   // 整个进程树会收到 SIGTERM（test runner 零输出暴毙）。统一走
-  // `bun run test:e2e`（scripts/e2e.mjs），由它负责 build + preview。
+  // `pnpm run test:e2e`（scripts/e2e.mjs），由它负责 build + preview。
 });

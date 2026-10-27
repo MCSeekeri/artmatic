@@ -31,7 +31,7 @@ const DIFF_REF = args.includes('--diff') ? opt('--diff', 'HEAD') : null;
 const AS_JSON = args.includes('--json');
 
 if (!existsSync(REPORT)) {
-  console.error(`找不到 ${REPORT} —— 先跑 \`bun run test:mutate\`。`);
+  console.error(`找不到 ${REPORT} —— 先跑 \`pnpm run test:mutate\`。`);
   process.exit(2);
 }
 
@@ -67,11 +67,8 @@ if (DIFF_REF) {
   try {
     diff = changedLines(DIFF_REF);
   } catch (err) {
-    // 已知：某些沙箱里 node 无法 spawn git（EBUSY），bun 可以。降级为不过滤，别让一次探测失败毁掉整个清单。
+    // 已知：某些沙箱里 node 无法 spawn git（EBUSY）。降级为不过滤，别让一次探测失败毁掉整个清单。
     console.error(`⚠ git diff 执行失败（${err.code ?? err.message}）。`);
-    if (!process.versions.bun) {
-      console.error(`  该环境下 node 起不了 git —— 请用 bun 跑：bun scripts/mutate-triage.mjs --diff ${DIFF_REF}`);
-    }
     console.error('  本次不过滤，列出全部 survivor。\n');
   }
 }

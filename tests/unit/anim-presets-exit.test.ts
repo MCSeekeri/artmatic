@@ -5,7 +5,7 @@ import { checkPresets } from './_anim-preset-check';
 
 /**
  * **退出**组预设的守卫（id 从分组表推，不另抄一份）。
- * `bunx vitest run tests/unit/anim-presets-exit.test.ts`
+ * `pnpm exec vitest run tests/unit/anim-presets-exit.test.ts`
  */
 const IDS = ANIM_PRESET_IDS.filter((id) => animGroupOf(id) === 'exit');
 

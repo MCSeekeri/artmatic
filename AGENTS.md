@@ -147,13 +147,13 @@ OFL 兼容，所以下面这套取舍成立；**换成任何 copyleft 主许可�
 | 测试 | Playwright（E2E）+ vitest（**只测纯函数**） |
 
 **发行版是桌面壳，安装包 / 签名 / 自动更新仍不做。** `desktop/` 是**真正的宿主**
-（`preload.cjs` + `host.mjs`）：`bun run desktop` 起壳，`desktop:probe` 跑能力探针，
+（`preload.cjs` + `host.mjs`）：`pnpm run desktop` 起壳，`desktop:probe` 跑能力探针，
 `desktop:artifact` 打免安装便携目录，`desktop:smoke` 在打包产物里验 preload / IPC /
 `artmatic-asset://` 的 Range（可配 `ARTMATIC_SMOKE_VIDEO` 验路径 linked 视频 + 打包）。
 `src/platform/electron.ts` 只覆盖浏览器做不到的三件事（原生路径、按范围读、文件监视），
 其余直接复用 `browserPlatform`；页面拿不到 `fs`，主进程只认用户选过的路径 + token。
 结论见 `docs/electron-compat.md`（官方构建自带专有编解码器，**不需要**塞 ffmpeg）。
-Web 版（`bun run build` 的 `dist/`）自此定位为**开发与试玩**，不再追 Firefox / Safari 适配。
+Web 版（`pnpm run build` 的 `dist/`）自此定位为**开发与试玩**，不再追 Firefox / Safari 适配。
 
 ---
 
@@ -281,35 +281,35 @@ mcp/ · cli/        宿主侧入口（MCP server / CLI）：它们驱动内核�
 ## 6. 开发与测试
 
 ```bash
-bun install          # 唯一的装依赖方式（真源是 bun.lock）
-bun run dev          # Vite dev server（纯浏览器，http://localhost:5173）
-bun run build        # 生产构建（产出 dist/，静态站点）
-bun run preview      # 预览构建产物（http://localhost:4173）
-bun run check        # svelte-check 类型检查
-bun run test         # vitest，只测纯逻辑（配置里限死 tests/unit，不收 e2e）
-bun run test:mutate  # Stryker 变异测试（见 `tests/AGENTS.md`）：逐处改错源码再跑测试，报出「假守卫」
-bun run test:e2e     # scripts/e2e.mjs：自 build + 自起 preview + Playwright（系统 Chrome）
-bunx vitest run tests/unit/xxx.test.ts    # 只想跑一个测试文件
-node scripts/e2e.mjs tests/e2e/x.spec.ts  # 只跑一个 E2E（参数原样转给 playwright test）
-bun run capacity     # 打印本机内存 / 显存探测（页面读的是 /__capacity.json）
-bun run fonts:sfnt   # 内置字体 woff2 → TTF（文本转路径要 SFNT；产物已提交）
-bun run cli new ./p  # CLI（new / validate / clip add / diff / render），首次按需 SSR 打包
-bun run mcp          # MCP server（stdio）：stdout 是 JSON-RPC 通道，不能往里打日志
-bun run desktop      # Electron 探针壳（先 build）；desktop:probe 加探针 + 截图
+pnpm install         # 唯一的装依赖方式（真源是 pnpm-lock.yaml）
+pnpm run dev         # Vite dev server（纯浏览器，http://localhost:5173）
+pnpm run build       # 生产构建（产出 dist/，静态站点）
+pnpm run preview     # 预览构建产物（http://localhost:4173）
+pnpm run check       # svelte-check 类型检查
+pnpm run test        # vitest，只测纯逻辑（配置里限死 tests/unit，不收 e2e）
+pnpm run test:mutate # Stryker 变异测试（见 `tests/AGENTS.md`）：逐处改错源码再跑测试，报出「假守卫」
+pnpm run test:e2e    # scripts/e2e.mjs：自 build + 自起 preview + Playwright（系统 Chrome）
+pnpm exec vitest run tests/unit/xxx.test.ts   # 只想跑一个测试文件
+node scripts/e2e.mjs tests/e2e/x.spec.ts      # 只跑一个 E2E（参数原样转给 playwright test）
+pnpm run capacity    # 打印本机内存 / 显存探测（页面读的是 /__capacity.json）
+pnpm run fonts:sfnt  # 内置字体 woff2 → TTF（文本转路径要 SFNT；产物已提交）
+pnpm run cli new ./p # CLI（new / validate / clip add / diff / render），首次按需 SSR 打包
+pnpm run mcp         # MCP server（stdio）：stdout 是 JSON-RPC 通道，不能往里打日志
+pnpm run desktop     # Electron 探针壳（先 build）；desktop:probe 加探针 + 截图
 ```
 
 官网是独立子项目 `site/`（Astro + Starlight），**不进主构建**，也不共用 `dist/`：
 
 ```bash
-bun run site:dev     # site/ 的 dev server（http://localhost:4321）
-bun run site:build   # 产出 site/dist（CI 里由 .github/workflows/pages.yml 发布）
+pnpm run site:dev    # site/ 的 dev server（http://localhost:4321）
+pnpm run site:build  # 产出 site/dist（CI 里由 .github/workflows/pages.yml 发布）
 ```
 
 三条容易踩的：
 
-- **`bun run site:*` 会自动先跑 `gen`**：`tokens.css` / `stats.json` / `content/docs/api/` 都是生成物（已 gitignore），分别来自 `src/ui/tokens.ts`、`src/` 的实数、TypeDoc。
-- **本地验子路径部署要关掉 MSYS 的路径转换**：`MSYS_NO_PATHCONV=1 BASE_PATH=/artmatic bun run site:build`。不关的话 Git Bash 会把 `/artmatic` 改写成 `C:/Program Files/.../artmatic`，构建会在 `api/agent` 路由上报 `NoMatchingStaticPathFound`。
-- **首页的界面图是脚本截的**：`cd site && bun run shots`（先起 `bun run dev`）。手截的图会随界面变化悄悄过期，脚本至少能重跑。
+- **`pnpm run site:*` 会自动先跑 `gen`**：`tokens.css` / `stats.json` / `content/docs/api/` 都是生成物（已 gitignore），分别来自 `src/ui/tokens.ts`、`src/` 的实数、TypeDoc。`gen` 里有两个脚本要直接 import `.ts` 源文件，走 `tsx` 而不是裸 `node`。
+- **本地验子路径部署要关掉 MSYS 的路径转换**：`MSYS_NO_PATHCONV=1 BASE_PATH=/artmatic pnpm run site:build`。不关的话 Git Bash 会把 `/artmatic` 改写成 `C:/Program Files/.../artmatic`，构建会在 `api/agent` 路由上报 `NoMatchingStaticPathFound`。
+- **首页的界面图是脚本截的**：`cd site && pnpm run shots`（先起 `pnpm run dev`）。手截的图会随界面变化悄悄过期，脚本至少能重跑。
 - **首页版式只有一套坐标**：`.board`（单一宽度 1200）负责左右竖线与横线的外延短头，`.row` 是 12 栏网格，**竖线只写在带 `.vr` 的单元上**。别在 section 上另加 border —— 那正是「两端不接触其它线条的悬空分隔线」的来源。
 - **首页的动态画面不 import 主应用任何模块**：`home/AlgoCanvas.svelte`（WebGL2，lyapunov / mandelbrot，`data-theme=light` 时把同一张图换算成「纸上的墨」）与 `home/AsciiField.svelte`（2D canvas 字符场）。那条 import 链会经 i18n 拉到 `$state`，在 Astro 下编译不过。
 
@@ -317,23 +317,34 @@ bun run site:build   # 产出 site/dist（CI 里由 .github/workflows/pages.yml 
 `package.json` 注入；`GET /__capacity.json` 给本机真实内存 / 显存（拉不到则退回保守默认）；
 `/__llm/*` 是直连失败时的同源代理回落。纯静态部署按「三项都不存在」理解。
 
-> **包管理器只有 bun。** `package.json` 的 `packageManager` 声明了版本，lockfile
-> 只有 `bun.lock` 一份（`package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` 已进
-> `.gitignore`）。**不要用 `npm` / `yarn` / `pnpm`** —— 它们会写出自己的 lockfile，
-> 与 `bun.lock` 分叉；两边版本一旦不一致，症状是「本机好好的、别人装出来不一样」，
+> **包管理器只有 pnpm。** `package.json` 的 `packageManager` 声明了版本，lockfile
+> 只有 `pnpm-lock.yaml` 一份（`bun.lock*` / `package-lock.json` / `yarn.lock` 已进
+> `.gitignore`）。**不要用 `npm` / `yarn` / `bun`** —— 它们会写出自己的 lockfile，
+> 与 `pnpm-lock.yaml` 分叉；两边版本一旦不一致，症状是「本机好好的、别人装出来不一样」，
 > 而且**不会有任何报错**。
 >
 > 这不是假想：`b32d191`（引入 MCP 那次）用 npm 装了 `@modelcontextprotocol/sdk`，
-> 只更新了 `package-lock.json`，`bun.lock` 从此落后一个提交 —— 直到 2026-10-11
-> 才补上（补齐时只多出 4 个包，说明缺的就是那一次）。**装了依赖就一定要更新
-> `bun.lock` 并一起提交。**
+> 只更新了 `package-lock.json`，真源的 lockfile 从此落后一个提交 —— 直到 2026-10-11
+> 才补上。**装了依赖就一定要更新 `pnpm-lock.yaml` 并一起提交**：用 `pnpm add` /
+> `pnpm remove`，不要只改 `package.json`。
 >
-> **`bun test` ≠ `bun run test`**：前者是 Bun 自带的测试运行器，**不读 vitest 配置**，
-> 跑出来的结果没有意义。脚本一律写 `bun run <script>`。
+> **直接依赖写死精确版本（不带 `^`）**，值与 `pnpm-lock.yaml` 的解析结果一致 ——
+> 覆盖掉 lockfile 被删、合并冲突这类场景。加依赖用 `pnpm add pkg@x.y.z`，要升级就
+> 整批升并跑一遍 `pnpm run test`。
 >
-> 本机（ServBay）bun 在 `C:\ServBay\bin\bun.cmd`，已在 PATH 上。
-> 若 `bun install` 长时间没有任何输出是正常的（它在干活）；在需要看进度的场合
-> 用 `bun install --verbose`。
+> **workspace 成员写在 `pnpm-workspace.yaml` 的 `packages` 里。** pnpm 不读
+> `package.json` 的 `workspaces` 字段 —— 按 npm 的习惯写在那里，`site/` 会被当成
+> 无关目录，症状是它自己的依赖根本没装。
+>
+> **依赖的安装脚本默认被拦。** 只有 `pnpm-workspace.yaml` 的 `allowBuilds` 里点名的包
+> 才执行 `postinstall`（mapping 形式：`pkg: true`；旧的 `onlyBuiltDependencies` 已不生效）。
+> 新依赖若要下载平台二进制（`sharp` / `esbuild` 这类），漏登记的症状是运行时缺文件，
+> 安装时**不报错**。
+>
+> `electron` 44 起没有 `postinstall`（`allowBuilds` 里写它没有意义），二进制走单独的
+> `install-electron` bin；`desktop` / `desktop:artifact` 脚本已内置这一步。它在国内直连
+> GitHub release 会报 `TypeError: fetch failed` —— 先设
+> `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 再跑。
 
 > `test:e2e` **不走** playwright 的 `webServer` 配置：它经 shell spawn 长驻进程，
 > 在部分沙箱里整个进程树会收到 SIGTERM（runner 零输出暴毙）。`scripts/e2e.mjs`

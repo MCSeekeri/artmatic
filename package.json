@@ -4,10 +4,7 @@
   "version": "0.3.0",
   "license": "Apache-2.0",
   "type": "module",
-  "packageManager": "bun@1.4.2",
-  "workspaces": [
-    "site"
-  ],
+  "packageManager": "pnpm@12.15.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/check-bundle.mjs",
@@ -20,40 +17,37 @@
     "cli": "node scripts/cli.mjs",
     "capacity": "node scripts/capacity.mjs",
     "fonts:sfnt": "node scripts/fonts-woff2-to-sfnt.mjs",
-    "desktop": "electron desktop/main.mjs",
-    "desktop:probe": "electron desktop/main.mjs --probe",
-    "desktop:artifact": "bun run build && node desktop/build.mjs",
-    "desktop:smoke": "node desktop/smoke.mjs",
-    "site:dev": "bun run --cwd site dev",
-    "site:build": "bun run --cwd site build"
+    "desktop": "install-electron && electron desktop/main.mjs",
+    "desktop:probe": "install-electron && electron desktop/main.mjs --probe",
+    "desktop:artifact": "pnpm run build && install-electron && node desktop/build.mjs",
+    "desktop:smoke": "install-electron && node desktop/smoke.mjs",
+    "site:dev": "pnpm -C site run dev",
+    "site:build": "pnpm -C site run build"
   },
-  "trustedDependencies": [
-    "electron"
-  ],
   "dependencies": {
-    "@lucide/svelte": "^1.49.0",
-    "@zumer/snapdom": "^3.2.0",
-    "fflate": "^0.8.2",
-    "gifenc": "^1.0.3",
-    "gl-transitions": "^1.71.0",
-    "harfbuzzjs": "^1.6.2",
-    "marked": "^18.1.1",
-    "mediabunny": "^1.61.0",
-    "polygon-clipping": "^0.15.7"
+    "@lucide/svelte": "1.49.0",
+    "@zumer/snapdom": "3.4.0",
+    "fflate": "0.8.3",
+    "gifenc": "1.0.3",
+    "gl-transitions": "1.71.0",
+    "harfbuzzjs": "1.6.4",
+    "marked": "18.1.1",
+    "mediabunny": "1.62.1",
+    "polygon-clipping": "0.15.7"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "@playwright/test": "^1.55.0",
-    "@stryker-mutator/core": "^10.0.0",
-    "@stryker-mutator/vitest-runner": "^10.0.0",
-    "@sveltejs/vite-plugin-svelte": "^6.1.0",
-    "@types/node": "^26.6.3",
-    "electron": "^44.9.0",
-    "svelte": "^5.38.0",
-    "svelte-check": "^4.3.1",
-    "typescript": "^5.9.2",
-    "vite": "^7.1.0",
-    "vitest": "^3.2.4",
-    "wawoff2": "^2.0.1"
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@playwright/test": "1.64.1",
+    "@stryker-mutator/core": "10.1.1",
+    "@stryker-mutator/vitest-runner": "10.1.1",
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "@types/node": "26.6.5",
+    "electron": "44.9.3",
+    "svelte": "5.57.2",
+    "svelte-check": "4.7.7",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.7",
+    "wawoff2": "2.0.1"
   }
 }

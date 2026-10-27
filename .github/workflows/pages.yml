@@ -21,7 +21,8 @@ on:
       - 'src/**'
       - 'package.json'
       - 'tsconfig.json'
-      - 'bun.lock'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
   workflow_dispatch:
 
 permissions:
@@ -41,9 +42,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      # 不写 version：action 会读 package.json 的 `packageManager`。
+      # 两处同时指定会报 "Multiple versions of pnpm specified"。
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
         with:
-          bun-version: 1.4.2
+          node-version: 22
+          cache: pnpm
 
       # 这个 action 只有一个不可替代的产出：`base_path`。
       #   project site（oxygennine.github.io/artmatic）→ `/artmatic`
@@ -52,17 +58,17 @@ jobs:
       - id: pages
         uses: actions/configure-pages@v5
 
-      # 前提：`site/` 是 bun workspace 成员（根 package.json 的 `workspaces` 里带上它），
-      # 锁文件共用根 `bun.lock` —— 项目约定只有一份 lockfile。
+      # 前提：`site/` 是 pnpm workspace 成员（根 `pnpm-workspace.yaml` 的 packages），
+      # 锁文件共用根 `pnpm-lock.yaml` —— 项目约定只有一份 lockfile。
       # 如果哪天 `site/` 改成独立依赖树，这一步要改成 working-directory: site。
-      - run: bun install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
       - name: Build site
         working-directory: site
         env:
           BASE_PATH: ${{ steps.pages.outputs.base_path }}
         run: |
-          bun run build
+          pnpm run build
           # Actions 部署本身不跑 Jekyll（2024-07 起），`.nojekyll` 不是必需的。
           # 留着只为防一件事：以后有人图省事改回 branch 部署，`_astro/` 这类下划线
           # 目录会被 Jekyll 吃掉，症状是「页面能开、样式全丢」。

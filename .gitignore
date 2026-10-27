@@ -16,11 +16,11 @@ test-results/
 # 机器能力覆盖文件：**每台机器不一样**，属于本地配置（见 scripts/capacity.mjs）。
 artmatic.capacity.json
 
-# 包管理器是 bun：真源是 bun.lock（见 AGENTS §6）。
+# 包管理器是 pnpm：真源是 pnpm-lock.yaml（见 AGENTS §6）。
 # 别的包管理器一旦被顺手用上，产物就是下面这些 —— 它们只会制造分叉。
+bun.lock*
 package-lock.json
 yarn.lock
-pnpm-lock.yaml
 # 本地探针/临时日志（desktop 探针与一次性脚本用）
 .tmp-*
 .tmp/

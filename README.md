@@ -37,7 +37,7 @@ Artmatic 是一款面向算法艺术与故障艺术的 Web 原生开源剪辑软
 | 项 | 要求 |
 |---|---|
 | 运行时 | Node.js 20.19+ / 22.12+ |
-| 包管理器 | [bun](https://bun.sh) |
+| 包管理器 | [pnpm](https://pnpm.io) 12+ |
 | 浏览器 | **Chrome / Edge**，暂不支持 Safari / Firefox。依赖 File System Access（工程读写）、WebCodecs（MP4 编码）、WebGL2（合成） |
 | 运行环境 | 必须处于 **secure context**（`localhost` 或 HTTPS）。`file://` 打开不行 —— 上述 API 在非安全上下文里不存在 |
 | 部署 | 无后端，`build` 产物是纯静态文件，可放任意静态托管 |
@@ -47,23 +47,23 @@ Artmatic 是一款面向算法艺术与故障艺术的 Web 原生开源剪辑软
 ## 快速开始
 
 ```bash
-bun install
+pnpm install
 
 # 开发
-bun run dev          # http://localhost:5173
+pnpm run dev          # http://localhost:5173
 
 # 构建与本地预览
-bun run build        # 产物在 dist/
-bun run preview      # http://localhost:4173
+pnpm run build        # 产物在 dist/
+pnpm run preview      # http://localhost:4173
 
 # 桌面版（发行形态）
-bun run desktop:artifact   # build + 打免安装便携目录到 release/Artmatic-<版本>-win32-x64/
-bun run desktop:smoke      # 在打包产物里验 preload / IPC / 素材 Range 读
+pnpm run desktop:artifact   # build + 打免安装便携目录到 release/Artmatic-<版本>-win32-x64/
+pnpm run desktop:smoke      # 在打包产物里验 preload / IPC / 素材 Range 读
 ```
 
 ### 部署
 
-`bun run build` 产出的 `dist/` 是纯静态站点，直接上传到任意静态托管（Vercel / Netlify /
+`pnpm run build` 产出的 `dist/` 是纯静态站点，直接上传到任意静态托管（Vercel / Netlify /
 Nginx / 对象存储均可）。**无需任何服务端配置**，也**不需要 COOP/COEP 之类的特殊响应头**。
 
 唯一的硬性要求是**必须通过 HTTPS 提供**（本机 `localhost` 除外）—— 否则浏览器的
@@ -73,9 +73,9 @@ File System Access 与 WebCodecs 会被禁用，表现为「保存按钮点了�
 ### 开发者命令
 
 ```bash
-bun run check        # 类型检查
-bun run test         # 单元测试（纯函数）
-bun run test:e2e     # Playwright 端到端（自构建 + 自起 preview + 系统 Chrome）
+pnpm run check        # 类型检查
+pnpm run test         # 单元测试（纯函数）
+pnpm run test:e2e     # Playwright 端到端（自构建 + 自起 preview + 系统 Chrome）
 ```
 
 E2E 用本机 Chrome（`channel: 'chrome'`），**不需要** `playwright install`。
