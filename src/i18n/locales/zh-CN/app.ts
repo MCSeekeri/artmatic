@@ -220,6 +220,7 @@ export const app = {
   'app.settingsNavAppearance': '外观',
   'app.settingsNavHabits': '操作习惯',
   'app.settingsNavEditor': '编辑器行为',
+  'app.settingsNavDesktop': '桌面',
   'app.settingsNavLicense': '许可',
   'app.applySettings': '保存并应用',
   'app.changedMark': '本次已更改',
@@ -287,6 +288,16 @@ export const app = {
   'app.beatAnchorNew': '新关键帧默认锚到拍',
   'app.beatAnchorTip': '锚到拍：改 BPM / offset 时卡点自动跟随',
   'app.inspector': '检查器',
+
+  /* —— 桌面（只有桌面壳里有这一页） —— */
+  /*
+   * 应用菜单已被关掉（`Menu.setApplicationMenu(null)`），这三个动作只剩
+   * 这一个入口。
+   */
+  'app.devTools': '开发者工具',
+  'app.reload': '重新加载',
+  'app.quit': '退出 Artmatic',
+  'app.desktopNote': '有未保存的改动时，重新加载与退出都会先弹确认框。',
 
   /* —— 许可 —— */
   /*

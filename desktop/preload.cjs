@@ -54,6 +54,19 @@ const api = {
   showInFolder: (path) => ipcRenderer.invoke('artmatic:showInFolder', path),
   /** 机器能力（内存 / 显存）。`app://` 下没有 `/__capacity.json`，只能由主进程量。 */
   capacity: () => ipcRenderer.invoke('artmatic:capacity'),
+  /**
+   * 窗口级动作。应用菜单被关掉之后，开发者工具 / 重新加载 / 退出只剩设置面板
+   * 这一个入口（界面靠这个键在不在，决定要不要显示「桌面」那一页）。
+   *
+   * 全部单向 `send`：没有返回值，失败只会在主进程侧打一行日志 —— 这三件事
+   * 没有「可以补救」的失败形态。
+   */
+  shell: {
+    setTitleBarOverlay: (chrome) => ipcRenderer.send('artmatic:titleBarOverlay', chrome),
+    toggleDevTools: () => ipcRenderer.send('artmatic:toggleDevTools'),
+    reload: () => ipcRenderer.send('artmatic:reload'),
+    quit: () => ipcRenderer.send('artmatic:quit'),
+  },
 }
 
 if (SMOKE) {

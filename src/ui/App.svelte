@@ -29,6 +29,7 @@
   import { appState } from './app-state.svelte';
   import { theme } from './theme.svelte';
   import { installTheme, applyFontScale, applyMotion } from './theme-apply';
+  import { syncTitleBarOverlay } from './titlebar';
   import { activeElementOwnsSpace, isExempt } from './focus';
   import { saveProjectAs, saveProjectNow } from './project-actions';
   import { isSplitKey } from './shortcuts';
@@ -61,6 +62,9 @@
     installTheme(theme.spec);
     applyFontScale(theme.fontScale);
     applyMotion(theme.motionEnabled, theme.motionSpeed);
+    // 桌面壳：窗口按钮由主进程画，读不到上面的 CSS 变量 —— 得把新配色推过去。
+    // 顺序有关系：它读的是 installTheme 刚写下的 token。
+    syncTitleBarOverlay();
   });
 
   // 切工程 = 新会话：否则 A 的聊天会被记进 B 的历史（见 agentState.onProjectChanged）。

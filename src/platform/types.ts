@@ -85,6 +85,29 @@ export interface PickedLinked {
  */
 export type ClipboardWriteResult = 'ok' | 'unsupported' | 'denied' | 'failed';
 
+/**
+ * 桌面壳的窗口级动作。**浏览器里没有这份东西** —— 界面据此判断要不要显示
+ * 「桌面」那一页设置（`platform.shell` 缺席 = 没有窗口可管）。
+ *
+ * 只有主进程做得到的事才进这里：窗口按钮的配色、开发者工具、重新加载、退出。
+ * 全是壳层动作，所以**不进 Agent 工具表**（AGENTS §1.9 的例外条款）。
+ */
+export interface ShellActions {
+  /**
+   * 窗口按钮（最小化 / 最大化 / 关闭）的底色与符号色。
+   *
+   * 由主进程画，读不到 CSS 变量 —— 主题一变就得把算好的颜色发过去。
+   * `height` 传顶栏高度，让按钮与 `.topbar` 齐平（不齐平会多出一条缝）。
+   */
+  setTitleBarOverlay(chrome: { color: string; symbolColor: string; height: number }): void;
+  /** 开 / 关开发者工具（独立窗口，不挤压布局）。 */
+  toggleDevTools(): void;
+  /** 重载页面。脏工程会先弹原生确认框。 */
+  reload(): void;
+  /** 退出应用。脏工程会先弹原生确认框。 */
+  quit(): void;
+}
+
 export interface Platform {
   pickAudioFile(): Promise<PickedFile | null>;
   pickImageFile(): Promise<PickedFile | null>;
@@ -185,4 +208,12 @@ export interface Platform {
     /** 扩展名，带点，如 `.mp4`。 */
     ext: string;
   }): Promise<SaveStream | null>;
+
+  /**
+   * 桌面壳：窗口级动作。**浏览器里缺席**。
+   *
+   * 缺席不是「没实现」，是「在这个宿主里没有意义」—— 浏览器没有窗口按钮，
+   * 也没有应用级退出。所以它是可选的：界面按它判断要不要显示「桌面」页。
+   */
+  readonly shell?: ShellActions;
 }

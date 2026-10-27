@@ -2,7 +2,7 @@
  * desktop/build.mjs — 打一个**免安装的便携目录**，不引 electron-builder。
  *
  * 产物：release/Artmatic-<version>-win32-x64/Artmatic.exe
- *   resources/app/{main.mjs, preload.cjs, host.mjs, package.json, dist/}
+ *   resources/app/{main.mjs, preload.cjs, host.mjs, icon.ico, package.json, dist/}
  *
  * 为什么不用 electron-builder：这一步只是「让现有 web 产物在桌面壳里真的跑起来」，
  * 需要的是可复现、可 diff 的最小结构。安装包 / 签名 / 自动更新属于发行流程，
@@ -10,11 +10,15 @@
  *
  * 用法：
  *   pnpm run build && node desktop/build.mjs
+ *
+ * 不走 `pnpm run desktop:artifact`（它前面还有一步 `install-electron`：本机下载
+ * Electron 走不通，会把这条命令卡死在第一步）。
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Data, NtExecutable, NtExecutableResource, Resource } from 'resedit'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '..')
@@ -42,6 +46,64 @@ function fail(msg) {
   process.exit(1)
 }
 
+/**
+ * 改写可执行文件的图标与版本信息。
+ *
+ * 窗口 / 任务栏那个图标走 `BrowserWindow.icon`（见 `main.mjs`），但**资源管理器里
+ * 这个文件**的图标是 exe 自己的 PE 资源 —— 不改文件本身，用户拿到的就是 Electron
+ * 官方图标，一眼看得出是套壳。
+ *
+ * 用 `resedit`（纯 JS 读写 PE，devDependency，不进产物）：它负责重排 `.rsrc` 与
+ * 目录项 —— 手动算 section 偏移是纯自找麻烦。顺带把那串 "Electron" 版本信息换掉，
+ * 文件属性的「详细信息」栏读的就是它。
+ *
+ * **会丢掉 Authenticode 签名**（改字节必然）。Electron 官方 Windows 包本来就没签，
+ * 我们也没签，没有实际损失。
+ */
+function patchExeIcon(exePath) {
+  if (process.platform !== 'win32') return // 只有 Windows 会看 PE 资源
+  const icoPath = path.join(__dirname, 'icon.ico')
+  if (!fs.existsSync(icoPath)) {
+    fail(`找不到 ${path.relative(ROOT, icoPath)}，先跑 node scripts/make-icon.mjs`)
+  }
+
+  const exe = NtExecutable.from(fs.readFileSync(exePath), { ignoreCert: true })
+  const res = NtExecutableResource.from(exe)
+  const icons = Data.IconFile.from(fs.readFileSync(icoPath)).icons.map((i) => i.data)
+
+  /*
+   * **每一组都换**：electron.exe 里不止一组图标（主图标之外还有给文档 / 协议关联
+   * 用的），只换第一组的话，某些视图里仍会露出 Electron 的图标。
+   */
+  const groups = Resource.IconGroupEntry.fromEntries(res.entries)
+  if (groups.length === 0) {
+    Resource.IconGroupEntry.create(res.entries, 1, 1033, icons)
+  } else {
+    for (const g of groups) {
+      Resource.IconGroupEntry.replaceIconsForResource(res.entries, g.id, g.lang, icons)
+    }
+  }
+
+  const [vi] = Resource.VersionInfo.fromEntries(res.entries)
+  if (vi) {
+    const lang = vi.getAllLanguagesForStringValues()[0] ?? { lang: 1033, codepage: 1200 }
+    vi.setStringValues(lang, {
+      FileDescription: 'Artmatic',
+      ProductName: 'Artmatic',
+      OriginalFilename: 'Artmatic.exe',
+      InternalName: 'Artmatic',
+    })
+    // 版本号跟 package.json 走（Electron 那一版 44.9.3 在文件属性里没有意义）。
+    vi.setFileVersion(VERSION, lang.lang)
+    vi.setProductVersion(VERSION, lang.lang)
+    vi.outputToResourceEntries(res.entries)
+  }
+
+  res.outputResource(exe)
+  fs.writeFileSync(exePath, Buffer.from(exe.generate()))
+  console.log('  图标 / 版本信息   ', `已写入 ${path.basename(exePath)}`)
+}
+
 if (!fs.existsSync(ELECTRON_DIST)) fail('找不到 node_modules/electron/dist，先跑 pnpm exec install-electron')
 if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) fail('找不到 dist/index.html，先跑 pnpm run build')
 
@@ -59,6 +121,7 @@ fs.mkdirSync(APP, { recursive: true })
 // 1. 壳：整份 Electron 运行时（含 libffmpeg / dll / locales）
 fs.cpSync(ELECTRON_DIST, OUT, { recursive: true })
 fs.renameSync(path.join(OUT, 'electron.exe'), path.join(OUT, EXE))
+patchExeIcon(path.join(OUT, EXE))
 
 // 2. 裁 locales。这 55 个 .pak 是 **Chromium 自己**的界面文案（DevTools、右键菜单、
 //    网络错误页、文件对话框的 Chromium 部分），跟 Artmatic 的 i18n 无关 ——
@@ -71,7 +134,9 @@ for (const name of fs.readdirSync(localesDir)) {
 }
 
 // 3. 应用：入口 + 清单 + 产物
-for (const f of ['main.mjs', 'preload.cjs', 'host.mjs']) {
+//    `icon.ico` 与 main.mjs 同目录（`main.mjs` 按 `__dirname/icon.ico` 找），
+//    由 `scripts/make-icon.mjs` 从品牌 SVG 生成。
+for (const f of ['main.mjs', 'preload.cjs', 'host.mjs', 'icon.ico']) {
   fs.copyFileSync(path.join(__dirname, f), path.join(APP, f))
 }
 // 容量探测：`host.mjs` 的 `artmatic:capacity` 要 import 它（dev 走 `../scripts`）。

@@ -224,6 +224,55 @@ win.webContents.on('will-prevent-unload', (event) => {
 
 **这条是产品级缺陷，不是打包配置问题**：web 版有浏览器兜底，桌面版没有。
 
+**关窗之后进程必须真的死掉。** 默认的 `window-all-closed → quit` 在本机会话里会挂住
+（同 §7 那条 network service 崩溃），表现是**窗口没了、进程还在**：句柄钉着
+`release/*/resources/default_app.asar`，于是旧产物删不掉、目录改名也 `Permission denied`，
+只能重启才干净 —— 而症状看起来像「打包脚本有 bug」。所以 `main.mjs` 里给了一支超时：
+
+```js
+app.on('window-all-closed', () => {
+  app.quit()
+  setTimeout(() => app.exit(0), 2000).unref()   // 走到这儿说明清理已完或已不可能
+})
+```
+
+排查时的一句话：**先 `tasklist | findstr Artmatic`，再怀疑脚本**。有进程在跑就什么都别删。
+
+### 3.6 窗口外观：无菜单 + 顶栏即标题栏
+
+```js
+if (process.platform !== 'darwin') Menu.setApplicationMenu(null)
+new BrowserWindow({
+  titleBarStyle: 'hidden',
+  titleBarOverlay: { color, symbolColor, height }, // 首帧值，渲染层随后校正
+  icon: 'icon.ico',
+})
+```
+
+| 关注点 | 处理 |
+|---|---|
+| 默认菜单栏 | `Menu.setApplicationMenu(null)`，只在非 macOS。Windows / Linux 下它就是那条几十像素高的 File/Edit/View |
+| 加速键 | 菜单一并带走全部默认加速键 ⇒ `before-input-event` 补回 Ctrl+W / F12 / Ctrl+Shift+I / F5 / Ctrl+R |
+| macOS | 不动：菜单挂在系统菜单栏上、不占窗口，置 null 会弄坏 Cmd+Q / Cmd+C；交通灯浮在内容上要另做左侧留白，而发行版不出 macOS |
+| 右侧留白 | 系统画的三个按钮宽度随 DPI 与窗口状态变 ⇒ 读 `navigator.windowControlsOverlay.getTitlebarAreaRect()`，`--wco-w` = `innerWidth − rect.width`（实测 1440 宽的窗口是 137px）。写死 px 必然错位 |
+| 拖拽 | 顶栏 `app-region: drag`；按钮与选项卡 `no-drag` —— 选项卡自己有拖动排序，被窗口拖拽吞掉指针事件就废了 |
+| 只在壳里生效 | 全部规则门控在 `:root[data-wco='on']`。浏览器里无条件 `drag` 会把顶栏变成点不到、选不中的死区 |
+| 按钮配色 | 按钮由主进程画、读不到 CSS 变量 ⇒ 主题变更后 `setTitleBarOverlay` 重发一次。取 `--bar-bg` / `--bar-fg` 时要**解开一层 `var(--x)`**（component 层 token 存的就是那个形态，直接交给 Electron 会抛） |
+| 高度 | 真源是 `tokens.ts` 的 `DENSITY.topbarH`；`host.mjs::TITLEBAR_H` 只是首帧猜测，渲染层按 `--topbar-h` 回传校正 |
+| 图标 | 两处，缺一不可：窗口 / 任务栏走 `BrowserWindow.icon`（`main.mjs`，读 `desktop/icon.ico`）；**资源管理器里那个**是 exe 自己的 PE 资源，由 `build.mjs::patchExeIcon` 用 `resedit` 改写（顺带把版本信息里的 "Electron" 换成 Artmatic + `package.json` 的版本号）。`icon.ico` 由 `node scripts/make-icon.mjs` 从品牌 SVG 生成，改了品牌才需要重跑 |
+
+壳层动作（开发者工具 / 重新加载 / 退出）在**设置 → 桌面**，这一页只在 `platform.shell` 存在时出现 ——
+浏览器没有窗口可管。三条都走窗口自己的路径（`reload()` / `close()` 会触发页面 `beforeunload`），
+所以脏工程照样弹原生确认框；开发者工具开在**独立窗口**，不挤压按像素排的布局。
+
+`resedit` 是纯 JS 读写 PE 的库（MIT，devDependency，不进产物）。手算 `.rsrc` 的偏移与数据目录
+不是这儿该干的事。它替换全部 RT_ICON / RT_GROUP_ICON 组，所以不会在某个视图里残留 Electron 图标。
+
+两条已知边界：
+
+- **会丢掉 Authenticode 签名**（改字节必然）。Electron 官方 Windows 包本来就没签，我们也没签，没有实际损失 —— 真要签名得在打包后重新签。
+- 版本信息里的 `CompanyName` / `LegalCopyright` 仍是 Electron 上游那两行（`GitHub, Inc.`）。它们是关于**运行时来源**的陈述，随包还带着 `LICENSES.chromium.html`，所以不改成我们自己的名字。
+
 ## 4. 性能：没有理由变慢，但有三个开关会让它变慢
 
 Electron 与 Chrome 是同一套 Chromium / V8 / ANGLE / 硬件解码器。差异只可能来自配置：
@@ -366,6 +415,8 @@ Electron 里没有额外开销。
 |---|---|---|
 | 打开工程后 `X` / `Ctrl+W` / `Alt+F4` 都关不掉，只能强杀；零工程时能关 | 页面 `beforeunload` 在 `anyDirty` 时拦截，Electron 不弹浏览器那种确认框，窗口于是永远不关 | 接 `will-prevent-unload` → 原生确认框；用户选「放弃」时 `event.preventDefault()` |
 | `Ctrl+W` 完全没反应 | 没有应用菜单 ⇒ 没有默认加速键 | `before-input-event` 里接 `Ctrl/Cmd+W` → `win.close()` |
+| `F12` / `F5` / `Ctrl+R` 也没反应 | 同上，同一批默认加速键一起消失 | 同一个 handler 里补上，指向 `toggleDevTools()` / `reload()` |
+| 窗口关了，`release/*/` 却删不掉 | `app.quit()` 挂住 ⇒ 没有窗口的僵尸进程钉着 `resources/default_app.asar` | `window-all-closed` 里 quit + 2s 后 `app.exit(0)`；排查先看 `tasklist` |
 | 强杀时窗口先变黑再消失 | 进程被杀，合成器没了 | 正常现象，不是 bug |
 
 验证（`desktop/main.mjs --closetest`，打开演示工程使其处于未保存状态）：

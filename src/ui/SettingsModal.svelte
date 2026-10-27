@@ -46,6 +46,7 @@
   } from './tokens';
   import { SHORTCUT_SCHEMES, type ShortcutScheme } from './shortcuts';
   import type { OverlapBehavior } from '../core/schema';
+  import { platform } from '../platform/index';
   import { tr } from '../i18n/index.svelte';
 
   interface Props {
@@ -53,18 +54,29 @@
   }
   const { onclose }: Props = $props();
 
-  type Section = 'project' | 'appearance' | 'habits' | 'editor' | 'license';
+  type Section = 'project' | 'appearance' | 'habits' | 'editor' | 'desktop' | 'license';
   let section = $state<Section>('project');
 
-  const SECTIONS: { id: Section; labelKey: 'app.settingsNavProject' | 'app.settingsNavAppearance' | 'app.settingsNavHabits' | 'app.settingsNavEditor' | 'app.settingsNavLicense' }[] = [
+  const SECTIONS: { id: Section; labelKey: 'app.settingsNavProject' | 'app.settingsNavAppearance' | 'app.settingsNavHabits' | 'app.settingsNavEditor' | 'app.settingsNavDesktop' | 'app.settingsNavLicense' }[] = [
     { id: 'project', labelKey: 'app.settingsNavProject' },
     { id: 'appearance', labelKey: 'app.settingsNavAppearance' },
     { id: 'habits', labelKey: 'app.settingsNavHabits' },
     { id: 'editor', labelKey: 'app.settingsNavEditor' },
+    { id: 'desktop', labelKey: 'app.settingsNavDesktop' },
     { id: 'license', labelKey: 'app.settingsNavLicense' },
   ];
-  // 分页名在这里解析：`SECTIONS` 是模块级常量，直接在表里调 tr() 会把语言冻结。
-  const navItems = $derived(SECTIONS.map((s) => ({ id: s.id, label: tr(s.labelKey) })));
+  /**
+   * 分页名在这里解析：`SECTIONS` 是模块级常量，直接在表里调 tr() 会把语言冻结。
+   *
+   * 「桌面」只在桌面壳里存在：浏览器没有窗口按钮可调，也没有退出应用这回事，
+   * 列出来就是一页按了没反应的按钮（判据是 `platform.shell`）。
+   */
+  const navItems = $derived(
+    SECTIONS.filter((s) => s.id !== 'desktop' || !!platform.shell).map((s) => ({
+      id: s.id,
+      label: tr(s.labelKey),
+    })),
+  );
 
   /**
    * 许可页的内容：**只列名称**，移植细节与各自条款全在仓库根的 `CREDITS.md`。
@@ -319,7 +331,7 @@
   {onclose}
 >
   {#snippet footer()}
-    {#if section === 'license'}
+    {#if section === 'license' || section === 'desktop'}
       <!-- 只读页：没有可保存的东西，就不给一个按了什么也不发生的「保存并应用」。 -->
       <Button label={tr('common.close')} variant="outline" testid="settings-license-close" onclick={onclose} />
     {:else}
@@ -709,6 +721,38 @@
           </div>
         </div>
         <p class="set-note">{tr('typo.scriptRisk')}</p>
+      {:else if section === 'desktop'}
+        <!--
+          壳层动作。应用菜单已被关掉（主进程的 `Menu.setApplicationMenu(null)`），
+          这三个入口没有别的地方可放；它们也都不属于工程，所以不进 Agent 工具表
+          （AGENTS §1.9 的例外条款）。
+        -->
+        <div class="set-actions">
+          <Button
+            label={tr('app.devTools')}
+            icon="code"
+            variant="outline"
+            size="lg"
+            testid="setting-devtools"
+            onclick={() => platform.shell?.toggleDevTools()}
+          />
+          <Button
+            label={tr('app.reload')}
+            icon="rotate-cw"
+            variant="outline"
+            size="lg"
+            testid="setting-reload"
+            onclick={() => platform.shell?.reload()}
+          />
+          <Button
+            label={tr('app.quit')}
+            variant="danger"
+            size="lg"
+            testid="setting-quit"
+            onclick={() => platform.shell?.quit()}
+          />
+        </div>
+        <p class="set-note">{tr('app.desktopNote')}</p>
       {:else if section === 'license'}
         <!--
           三组：代码 / 素材 / 依赖。每组只有「名称 + 许可证」两列 —— 用途与移植
@@ -823,6 +867,16 @@
     display: inline-flex;
     align-items: center;
     gap: var(--sp-3);
+  }
+  /*
+   * 动作列表（桌面页）。宽度收在控件列那一档：三个按钮等宽，不和上面的
+   * 「标签 + 控件」两列结构打架。
+   */
+  .set-actions {
+    display: grid;
+    gap: var(--sp-3);
+    max-width: 230px;
+    margin-bottom: var(--sp-4);
   }
   .mono {
     font-family: 'Cascadia Code', Consolas, monospace;

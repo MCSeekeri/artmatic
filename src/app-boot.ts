@@ -21,6 +21,7 @@ import { appState } from './ui/app-state.svelte';
 import { platform } from './platform/index';
 import { theme } from './ui/theme.svelte';
 import { installTheme, applyFontScale, applyMotion } from './ui/theme-apply';
+import { installWindowChrome } from './ui/titlebar';
 import { runExport } from './exporters/export-runner';
 import { PngSequenceSink } from './exporters/png-sequence';
 import { Mp4Sink, probeMp4Codec } from './exporters/mp4-sink';
@@ -69,6 +70,13 @@ import type { Renderer } from './engine/renderer';
 installTheme(theme.spec);
 applyFontScale(theme.fontScale);
 applyMotion(theme.motionEnabled, theme.motionSpeed);
+
+/*
+ * 桌面壳的窗口顶栏：给系统画的窗口按钮让位、把顶栏设成可拖拽区。
+ * 必须在 mount 之前 —— 晚一帧的话顶栏有一瞬间既不能拖、也没让开按钮。
+ * 浏览器里是空操作（`platform.shell` 缺席）。
+ */
+installWindowChrome();
 
 /*
  * **首屏零选项卡**：不自动开任何工程，直接进欢迎界面。

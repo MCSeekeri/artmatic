@@ -1,13 +1,17 @@
 /**
- * desktop/host.mjs — Electron 主进程侧的素材宿主。
+ * desktop/host.mjs — Electron 主进程侧的宿主能力。
  *
- * 三件事：
+ * 三块：
  *   1. `artmatic-asset://` 协议：按 Range 返回本机文件（视频 seek 靠它），
  *      只认注册过的 token，不认任意路径。
  *   2. IPC：原生选择器、按范围读、stat、监视、在文件管理器中显示。
- *   3. 安全边界：所有路径先过 allowlist（用户亲手选过的文件），页面拿不到 fs。
+ *   3. 窗口级动作：窗口按钮配色、开发者工具、重新加载、退出
+ *      —— 应用菜单关掉之后，这几件事没有别的入口。
  *
- * 这个文件是**产品代码**（不是探针）：`main.mjs` 在 app ready 后安装它，
+ * 安全边界贯穿全部：所有路径先过 allowlist（用户亲手选过的文件），页面拿不到 fs，
+ * 也拿不到 BrowserWindow。
+ *
+ * 这个文件是**产品代码**：`main.mjs` 在 app ready 后安装它，
  * `preload.cjs` 只暴露白名单方法。
  */
 
@@ -16,6 +20,14 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { Readable } from 'node:stream'
+
+/**
+ * 窗口按钮那块 overlay 的高度**初值**。
+ *
+ * 真源是 `ui/tokens.ts` 的 `DENSITY.topbarH`（顶栏高度），渲染层挂载后按
+ * `--topbar-h` 算好再回传一次 —— 这里只是首帧用一下，两边不一致会自愈。
+ */
+export const TITLEBAR_H = 30
 
 /** 与 `app` 同一个 `registerSchemesAsPrivileged` 调用里注册。 */
 export const ASSET_SCHEME = {
@@ -291,4 +303,62 @@ export function installHost({ app, protocol, ipcMain, dialog, shell }) {
   }
 
   return { allow, urlFor, stop: closeWatchers }
+}
+
+/**
+ * 开发者工具：开 / 关同一个入口（设置面板与 F12 共用）。
+ *
+ * **独立窗口**（`mode: 'detach'`）：停在窗口底部会压掉预览的高度，
+ * 而这台应用的布局是按像素排的 —— 一开工具就把时间轴挤掉一截，很容易被当成 bug。
+ */
+export function toggleDevTools(win) {
+  const wc = win?.webContents
+  if (!wc || wc.isDestroyed()) return
+  if (wc.isDevToolsOpened()) wc.closeDevTools()
+  else wc.openDevTools({ mode: 'detach' })
+}
+
+/**
+ * 窗口级动作的 IPC。
+ *
+ * 关掉应用菜单（`Menu.setApplicationMenu(null)`）之后，「开发者工具 / 重新加载 /
+ * 退出」在窗口里就没有入口了，改由渲染层的设置面板触发。三条都走窗口自己的既有
+ * 路径（`reload()` / `close()` 会触发页面的 `beforeunload`），脏工程照样弹原生
+ * 确认框，所以这里不需要再实现一遍守卫。
+ *
+ * 页面调不到 BrowserWindow —— 与素材那条链路同一条边界：只认具名动作。
+ *
+ * @param {object} deps
+ * @param {import('electron').App} deps.app
+ * @param {import('electron').IpcMain} deps.ipcMain
+ * @param {() => import('electron').BrowserWindow | null} deps.getWindow
+ */
+export function installWindowShell({ app, ipcMain, getWindow }) {
+  const live = () => {
+    const w = getWindow()
+    return w && !w.isDestroyed() ? w : null
+  }
+
+  ipcMain.on('artmatic:titleBarOverlay', (_e, next) => {
+    const w = live()
+    // macOS 用交通灯，没有 overlay 这回事；那边调 setTitleBarOverlay 会抛。
+    if (!w || process.platform === 'darwin') return
+    const color = typeof next?.color === 'string' ? next.color : null
+    const symbolColor = typeof next?.symbolColor === 'string' ? next.symbolColor : null
+    const height = Number(next?.height)
+    try {
+      w.setTitleBarOverlay({
+        ...(color ? { color } : {}),
+        ...(symbolColor ? { symbolColor } : {}),
+        ...(Number.isFinite(height) && height > 0 ? { height } : {}),
+      })
+    } catch (e) {
+      // 颜色串不合法时 Electron 抛在这里。留着上一版配色比崩掉好。
+      console.warn('[titlebar] overlay failed', e?.message ?? e)
+    }
+  })
+
+  ipcMain.on('artmatic:toggleDevTools', () => toggleDevTools(live()))
+  ipcMain.on('artmatic:reload', () => live()?.webContents.reload())
+  ipcMain.on('artmatic:quit', () => app.quit())
 }

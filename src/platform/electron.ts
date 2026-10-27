@@ -15,7 +15,7 @@
 
 import { browserPlatform } from './browser';
 import type { MachineCapacity } from '../core/capacity';
-import type { PickedLinked, Platform } from './types';
+import type { PickedLinked, Platform, ShellActions } from './types';
 
 /** `desktop/preload.cjs` 暴露的形状。页面只认这一份。 */
 export interface ElectronHostBridge {
@@ -38,6 +38,11 @@ export interface ElectronHostBridge {
     machine: MachineCapacity;
     overrides: Partial<Record<string, number>> | null;
   } | null>;
+  /**
+   * 窗口级动作。**可选**：旧壳（没接这组 IPC）上不存在，
+   * 界面据此不显示「桌面」页，而不是画三个按了没反应的按钮。
+   */
+  shell?: ShellActions;
 }
 
 const MIME: Record<string, string> = {
@@ -129,5 +134,8 @@ export function createElectronPlatform(host: ElectronHostBridge): Platform {
     showInFolder: (path) => {
       void host.showInFolder(path);
     },
+
+    // 窗口能力只有主进程有；旧壳拿不到就不给这个键（界面自动降级）。
+    ...(host.shell ? { shell: host.shell } : {}),
   };
 }

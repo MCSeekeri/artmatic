@@ -150,10 +150,18 @@ OFL 兼容，所以下面这套取舍成立；**换成任何 copyleft 主许可�
 （`preload.cjs` + `host.mjs`）：`pnpm run desktop` 起壳，`desktop:probe` 跑能力探针，
 `desktop:artifact` 打免安装便携目录，`desktop:smoke` 在打包产物里验 preload / IPC /
 `artmatic-asset://` 的 Range（可配 `ARTMATIC_SMOKE_VIDEO` 验路径 linked 视频 + 打包）。
-`src/platform/electron.ts` 只覆盖浏览器做不到的三件事（原生路径、按范围读、文件监视），
+`src/platform/electron.ts` 只覆盖浏览器做不到的事（原生路径、按范围读、文件监视、窗口级动作），
 其余直接复用 `browserPlatform`；页面拿不到 `fs`，主进程只认用户选过的路径 + token。
 结论见 `docs/electron-compat.md`（官方构建自带专有编解码器，**不需要**塞 ffmpeg）。
 Web 版（`pnpm run build` 的 `dist/`）自此定位为**开发与试玩**，不再追 Firefox / Safari 适配。
+
+窗口**没有原生菜单，也没有原生标题栏**：`.topbar` 就是标题栏，右侧让给系统窗口按钮的宽度由
+`navigator.windowControlsOverlay` 量（写死 px 必错位）。**改顶栏或往里加控件必须看 TopBar 里
+`:root[data-wco='on']` 那几条 `app-region` 规则** —— 新控件默认落在窗口拖拽区里，点击会被吞掉，
+而且不报错。壳层动作（开发者工具 / 重新加载 / 退出）只有「设置 → 桌面」一个入口，那一页只在
+`platform.shell` 存在时出现。窗口图标有两处：`desktop/icon.ico`（`scripts/make-icon.mjs` 从品牌 SVG 生成）
+喂给 `BrowserWindow.icon`，`desktop/build.mjs` 再用 `resedit` 把它写进 exe 的 PE 资源 —— 少改一处就有一处是 Electron 的图标。
+细节见 `docs/electron-compat.md` §3.6。
 
 ---
 

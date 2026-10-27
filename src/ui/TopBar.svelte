@@ -167,6 +167,29 @@
     background: var(--bar-bg);
     border-bottom: 1px solid var(--bar-border);
   }
+  /*
+   * 桌面壳：顶栏**就是**窗口标题栏（`titleBarStyle: 'hidden'`，原生那条已经没了）。
+   *
+   * 两件事只能在这里做：
+   *   · 右侧让开系统画的三个窗口按钮。宽度是 `titlebar.ts` 量的，写死 px 会在
+   *     高 DPI 或最大化时错位；
+   *   · 让空处能拖窗口。
+   *
+   * 只认 `data-wco='on'`：浏览器里给顶栏加 `-webkit-app-region: drag` 等于把它
+   * 变成点不到、选不中的死区。
+   */
+  :global(:root[data-wco='on']) .topbar {
+    -webkit-app-region: drag;
+    padding-right: calc(var(--wco-w, 0px) + var(--sp-3));
+  }
+  /*
+   * 按钮与选项卡必须退出拖拽区，否则点不动（拖拽区会吞掉点击与指针事件）。
+   * 选项卡尤其重要：它自己要用指针拖动排序。
+   */
+  :global(:root[data-wco='on']) .topbar button,
+  :global(:root[data-wco='on']) .tab {
+    -webkit-app-region: no-drag;
+  }
   .app-mark {
     display: inline-flex;
     align-items: center;
