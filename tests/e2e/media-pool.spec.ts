@@ -569,31 +569,6 @@ test('拖到媒体池：只登记素材不建片段；认不出的文件只提�
   expect((await clipsOf(page)).filter((c) => c.source?.type === 'image')).toHaveLength(0);
 });
 
-test('导入视频前按本机预算拦截：超限直接拒绝，素材表不增长', async ({ page }) => {
-  await boot(page);
-
-  const result = await page.evaluate(async () => {
-    const A = (window as never as {
-      __artmatic: {
-        capacity: { set: (patch: Record<string, number>) => unknown };
-        store: { project: { assets: Record<string, unknown> } };
-        importVideoOfSize: (name: string, size: number) => Promise<unknown>;
-      };
-    }).__artmatic;
-    // RANGE 的下界是 8 MB（`core/capacity.ts`），所以 E2E 能设到的最小预算是 8；
-    // 用 9 MB 的假文件去撞它。
-    A.capacity.set({ videoPerAssetMB: 8 });
-    const before = Object.keys(A.store.project.assets).length;
-    const out = await A.importVideoOfSize('huge.mp4', 9 * 1024 * 1024);
-    return { out, before, after: Object.keys(A.store.project.assets).length };
-  });
-
-  expect(result.out).toBeNull();
-  // 素材表（逻辑引用）不变 —— 拒绝发生在 probe / 登记之前。
-  expect(result.after).toBe(result.before);
-  await expect(page.getByTestId('notice')).toContainText('超过本机预算');
-});
-
 test('从媒体池把素材拖到时间轴：落在指针处，并选中新片段', async ({ page }) => {
   await boot(page);
   // 落点按拍算（280px = 5s）。默认形态是节奏模式的「小节」（2s 一格），显式切到拍。

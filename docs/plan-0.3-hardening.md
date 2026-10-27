@@ -1,5 +1,7 @@
 # 0.3 加固计划（分批实施）
 
+【已归档，本文档内所有任务均已完成，仅供参考】
+
 > 2026-10-18 · 依据：两周自检结论 + 负责人对三条结论的修正。
 > 目标不是加功能，是**把边界关上**：素材不再全量驻留内存、删除不再等于销毁、
 > 崩溃不再等于丢工作，然后补两处基本盘（段落 / 插值）。
@@ -8,7 +10,7 @@
 
 | Wave | 状态 | 证据 |
 |---|---|---|
-| W0 止血 | **完成** | `saveProject` 去掉删除段、`checkImportSize`、`saveBeforeExport`、`plugin_try` 审批、`MP4_CODEC_LADDER`；E2E `project` / `media-pool` / `export-mp4` / `agent-in-app` |
+| W0 止血 | **完成**（W0.2 已于 2026-10-27 撤回） | `saveProject` 去掉删除段、`saveBeforeExport`、`plugin_try` 审批、`MP4_CODEC_LADDER`；E2E `project` / `media-pool` / `export-mp4` / `agent-in-app` |
 | W1 素材生命周期 | **完成** | `AssetSource = file / handle / path / bytes`、`writeStreamAtomic`、`project/autosave.ts`、`retained` + `assets/.trash/`；单测 `asset-store` / `autosave` / `project-ledger` / `project-io`，E2E `autosave` |
 | W2 时间轴双形态 | **完成** | `Project.sections`、`UiPrefs.timelineMode`、`AudioClip.fadeIn/fadeOut`；E2E `timeline-sections` / `timeline-modes` / `timeline-audio-fade` |
 | W3 关键帧插值 | **完成** | `Key.hOut/hIn` + 曲线编辑器浮层；E2E `curve-editor` |
@@ -73,14 +75,19 @@ W2 / W3 / W4 之间没有先后依赖，可以并行或按手感插队。W1 是�
 **判据**：`tests/unit/project-io.test.ts` 增「移除素材后保存，文件仍在，且返回
 `assetsRemoved === 0`」；E2E `media.spec.ts` 增「删除后重开工程仍能找回该文件」。
 
-### W0.2 导入前挡体积 + 说明
+### W0.2 导入前挡体积 + 说明（2026-10-27 撤回）
 
 `src/ui/media-import.ts::importVideoFile` 在 `arrayBuffer()` 之前判断
 `file.size > limits.videoPerAssetMB`，直接拒绝并给一句「这个素材 {size}，超过本机
 预算 {limit}」；`limits` 已有，不新增配置项。
 
-**判据**：单测（纯函数化的 `checkImportSize`）+ E2E 一条（构造大文件太贵，用
-`limits` 临时调小到 1MB 来测）。
+**撤回理由**：这条闸门的判据是 W1 之前那一步 `await file.arrayBuffer()`。W1 之后
+视频全链路不再进堆（`putFile` 只存 `File` 句柄、解码 seek 读、保存流式写），文件
+体积不再产生任何内存峰值；而拿 `videoPerAssetMB`（**显存**里的帧纹理预算）当文件
+体积代理本身就是口径错误 —— 同一段画面无论压成 40 MB 还是 800 MB，解出来是同一张
+纹理。留下来的实际效果是：按显卡大小拒绝正常素材（本机 8 GB 显存 → 409 MB，
+探测不到 → 192 MB），并把门槛也套在 linked 路径上（那条路只按范围读、一个字节都
+不拷）。磁盘占用是真实的，但那是保存时用户自己选的目录，由写盘报错。
 
 ### W0.3 导出前强制保存
 

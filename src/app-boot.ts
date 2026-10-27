@@ -618,15 +618,6 @@ registerControlPlane(control);
     target?: { trackId?: string; start?: number },
   ) => importVideoFile(new File([new Uint8Array(bytes)], name, { type: 'video/mp4' }), target ?? {}),
   /**
-   * E2E 专用：造一个**指定体积**的假视频，用来测导入前的体积闸门。
-   *
-   * 为什么不在 Playwright 侧造字节再传进来：几 MB 的数字数组序列化一次就够呛，
-   * 而且真正的判据是「字节从来没被读进内存」，文件内容是什么无关紧要 ——
-   * 闸门在 `probeVideo` 之前就拒绝，构造真实可解码的视频纯属浪费。
-   */
-  importVideoOfSize: (name: string, size: number) =>
-    importVideoFile(new File([new Uint8Array(size)], name, { type: 'video/mp4' }), {}),
-  /**
    * E2E / 性能探针专用：跑真实导出管线但**丢掉帧**，只回传耗时。
    *
    * 为什么需要它：视频解码是**异步就绪**的，而预览缺帧时会拿最近的帧顶上，

@@ -67,7 +67,12 @@ export interface MachineCapacity {
 export interface CapacityLimits {
   /** 视频纹理缓存的**全局**预算（MB）—— 所有素材合起来，不是每素材一份。 */
   videoTextureMB: number;
-  /** 单个视频素材的上限（MB）：防一个素材把全局预算吃光。 */
+  /**
+   * 单个视频素材的**纹理缓存**上限（MB）：防一个素材把全局预算吃光。
+   *
+   * 它衡量的是「解出来的帧占多少显存」，与源文件的体积无关 —— 一个 40 MB 的
+   * H.264 与一个 800 MB 的 ProRes 解出来是同一张纹理。**不要拿它当文件大小闸门。**
+   */
   videoPerAssetMB: number;
   /** 视频上传纹理的最大宽度（像素）。超过渲染宽度的像素是纯浪费。 */
   maxUploadWidth: number;
@@ -302,25 +307,4 @@ export function mbToBytes(mb: number): number {
   return Math.round(mb * 1024 * 1024);
 }
 
-export type ImportSizeCheck = { ok: true } | { ok: false; sizeBytes: number; limitBytes: number };
 
-/**
- * 导入前的单文件体积闸门。
- *
- * 用的是 `videoPerAssetMB` —— 它本来是**显存**预算（单个视频素材允许占多少纹理），
- * 这里拿它当「单个文件的体积代理」。口径是刻意保守的：显存预算普遍小于
- * 「用户以为能拖进来的文件大小」，而这里挡的是「先把 2 GB 读进 `arrayBuffer()`
- * 再发现装不下」—— 那一步的内存峰值与后续是否真的用得上无关。
- *
- * 边界取**闭区间**（`size === limit` 放行）：等于预算的文件没有任何一条理由被拒。
- *
- * 视频不再整份进堆之后，这条闸门不再是「防内存峰值」，而是一条**策略上限**：
- * 它挡的下一步动作是「把整个文件拷进工程目录」以及按素材时长解码的代价。
- * 口径仍是 `videoPerAssetMB`（预算本来就是「只占一小块」的保守估计）；
- * 要放宽就改预算，别在这里另写阈值。
- */
-export function checkImportSize(sizeBytes: number, limitMB: number): ImportSizeCheck {
-  const limitBytes = mbToBytes(limitMB);
-  if (!Number.isFinite(sizeBytes) || sizeBytes <= limitBytes) return { ok: true };
-  return { ok: false, sizeBytes, limitBytes };
-}

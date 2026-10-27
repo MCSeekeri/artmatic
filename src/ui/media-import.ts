@@ -27,8 +27,6 @@ import { contentOfBlob, contentOfBytes, contentOfPath } from '../project/fingerp
 import { platform } from '../platform/index';
 import { adoptFileHandle } from '../project/fs';
 import { putAssetHandle } from '../project/asset-handles';
-import { checkImportSize, getLimits } from '../core/capacity';
-import { formatBytes } from '../core/format';
 import { computeWaveform, decodeAudio } from '../audio/decode';
 import { imageSourceFor, registerImageBytes, registerVideoMedia } from '../engine/media-assets';
 import { probeVideo } from '../engine/video-source';
@@ -105,25 +103,14 @@ export async function importVideoFile(
   linkedHandle?: unknown,
 ): Promise<ImportedFile | null> {
   /*
-   * 体积闸门在 `probeVideo` 之前。
+   * **不按文件体积拒绝。**
    *
-   * 导入**不再把整份视频读进堆**（`putFile` 只存 `File` 句柄），
-   * 所以这条闸门不再防内存，而是一条**策略**上限：单个素材的体积超过本机
-   * 预算就不收。它挡的下一步动作是「把这个文件整份拷进工程目录」——
-   * 磁盘占用与解码代价仍然是真实成本。口径见 `core/capacity.ts::checkImportSize`。
+   * 视频全程不进堆（`putFile` 只存 `File` 句柄，解码 seek 读、保存流式写），
+   * 所以文件大小不产生任何内存峰值；而它也不该拿显存预算当代理 ——
+   * 40 MB 的 H.264 与 800 MB 的 ProRes 解出来是同一张纹理，按体积拒绝只会
+   * 把正常素材挡在门外（而且门槛还随显卡变）。磁盘占用是真实的，但它是保存时
+   * 才发生的、用户自己选的目录，出错由写盘那一步报。
    */
-  const check = checkImportSize(file.size, getLimits().videoPerAssetMB);
-  if (!check.ok) {
-    appState.flash(
-      tr('err.video.tooLarge', {
-        size: formatBytes(check.sizeBytes),
-        limit: formatBytes(check.limitBytes),
-      }),
-      'error',
-    );
-    return null;
-  }
-
   const meta = await probeVideo(file);
   if (!meta) {
     appState.flash(tr('err.video.unreadable', { name: file.name }), 'error');
@@ -265,18 +252,6 @@ export async function importLinkedPath(
       void e;
       return null;
     }
-  }
-
-  const check = checkImportSize(size, getLimits().videoPerAssetMB);
-  if (!check.ok) {
-    appState.flash(
-      tr('err.video.tooLarge', {
-        size: formatBytes(check.sizeBytes),
-        limit: formatBytes(check.limitBytes),
-      }),
-      'error',
-    );
-    return null;
   }
 
   const media = {
