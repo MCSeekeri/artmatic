@@ -139,7 +139,7 @@ test('标记按尺寸切换大小版，品牌紫跟随主题色', async ({ page 
   // 侧栏 20px → 2×2 小标记
   const rail = await viewBoxes('[data-testid=rail-logo] .brand');
   expect(rail.length, '侧栏应有一个标记').toBe(1);
-  expect(rail[0]).toMatch(/^0 0 143 /);
+  expect(rail[0]).toMatch(/^-10 0 163 /);
 
   // 「关于」里 → 3×3 大标记 + 字标
   await page.getByTestId('rail-logo').click();
