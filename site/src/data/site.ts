@@ -12,7 +12,9 @@ export function url(path: string): string {
  * 发了第一个 release 后改这里：`available: true`，补 `version` 与 `size`。
  */
 export const DOWNLOAD = {
-  available: false,
+  available: true,
+  version: 'v0.3.0',
+  size: '142MB',
   url: `${GITHUB}/releases`,
   label: 'Windows x64 便携包',
 } as const;

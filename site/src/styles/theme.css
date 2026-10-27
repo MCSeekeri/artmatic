@@ -43,7 +43,7 @@
 
   /* ---- 字体 ---- */
   --sl-font: 'Inter', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --sl-font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, 'Microsoft YaHei', monospace;
   --sl-font-heading: 'Outfit', var(--sl-font);
 
   /* ---- 版式 ---- */
@@ -56,6 +56,8 @@
   --site-frame: 1160px;
   --site-gutter: clamp(1rem, 4vw, 2.5rem);
   --site-heading-tracking: -0.02em;
+
+  --motion-duration-hover: 0.15s;
 }
 
 /* 标题一律 Outfit；正文里 h4/h5 也用，避免中英混排时字重乱跳 */
@@ -71,6 +73,12 @@ h4,
   font-family: var(--sl-font-heading);
   font-weight: 700;
   letter-spacing: var(--site-heading-tracking);
+}
+
+a {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ---------------------------------------------------------------- 站点外壳 */
@@ -111,7 +119,7 @@ header.header {
   color: var(--text-primary);
 }
 
-/* 主按钮：品牌紫实底。整个站点只有「下载」用这个形态 */
+/* 主按钮 */
 .site-nav .nav-cta,
 .btn-primary {
   display: inline-flex;
@@ -130,6 +138,7 @@ header.header {
 }
 .site-nav .nav-cta:hover,
 .btn-primary:hover {
+  transition: background-color var(--motion-duration-hover) var(--motion-ease);
   background: var(--accent-strong);
   color: var(--accent-on);
 }
@@ -167,7 +176,8 @@ header.header {
 .sidebar-content .group-label,
 .sidebar-content summary {
   font-family: var(--sl-font-mono);
-  font-size: 11px;
+  font-size: 105%;
+  font-weight: normal;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -182,13 +192,9 @@ header.header {
   color: var(--text-primary);
 }
 .sidebar-content a[aria-current='page'] {
-  /* Starlight 默认给当前项铺一块实底品牌色 —— 在纸面语言里太重了，
-     换成浅底 + 左侧一条竖线 */
-  background: var(--surface-2);
-  color: var(--text-primary);
+  background: transparent;
+  color: var(--accent);
   font-weight: 700;
-  box-shadow: inset 2px 0 0 var(--accent);
-  border-radius: var(--radius-sm);
 }
 
 /* 右栏目录：小一号，链接不做下划线 */

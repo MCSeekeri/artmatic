@@ -1,11 +1,25 @@
 ---
 /** 01 宣言：全站唯一的纯文本分区。左栏只有编号，右栏一路读到底。 */
 import stats from '../../data/stats.json';
+import { Image } from 'astro:assets';
+import applight from '../../assets/shots/app-light.png'
 ---
 
 <section class="sec" id="manifesto">
   <div class="board">
     <div class="row">
+      <div class="c-12 flush">
+        <Image
+          src={applight}
+          alt="Artmatic 的主界面"
+          widths={[760, 1200, 1500]}
+          sizes="(max-width: 1240px) 100vw, 1200px"
+          format="webp"
+          quality={86}
+          loading="lazy"
+        />
+      </div>
+
       <div class="c-3 aside">
         <p class="kicker"><b>01</b> 宣言</p>
       </div>
