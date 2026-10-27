@@ -1,12 +1,12 @@
 /**
- * layout.ts — 工程目录格式（M5a）。
+ * layout.ts — 工程目录格式。
  *
  * ```
  * <工程目录>/
  * ├── project.json        工程本体（§5 的 Project），真相的唯一载体
  * ├── project.json.bak    上一版成功保存的副本（writeProject 自动维护）
  * ├── assets.json         素材台账（引用路径 + 内容哈希 + 原始文件名）
- * ├── assets/             素材字节（M5a 只有 bundled / generated 两种模式）
+ * ├── assets/             素材字节（只有 bundled / generated 两种模式）
  * ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
  * └── thumbs/             缩略图缓存（可丢弃，删了只是重新生成）
  * ```
@@ -24,7 +24,7 @@
 /**
  * 目录格式自身的版本，与 `Project.schemaVersion` 独立。
  *
- * v2（W1.3）：台账条目多了 `retained`（已从工程移除、但字节文件保留）。
+ * v2：台账条目多了 `retained`（已从工程移除、但字节文件保留）。
  * v3（linked 素材）：条目从「一条 path + 一个 hash」变成
  * `content = {size, fp}` + `locations[] = project | local`。旧台账由
  * `parseLedger` 归一化（`path` → project 位置、`hash` 无法换算成采样指纹
@@ -141,7 +141,7 @@ export function assetRelPath(assetId: string, originName: string): string {
 }
 
 /**
- * 回收站里放一个素材文件时的段数组（W1.3）。
+ * 回收站里放一个素材文件时的段数组。
  *
  * 文件名带时间戳：同一个素材被清理两次时不能互相覆盖 —— 第一次进回收站的
  * 那一份才是用户可能想找回的。`stamp` 由调用方给（纯函数不读时钟）。

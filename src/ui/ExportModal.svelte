@@ -109,7 +109,7 @@
   const pct = $derived(Math.round((appState.exportProgress ?? 0) * 100));
   const exporting = $derived(appState.exportProgress !== null);
   /**
-   * MP4 能力（W0.5）。**不是同步的**：无硬编的机器要逐档问 `isConfigSupported`，
+   * MP4 能力。**不是同步的**：无硬编的机器要逐档问 `isConfigSupported`，
    * 才能知道能不能退到 Constrained Baseline。`checking` 期间按钮保持可用 ——
    * 真点下去时 `exportMp4` 会自己再探一次，并以底栏提示收场。
    */

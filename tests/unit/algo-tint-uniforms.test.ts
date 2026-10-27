@@ -20,8 +20,8 @@ import type { SourceClip } from '../../src/core/schema';
  *
  * `compileAll` 只证明 shader 编得过，这三类一条都看不见。
  *
- * 这个缺口是 Wave 1 埋下的（那次加了 `tintFragment` 但没有任何生成器用它，
- * 于是守卫也没跟着加）。Wave 2 的第一个使用者是反应扩散 —— 它有 4 个调色板
+ * 这个缺口是加 `tintFragment` 那次埋下的（加了但没有任何生成器用它，
+ * 于是守卫也没跟着加）。第一个使用者是反应扩散 —— 它有 4 个调色板
  * 加对比度/显示开关好几个 uniform，正是最容易漏派发的那种。
  */
 

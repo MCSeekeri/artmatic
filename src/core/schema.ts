@@ -103,14 +103,14 @@ export interface AssetTrimRange {
 export interface Asset {
   id: string;
   /**
-   * `video` 在 M6 接上（`engine/video-source.ts`）。台账层
-   * （`project/ledger.ts` 的 `AssetEntry.kind`）从 M5a 起就已经有它了，
-   * 这里落后了一格 —— 于是「导入视频 → 存进工程 → 打开时按 kind 分支」
+   * `video` 由 `engine/video-source.ts` 接上。台账层
+   * （`project/ledger.ts` 的 `AssetEntry.kind`）早就有它了，
+   * 这里曾经落后一格 —— 于是「导入视频 → 存进工程 → 打开时按 kind 分支」
    * 会在校验处对不上。
    */
   kind: 'audio' | 'image' | 'video';
   name: string;
-  /** 内容哈希（M5 引用制的预留，MVP 不强制）。 */
+  /** 内容哈希（引用制的预留，暂不强制）。 */
   hash?: string;
   durationSec?: number;
   size?: { w: number; h: number };
@@ -241,7 +241,7 @@ export interface VideoAudioSettings {
 export interface SourceClip extends ClipBase {
   kind: 'source';
   source:
-    // MVP 实现 image / algo / solid / text 四种；video 只留类型位置（M5）。
+    // 实现 image / algo / solid / text 四种；video 只留类型位置。
     | { type: 'video'; assetId: string; srcIn: number; speed: number }
     | { type: 'image'; assetId: string }
     | AlgoSource
@@ -410,7 +410,7 @@ class SchemaError extends Error {}
 
 /**
  * 迁移函数表：MIGRATIONS[v] 把版本 v 的工程升到 v+1。
- * 第一天就是空表 + 版本检查——M5 的原子写 / 迁移链条在这里生长，不要事后打补丁。
+ * 第一天就是空表 + 版本检查——原子写 / 迁移链条在这里生长，不要事后打补丁。
  */
 const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, unknown>> = {
   /**
@@ -418,7 +418,7 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * TypographyDocument。
    *
    * v1 里从来没有出现过 text 片段，所以这条迁移在实践中几乎不会命中；写它是因为
-   * 「迁移链第一天就有」是项目纪律（M0 就写下的），而且手改过的 JSON 可能带着
+   * 「迁移链第一天就有」是项目纪律，而且手改过的 JSON 可能带着
    * 一个形状不对的 doc，不补的话 validateProject 会在更远的地方炸。
    *
    * 注意这里**直接写字面量**而不是调 createTypographyDocument()：那会构成

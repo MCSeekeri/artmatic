@@ -1,5 +1,5 @@
 /**
- * handles.ts — 工程目录句柄的持久化（M5a）。
+ * handles.ts — 工程目录句柄的持久化。
  *
  * 文件系统句柄是 **structured-cloneable** 的，所以能直接存进 IndexedDB，
  * 下次访问取出来接着用 —— 用户不必每次重新选目录。这是 Web 端 IDE

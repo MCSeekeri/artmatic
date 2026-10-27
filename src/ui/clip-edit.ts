@@ -3,7 +3,7 @@
  *
  * 曲线键约定（schema.ts 的注释是权威）：
  *   'opacity' / 'transform.x' / ... 作用于 SourceClip 的同名基值；
- *   `${instanceId}.${paramKey}`（B8）作用于特效实例参数。
+ *   `${instanceId}.${paramKey}` 作用于特效实例参数。
  */
 
 import { upsertKey, type Curve } from '../core/curve';

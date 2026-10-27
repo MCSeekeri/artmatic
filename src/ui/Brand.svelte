@@ -2,7 +2,7 @@
   /**
    * Brand — logo 的唯一入口。
    *
-   * 资源是 O9 按「亮/暗背景」成对导出的，`Brand.svelte` 按当前主题选一个：
+   * `Brand.svelte` 按当前主题选一个：
    *
    *   artmatic-small-*      2×2 标记（viewBox 163×163，内容 143×163 居中）
    *   artmatic-main-*       3×3 标记（viewBox 1280×1251）

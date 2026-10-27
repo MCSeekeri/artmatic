@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openDemo, buildStage, meanAt, renderTwiceDiff, setTrackEnabled, settle } from './_stage';
 
 /**
- * M6 收尾这批功能的 E2E：视频素材、image 片段、工程设置、预览降质、rail 一致性。
+ * 收尾这批功能的 E2E：视频素材、image 片段、工程设置、预览降质、rail 一致性。
  *
  * 视频素材**现场编**（`__artmatic.makeTestVideo`）：不往仓库塞二进制，而且这条
  * 路顺带证明了「导出的 MP4 能被自己的解码链路读回来」。

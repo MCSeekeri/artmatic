@@ -1,5 +1,5 @@
 /**
- * growth-algos.test.ts — Wave 4 批次 3 的三个生成器（Buddhabrot / 混沌游戏 / DLA）。
+ * growth-algos.test.ts — 三个生长类生成器（Buddhabrot / 混沌游戏 / DLA）。
  *
  * 三个都是「用随机数长出结构」，所以这份测试有两条共同的主线：
  *

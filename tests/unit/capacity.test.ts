@@ -155,7 +155,7 @@ describe('运行期持有', () => {
   });
 });
 
-describe('导入体积闸门（W0.2）', () => {
+describe('导入体积闸门', () => {
   it('等于上限放行，超一个字节就拒', () => {
     expect(checkImportSize(mbToBytes(192), 192)).toEqual({ ok: true });
     const over = checkImportSize(mbToBytes(192) + 1, 192);

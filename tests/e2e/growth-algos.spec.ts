@@ -2,12 +2,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { openDemo, buildStage, gridL1, gridStats, waitForSourceReady } from './_stage';
 
 /**
- * Wave 4 批次 3 的 E2E：Buddhabrot（sim）+ 混沌游戏 / DLA（bake）。
+ * 生长类生成器的 E2E：Buddhabrot（sim）+ 混沌游戏 / DLA（bake）。
  *
  * 三条纪律与 `algos3d.spec.ts` 一致：
  *
  * 1. **「两个配置不同」的断言前面必须先证明两边都不空**，否则「两张黑图不同」
- *    会假通过（Wave 1 踩过这个坑）。
+ *    会假通过（此前踩过这个坑）。
  * 2. 判据用**分块 L1**，不用「覆盖像素数之差」也不用逐像素相等（理由见
  *    `_stage.ts::gridStats`）。
  * 3. **每个配置都要重载页面** —— `buildStage` 是加轨，而 `addTrack` 是 push。

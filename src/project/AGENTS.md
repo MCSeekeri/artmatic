@@ -55,7 +55,7 @@
   拿不到句柄的环境退回 bundled。`collect`（媒体池菜单）才把副本写进 `assets/`。
   **本地原文件永远不删**；linked-only 条目在工程目录里没有文件是正常状态，
   `auditLedger` 不对它报 missing。
-- **素材仓存的是来源，不是一律摊开的字节（W1.1）**：`AssetSource = file | handle | bytes | path | none`。
+- **素材仓存的是来源，不是一律摊开的字节**：`AssetSource = file | handle | bytes | path | none`。
   - 视频：`file`（本地导入）/ `handle`（句柄）/ `path`（桌面版绝对路径）——
     **一个字节都不进堆**。图片/音频：`bytes`（要喂解码器）。
   - `path` 的读取由 `setAssetPathReader()` 在 `main.ts` 注入（Electron 主进程的
@@ -69,9 +69,9 @@
 - **写入顺序就是全部的安全性**：素材 → 台账 → 工程。崩在中间任何一步都无害
   （多出来的素材文件下次被当作孤儿报告），而「工程引用了已删素材」是有害的。
   素材写入走 `writeStreamAtomic`（**流式**），`saveProject` 只收 `openFor(id)`；
-  它不再有 `bytesFor` —— 把整份视频交给它就会把 W1.1 的收益赔回去。
-- **保存不删素材文件（W0.1）**：从 `Project.assets` 移除只解除引用，`assets/` 里的字节
-  留在原处。W1.3 起台账把它标成 `retained: true`（不再是「孤儿」），工程面板的
+  它不再有 `bytesFor` —— 把整份视频交给它就会把句柄化的收益赔回去。
+- **保存不删素材文件**：从 `Project.assets` 移除只解除引用，`assets/` 里的字节
+  留在原处。台账把它标成 `retained: true`（不再是「孤儿」），工程面板的
   「未使用素材」可以恢复它，或者把文件**移进 `assets/.trash/`**（先写回收站再删原文件）。
   「彻底删除」只对已移除的条目出现，并带二次确认。所以 `assets/` 里有台账不知道的文件
   仍是**预期状态**（旧版本留下的孤儿），不是残留。
@@ -97,7 +97,7 @@
   必须自己做内容比对（见下一条），不能只看脏标记。
   `ProjectStore.replaceProject()`（打开 / 新建）**会清空撤销栈**，`loadFrom()`（工程内换内容）
   不会 —— 否则撤销会把两份工程的片段混在一起，而每一步看起来都合法。
-- **自动保存（W1.2）**：调度器在 `project/autosave.ts`（纯编排，单测走 `memoryRoot`），
+- **自动保存**：调度器在 `project/autosave.ts`（纯编排，单测走 `memoryRoot`），
   接线在 `ui/autosave.ts`。三条硬约定：
   1. **不轮转 `.bak`**（`saveProject({ backup: false })`）—— `.bak` 只代表「上一次手动保存」；
   2. **不入撤销栈、不 bump version、不动 `savedVersion`** —— 自动保存是磁盘行为，

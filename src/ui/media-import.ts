@@ -94,8 +94,8 @@ function finish(
  *
  * 与音频/图片的两处关键差别：
  *  1. **`File` 句柄同时交给渲染层与素材仓**（`registerVideoMedia` / `putFile`）：
- *     解码从磁盘流式读，保存也按块流式写 —— 全程没有「整份字节进堆」那一步
- *     （W1.1）。这是视频与图片/音频在生命周期上的根本区别。
+ *     解码从磁盘流式读，保存也按块流式写 —— 全程没有「整份字节进堆」那一步。
+ *     这是视频与图片/音频在生命周期上的根本区别。
  *  2. 元数据（时长 / 显示尺寸）必须 probe 出来 —— 它决定片段默认长度，
  *     也是「这份字节到底是不是视频」唯一的判据。
  */
@@ -105,9 +105,9 @@ export async function importVideoFile(
   linkedHandle?: unknown,
 ): Promise<ImportedFile | null> {
   /*
-   * 体积闸门在 `probeVideo` 之前（W0.2）。
+   * 体积闸门在 `probeVideo` 之前。
    *
-   * W1.1 之后导入**不再把整份视频读进堆**（`putFile` 只存 `File` 句柄），
+   * 导入**不再把整份视频读进堆**（`putFile` 只存 `File` 句柄），
    * 所以这条闸门不再防内存，而是一条**策略**上限：单个素材的体积超过本机
    * 预算就不收。它挡的下一步动作是「把这个文件整份拷进工程目录」——
    * 磁盘占用与解码代价仍然是真实成本。口径见 `core/capacity.ts::checkImportSize`。
@@ -131,7 +131,7 @@ export async function importVideoFile(
   }
 
   /*
-   * 内容身份（W1 去重）：只读首尾各 64 KiB，**不整份读**。
+   * 内容身份（去重）：只读首尾各 64 KiB，**不整份读**。
    * 命中同一份内容就复用它 —— 反复导入同一个文件不该在 assets/ 里堆副本。
    */
   const content = await contentOfBlob(file);
@@ -186,7 +186,7 @@ export async function importVideoFile(
 
   const assetId = newId();
   /*
-   * W1.1：**不整份读**。`File` 是磁盘背书的句柄 —— 解码器从它 seek 读，
+   * **不整份读**。`File` 是磁盘背书的句柄 —— 解码器从它 seek 读，
    * 保存时按块流式写。原先这里 `await file.arrayBuffer()` 是「导入 2 GB 视频 =
    * 2 GB JS 堆」的唯一来源，而它换来的字节没有任何一处消费方需要。
    */

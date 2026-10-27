@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { openDemo } from './_stage';
 
 /**
- * M4 排版：光栅化 → 纹理 → 合成的闭环。
+ * 排版：光栅化 → 纹理 → 合成的闭环。
  *
  * ⚠️ 本文件刻意**不使用 demo 工程**。AGENTS §7 记录在案：determinism / algos /
  * effects 里「同一 t 多次求值逐像素一致」的断言有 60–75% 失败率，根因疑似

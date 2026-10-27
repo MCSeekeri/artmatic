@@ -770,7 +770,7 @@ export class AgentSession {
            * 需要审批：交给面板。用户点了之后 session 带 `confirm:true` 再调一次
            * 控制平面 —— 面板不直接改状态。
            *
-           * 两条路径（W0.4）：
+           * 两条路径：
            *  · `plugin_try` 会**立刻执行**源码，批准后用同一份参数重试；
            *  · `plugin_install` 只写盘，批准后按 pluginId 安装。
            * 工具面不暴露 `confirm`（模型不能自己批准），所以这一层必须按名字分流。

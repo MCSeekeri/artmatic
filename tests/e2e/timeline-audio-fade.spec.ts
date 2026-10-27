@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openDemo } from './_stage';
 
 /**
- * 音频淡变（0.3 W2.3）。
+ * 音频淡变。
  *
  * 这里守的是**手势与界面**：三角手柄拖得动、拖出来的值落进 `Project`
  * （一笔撤销）、片段 DOM 上的手柄位置跟着走。包络本身的逐点数值在

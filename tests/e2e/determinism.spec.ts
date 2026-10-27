@@ -6,7 +6,7 @@ import { openDemo, SETTLE_FRAMES, waitForSourceReady } from './_stage';
  * 逐像素断言在 page 内做完 reduce 再回传标量，不要把几 MB 像素传回 Node。
  */
 
-test('同一工程同一 t，连续求值 100 次逐像素一致（M0 验收）', async ({ page }) => {
+test('同一工程同一 t，连续求值 100 次逐像素一致', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
   await openDemo(page);

@@ -69,7 +69,7 @@ export const app = {
   'app.exportMp4': 'MP4',
   'app.exportMp4Hint': 'H.264 + AAC · 约 {size}',
   'app.exportMp4Unsupported': '本机浏览器不支持 WebCodecs，只能导出 PNG 序列。',
-  /* 有 WebCodecs 但没有可用 H.264 profile（W0.5）：诊断与上一条不同。 */
+  /* 有 WebCodecs 但没有可用 H.264 profile：诊断与上一条不同。 */
   'app.exportMp4NoH264': '本机没有可用的 H.264 编码器，只能导出 PNG 序列。',
   /* 落到 baseline = 走 OpenH264 软件编码：能编，但比硬编慢一个量级。 */
   'app.exportMp4Software': '本机无硬件编码器（软件编码），导出会明显变慢。',
@@ -104,7 +104,7 @@ export const app = {
    */
   'app.simCatchUp': '模拟追赶中',
   /*
-   * 自动保存降级（W1.2）。**常驻**底栏直到下一次写入成功 ——
+   * 自动保存降级。**常驻**底栏直到下一次写入成功 ——
    * 它与 `notice` 那条一次性提示分开，因为「磁盘上的工程不是最新的」
    * 是一个持续状态，不是一件事。
    */
@@ -125,7 +125,7 @@ export const app = {
   'app.assetCountShort': '{n} 素材',
   'app.assetAudit': '素材检查',
   /*
-   * 未使用素材（W1.3）：媒体池「移除」之后字节文件仍在 assets/。
+   * 未使用素材：媒体池「移除」之后字节文件仍在 assets/。
    * 这一段是「移除 ≠ 销毁」唯一可操作的出口 —— 没有它，「文件保留」
    * 就只是一句安慰，用户找不到那个文件。
    */
@@ -140,7 +140,7 @@ export const app = {
   'app.unusedDeleted': '已删除「{name}」的源文件',
   'app.unusedRestored': '「{name}」已恢复为工程素材',
   'app.unusedFailed': '「{name}」处理失败（文件可能已被移走或没有权限）',
-  /* W1 清理链路：占用统计与批量动作。 */
+  /* 清理链路：占用统计与批量动作。 */
   'app.storageUsage': '占用',
   'app.usageProject': '工程内副本',
   'app.usageUnused': '未使用素材',
@@ -162,7 +162,7 @@ export const app = {
   'app.orphansDone': '已清理 {n} 个未跟踪文件',
   'app.cleanupFailed': '清理失败：{detail}',
 
-  /* ------------------------------------------------ 工程包（W1） */
+  /* ---------------------------------------------------- 工程包 */
   'app.pack': '打包工程…',
   'app.importPack': '导入工程包…',
   'app.packDescription': 'Artmatic 工程包（工程 + 全部素材）',

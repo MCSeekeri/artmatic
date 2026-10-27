@@ -85,7 +85,7 @@ applyMotion(theme.motionEnabled, theme.motionSpeed);
 appState.init();
 
 /*
- * 自动保存（W1.2）必须在 mount 之前接上：`appState.init()` 之后任何一次
+ * 自动保存必须在 mount 之前接上：`appState.init()` 之后任何一次
  * `store.commit` 都应该被它看见。晚接的代价是「打开页面后第一笔改动
  * 没被自动保存」—— 而那是用户最可能丢的一笔（还在试）。
  */
@@ -199,7 +199,7 @@ const projectDebug = {
     await writeBytesAtomic(dir, name, new Uint8Array(bytes), { verify: true });
   },
 
-  /* ------------------------------------------- 自动保存 / 草稿（W1.2） */
+  /* ------------------------------------------------- 自动保存 / 草稿 */
 
   /**
    * 立即跑一轮自动保存（测试不等 2 s 防抖）。
@@ -547,7 +547,7 @@ registerControlPlane(control);
       clips: [mk('tv-bottom-a', 0, 2, '#0000ff', 0.25)],
     } as never);
 
-    // 按尺寸探测阶梯（W0.5）：无硬编的机器上没有 Main，只有 baseline。
+    // 按尺寸探测阶梯：无硬编的机器上没有 Main，只有 baseline。
     const choice = await probeMp4Codec({ w: p.resolution.w, h: p.resolution.h, fps: p.fps });
     if (!choice) return [];
     const blob = (await runExport(appState.renderer, p, {
@@ -610,7 +610,7 @@ registerControlPlane(control);
     target?: { trackId?: string; start?: number },
   ) => importVideoFile(new File([new Uint8Array(bytes)], name, { type: 'video/mp4' }), target ?? {}),
   /**
-   * E2E 专用：造一个**指定体积**的假视频，用来测导入前的体积闸门（W0.2）。
+   * E2E 专用：造一个**指定体积**的假视频，用来测导入前的体积闸门。
    *
    * 为什么不在 Playwright 侧造字节再传进来：几 MB 的数字数组序列化一次就够呛，
    * 而且真正的判据是「字节从来没被读进内存」，文件内容是什么无关紧要 ——

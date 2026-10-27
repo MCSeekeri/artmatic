@@ -308,7 +308,7 @@ export const agent = {
   'agent.approval.title': '安装插件？',
   'agent.approval.body': '这个插件会在你的工程里执行代码（主世界、没有沙箱）。确认要写入 plugins/ 吗？',
   'agent.approval.install': '安装',
-  /* 试挂（W0.4）：与安装区分开 —— 它不写盘，但源码会**立刻**在页面里执行。 */
+  /* 试挂：与安装区分开 —— 它不写盘，但源码会**立刻**在页面里执行。 */
   'agent.approval.mediaTitle': '操作媒体池？',
   'agent.approval.mediaBody': '「{op}」会移动或删除磁盘上的素材文件（{name}）。确认这一步是真的要做到的。',
   'agent.approval.mediaRun': '执行',

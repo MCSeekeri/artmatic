@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MP4_CODEC, MP4_CODEC_LADDER, pickMp4Codec } from '../../src/exporters/mp4-sink';
 
 /**
- * W0.5 的阶梯选择。
+ * 编码阶梯的选择。
  *
  * `isConfigSupported` 在 Node 里不存在，所以真正能测的是「拿到每一档的
  * 支持情况之后选哪一档」—— 这恰好是最容易写错的部分（跳过、全 false、

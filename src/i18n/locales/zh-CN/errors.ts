@@ -102,16 +102,16 @@ export const errors = {
   'err.ledger.unhashed': '{path} 没有可用的哈希值',
   /* 单个未记录文件（`auditLedger` 的逐条形态；保留给直接调用者与测试）。 */
   'err.ledger.untracked': 'assets/ 里有存在未被记录的文件：{path}',
-  /* 打开工程时的聚合形态：保存不再删素材（W0.1），孤儿会成批出现。 */
+  /* 打开工程时的聚合形态：保存不再删素材，孤儿会成批出现。 */
   'err.ledger.orphans': '磁盘上有 {n} 个不再被引用的素材，占用 {size}；暂不自动清理，可手动从 assets/ 删除',
 
   /* ------------------------------------------------ 导出（ui/export.ts、exporters/） */
   /* sink 抛出的错会经 `flash('导出失败：' + msg)` 进底栏，所以这些也要抽。 */
   'err.export.noWebCodecs': '本机浏览器不支持 WebCodecs，请改用 PNG 序列导出',
-  /* 有 WebCodecs、但四档 H.264 profile 全被拒（W0.5）——
+  /* 有 WebCodecs、但四档 H.264 profile 全被拒——
      不要与上一条混用：那是「编不了」，这是「编不动这个 profile」。 */
   'err.export.noH264': '本机没有可用的 H.264 编码器（Main / Baseline 都被拒），只能导出 PNG 序列',
-  /* 导出前会先保存工程（W0.3）。还没落地到目录时只提示，不拦导出。 */
+  /* 导出前会先保存工程。还没落地到目录时只提示，不拦导出。 */
   'err.export.saveFirstHint': '这个工程还没有保存到目录：导出期间如果崩溃，未保存的改动会丢，建议先保存一次',
   'err.export.silentAudio': '音轨混流结果是静音，本次只导出画面',
   'err.export.mp4Done': '已导出 MP4 ，共 {size}',
@@ -141,7 +141,7 @@ export const errors = {
   /* 进底栏的 flash。容器认得、轨里没视频、或者编码本机解不动，都归这条 ——
      对用户来说下一步动作是同一个：换一个文件。 */
   'err.video.unreadable': '「{name}」不是能读的视频文件（容器或编码不支持）',
-  /* 导入前的体积闸门（W0.2）：说清「多大、上限多少、下一步怎么办」，
+  /* 导入前的体积闸门：说清「多大、上限多少、下一步怎么办」，
      而不是只丢一句「太大」。 */
   'err.video.tooLarge': '这个素材 {size}，超过本机预算 {limit}；请先压缩，或换一个小一点的视频',
 

@@ -3,7 +3,7 @@ import { openDemo } from './_stage';
 import { zhCN } from '../../src/i18n/locales/zh-CN';
 
 /**
- * 段落标记（0.3 W2.1）。
+ * 段落标记。
  *
  * 段落带是标尺上方的**一条 DOM**（不是 canvas 上的 12px 条），所以这里的断言
  * 既能看数据（`store.project.sections`），也能看用户真正看到的东西

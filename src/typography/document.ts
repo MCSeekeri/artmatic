@@ -633,7 +633,7 @@ export interface TextStyle {
    * 静默消失 —— 那比一个联合类型贵得多。
    */
   shadow?: TextStyleShadow | TextStyleShadow[];
-  /** M4 预留；CSS text-autospace 普及前恒为 'none'。 */
+  /** 预留字段；CSS text-autospace 普及前恒为 'none'。 */
   textAutospace?: 'none' | 'normal';
   writingMode: 'horizontal-tb' | 'vertical-rl';
 }
@@ -832,11 +832,11 @@ export interface ImageElement extends ElementBase {
 export type TypographyElement = TextElement | ShapeElement | ImageElement;
 
 /**
- * 字体引用。**字体字节绝不进 project.json**（AGENTS §1.7 + M5「素材用引用
+ * 字体引用。**字体字节绝不进 project.json**（AGENTS §1.7「素材用引用
  * 而非拷贝」）：9 MB 的中文字体会把工程文件变成不可用的大 blob。
  *
  * 注意 Project.assets 的 Asset.kind 目前只有 'audio' | 'image'，**没有 'font'** ——
- * M4 的字体走运行期 FontRegistry + 这里的引用，不走 assets。
+ * 字体走运行期 FontRegistry + 这里的引用，不走 assets。
  */
 export interface FontRef {
   id: string;

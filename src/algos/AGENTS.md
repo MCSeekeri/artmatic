@@ -226,8 +226,8 @@
 
 ### 元胞自动机家族：默认值必须**实测**选定
 
-Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、循环 CA、沙堆、
-雪花、Lenia、Wireworld）。它们的默认值**不是从文献抄来的就完事** —— 有四处是
+7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、循环 CA、沙堆、
+雪花、Lenia、Wireworld）的默认值**不是从文献抄来的就完事** —— 有四处是
 实测才发现的：
 
 | 生成器 | 文献/直觉的默认 | 实测 | 结论 |
@@ -333,7 +333,7 @@ Wave 2 加了 7 个 CA / 人工生命生成器（反应扩散、Brian's Brain、
 - 用到的 `performance.now()` 与 `tick()` 里那个降帧率节流同类：**传输层节流，不参与
   内容求值**（硬约束 1.1 管的是内容）。
 
-### 2D 分形（Wave 4 批次 2）：newton / kleinian / lyapunov
+### 2D 分形：newton / kleinian / lyapunov
 
 三个都是 `realtime`，几何全在 fragment 里。三条只有踩过才知道的：
 

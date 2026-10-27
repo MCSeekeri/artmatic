@@ -9,7 +9,7 @@
  *   3. 权限显式放行（Electron 默认全放行，这里写出来是为了留下痕迹）
  *   4. `--probe` 模式：在页面里跑一遍能力探针，打印 JSON + 截图，然后退出
  *
- * 不是产品代码。产品化的 IPC 版 platform 实现另做（见 W5）。
+ * 不是产品代码。产品化的 IPC 版 platform 实现另做。
  */
 
 // electron 44 的主入口在 ESM 下既不给具名导出（BrowserWindow 会报

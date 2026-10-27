@@ -124,7 +124,7 @@ test('导出 MP4：容器合法、帧数与工程一致、且产物里真有音�
   expect(bytes.byteLength).toBeLessThan(2_000_000);
 });
 
-test('Main 被拒时退到 Constrained Baseline，且产物能被解码器读回（W0.5）', async ({ page }) => {
+test('Main 被拒时退到 Constrained Baseline，且产物能被解码器读回', async ({ page }) => {
   await setupTinyProject(page);
 
   /*
@@ -176,7 +176,7 @@ test('H.264 全不支持时文案说「只能导出 PNG 序列」，不是「不
   await page.getByTestId('rail-export').click();
   const hint = page.getByTestId('export-mp4-hint');
   await expect(hint).toContainText('只能导出 PNG 序列');
-  // 这是 W0.5 的全部意义：机器能编 H.264，只是编不了这批 profile。
+  // 这就是这条判据的全部意义：机器能编 H.264，只是编不了这批 profile。
   await expect(hint).not.toContainText('不支持 WebCodecs');
   await expect(page.getByTestId('export-mp4')).toBeDisabled();
 });

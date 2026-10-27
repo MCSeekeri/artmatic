@@ -1,5 +1,5 @@
 /**
- * autosave.ts（ui 层）— 把 `project/autosave.ts` 的调度器接到真实世界（W1.2）。
+ * autosave.ts（ui 层）— 把 `project/autosave.ts` 的调度器接到真实世界。
  *
  * 分工刻意是这样分的：
  *

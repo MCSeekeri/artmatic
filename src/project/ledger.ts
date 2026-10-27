@@ -66,7 +66,7 @@ export interface AssetEntry {
   /** 首次导入时间（毫秒）。只用于展示排序。 */
   addedAt: number;
   /**
-   * 已从 `Project.assets` 移除、但**字节文件仍保留**（W1.3）。
+   * 已从 `Project.assets` 移除、但**字节文件仍保留**。
    *
    * 缺省 `false`（旧台账没有这个字段，语义就是旧行为）。
    */
@@ -247,7 +247,7 @@ export interface LedgerDiff {
   /** 新增的素材 id（要写字节）。 */
   added: string[];
   /**
-   * 消失的素材 id。**保存不会因此删文件**（W0.1/W1.3）：清理只走
+   * 消失的素材 id。**保存不会因此删文件**：清理只走
    * `moveAssetToTrash` / `deleteAssetFile` 两条显式路径。
    */
   removed: string[];

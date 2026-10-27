@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { addTextClip, openDemo } from './_stage';
 
 /**
- * M4 排版：右侧「元素属性」面板 + 填充的多色标 / 停靠位置 + 文本框背景。
+ * 排版：右侧「元素属性」面板 + 填充的多色标 / 停靠位置 + 文本框背景。
  *
  * 与 typography-ribbon.spec.ts 同一条纪律：**能看见的状态就断言 DOM**，
  * store 断言只是补充。这里的四条用例各自钉住一个用户可见的行为：

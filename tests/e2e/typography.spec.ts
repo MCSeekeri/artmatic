@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { addTextClip, openDemo } from './_stage';
 
 /**
- * M4 排版：编辑器页宿主的生命周期与交互。
+ * 排版：编辑器页宿主的生命周期与交互。
  *
  * 走**真实手势**（page.mouse / page.keyboard）而不是直接调 store ——
  * 分页、命中测试、事务结算这些问题全在手势层，直接调 store 会把它们整个绕过去。

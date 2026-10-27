@@ -319,7 +319,7 @@ describe('auditLedger', () => {
   });
 });
 
-describe('retained：已移除但文件还在（W1.3）', () => {
+describe('retained：已移除但文件还在', () => {
   it('旧台账缺这个字段 → 视为未保留（旧行为）', () => {
     const { ledger } = parseLedger(JSON.stringify({ layoutVersion: 1, entries: { a: entry() } }));
     expect(ledger.entries.a!.retained).toBeUndefined();

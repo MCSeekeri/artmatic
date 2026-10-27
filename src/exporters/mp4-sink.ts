@@ -11,7 +11,7 @@
  * > 看到这一条不要误判成「H.264 不支持」——那是本项目自己踩过的坑，
  * > 连带把 ADR-001 的探测串写错了（已在该 ADR 加补注）。
  * >
- * > 2026-10-19（W0.5）起改成**阶梯**（见 `MP4_CODEC_LADDER`）：硬件走 Main，
+ * > 2026-10-19 起改成**阶梯**（见 `MP4_CODEC_LADDER`）：硬件走 Main，
  * > 无硬编时退到 OpenH264 的 Constrained Baseline。1080p 的软件路径必须用
  * > **Baseline 4.0**（`avc1.42e028`），3.1 的那一档只覆盖 ≤720p。
  *
@@ -38,7 +38,7 @@ import { EXPORT_SAMPLE_RATE, toAudioBuffer } from './mixdown';
 import { tr } from '../i18n/index.svelte';
 
 /**
- * H.264 的 codec 阶梯（W0.5）。**从高到低逐档探测，第一个 `isConfigSupported`
+ * H.264 的 codec 阶梯。**从高到低逐档探测，第一个 `isConfigSupported`
  * 通过的档位就是这次导出的配置。**
  *
  * 为什么不是一档：没有硬件编码器的机器上 Chromium 会回退 OpenH264，而它

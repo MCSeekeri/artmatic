@@ -10,7 +10,7 @@ import { memoryRoot } from '../../src/project/fs';
 import { createLedger, projectPath, serializeLedger } from '../../src/project/ledger';
 
 /**
- * W1.1 的守卫：**视频素材的字节一个都不许被读进堆**。
+ * 素材来源的守卫：**视频素材的字节一个都不许被读进堆**。
  *
  * 这条不是性能优化，是「打开 2 GB 视频工程 = 2 GB JS 堆」那条链的唯一断点。
  * 所以判据不是「结果对不对」，而是**读取次数**：一个假的 `File` 会在
@@ -61,7 +61,7 @@ function fakeVideo(size: number) {
   };
 }
 
-describe('AssetStore：File 来源不整份读（W1.1）', () => {
+describe('AssetStore：File 来源不整份读', () => {
   it('登记不读；建台账只读首尾 128 KiB；hash 退化成 null', async () => {
     const store = createAssetStore();
     const f = fakeVideo(1024 * 1024);
@@ -172,7 +172,7 @@ describe('AssetStore：从台账读回（打开工程）', () => {
   });
 });
 
-describe('AssetStore：移除 = 解除关联（W1.3）', () => {
+describe('AssetStore：移除 = 解除关联', () => {
   it('retire 之后不在活动素材里，但台账仍以 retained:true 记录它', async () => {
     const store = createAssetStore();
     const bytes = new Uint8Array([9, 8, 7]);
@@ -235,7 +235,7 @@ describe('AssetStore：移除 = 解除关联（W1.3）', () => {
   });
 });
 
-describe('AssetStore：内容身份与去重（W1 清理链路）', () => {
+describe('AssetStore：内容身份与去重', () => {
   it('同内容（同一指纹）复用同一个 id，活动区与保留区都找得到', async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
     const content = await contentOfBytes(bytes);
@@ -307,7 +307,7 @@ describe('AssetStore：内容身份与去重（W1 清理链路）', () => {
   });
 });
 
-describe('path 来源：桌面版 linked（W5）', () => {
+describe('path 来源：桌面版 linked', () => {
   it('按范围分块读；openVideo 返回 path 载体；没有 reader 时不假装读到空字节', async () => {
     const store = createAssetStore();
     const size = 5 * 1024 * 1024 + 7;

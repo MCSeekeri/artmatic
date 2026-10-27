@@ -124,7 +124,7 @@ avc1.4d0028 (Main 4.0) → avc1.4d401f (Main 3.1) → avc1.42E01E (Baseline 3.1)
 
 **结论：主进程必须用 `protocol.handle` 服务 `dist/`，并把 scheme 注册成
 `{ standard: true, secure: true, supportFetchAPI: true, stream: true }`。**
-这是整个 W5 里唯一不能省的一步，它决定 web 版的行为在桌面版里是否逐条成立。
+这是唯一不能省的一步，它决定 web 版的行为在桌面版里是否逐条成立。
 
 ## 1. 逐项能力对照
 

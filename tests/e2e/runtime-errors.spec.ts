@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { openDemo } from './_stage';
 
 /**
- * 全局错误兜底（W4）：未捕获异常 / 未处理 rejection 必须能在底栏看见，
+ * 全局错误兜底：未捕获异常 / 未处理 rejection 必须能在底栏看见，
  * 点开能看到消息与可复制的诊断信息，且不打断编辑。
  */
 test('未捕获错误落到运行错误面板，可清空', async ({ page }) => {

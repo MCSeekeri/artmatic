@@ -1,5 +1,5 @@
 /**
- * io.ts — 保存 / 打开编排（M5a）。
+ * io.ts — 保存 / 打开编排。
  *
  * ## 写入顺序是安全性的全部
  *
@@ -19,7 +19,7 @@
  * | ① 后 ② 前 | assets/ 里多几个文件 | **无害**（台账没记，下次当成孤儿素材报告） |
  * | ② 后 ③ 前 | 台账新、工程旧 | **无害**（旧工程引用的素材都还在） |
  *
- * ## 保存**不删**素材文件（W0.1）
+ * ## 保存**不删**素材文件
  *
  * 早期版本在 ③ 之后还有一段「删掉台账里消失的素材」（原 ④）。它消灭了
  * 「点保存顺手销毁源文件」的下半段风险，却引入了更坏的形态：一次误删 +
@@ -100,7 +100,7 @@ export interface SaveInput {
   /**
    * 分块读素材；null = 没有可用来源（generated，或素材已丢失）。
    *
-   * W1.1 起素材仓把视频存成 `File` / 句柄，所以这里必须是**流**而不是
+   * 素材仓把视频存成 `File` / 句柄，所以这里必须是**流**而不是
    * 整份 `Uint8Array` —— 2 GB 视频的保存峰值从此只有一块的大小。
    */
   openFor: (assetId: string) => AsyncIterable<Uint8Array> | null;
@@ -108,7 +108,7 @@ export interface SaveInput {
    * 是否轮转 `project.json.bak`。默认 true。
    *
    * 自动保存传 false：`.bak` 只在手动保存时写，否则它变成「两秒前」，
-   * 失去「上一版手动保存」的兜底意义（W1.2 的三条硬约定之一）。
+   * 失去「上一版手动保存」的兜底意义（三条硬约定之一）。
    */
   backup?: boolean;
 }
@@ -118,7 +118,7 @@ export interface SaveReport {
   ledgerBytes: number;
   assetsWritten: number;
   /**
-   * 语义已废（W0.1 起保存不再删素材），恒为 0。
+   * 语义已废（保存不再删素材），恒为 0。
    * 保留字段只为不破坏既有调用方与测试的读法。
    */
   assetsRemoved: number;
@@ -127,7 +127,7 @@ export interface SaveReport {
    * 保存后**确实在工程目录 `assets/` 里**的素材 id（含早就存在、这次没重写的）。
    *
    * 素材仓用它回答「这条素材有没有文件可保留」：从未落盘的素材被移除时
-   * 应当直接丢弃，而不是下一次保存又把它写出来（W1 清理链路）。
+   * 应当直接丢弃，而不是下一次保存又把它写出来。
    */
   persistedAssets: string[];
   /**
@@ -178,7 +178,7 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
     const name = segs.pop();
     if (!name) continue;
     const parent = await resolveDir(dir, segs, true);
-    // 流式写：视频素材的内存峰值 = 一块 buffer，与文件大小无关（W1.1/W1.2）。
+    // 流式写：视频素材的内存峰值 = 一块 buffer，与文件大小无关。
     const report = await writeStreamAtomic(parent, name, stream, { verify: false });
     writtenIds.push(id);
     assetsWritten++;
@@ -199,7 +199,7 @@ export async function saveProject(input: SaveInput): Promise<SaveReport> {
   });
   warnings.push(...pr.warnings);
 
-  // 用户主动移除的素材**不删文件**（W0.1，理由见文件头）。它们留在 assets/ 里，
+  // 用户主动移除的素材**不删文件**（理由见文件头）。它们留在 assets/ 里，
   // 下次打开工程时被聚合成一条「不再被引用」的提示。
   // `assetsRemoved` 保留在 SaveReport 里是为了不破坏既有调用方，语义已废：
   // 恒为 0，且**不要**再拿它判断磁盘上发生了什么。
@@ -269,7 +269,7 @@ export async function openProject(dir: FsDirHandle): Promise<OpenResult> {
     diskPaths,
   );
 
-  // `auditLedger` 对每个未跟踪文件各发一条 issue。保存不再删素材之后（W0.1），
+  // `auditLedger` 对每个未跟踪文件各发一条 issue。保存不再删素材之后，
   // 这里会有成批的孤儿 —— 逐条铺在面板上会把真正该看的 missing 淹掉。
   // 所以只在打开工程时收成**一条**聚合提示，`auditLedger` 本身不动
   // （它的逐文件行为有单测与别的调用方依赖）。
@@ -284,7 +284,7 @@ export async function openProject(dir: FsDirHandle): Promise<OpenResult> {
  * 把「磁盘上有、台账里没有」的文件收成一条 issue。
  *
  * 体积只读 `FsFile.size`，**绝不 `readBytes()`**：孤儿里可能有几 GB 的视频，
- * 为了显示一句提示把它整份读进堆，等于把 W0.1 换来的安全性又赔回去。
+ * 为了显示一句提示把它整份读进堆，等于把这份安全性又赔回去。
  */
 async function summarizeOrphans(
   dir: FsDirHandle,
@@ -330,7 +330,7 @@ async function sizeOf(dir: FsDirHandle, relPath: string): Promise<number> {
 }
 
 /**
- * 打开工程里的某个素材文件句柄。**不读字节** —— W1.1 之后视频只留句柄。
+ * 打开工程里的某个素材文件句柄。**不读字节** —— 视频只留句柄。
  * 文件不在时返回 null（`issues` 里已经有记录）。
  */
 export async function openAssetFile(dir: FsDirHandle, entry: AssetEntry): Promise<FsFileHandle | null> {
@@ -446,7 +446,7 @@ async function rebuildLedgerFromDir(
   return { ledger, warnings };
 }
 
-/* ------------------------------------------------------ 删除语义（W1.3） */
+/* ------------------------------------------------------------ 删除语义 */
 
 /** 把文件句柄变成分块流（大素材不整份进堆）。 */
 async function* chunksOfHandle(fh: FsFileHandle): AsyncGenerator<Uint8Array> {
@@ -472,7 +472,7 @@ async function* chunksOfHandle(fh: FsFileHandle): AsyncGenerator<Uint8Array> {
  * 把一份素材移进 `assets/.trash/`。返回回收站相对路径。
  *
  * 三件事的顺序是刻意的：**先写回收站、再删原文件**。反过来的话，
- * 写回收站失败就等于直接销毁了源文件 —— 而那正是 W1.3 要消灭的形态。
+ * 写回收站失败就等于直接销毁了源文件 —— 而那正是这套删除语义要消灭的形态。
  *
  * 回收站文件名带时间戳（`<assetId>-<stamp><ext>`）：同一素材清理两次时
  * 不能互相覆盖，第一次进回收站的那份才是用户可能想找回的。

@@ -1,5 +1,5 @@
 /**
- * fs.ts — 工程目录的读写能力（M5a）。
+ * fs.ts — 工程目录的读写能力。
  *
  * ## 为什么自己定义接口，而不是直接用 `FileSystemDirectoryHandle`
  *
@@ -50,7 +50,7 @@ export interface FsFile {
   readBytes(): Promise<Uint8Array>;
   readText(): Promise<string>;
   /**
-   * 流式读（W1.1）。大文件（视频）用它，**不要**先 `readBytes()` ——
+   * 流式读。大文件（视频）用它，**不要**先 `readBytes()` ——
    * 那是把整份素材摊进堆的那一步。
    *
    * 可选：不实现时上层退回 `readBytes()`（memory 与旧实现）。
@@ -296,7 +296,7 @@ export interface WriteStreamOptions {
 }
 
 /**
- * 流式原子写（W1.1/W1.2）：边读边 `write()`，**整份素材从不进堆**。
+ * 流式原子写：边读边 `write()`，**整份素材从不进堆**。
  *
  * 与 `writeBytesAtomic` 的关系：
  *  - 原子性同源（`createWritable` 的 siloed 语义 + `close()` 才提交）；

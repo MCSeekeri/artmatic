@@ -100,7 +100,7 @@ interface FrameCtx {
   h: number;
 }
 
-/** 特效执行器：B8 由 effects/registry 装配；之前特效片段是 no-op。 */
+/** 特效执行器：由 effects/registry 装配；之前特效片段是 no-op。 */
 export type EffectRunner = (
   inst: EffectInstance,
   src: Target,

@@ -19,7 +19,7 @@
  * ## 性能上的三条硬措施（用户专门点了这一条）
  *
  * 1. **不在内存里摊开字节。** 素材只存 `Blob`/`File` 引用（浏览器的文件句柄
- *    是磁盘背书的），mediabunny 从它 seek 读。W1.1 起 `AssetStore` 对视频只存
+ *    是磁盘背书的），mediabunny 从它 seek 读。`AssetStore` 对视频只存
  *    `File` / 句柄（本地导入与打开工程都不读字节），保存也走流式 —— 这条约束
  *    现在是**全链路**的，不只是解码这一侧。
  * 2. **解出一帧就立刻 `close()`。** WebCodecs 的 `VideoFrame` 占的是解码器池，
@@ -257,7 +257,7 @@ export interface VideoProbe {
  * `VideoMedia` → mediabunny 的 `Source`。
  *
  * 三条来源必须是三种 adapter，不能「都包成 Blob」：`path` 的整份包装等于
- * 把 2 GB 读进内存，正好是 W1.1 消灭的动作。`CustomSource` 只按请求的范围
+ * 把 2 GB 读进内存，正好是句柄化消灭的动作。`CustomSource` 只按请求的范围
  * 读，缓存上限 8 MiB（与 `BufferSource` 的量级一致）。
  */
 export function videoSourceOf(media: VideoMedia): Source {

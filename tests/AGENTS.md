@@ -34,7 +34,7 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
     兜底 / 钳制）+ **矩形网格**的行为：环面回绕按两轴分别取、`TorusField` 矩形 halo
     与朴素两轴卷积逐位对拍、各 sim 句柄报告 `gridW × gridH`。
   - `tests/unit/cellular-automata.test.ts` / `tests/unit/lenia-wireworld.test.ts` /
-    `tests/unit/reaction-diffusion.test.ts` —— Wave 2 那 7 个 sim。里面有几条**解析不变量**
+    `tests/unit/reaction-diffusion.test.ts` —— 那 7 个 sim。里面有几条**解析不变量**
     才算真守卫：反应扩散 `F=k=0` 时 `Σ(u+v)` 守恒、沙堆的**阿贝尔性**（fifo 与 lifo
     两种崩塌顺序的终止态逐格相同）、雪花「冰只增不减」、循环 CA「默认参数下相邻两步
     必须有格子在变」（这条直接抓「冻死」）。

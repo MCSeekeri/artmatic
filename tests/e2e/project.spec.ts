@@ -1,5 +1,5 @@
 /**
- * project.spec.ts — 工程持久化的端到端验证（M5a）。
+ * project.spec.ts — 工程持久化的端到端验证。
  *
  * ## 为什么跑在 OPFS 上而不是 mock 一个文件系统
  *
@@ -59,7 +59,7 @@ type W = {
     assets: {
       put(id: string, bytes: Uint8Array, input: Record<string, unknown>): void;
       ids(): string[];
-      /** W1.3：已移除但字节文件仍保留的素材。 */
+      /** 已移除但字节文件仍保留的素材。 */
       retainedIds(): string[];
     };
   };
@@ -265,7 +265,7 @@ test.describe('素材台账', () => {
     expect(issues.some((i) => i.kind === 'missing' && i.severity === 'error')).toBe(true);
   });
 
-  test('移除素材后保存：文件仍在，重开是「未使用素材」而不是孤儿（W0.1 / W1.3）', async ({ page }) => {
+  test('移除素材后保存：文件仍在，重开是「未使用素材」而不是孤儿', async ({ page }) => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
     await page.evaluate((bytes) => {
       (window as never as W).__artmatic.assets.put('img-keep', new Uint8Array(bytes), {
@@ -370,7 +370,7 @@ test.describe('脏标记、多工程与侧栏接线', () => {
     expect(await page.evaluate(() => (window as never as W).__artmatic.appState.projectDirty)).toBe(true);
   });
 
-  test('导出前会先保存：改片段 → 点导出 → 重新加载后改动还在（W0.3）', async ({ page }) => {
+  test('导出前会先保存：改片段 → 点导出 → 重新加载后改动还在', async ({ page }) => {
     await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
     // 把工程压到 320×180 / 0.5s：PNG 序列只产 15 帧，够证明「走完导出」而不占磁盘。
     await page.evaluate(() => {

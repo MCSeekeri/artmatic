@@ -3,7 +3,7 @@ import { resolveAsset, type LocationProbe } from '../../src/project/asset-resolv
 import type { AssetEntry } from '../../src/project/ledger';
 
 /**
- * W1 的核心真值表：**同一份素材有多份副本时，到底用哪一份**。
+ * 素材解析的核心真值表：**同一份素材有多份副本时，到底用哪一份**。
  *
  * 这里的每一条都对应一个用户可见的形态：
  *  - 本地文件在、工程副本也在 → 用 mode 偏好的那份；

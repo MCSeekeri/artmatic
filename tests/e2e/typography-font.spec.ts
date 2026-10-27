@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 /**
- * M4 排版：字体子集化（ADR-003 规则 ①）。
+ * 排版：字体子集化（ADR-003 规则 ①）。
  *
  * ## 为什么要这么搭
  *

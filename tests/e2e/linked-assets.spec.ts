@@ -1,5 +1,5 @@
 /**
- * linked-assets.spec.ts — 引用式素材（W1）在浏览器里的完整生命周期。
+ * linked-assets.spec.ts — 引用式素材在浏览器里的完整生命周期。
  *
  * 真实系统文件选择器驱动不了，所以用 **OPFS 里的文件句柄**当「本机文件」：
  * 它与 `showOpenFilePicker` 返回的是同一个 `FileSystemFileHandle` 类型，

@@ -278,7 +278,7 @@ export class TypographyRuntime {
       });
   }
 
-  /** 图片素材的 URL 解析。M4 由编辑器注册；未注册时该元素这帧缺席。 */
+  /** 图片素材的 URL 解析。由编辑器注册；未注册时该元素这帧缺席。 */
   resolveImage: (assetId: string) => string | null = () => null;
   /**
    * 图片素材「脱机」判据（引用不存在 → 画面给暗红占位符）。

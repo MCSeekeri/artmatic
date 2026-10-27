@@ -12,7 +12,7 @@ import { bitmapFromRows, encodePattern } from '../../src/algos/pattern-codec';
  *
  * ⚠️ **空转探针红旗**：任何「两个配置 hash 不同」的断言，前面必须先有一条
  * `meanAt > 阈值`。反应扩散的死区预设、或步数不够的模拟，两张图都是黑的，
- * `not.toBe` 会「通过」但什么都没测到 —— Wave 1 已经踩过一次这个坑。
+ * `not.toBe` 会「通过」但什么都没测到 —— 这个坑已经踩过一次。
  *
  * ## 两个「为什么这里没有某条断言」
  *

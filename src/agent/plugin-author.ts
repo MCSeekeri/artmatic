@@ -115,7 +115,7 @@ export async function tryPlugin(opts: {
   }
 
   /*
-   * 确认必须挡在 `host.importBytes` **之前**（W0.4）。
+   * 确认必须挡在 `host.importBytes` **之前**。
    *
    * 试挂不是「先建个对象看看」：`importBytes` 会 `import()` 这份源码，
    * 也就是**立刻在主世界执行它**。晚一步再拦，代码已经跑过了，

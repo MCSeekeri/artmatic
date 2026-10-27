@@ -54,7 +54,7 @@ export interface PoolItem {
   bytes: number | null;
   /** 工程登记了它、但仓里没有字节 —— 打开工程时那个文件读不出来。 */
   missing: boolean;
-  /** 引用式素材（W1）：字节不在工程目录里，指向本机原文件。 */
+  /** 引用式素材：字节不在工程目录里，指向本机原文件。 */
   linked?: boolean;
   /** linked 的原文件在本次会话里变过（只提示，不自动换内容）。 */
   stale?: boolean;
@@ -66,7 +66,7 @@ export interface PoolItem {
 /**
  * 只是声明我们用到素材仓的哪几个方法（传真仓或假的都行）。
  *
- * W1.1 起读的是 `size()` 而不是 `get()`：视频的字节根本不在内存里，
+ * 读的是 `size()` 而不是 `get()`：视频的字节根本不在内存里，
  * 而「这一行显示多大」只需要字节数。
  */
 type PoolSource = Pick<AssetStore, 'ids' | 'input' | 'size'> &

@@ -1,5 +1,5 @@
 /**
- * asset-store.ts — 运行期素材仓（M5a / W1.1 句柄化）。
+ * asset-store.ts — 运行期素材仓（句柄化）。
  *
  * 存的是**素材的来源**，不是「一律摊开的字节」。对象 URL 那边是
  * `typography/image-assets.ts` 的事，两者职责不同：
@@ -10,7 +10,7 @@
  *        └─→ putImageBytes(id, url)         ← 渲染用（snapDOM 要能取到 <img>）
  * ```
  *
- * ## 为什么必须区分来源（W1.1）
+ * ## 为什么必须区分来源
  *
  * `platform/types.ts::PickedVideo` 的注释早就写明「只给 `File` 句柄，10 GB 素材
  * 也不会把堆撑爆」。视频解码（mediabunny）本来就是从 `Blob` seek 读的，所以
@@ -99,7 +99,7 @@ export type AssetSource =
   | { kind: 'file'; file: File }
   | { kind: 'handle'; handle: FsFileHandle; size: number }
   | { kind: 'bytes'; bytes: Uint8Array }
-  /** 桌面版 linked：本机绝对路径（读取走 platform 的 readRange，见 W5）。 */
+  /** 桌面版 linked：本机绝对路径（读取走 platform 的 readRange）。 */
   | { kind: 'path'; path: string; size: number }
   | { kind: 'none' };
 
@@ -118,7 +118,7 @@ interface Item {
   local: string | null;
 }
 
-/** 「已从工程移除、但字节文件还在」的条目（W1.3）。 */
+/** 「已从工程移除、但字节文件还在」的条目。 */
 interface RetainedItem {
   input: AssetInput;
   source: AssetSource;
@@ -190,7 +190,7 @@ export class AssetStore {
    * 登记一份**本机绝对路径**（桌面版 linked）：一个字节都不读。
    *
    * 浏览器没有真实路径，这条只给 `platform/electron.ts` 用；图片/音频的
-   * 字节由 platform 的 `readRange` 按需取（W5）。
+   * 字节由 platform 的 `readRange` 按需取。
    */
   putPath(id: string, path: string, size: number, input: AssetInput, content?: AssetContent | null): void {
     const prev = this.items.get(id);
@@ -508,7 +508,7 @@ export class AssetStore {
     return file.readBytes();
   }
 
-  /* -------------------------------------------------- 移除 / 保留（W1.3） */
+  /* -------------------------------------------------------- 移除 / 保留 */
 
   /**
    * 解除关联：从活动素材里挪到「保留」区。
@@ -716,7 +716,7 @@ export class AssetStore {
       if (!handle) {
         /*
          * 没有工程副本不一定等于「素材丢了」：linked-only 的条目本来就只有
-         * 本地位置（W5 由 platform 接上）。只有**一个位置都没有**才算 missing。
+         * 本地位置（由 platform 接上）。只有**一个位置都没有**才算 missing。
          */
         if (local) {
           this.items.set(entry.id, {
@@ -812,7 +812,7 @@ async function* chunksOf(src: AssetSource): AsyncGenerator<Uint8Array> {
     return;
   }
   /*
-   * `path` 来源由 platform 的 `readRange` 提供字节（W5）。
+   * `path` 来源由 platform 的 `readRange` 提供字节。
    * 在内核还拿不到那条能力时**什么都不产出** —— 绝不能返回空字节让
    * `writeStreamAtomic` 把工程副本写成 0 字节（那会静默毁掉一份素材）。
    */
@@ -869,7 +869,7 @@ async function readAllOf(src: AssetSource): Promise<Uint8Array | null> {
     const file = await src.handle.get();
     return file.readBytes();
   }
-  // 同 `chunksOf`：path 的读取在 platform（W5），这里不假装读到了空字节。
+  // 同 `chunksOf`：path 的读取在 platform，这里不假装读到了空字节。
   return null;
 }
 

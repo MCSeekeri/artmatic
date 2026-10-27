@@ -1,5 +1,5 @@
 /**
- * drafts.ts — 本地草稿（OPFS `drafts/<key>.json`，W1.2）。
+ * drafts.ts — 本地草稿（OPFS `drafts/<key>.json`）。
  *
  * ## 为什么草稿不是「另一份工程」
  *

@@ -62,7 +62,7 @@
 - mediabunny 生命周期：加轨（`addVideoTrack` / `addAudioTrack`）→ `output.start()` →
   源 `.add(样本)` → `finalize()`。音频**建源 + 加轨**在 `configure`（start 前必须建好），
   灌 PCM 在第一次 `submit` 之前（`add()` 断言已 started）。灌早了报 `Output has not started`。
-- **H.264 走四档阶梯**（`mp4-sink.ts::MP4_CODEC_LADDER`，W0.5）：
+- **H.264 走四档阶梯**（`mp4-sink.ts::MP4_CODEC_LADDER`）：
   `avc1.4d0028`(Main 4.0) → `avc1.4d401f`(Main 3.1) → `avc1.42e028`(Baseline 4.0) →
   `avc1.42e01e`(Baseline 3.1)。无硬编的机器只有 OpenH264 的 **Constrained Baseline**，
   写死 Main 会把它们误判成「不支持 WebCodecs」。baseline 必须留 **4.0** 那档：

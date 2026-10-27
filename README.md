@@ -1,6 +1,6 @@
 # Artmatic
 
-<p align="center">
+<p align="center" style="background-color: #0a0a0a; padding-top: 15px; border-radius: 8px; width: auto; color: #fafafa;">
 <img src="./src/assets/brand/artmatic-small-light.svg" width=64px"> <img src="./src/assets/brand/artmatic-fonttype-light.svg" height="64px">
 <br/><br/>
 <em>创建秩序与混沌的美</em>

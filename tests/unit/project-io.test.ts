@@ -56,7 +56,7 @@ function saver(f: Fixture, over: Partial<{ project: Project; ledger: AssetLedger
     dir: f.dir,
     project: over.project ?? f.project,
     ledger: over.ledger ?? f.ledger,
-    // W1.1 起保存走**分块流**：素材仓的 `open()` 就是这个形状。
+    // 保存走**分块流**：素材仓的 `open()` 就是这个形状。
     openFor: (id) => {
       const bytes = f.payload.get(id);
       if (!bytes) return null;
@@ -122,7 +122,7 @@ describe('saveProject', () => {
     expect(f.root.inspect('p/project.json')).toBeNull();
   });
 
-  it('台账里移除的素材，磁盘上的文件**不删**（W0.1）', async () => {
+  it('台账里移除的素材，磁盘上的文件**不删**', async () => {
     const f = await fixture();
     await saver(f);
     expect(f.root.inspect('p/assets/img1.png')).not.toBeNull();
@@ -143,7 +143,7 @@ describe('saveProject', () => {
   });
 });
 
-describe('saveProject：自动保存的 .bak 约定（W1.2）', () => {
+describe('saveProject：自动保存的 .bak 约定', () => {
   it('backup:false 时不写 .bak，也不改动已有的 .bak', async () => {
     const f = await fixture();
     // 先手动保存一次并制造一个 .bak
@@ -170,7 +170,7 @@ describe('saveProject：自动保存的 .bak 约定（W1.2）', () => {
   });
 });
 
-describe('删除语义：回收站与真删（W1.3）', () => {
+describe('删除语义：回收站与真删', () => {
   it('moveAssetToTrash 先写回收站再删原文件', async () => {
     const f = await fixture();
     await saver(f);
@@ -212,7 +212,7 @@ describe('删除语义：回收站与真删（W1.3）', () => {
   });
 });
 
-describe('清理：回收站与孤儿（W1）', () => {
+describe('清理：回收站与孤儿', () => {
   it('listTrashFiles 只列 .trash 里的文件并给出体积', async () => {
     const f = await fixture();
     await saver(f);

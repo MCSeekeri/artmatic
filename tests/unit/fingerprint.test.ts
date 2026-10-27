@@ -8,7 +8,7 @@ import {
 } from '../../src/project/fingerprint';
 
 /**
- * W1 去重与 linked/bundled 冲突判定的地基。
+ * 去重与 linked/bundled 冲突判定的地基。
  *
  * 判据只有一条：**同一份内容必须得到同一个指纹，不同内容必须不同**。
  * 采样指纹的已知弱点也在这里钉住 —— 只改中段（首尾 128 KiB 之外）不会被发现，

@@ -305,7 +305,7 @@ export function mbToBytes(mb: number): number {
 export type ImportSizeCheck = { ok: true } | { ok: false; sizeBytes: number; limitBytes: number };
 
 /**
- * 导入前的单文件体积闸门（W0.2）。
+ * 导入前的单文件体积闸门。
  *
  * 用的是 `videoPerAssetMB` —— 它本来是**显存**预算（单个视频素材允许占多少纹理），
  * 这里拿它当「单个文件的体积代理」。口径是刻意保守的：显存预算普遍小于
@@ -314,10 +314,10 @@ export type ImportSizeCheck = { ok: true } | { ok: false; sizeBytes: number; lim
  *
  * 边界取**闭区间**（`size === limit` 放行）：等于预算的文件没有任何一条理由被拒。
  *
- * ⚠️ **W1.1 已复看（结论：保留）**。视频不再整份进堆之后，这条闸门不再是
- * 「防内存峰值」，而是一条**策略上限**：它挡的下一步动作是「把整个文件拷进
- * 工程目录」以及按素材时长解码的代价。口径仍是 `videoPerAssetMB`
- *（预算本来就是「只占一小块」的保守估计）；要放宽就改预算，别在这里另写阈值。
+ * 视频不再整份进堆之后，这条闸门不再是「防内存峰值」，而是一条**策略上限**：
+ * 它挡的下一步动作是「把整个文件拷进工程目录」以及按素材时长解码的代价。
+ * 口径仍是 `videoPerAssetMB`（预算本来就是「只占一小块」的保守估计）；
+ * 要放宽就改预算，别在这里另写阈值。
  */
 export function checkImportSize(sizeBytes: number, limitMB: number): ImportSizeCheck {
   const limitBytes = mbToBytes(limitMB);

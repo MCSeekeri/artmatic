@@ -3,7 +3,7 @@ import { sampleL1, shootAlgo as shoot } from './_stage';
 import { bitmapFromRows, encodePattern } from '../../src/algos/pattern-codec';
 
 /**
- * Wave 4 批次 2 的三个 2D 分形（newton / kleinian / lyapunov）的 E2E。
+ * 三个 2D 分形（newton / kleinian / lyapunov）的 E2E。
  *
  * ## 判据只有两个，都是标量（GPU 读回 + page 内归约，无截图比对）
  *

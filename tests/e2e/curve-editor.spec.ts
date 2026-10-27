@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { buildStage, openDemo } from './_stage';
 
 /**
- * 关键帧曲线编辑器（0.3 W3）。
+ * 关键帧曲线编辑器。
  *
  * 这里守的是**界面与手势的接线**：呼出入口、插值切换真的写进 Project、
  * 贝塞尔手柄拖得动且一笔撤销、参数表能给没有曲线的参数新建曲线。

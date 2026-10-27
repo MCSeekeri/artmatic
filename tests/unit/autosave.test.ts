@@ -3,7 +3,7 @@ import { Autosave, type AutosaveSnapshot, type AutosaveStatus, type AutosaveTime
 import { memoryRoot, readTextIfExists, writeBytesAtomic, type FsDirHandle } from '../../src/project/fs';
 
 /**
- * W1.2 的编排守卫：**防抖合并 / 单飞 / 手动优先 / 失败降级**。
+ * 自动保存的编排守卫：**防抖合并 / 单飞 / 手动优先 / 失败降级**。
  *
  * 全部走 `memoryRoot()`（真写文件，不是 mock）：这些行为出错时的形态都是
  * 「多写一次」或「少写一次」，只有真的落盘才看得出区别。

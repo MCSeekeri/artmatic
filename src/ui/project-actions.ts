@@ -287,13 +287,13 @@ export async function openRecentProject(ref: ProjectRef): Promise<boolean> {
 /**
  * 保存指定的那份工程。
  *
- * **必须显式给 `p`**，不能在里面读 `appState.store`：W1.2 起一次保存可能
+ * **必须显式给 `p`**，不能在里面读 `appState.store`：一次保存可能
  * 要流式写几 GB 素材，期间用户切选项卡是正常操作 —— 用「当前」会把 A 的内容
  * 记成 B 已保存（脏标记从此撒谎，而磁盘上多出一份不该有的文件）。
  */
 async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<boolean> {
   /*
-   * **手动保存优先**（W1.2 第 3 条）：先取消排队中的自动保存，再等正在跑的
+   * **手动保存优先**：先取消排队中的自动保存，再等正在跑的
    * 那一轮写完。不等的话两边会同时 `createWritable({mode:'exclusive'})` ——
    * 后到的那个拿到 `NoModificationAllowedError`，而它可能正是用户按的 Ctrl+S。
    */
@@ -412,7 +412,7 @@ export async function saveProjectNow(): Promise<boolean> {
 /**
  * 把某个素材仓里的字节重新变成「能画出来的东西」。
  *
- * 持久化层存的是**来源**（W1.1），渲染层要的是 objectURL / AudioBuffer /
+ * 持久化层存的是**来源**，渲染层要的是 objectURL / AudioBuffer /
  * 视频 `Blob`，两者之间必须有一次重建。**单条素材解不开不中断整个流程**：
  * 画面照旧能开，只是那一条没声音/不显示，而 `issues` 里通常已经有记录了。
  *
@@ -465,7 +465,7 @@ async function resolveLocalHandles(store: AssetStore): Promise<void> {
 
 async function hydrateRenderAssets(store: AssetStore): Promise<void> {
   for (const id of store.ids()) {
-    // W1.1 起视频要 `handle.get()`（可能因权限失效而抛）：单条失败不挡打开。
+    // 视频要 `handle.get()`（可能因权限失效而抛）：单条失败不挡打开。
     try {
       await hydrateAsset(store, id);
     } catch {
@@ -497,7 +497,7 @@ async function hydrateAsset(store: AssetStore, id: string): Promise<void> {
     putImageBytes(id, arr, mime);
     // 排版文档用 objectURL（snapDOM 要从 DOM 取 <img>），
     // 而 image **片段**要的是 WebGL 纹理 —— 两条路都得喂。
-    // 这里漏过一整个 M4/M5a 周期：`setImage` 零调用方，
+    // 这里漏过一整个版本周期：`setImage` 零调用方，
     // 于是「转为图片」产出的片段在画面上一律空白。
     try {
       await registerImageBytes(id, new Blob([arr], { type: mime }));
@@ -520,7 +520,7 @@ async function hydrateAsset(store: AssetStore, id: string): Promise<void> {
   }
 }
 
-/* -------------------------------------------------- 未使用素材（W1.3） */
+/* -------------------------------------------------------- 未使用素材 */
 
 /**
  * 把一条「已移除但字节还在」的素材恢复成工程素材。
@@ -584,7 +584,7 @@ export async function deleteUnusedAsset(assetId: string): Promise<boolean> {
   return true;
 }
 
-/* ------------------------------------------------------ 占用与清理（W1） */
+/* ---------------------------------------------------------- 占用与清理 */
 
 export interface ProjectUsage {
   /** 活动素材的体积（含只有本地引用的）。 */
@@ -739,7 +739,7 @@ export async function cleanupOrphanFiles(): Promise<number> {
   return removed;
 }
 
-/* ------------------------------------------------------ 引用式素材（W1） */
+/* ---------------------------------------------------------- 引用式素材 */
 
 /**
  * 把一条 linked 素材收集进工程（`assets/` 里加一份副本，本地位置保留）。
@@ -828,7 +828,7 @@ export async function relinkAsset(assetId: string): Promise<boolean> {
   }
 }
 
-/* ------------------------------------------------------ 崩溃恢复（W1.2） */
+/* ------------------------------------------------------------ 崩溃恢复 */
 
 /**
  * 从本地草稿恢复一份工程。

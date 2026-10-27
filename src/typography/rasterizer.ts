@@ -6,7 +6,7 @@
  * 内存上限必须由单一处说了算，否则「谁该淘汰」会变成两个模块的猜谜游戏。
  *
  * 后端优先级（ADR-003）：hic → dom-snap → canvas2d → png-import。
- * M4 只实现 dom-snap；其余留 stub（isAvailable() 返回 false）。
+ * 只实现 dom-snap；其余留 stub（isAvailable() 返回 false）。
  * hic 的位置尤其要留：snapDOM 3.x 自己就有 `engine: 'html-in-canvas'`，
  * 等它的上传路径在这个 Electron 版本上通了，dom-snap 后端内部换一行即可。
  */

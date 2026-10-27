@@ -96,7 +96,7 @@ export type Mp4Availability =
   | { kind: 'no-h264' };
 
 /**
- * 按当前工程尺寸探测 MP4 能力（W0.5）。
+ * 按当前工程尺寸探测 MP4 能力。
  *
  * 为什么必须按尺寸探测：H.264 的 level 限制的是 **coded area**，
  * baseline 3.1（`avc1.42001e`）在 1080p 下会被直接拒绝。所以「MP4 可不可用」
@@ -113,7 +113,7 @@ export async function probeMp4Availability(): Promise<Mp4Availability> {
 }
 
 /**
- * 导出前的强制保存（W0.3）。
+ * 导出前的强制保存。
  *
  * 目的只有一个：**别让「导出 OOM 崩标签页」顺手带走未保存的编辑**。
  * 所以它的语义是「尽力保存」，不是闸门 —— 保存失败、用户取消、工程还没有
@@ -337,7 +337,7 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
   // 保存是异步的：两次快速点击都能穿过上面的判断，所以这里要复查。
   if (appState.exportProgress !== null) return;
 
-  // 阶梯探测在开跑之前做（W0.5）。全不支持时说的是「没有可用 H.264」，
+  // 阶梯探测在开跑之前做。全不支持时说的是「没有可用 H.264」，
   // 不是「不支持 WebCodecs」—— 后者是误诊。
   const choice = await probeMp4Codec({
     w: appState.store.project.resolution.w,

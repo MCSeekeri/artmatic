@@ -86,7 +86,7 @@
     return { count: appState.assets.ids().length, bytes: appState.assets.totalBytes() };
   });
 
-  /* ---------------------------------------------- 未使用素材（W1.3） */
+  /* ---------------------------------------------------- 未使用素材 */
 
   /**
    * 已从工程移除、但字节文件还在的素材。
@@ -107,7 +107,7 @@
 
   let pendingUnused = $state<{ id: string; name: string; action: 'trash' | 'delete' } | null>(null);
 
-  /* ------------------------------------------------ 占用与批量清理（W1） */
+  /* ---------------------------------------------------- 占用与批量清理 */
 
   let usage = $state<ProjectUsage | null>(null);
   let pendingCleanup = $state<'trash-all' | 'delete-all' | 'clear-trash' | 'orphans' | null>(null);
@@ -349,7 +349,7 @@
         {/if}
 
         <!--
-          占用（W1）：把「工程到底占了多大」摊开。回收站与未跟踪文件也在里面 ——
+          占用：把「工程到底占了多大」摊开。回收站与未跟踪文件也在里面 ——
           它们不在台账里，别处没有任何地方能看到这两个数。
         -->
         <h3 class="gap">{tr('app.storageUsage')}</h3>
@@ -385,7 +385,7 @@
         {/if}
 
         <!--
-          未使用素材（W1.3）：「移除」只是解除关联，文件还在 assets/。
+          未使用素材：「移除」只是解除关联，文件还在 assets/。
           逐条动作按破坏性递增排列 —— 恢复在最左，彻底删除在最右（红色确认）。
         -->
         {#if unused.length}

@@ -3,7 +3,7 @@ import { addTextClip, openDemo } from './_stage';
 import { parsePathNodes } from '../../src/typography/path-nodes';
 
 /**
- * M4 排版：Ribbon 与画布交互。
+ * 排版：Ribbon 与画布交互。
  *
  * ## 为什么这个文件里到处是 DOM 断言
  *

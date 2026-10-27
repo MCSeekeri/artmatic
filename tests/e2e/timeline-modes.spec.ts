@@ -3,7 +3,7 @@ import { openDemo } from './_stage';
 import { zhCN } from '../../src/i18n/locales/zh-CN';
 
 /**
- * 时间轴双形态（0.3 W2.2）。
+ * 时间轴双形态。
  *
  * 判据刻意**不读像素**：标尺是 canvas，读文字只能靠 OCR；而这一波真正会坏的地方
  * 是「切了模式但工具条 / 吸附没跟上」。所以断言落在三处可读状态上：

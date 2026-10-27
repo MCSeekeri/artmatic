@@ -13,7 +13,7 @@ import { listGenerators } from '../../src/algos/registry';
 import { ALGO_HEAD, declaredUniforms } from '../../src/algos/shader-lib';
 
 /**
- * Wave 4 批次 2 三个 2D 分形的契约与纯函数。
+ * 三个 2D 分形的契约与纯函数。
  *
  * 这三个的**几何全在 fragment 里**，所以能纯测的只有两样：序列的编解码
  * （`sequenceBits`）与「这个 def 的接线形状对不对」。前者是这批里唯一会

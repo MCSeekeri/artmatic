@@ -2844,7 +2844,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         // 复用 UI 那条同义文案：agent 与面板给的是同一个下一步动作。
         throw new ControlFailure('unsupported', tr('err.export.noWebCodecs'));
       }
-      // 与 UI 走同一条阶梯（W0.5）：无硬编的机器只有 Constrained Baseline。
+      // 与 UI 走同一条阶梯：无硬编的机器只有 Constrained Baseline。
       const exportSize = size ?? project.resolution;
       const choice = await probeMp4Codec({ w: exportSize.w, h: exportSize.h, fps: project.fps });
       if (!choice) throw new ControlFailure('unsupported', tr('err.export.noH264'));

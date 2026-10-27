@@ -264,7 +264,7 @@
   去重；只留最近 5 条错误 + 10 条 `console.error`。诊断文本包含版本 / URL / UA，
   由 `diagnosticText()` 生成 —— **不要在别处另拼一份**。
 
-## 关键帧曲线编辑器（`ui/curve-editor/`，0.3 W3）
+## 关键帧曲线编辑器（`ui/curve-editor/`）
 
 - **是独立浮层，不进检查器**。曲线要同时看「时间 × 值」两维，塞进一列表单只能得到
   「选一个 key → 改一个数字」。检查器里只留一个曲线图标入口（`KeyableField` 的
@@ -527,7 +527,7 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   `importLinkedPath`。拿不到路径（浏览器 / 剪贴板）才退化成字节导入。
   **不要**在 drop handler 里自己 `await` 后再取路径 —— 那样会静默退化成 bundled。
 - **「未使用素材」只在工程面板的「清理」页（`ProjectModal.svelte`）**，数据是 `assets.retainedIds()` /
-  `retainedInput()` / `retainedSize()`（W1.3）。三个动作都有唯一实现：恢复走
+  `retainedInput()` / `retainedSize()`。三个动作都有唯一实现：恢复走
   `project-actions.restoreUnusedAsset`（要 await 素材来源重建，之后画面才能出来）、
   清理与真删走 `trashUnusedAsset` / `deleteUnusedAsset`。**不要在组件里直接调
   `moveAssetToTrash` / `fs.remove`** —— 少了 `store.touch()` 台账就不会被下一次

@@ -38,7 +38,7 @@ import type { UiContextSnapshot } from './context';
  * （`ClipTextSummary`），详情走 `getTypographyDoc`。这是**读形状变更**，
  * 旧客户端拿到的字段会变成 undefined —— 所以要抬版本而不是静默改。
  *
- * v3（2026-10-19，0.3 W2）：场景快照多了 `sections`（段落标记），
+ * v3（2026-10-19）：场景快照多了 `sections`（段落标记），
  * audio 片段多了 `fadeIn` / `fadeOut`。**只加字段**，但「工程结构里多了一类
  * 用户可编辑的实体」值得让网关照版本号判断能力，而不是让旧客户端以为
  * 时间轴上只有片段。

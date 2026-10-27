@@ -954,7 +954,7 @@ export const media = {
   'algo.apollonian.iter': '迭代次数',
   'algo.apollonian.scale': '反演缩放',
 
-  /* ---- 2D 分形 · 复平面 / 群（Wave 4 批次 2）---- */
+  /* ---- 2D 分形 · 复平面 / 群 ---- */
   'algo.newton': '牛顿分形（zⁿ−1）',
   'algo.newton.power': '幂次',
   'algo.newton.relax': '松弛系数',
