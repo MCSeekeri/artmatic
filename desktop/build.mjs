@@ -19,16 +19,21 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Data, NtExecutable, NtExecutableResource, Resource } from 'resedit'
+import os from 'node:os'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '..')
 const ELECTRON_DIST = path.join(ROOT, 'node_modules', 'electron', 'dist')
 const WEB_DIST = path.join(ROOT, 'dist')
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
+const ARCH = os.arch()
+const PLATFORM = process.platform
 // 版本号进目录名。Windows 上刚跑过的 exe / asar 会被杀毒、索引器或沙箱短暂锁住，
 // 复用同一个目录会让「改一行重打一次」直接 EBUSY/EPERM —— 删不掉就换一个带时间戳的，
 // 保证这条命令永远能产出一个可运行的目录。
-let OUT = path.join(ROOT, 'release', `Artmatic-${VERSION}-win32-x64`)
+let OUT = path.join(ROOT, 'release', `Artmatic-${VERSION}-${PLATFORM}-${ARCH}`)
+
+
 if (fs.existsSync(OUT)) {
   try {
     fs.rmSync(OUT, { recursive: true, force: true })
@@ -120,7 +125,12 @@ fs.mkdirSync(APP, { recursive: true })
 
 // 1. 壳：整份 Electron 运行时（含 libffmpeg / dll / locales）
 fs.cpSync(ELECTRON_DIST, OUT, { recursive: true })
-fs.renameSync(path.join(OUT, 'electron.exe'), path.join(OUT, EXE))
+if (process.platform === 'win32') {
+  fs.renameSync(path.join(OUT, 'electron.exe'), path.join(OUT, EXE))
+} else {
+  fs.renameSync(path.join(OUT, 'electron'), path.join(OUT, EXE))
+}
+
 patchExeIcon(path.join(OUT, EXE))
 
 // 2. 裁 locales。这 55 个 .pak 是 **Chromium 自己**的界面文案（DevTools、右键菜单、
