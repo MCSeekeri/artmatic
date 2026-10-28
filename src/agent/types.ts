@@ -1025,6 +1025,11 @@ export interface ControlContext {
     list(): Promise<MediaPoolSnapshot>;
     /** `assetId` 只对单条动作有意义（`trash_all` / `clear_trash` 等忽略它）。 */
     run(op: MediaPoolOp, assetId?: string): Promise<{ changed: number; bytes?: number }>;
+    /**
+     * 改展示名（只动工程里的名字与素材仓的镜像）。返回 false = 没有这条素材。
+     * 不属于 `run` 的那些磁盘动作，所以**不经过确认**。
+     */
+    rename?(assetId: string, name: string): boolean;
   };
   /**
    * 「操作媒体池需用户确认」偏好（默认 **true**）。

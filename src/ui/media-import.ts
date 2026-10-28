@@ -69,9 +69,12 @@ function finish(
     id: assetId,
     kind,
     name,
+    fileName: appState.assets.originName(assetId) ?? name,
     durationSec: meta.durationSec ?? null,
     size: meta.size ?? null,
     bytes: appState.assets.size(assetId),
+    addedAt: appState.assets.addedAt(assetId),
+    modifiedAt: appState.assets.modifiedAt(assetId),
     missing: false,
   };
   const clipId = insertAssetClip(appState.store, item, {

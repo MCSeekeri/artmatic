@@ -35,6 +35,7 @@ import {
 import { activeRangeOf, rangeDurationSec } from '../core/preclip';
 import type { ProjectStore } from '../core/project-store';
 import type { AssetStore } from '../project/asset-store';
+import { pinyinHaystack } from '../i18n/pinyin';
 
 /* ------------------------------------------------------------------ 列表 */
 
@@ -42,7 +43,13 @@ import type { AssetStore } from '../project/asset-store';
 export interface PoolItem {
   id: string;
   kind: Asset['kind'];
+  /** 展示名（可被「重命名素材」改过，随工程保存）。 */
   name: string;
+  /**
+   * 导入时的原始文件名（台账 `originName`）。展示名改过之后它仍是磁盘上的
+   * 那个名字，所以搜索要一起匹配 —— 用户经常记得的是文件名而不是自己起的别名。
+   */
+  fileName: string | null;
   /** 秒。图片没有时长（它是静止的），视频/音频打开工程后从工程文件读回来。 */
   durationSec: number | null;
   /** 像素。音频没有尺寸。 */
@@ -52,6 +59,10 @@ export interface PoolItem {
    * 与 `missing` 一起构成「这条素材还在不在」的判据。
    */
   bytes: number | null;
+  /** 首次导入时间（毫秒）；仓里没有这条记录时 null。 */
+  addedAt: number | null;
+  /** 来源文件修改时间（毫秒）；未知时 null（排序回退到 `addedAt`）。 */
+  modifiedAt: number | null;
   /** 工程登记了它、但仓里没有字节 —— 打开工程时那个文件读不出来。 */
   missing: boolean;
   /** 引用式素材：字节不在工程目录里，指向本机原文件。 */
@@ -70,7 +81,7 @@ export interface PoolItem {
  * 而「这一行显示多大」只需要字节数。
  */
 type PoolSource = Pick<AssetStore, 'ids' | 'input' | 'size'> &
-  Partial<Pick<AssetStore, 'modeOf' | 'isStale'>>;
+  Partial<Pick<AssetStore, 'modeOf' | 'isStale' | 'originName' | 'addedAt' | 'modifiedAt'>>;
 
 export function buildPoolItems(
   declared: Readonly<Record<string, Asset>>,
@@ -81,18 +92,22 @@ export function buildPoolItems(
 
   for (const [id, a] of Object.entries(declared)) {
     seen.add(id);
+    const input = store.input(id);
     out.push({
       id,
       kind: a.kind,
       name: a.name,
+      fileName: store.originName?.(id) ?? input?.originName ?? null,
       durationSec: a.durationSec ?? null,
       size: a.size ?? null,
       bytes: store.size(id),
+      addedAt: store.addedAt?.(id) ?? null,
+      modifiedAt: store.modifiedAt?.(id) ?? null,
       /*
        * 判据是「仓里有没有这条记录」，**不是**「字节数是不是 0」：generated
        * 素材（演示工程的节拍音频）本来就没有字节，但它随时可重建，不算缺失。
        */
-      missing: !store.input(id),
+      missing: !input,
       linked: store.modeOf?.(id) === 'linked',
       stale: store.isStale?.(id) === true,
       ...(a.kind === 'video' && a.ranges?.length
@@ -109,9 +124,12 @@ export function buildPoolItems(
       id,
       kind: input.kind,
       name: input.name,
+      fileName: store.originName?.(id) ?? input.originName,
       durationSec: null,
       size: null,
       bytes: store.size(id),
+      addedAt: store.addedAt?.(id) ?? null,
+      modifiedAt: store.modifiedAt?.(id) ?? null,
       missing: false,
     });
   }
@@ -146,6 +164,110 @@ export function groupPool(items: readonly PoolItem[]): PoolGroup[] {
     kind,
     items: items.filter((i) => i.kind === kind),
   })).filter((g) => g.items.length > 0);
+}
+
+/* ------------------------------------------------------------ 搜索 / 排序 */
+
+export type PoolView = 'thumbs' | 'compact';
+
+/**
+ * 排序档位。
+ *
+ * 没有「按类型 / 分组」这一档：列表本来就按视频 → 图片 → 音频分组了，
+ * 再加一个「按类型排」只是把同一件事说两遍（与特效选择器删掉分类排序同一条理由）。
+ * 所有档位都只决定**组内**顺序。
+ */
+export type PoolSort = 'added' | 'name' | 'size' | 'modified' | 'duration';
+
+export const POOL_SORTS: readonly PoolSort[] = ['added', 'name', 'size', 'modified', 'duration'];
+
+/**
+ * 搜索：匹配展示名、原始文件名、id 三个字段，三种形态。
+ *
+ * - **包含**（大小写不敏感）：最常用，`take1` 命中 `take1.mp4`；
+ * - **拼音**：`pinyinOf` 由调用方注入。默认走 `pinyinHaystack`（手写表，见
+ *   `i18n/locales/zh-CN/pinyin.ts`），媒体池传的是**按需加载**的拼音库
+ *   （`ui/pool-pinyin.ts`）—— 素材名是用户数据，手写表覆盖不到，
+ *   而库的体积只该在「用户真的来搜索」时才付。
+ * - **子序列**：`vlog01` 命中 `my-vlog-01.mp4`（打漏了分隔符是常态）。
+ *
+ * 子序列只对长度 ≥ 2 的查询启用：单个字符用包含就够，否则「搜 a」会把
+ * 所有名字里出现过 a 的条目全部算命中（含子序列会命中得更多）。
+ */
+export function filterPoolItems(
+  items: readonly PoolItem[],
+  query: string,
+  pinyinOf: (text: string) => string = pinyinHaystack,
+): PoolItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...items];
+  return items.filter((it) => {
+    const hay = [it.name, it.fileName ?? '', it.id, pinyinOf(it.name), pinyinOf(it.fileName ?? '')]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    if (hay.includes(q)) return true;
+    if (q.length < 2) return false;
+    return subsequence(it.name, q) || subsequence(it.fileName ?? '', q);
+  });
+}
+
+/** `q` 是否是 `text` 的子序列（字符按顺序出现，允许中间隔东西）。 */
+function subsequence(text: string, q: string): boolean {
+  const hay = text.toLowerCase();
+  let i = 0;
+  for (let j = 0; j < hay.length && i < q.length; j += 1) {
+    if (hay[j] === q[i]) i += 1;
+  }
+  return i >= q.length;
+}
+
+/**
+ * 排序。**稳定排序**（V8 保证），所以同值时保留导入顺序。
+ *
+ * 方向是刻意的：体积 / 日期 / 时长都是「大 / 新 / 长」在上 —— 这三个档位的
+ * 用途是「找出最占地方的 / 最近改过的 / 用得最多的那一条」，倒序看是浪费一步。
+ * 未知值（null）一律排在已知值之后。
+ */
+export function sortPoolItems(
+  items: readonly PoolItem[],
+  sort: PoolSort,
+  usedSec: ReadonlyMap<string, number> = new Map(),
+): PoolItem[] {
+  const out = items.slice();
+  const byName = (a: PoolItem, b: PoolItem): number =>
+    a.name.localeCompare(b.name, 'zh-Hans-CN');
+  switch (sort) {
+    case 'name':
+      out.sort(byName);
+      break;
+    case 'size':
+      out.sort((a, b) => descNullable(a.bytes, b.bytes));
+      break;
+    case 'modified':
+      out.sort((a, b) => descNullable(modifiedOf(a), modifiedOf(b)));
+      break;
+    case 'duration':
+      out.sort((a, b) => (usedSec.get(b.id) ?? 0) - (usedSec.get(a.id) ?? 0));
+      break;
+    default:
+      // 'added' = 列表合成出来的顺序（导入顺序），一个都不动。
+      break;
+  }
+  return out;
+}
+
+/** 修改时间：文件 mtime 优先，未知时退回导入时间（见 `PoolItem.modifiedAt`）。 */
+function modifiedOf(it: PoolItem): number | null {
+  return it.modifiedAt ?? it.addedAt;
+}
+
+/** 降序比较（大的在前），null 永远排在最后。 */
+function descNullable(a: number | null, b: number | null): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return b - a;
 }
 
 /**
@@ -183,13 +305,36 @@ export function clipsUsingAsset(project: Project, assetId: string): AssetUsage[]
   const out: AssetUsage[] = [];
   for (const track of project.tracks) {
     for (const clip of track.clips) {
-      const used =
-        clip.kind === 'audio'
-          ? clip.assetId === assetId
-          : clip.kind === 'source' &&
-            (clip.source.type === 'image' || clip.source.type === 'video') &&
-            clip.source.assetId === assetId;
-      if (used) out.push({ trackId: track.id, trackName: track.name, clipId: clip.id, label: clip.label });
+      if (clipAssetId(clip) === assetId) {
+        out.push({ trackId: track.id, trackName: track.name, clipId: clip.id, label: clip.label });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 片段引用的素材 id；不引用素材（特效片段、纯色源）返回 null。
+ *
+ * 「哪些片段用了这条素材」只有一个判据：`clipsUsingAsset` 与时间轴时长排序
+ * 都读它。各写一遍的 bug 形态是「提示说没人用，删掉之后画面空了」。
+ */
+export function clipAssetId(clip: AnyClip): string | null {
+  if (clip.kind === 'audio') return clip.assetId;
+  if (clip.kind === 'source' && (clip.source.type === 'image' || clip.source.type === 'video')) {
+    return clip.source.assetId;
+  }
+  return null;
+}
+
+/** 每条素材在时间轴上的**片段总时长**（秒，多个片段累加）。排序用。 */
+export function assetUsageSeconds(project: Project): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const track of project.tracks) {
+    for (const clip of track.clips) {
+      const id = clipAssetId(clip);
+      if (!id) continue;
+      out.set(id, (out.get(id) ?? 0) + Math.max(0, clip.end - clip.start));
     }
   }
   return out;

@@ -108,6 +108,14 @@ interface Item {
   source: AssetSource;
   addedAt: number;
   /**
+   * 来源文件的修改时间（毫秒）；未知 = null。
+   *
+   * 只有「手上本来就有 `File`」的那条路（浏览器导入）知道它 —— 视频打开工程后
+   * 走句柄，取 mtime 要异步 `get()`，为了一份排序去 stat 每个素材不值。
+   * 消费方（媒体池排序）在 null 时回退到 `addedAt`。
+   */
+  mtime: number | null;
+  /**
    * 从台账读回来的原始条目。视频/保留项的 `hash` 与 `bytes` 靠它保留 ——
    * 否则一次保存就会把历史上算好的哈希抹成 null，`diffLedger` 会误判成 changed。
    */
@@ -123,6 +131,7 @@ interface RetainedItem {
   input: AssetInput;
   source: AssetSource;
   addedAt: number;
+  mtime: number | null;
   entry: AssetEntry | null;
   content: AssetContent | null;
   local: string | null;
@@ -161,6 +170,7 @@ export class AssetStore {
       input: { ...input, mode: input.mode ?? 'bundled' },
       source: { kind: 'bytes', bytes },
       addedAt: prev?.addedAt ?? Date.now(),
+      mtime: prev?.mtime ?? null,
       entry: prev?.entry ?? null,
       content: content ?? prev?.content ?? null,
       local: prev?.local ?? null,
@@ -179,6 +189,7 @@ export class AssetStore {
       input: { ...input, mode: input.mode ?? 'bundled' },
       source: { kind: 'file', file },
       addedAt: prev?.addedAt ?? Date.now(),
+      mtime: file.lastModified || (prev?.mtime ?? null),
       entry: prev?.entry ?? null,
       content: content ?? prev?.content ?? null,
       local: prev?.local ?? null,
@@ -198,6 +209,7 @@ export class AssetStore {
       input: { ...input, mode: input.mode ?? 'linked' },
       source: { kind: 'path', path, size },
       addedAt: prev?.addedAt ?? Date.now(),
+      mtime: prev?.mtime ?? null,
       entry: prev?.entry ?? null,
       content: content ?? prev?.content ?? null,
       local: path,
@@ -223,6 +235,7 @@ export class AssetStore {
       input: { ...input, mode: 'linked' },
       source: { kind: 'handle', handle, size },
       addedAt: prev?.addedAt ?? Date.now(),
+      mtime: prev?.mtime ?? null,
       entry: prev?.entry ?? null,
       content: content ?? prev?.content ?? null,
       local: `fsa:${id}`,
@@ -243,6 +256,7 @@ export class AssetStore {
       input: { ...input, mode: 'linked' },
       source: { kind: 'bytes', bytes },
       addedAt: prev?.addedAt ?? Date.now(),
+      mtime: prev?.mtime ?? null,
       entry: prev?.entry ?? null,
       content: content ?? prev?.content ?? null,
       local: path,
@@ -257,6 +271,7 @@ export class AssetStore {
       input: { ...input, mode: 'linked' },
       source: { kind: 'bytes', bytes },
       addedAt: prev?.addedAt ?? Date.now(),
+      mtime: prev?.mtime ?? null,
       entry: prev?.entry ?? null,
       content: content ?? prev?.content ?? null,
       local: `fsa:${id}`,
@@ -316,6 +331,7 @@ export class AssetStore {
       input: { ...input, mode: input.mode ?? 'bundled' },
       source: { kind: 'handle', handle, size },
       addedAt: prev?.addedAt ?? entry?.addedAt ?? Date.now(),
+      mtime: prev?.mtime ?? null,
       entry: entry ?? prev?.entry ?? null,
       content: content ?? prev?.content ?? null,
       local: prev?.local ?? (entry ? localPath(entry) : null),
@@ -334,6 +350,7 @@ export class AssetStore {
       input: { ...input, mode: 'generated' },
       source: { kind: 'none' },
       addedAt: prev?.addedAt ?? Date.now(),
+      mtime: prev?.mtime ?? null,
       entry: prev?.entry ?? null,
       content: null,
       local: null,
@@ -349,6 +366,36 @@ export class AssetStore {
 
   input(id: string): AssetInput | null {
     return this.items.get(id)?.input ?? null;
+  }
+
+  /**
+   * 改**展示名**（只动仓里的镜像）。
+   *
+   * 工程表那一份由 `ProjectStore.renameAsset` 写；这里跟着改一份是为了让
+   * 「未使用素材」列表与「源已变化」提示不出现旧名字。`originName` 一个字都不动
+   * —— 它决定落盘文件名与扩展名。
+   */
+  setInputName(id: string, name: string): boolean {
+    const item = this.items.get(id) ?? this.retained.get(id);
+    if (!item || !name) return false;
+    item.input = { ...item.input, name };
+    return true;
+  }
+
+  /** 导入时的原始文件名（媒体池搜索要匹配它，展示名可能已被改过）。 */
+  originName(id: string): string | null {
+    return (this.items.get(id) ?? this.retained.get(id))?.input.originName ?? null;
+  }
+
+  /** 首次导入时间（毫秒）；没有这条记录时 null。 */
+  addedAt(id: string): number | null {
+    const it = this.items.get(id) ?? this.retained.get(id);
+    return it ? it.addedAt : null;
+  }
+
+  /** 来源文件修改时间（毫秒）；未知 = null（打开工程后走句柄的那一类）。 */
+  modifiedAt(id: string): number | null {
+    return (this.items.get(id) ?? this.retained.get(id))?.mtime ?? null;
   }
 
   /** 素材的字节数。none / 未知返回 null。**不读盘**。 */
@@ -399,6 +446,7 @@ export class AssetStore {
       input: r.input,
       source: r.source,
       addedAt: r.addedAt,
+      mtime: r.mtime,
       entry: r.entry,
       content: r.content,
       local: r.local,
@@ -533,6 +581,7 @@ export class AssetStore {
       input: item.input,
       source: item.source,
       addedAt: item.addedAt,
+      mtime: item.mtime,
       entry: item.entry,
       content: item.content,
       local: item.local,
@@ -562,6 +611,7 @@ export class AssetStore {
       input: r.input,
       source,
       addedAt: r.addedAt,
+      mtime: r.mtime,
       entry: r.entry,
       content: r.content,
       local: r.local,
@@ -705,6 +755,8 @@ export class AssetStore {
           input,
           source,
           addedAt: entry.addedAt,
+          // 句柄的 lastModified 是异步的；排序回退到 addedAt（见 Item.mtime）。
+          mtime: null,
           entry,
           content,
           local,
@@ -723,6 +775,7 @@ export class AssetStore {
             input,
             source: { kind: 'none' },
             addedAt: entry.addedAt,
+            mtime: null,
             entry,
             content: known,
             local,
@@ -759,6 +812,7 @@ export class AssetStore {
           input,
           source,
           addedAt: entry.addedAt,
+          mtime: null,
           entry,
           content,
           local,

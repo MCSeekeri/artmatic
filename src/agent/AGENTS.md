@@ -121,6 +121,7 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 | 转场两端 | `setTransition(..., side)` / `clearTransition(clipId, side)` | `set_transition.side` / `clear_transition.side` |
 | 预剪辑范围 | `getAssetRanges` / `setAssetRange` / `removeAssetRange` / `setActiveRange` | 同名四个工具 |
 | 视频音频 | `detachVideoAudio` / `setAudioLock` / `setClipAudio` | 同名三个工具 |
+| 素材显示名 | `renameAsset`（只改 `assets[id].name`，**不动**文件名 / 路径 / 片段 label） | `rename_asset` |
 
 - `getCapabilities().features` 是模型唯一能看到「转场有 in/out、视频自带声音、增益单位是
   dB、-60 是静音」的地方。新增跨子系统语义时先加这一块，再加工具描述。

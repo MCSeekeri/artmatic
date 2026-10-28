@@ -125,3 +125,76 @@ test('检查器的纯色片段取色走取色卡：选标准色落库', async ({
     }),
   ).toBe('#ff0000');
 });
+
+/**
+ * 波纹删除：删掉中间那段，同轨后面的片段前移补位；默认关。
+ *
+ * 断言分两层：按钮的**可见状态**（`aria-pressed`）与**片段的真实起点**。
+ * 只断后者的话，开关没接上时「默认关」那条会碰巧通过（关着当然不动）。
+ */
+test('波纹删除：默认关，开着时后面的片段前移补位（一笔撤销）', async ({ page }) => {
+  await boot(page);
+
+  const trackId = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          addTrack: (kind: 'visual', name?: string) => string;
+          addClip: (trackId: string, clip: Record<string, unknown>) => void;
+        };
+      };
+    }).__artmatic;
+    const track = A.store.addTrack('visual', 'RIPPLE');
+    const solid = (id: string, start: number, end: number): Record<string, unknown> => ({
+      kind: 'source',
+      id,
+      start,
+      end,
+      label: id,
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'solid', color: '#3366cc' },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'stretch',
+    });
+    A.store.addClip(track, solid('rp-a', 0, 1));
+    A.store.addClip(track, solid('rp-b', 1, 2));
+    A.store.addClip(track, solid('rp-c', 3, 4));
+    return track;
+  });
+
+  const starts = async (): Promise<number[]> =>
+    page.evaluate((id) => {
+      const A = (window as never as {
+        __artmatic: { store: { track: (id: string) => { clips: { start: number }[] } | null } };
+      }).__artmatic;
+      return A.store.track(id)!.clips.map((c) => Number(c.start.toFixed(3)));
+    }, trackId);
+
+  const toggle = page.getByTestId('ripple-edit');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+  const selectAndDelete = async (clipId: string): Promise<void> => {
+    await page.locator(`[data-clip-id="${clipId}"]`).click();
+    await page.keyboard.press('Delete');
+  };
+
+  // 关着：只删不挪（b 走了，c 还在 3s）
+  await selectAndDelete('rp-b');
+  expect(await starts()).toEqual([0, 3]);
+
+  await page.keyboard.press('Control+z');
+  expect(await starts()).toEqual([0, 1, 3]);
+
+  // 开着：c 前移 1s 补位；按钮本身也要真的变成按下态
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await selectAndDelete('rp-b');
+  expect(await starts()).toEqual([0, 2]);
+
+  // 删除 + 补位是同一笔撤销
+  await page.keyboard.press('Control+z');
+  expect(await starts()).toEqual([0, 1, 3]);
+});

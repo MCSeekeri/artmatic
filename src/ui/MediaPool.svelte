@@ -2,9 +2,10 @@
   /**
    * MediaPool — 媒体池的内容：这个工程里已导入的素材，一行一条。
    *
-   * 分组顺序固定为视频 → 图片 → 音频（空组不显示），组内按导入顺序。
-   * 列表怎么合成、分组怎么切、从素材怎么建片段，全在 `media-pool.ts`
-   * 里（纯函数，有单测）；这里只负责把 appState 的几个值喂进去、把它画出来。
+   * 分组顺序固定为视频 → 图片 → 音频（空组不显示），组内顺序由头部那个排序档位决定
+   * （默认导入顺序）。列表怎么合成、怎么分组 / 筛选 / 排序、从素材怎么建片段，
+   * 全在 `media-pool.ts` 里（纯函数，有单测）；这里只负责把 appState 的几个值
+   * 喂进去、把它画出来。
    *
    * 「插入」落在**播放头**上，优先用主选中片段所在的那条轨 —— 用户此刻在编辑
    * 哪条轨，新素材就该落到哪里，这是从「我正在拼这一段」的意图推出来的。
@@ -18,14 +19,18 @@
   import { collectAsset, relinkAsset } from './project-actions';
   import {
     ASSET_DRAG_MIME,
+    assetUsageSeconds,
     buildPoolItems,
     clipsUsingAsset,
+    filterPoolItems,
     groupPool,
     insertAssetClip,
+    sortPoolItems,
     type PoolItem,
     type PoolKind,
   } from './media-pool';
   import { resolveImageAsset } from '../typography/image-assets';
+  import { poolPinyinHaystack } from './pool-pinyin';
   import { ensureVideoThumb, forgetVideoThumb, videoThumb } from './media-thumbs.svelte';
   import { fmtSize } from './export';
   import { snapTime } from '../core/time';
@@ -41,12 +46,16 @@
      * 「双击」与右侧的 + 按钮共用它。
      */
     oninsert?: (item: PoolItem) => void;
+    /** 搜索词。输入框在抽屉头部（`MediaPoolDrawer`），过滤在这一层做。 */
+    query?: string;
   }
-  const { oninsert }: Props = $props();
+  const { oninsert, query = '' }: Props = $props();
 
   /* 落点不同，提示语跟着换：在排版页说「插入到时间轴」是错的。 */
   const insertLabel = $derived(oninsert ? tr('pool.placeOnCanvas') : tr('pool.insert'));
   const hint = $derived(oninsert ? tr('pool.hintTypo') : tr('pool.hint'));
+  /** 紧凑形态：去掉缩略图，只留名字，宽度够时自动多列（CSS grid）。 */
+  const compact = $derived(appState.poolView === 'compact');
 
   const GROUP_LABEL: Record<PoolKind, MessageKey> = {
     video: 'pool.groupVideo',
@@ -64,9 +73,23 @@
    * 而 version 是 commit 推的 —— 读version 才能让新导进来的那条立刻出现。
    * 切工程也走它（`subscribeActive` 会把 version 换成新工程的计数）。
    */
-  const items = $derived.by(() => {
+  const rawItems = $derived.by(() => {
     void appState.version;
     return buildPoolItems(appState.store.project.assets, appState.assets);
+  });
+  /**
+   * 每条素材在时间轴上的片段总时长（「时间轴时长」排序要用）。
+   * 与 `clipsUsingAsset` 同一条判据（见 `clipAssetId`）。
+   */
+  const usedSec = $derived.by(() => {
+    void appState.version;
+    return assetUsageSeconds(appState.store.project);
+  });
+  const items = $derived.by(() => {
+    // 拼音转换器就绪后要重算一遍：它加载完成时用户可能已经打完一轮查询了。
+    void appState.poolPinyinReady;
+    const filtered = filterPoolItems(rawItems, query, poolPinyinHaystack);
+    return sortPoolItems(filtered, appState.poolSort, usedSec);
   });
   const groups = $derived(groupPool(items));
 
@@ -74,8 +97,10 @@
    * 视频缩略图：**惰性**解一帧（图片那边导入时就解好了，见 media-thumbs）。
    * 放 `$effect` 而不是在 `items` 的派生里做 —— 派生必须保持纯的，
    * 而 `ensureVideoThumb` 有副作用（排队解码）。它内部幂等，重复调用无代价。
+   * 紧凑形态不显示缩略图，也就不必为它解码。
    */
   $effect(() => {
+    if (compact) return;
     for (const it of items) if (it.kind === 'video') ensureVideoThumb(it.id);
   });
 
@@ -119,12 +144,6 @@
     appState.selectedClipId = clipId;
   }
 
-  /**
-   * 把这条素材挂到拖拽的 `DataTransfer` 上（落点在时间轴的轨道行里）。
-   *
-   * 只带 **id**：拖拽期间工程可能被改（撤销、删除），落地时按 id 重新解析成
-   * `PoolItem`，拿到的一定是当下的事实。
-   */
   /**
    * 正在预剪辑的条目（v13）。
    *
@@ -171,10 +190,39 @@
     dt.setData('text/plain', it.name);
   }
 
+  /* ------------------------------------------------------------ 重命名素材 */
+
+  /**
+   * 就地改名的条目。名字是**工程数据**（随工程保存），与磁盘文件名无关 ——
+   * 「重命名素材」只改它在 Artmatic 里的显示名（见 `ProjectStore.renameAsset`）。
+   */
+  let renamingId = $state<string | null>(null);
+  let renameValue = $state('');
+
+  function beginRename(it: PoolItem): void {
+    renamingId = it.id;
+    renameValue = it.name;
+  }
+
+  function commitRename(): void {
+    const id = renamingId;
+    const name = renameValue.trim();
+    renamingId = null;
+    if (!id || !name) return;
+    appState.renameAsset(id, name);
+  }
+
   /* ------------------------------------------------------------ 移除素材 */
 
-  /** ⋯ 菜单开在哪个条目上（非 null 时渲染菜单）。只用于**渲染**。 */
-  let menuFor = $state<{ item: PoolItem; anchor: HTMLElement } | null>(null);
+  /**
+   * 菜单开在哪个条目上（非 null 时渲染菜单）。只用于**渲染**。
+   * `anchor` = ⋯ 按钮（菜单贴在按钮下方），`at` = 右键（贴在鼠标处）。
+   */
+  let menuFor = $state<{
+    item: PoolItem;
+    anchor?: HTMLElement;
+    at?: { x: number; y: number };
+  } | null>(null);
   /**
    * 菜单当前作用的条目。**不能从 `menuFor` 派生**：
    * `Menu.activate()` 是「先 `onclose()` 再跑 `onselect()`」（见 controls/Menu.svelte），
@@ -192,6 +240,14 @@
    */
   let pendingDelete = $state<{ item: PoolItem; used: number } | null>(null);
 
+  /** 右键：菜单贴在鼠标处（与时间轴片段右键同一套）。`preventDefault` 必须有 —— 全局右键已禁用。 */
+  function openContextMenu(e: MouseEvent, it: PoolItem): void {
+    e.preventDefault();
+    e.stopPropagation();
+    menuTarget = it;
+    menuFor = { item: it, at: { x: e.clientX, y: e.clientY } };
+  }
+
   function askDelete(it: PoolItem): void {
     pendingDelete = { item: it, used: clipsUsingAsset(appState.store.project, it.id).length };
   }
@@ -205,111 +261,160 @@
     // objectURL 不 revoke 就一直钉着那份字节。
     forgetVideoThumb(p.item.id);
     appState.flash(tr('pool.deleted', { name: p.item.name }), 'success');
-  }</script>
+  }
+</script>
 
 <div class="pool">
   {#if !items.length}
-    <div class="empty" data-testid="pool-empty">
-      <Icon name="images" size={22} />
-      <p>{tr('pool.empty')}</p>
-      <p class="hint">{tr('pool.emptyHint')}</p>
-    </div>
+    {#if rawItems.length}
+      <!-- 有素材、但没有一条命中搜索：报「没有匹配」，而不是「这个工程还没有素材」。 -->
+      <div class="empty" data-testid="pool-no-match">
+        <Icon name="search" size={22} />
+        <p>{tr('pool.noMatch')}</p>
+      </div>
+    {:else}
+      <div class="empty" data-testid="pool-empty">
+        <Icon name="images" size={22} />
+        <p>{tr('pool.empty')}</p>
+        <p class="hint">{tr('pool.emptyHint')}</p>
+      </div>
+    {/if}
   {:else}
     {#each groups as g (g.kind)}
       <!-- 分组容器带 kind：测试与将来的拖放都要能一眼认出「这是哪一组」。 -->
-      <section class="group" data-testid="pool-group" data-kind={g.kind}>
+      <section class="group" class:compact data-testid="pool-group" data-kind={g.kind}>
         <h3 class="group-head">
           <Icon name={GROUP_ICON[g.kind]} size={12} />
           <span>{tr(GROUP_LABEL[g.kind])}</span>
           <span class="count" data-testid="pool-group-count">{g.items.length}</span>
         </h3>
 
-        {#each g.items as it (it.id)}
-          <!--
-            缩略图：图片是导入时解好的 objectURL；视频要**惰性解一帧**
-            （`media-thumbs` 排队解码，就绪后 version 一变这里自动重渲）；
-            音频没有画面，用类型图标。
-          -->
-          {@const thumb = it.kind === 'image'
-            ? resolveImageAsset(it.id)
-            : it.kind === 'video'
-              ? videoThumb(it.id)
-              : null}
-          <!--
-            双击 = 插入，拖 = 拖到时间轴上落成片段。行本身不是按钮（它没有
-            自己的动作），所以用 role="presentation" 挂交互，真正的动作在右侧那个 + 上。
-          -->
-          <div
-            class="row"
-            class:missing={it.missing}
-            role="presentation"
-            draggable={!it.missing}
-            data-testid="pool-item"
-            data-asset-id={it.id}
-            data-kind={it.kind}
-            ondragstart={(e) => dragStart(e, it)}
-            ondblclick={() => rowDblClick(it)}
-            onclick={() => rowClick(it)}
-            title={it.kind === 'video' ? tr('pool.preclipTip') : undefined}
-          >
-            <span class="thumb">
-              {#if thumb}
-                <img src={thumb} alt="" loading="lazy" data-testid="pool-thumb" />
-              {:else}
-                <Icon name={GROUP_ICON[it.kind]} size={15} />
-              {/if}
-            </span>
-
-            <span class="text">
-              <span class="name" title={it.name} data-testid="pool-name">{it.name}</span>
-              <span class="sub">
-                {#if it.missing}
-                  <span class="warn">{tr('pool.missing')}</span>
-                {/if}
-                {#if it.linked}
-                  <span class="badge" title={tr('pool.linkedHint')} data-testid="pool-linked">
-                    {tr('pool.linked')}
-                  </span>
-                {/if}
-                {#if it.stale}
-                  <span class="badge stale" title={tr('pool.staleHint')} data-testid="pool-stale">
-                    {tr('pool.stale')}
-                  </span>
-                {/if}
-                {#if metaOf(it)}<span>{metaOf(it)}</span>{/if}
-              </span>
-            </span>
-
-            <IconButton
-              icon="plus"
-              label={insertLabel}
-              size="sm"
-              testid="pool-insert"
-              disabled={it.missing}
-              onclick={(e) => {
-                // 别让 + 的 click 冒泡到行上（否则插入的同时又开了预剪辑）。
-                e.stopPropagation();
-                insert(it);
-              }}
-            />
-
+        <div class="rows">
+          {#each g.items as it (it.id)}
             <!--
-              ⋯ 与轨道行、时间轴片段用同一套菜单位置与图标：这一列的动作都是
-              「对这条东西做点什么」，放在行的右端、图标一致，用户不用重新找。
+              缩略图：图片是导入时解好的 objectURL；视频要**惰性解一帧**
+              （`media-thumbs` 排队解码，就绪后 version 一变这里自动重渲）；
+              音频没有画面，用类型图标。紧凑形态整个不渲染（省掉那条解码）。
             -->
-            <IconButton
-              icon="ellipsis-vertical"
-              label={tr('pool.menu')}
-              size="sm"
-              testid="pool-menu"
-              onclick={(e) => {
-                e.stopPropagation();
-                menuTarget = it;
-                menuFor = { item: it, anchor: e.currentTarget as HTMLElement };
-              }}
-            />
-          </div>
-        {/each}
+            {@const thumb = it.kind === 'image'
+              ? resolveImageAsset(it.id)
+              : it.kind === 'video'
+                ? videoThumb(it.id)
+                : null}
+            <!--
+              双击 = 插入，拖 = 拖到时间轴上落成片段，右键 = 素材菜单。行本身不是按钮
+              （它没有自己的动作），所以用 role="presentation" 挂交互，真正的动作在右侧那个 + 上。
+            -->
+            <div
+              class="row"
+              class:missing={it.missing}
+              class:compact
+              role="presentation"
+              draggable={!it.missing}
+              data-testid="pool-item"
+              data-asset-id={it.id}
+              data-kind={it.kind}
+              ondragstart={(e) => dragStart(e, it)}
+              ondblclick={() => rowDblClick(it)}
+              onclick={() => rowClick(it)}
+              oncontextmenu={(e) => openContextMenu(e, it)}
+              title={compact
+                ? [it.name, metaOf(it)].filter(Boolean).join(' · ')
+                : it.kind === 'video'
+                  ? tr('pool.preclipTip')
+                  : undefined}
+            >
+              {#if renamingId === it.id}
+                <!--
+                  就地改名。`stopPropagation` 全都要：行上的 click 会开预剪辑、
+                  dblclick 会插入，而输入框里双击是选词。
+                -->
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  class="rename-input"
+                  bind:value={renameValue}
+                  autofocus
+                  data-testid="pool-rename-input"
+                  aria-label={tr('pool.renameAsset')}
+                  onpointerdown={(e) => e.stopPropagation()}
+                  onclick={(e) => e.stopPropagation()}
+                  ondblclick={(e) => e.stopPropagation()}
+                  oncontextmenu={(e) => e.stopPropagation()}
+                  onblur={commitRename}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitRename();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      renamingId = null;
+                    }
+                  }}
+                />
+              {:else if compact}
+                <!-- 紧凑形态：只有名字（多列由 `.group.compact .rows` 的 grid 决定） -->
+                <span class="name" data-testid="pool-name">{it.name}</span>
+              {:else}
+                <span class="thumb">
+                  {#if thumb}
+                    <img src={thumb} alt="" loading="lazy" data-testid="pool-thumb" />
+                  {:else}
+                    <Icon name={GROUP_ICON[it.kind]} size={15} />
+                  {/if}
+                </span>
+
+                <span class="text">
+                  <span class="name" title={it.name} data-testid="pool-name">{it.name}</span>
+                  <span class="sub">
+                    {#if it.missing}
+                      <span class="warn">{tr('pool.missing')}</span>
+                    {/if}
+                    {#if it.linked}
+                      <span class="badge" title={tr('pool.linkedHint')} data-testid="pool-linked">
+                        {tr('pool.linked')}
+                      </span>
+                    {/if}
+                    {#if it.stale}
+                      <span class="badge stale" title={tr('pool.staleHint')} data-testid="pool-stale">
+                        {tr('pool.stale')}
+                      </span>
+                    {/if}
+                    {#if metaOf(it)}<span>{metaOf(it)}</span>{/if}
+                  </span>
+                </span>
+
+                <IconButton
+                  icon="plus"
+                  label={insertLabel}
+                  size="sm"
+                  testid="pool-insert"
+                  disabled={it.missing}
+                  onclick={(e) => {
+                    // 别让 + 的 click 冒泡到行上（否则插入的同时又开了预剪辑）。
+                    e.stopPropagation();
+                    insert(it);
+                  }}
+                />
+
+                <!--
+                  ⋯ 与轨道行、时间轴片段用同一套菜单位置与图标：这一列的动作都是
+                  「对这条东西做点什么」，放在行的右端、图标一致，用户不用重新找。
+                -->
+                <IconButton
+                  icon="ellipsis-vertical"
+                  label={tr('pool.menu')}
+                  size="sm"
+                  testid="pool-menu"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    menuTarget = it;
+                    menuFor = { item: it, anchor: e.currentTarget as HTMLElement };
+                  }}
+                />
+              {/if}
+            </div>
+          {/each}
+        </div>
       </section>
     {/each}
 
@@ -320,6 +425,14 @@
 {#if menuFor}
   <Menu
     items={[
+      {
+        id: 'rename',
+        label: tr('pool.renameAsset'),
+        icon: 'pencil' as const,
+        testid: 'pool-menu-rename',
+        // 读 `menuTarget`（普通变量），**不是** `menuFor`：理由见它的声明。
+        onselect: () => menuTarget && beginRename(menuTarget),
+      },
       ...(menuTarget?.kind === 'video' && !menuTarget.missing && !oninsert
         ? [
             {
@@ -361,11 +474,11 @@
         icon: 'trash' as const,
         danger: true,
         testid: 'pool-menu-delete',
-        // 读 `menuTarget`（普通变量），**不是** `menuFor`：理由见它的声明。
         onselect: () => menuTarget && askDelete(menuTarget),
       },
     ]}
-    anchorEl={menuFor.anchor}
+    at={menuFor.at}
+    anchorEl={menuFor.anchor ?? null}
     onclose={() => (menuFor = null)}
     testid="pool-menu-panel"
   />
@@ -424,10 +537,27 @@
     letter-spacing: 0;
   }
 
+  /*
+    条目区。缩略图形态是一列；紧凑形态是「宽度够就多列」的 auto-fill 网格
+    （minmax 下限 = 一个能看全名字的宽度，不够就自然退回一列）。
+    网格挂在 `.rows` 上而不是 `.group` 上：小标题不该变成网格里的一格。
+  */
+  .rows {
+    display: flex;
+    flex-direction: column;
+  }
+  .group.compact .rows {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+    gap: 1px var(--sp-2);
+    padding: 0 var(--sp-2);
+  }
+
   .row {
     display: flex;
     align-items: center;
     gap: var(--sp-3);
+    min-width: 0;
     padding: var(--sp-2) var(--sp-4);
     cursor: default;
   }
@@ -441,6 +571,12 @@
   .row.missing .name {
     color: var(--text-muted);
     text-decoration: line-through;
+  }
+  /* 紧凑条目：只有名字，高度与内边距都收到最小（一屏几十条） */
+  .row.compact {
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--radius-sm);
   }
 
   /* 缩略图格子：定宽定比，图片与图标两种内容都落在同一块地里 */
@@ -504,6 +640,19 @@
   .badge.stale {
     color: var(--warn, #d9a441);
     border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, transparent);
+  }
+
+  /* 就地改名：占满整行的文本区，焦点边框用主题色（与预剪辑的范围改名同形） */
+  .rename-input {
+    flex: 1;
+    min-width: 0;
+    padding: 2px 4px;
+    background: var(--surface-1);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--fs-sm);
   }
 
   .foot {

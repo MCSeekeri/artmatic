@@ -187,6 +187,10 @@ export const timeline = {
   'tp.overlapReject': '拒绝落点',
   'tp.overlapPush': '挤开邻居',
   'tp.overlapTrim': '吃掉重叠',
+  /* 波纹删除：两态按钮（默认关）。删片段后同轨后面的片段前移补位。 */
+  'tp.ripple': '波纹',
+  'tp.rippleTip':
+    '波纹删除：删掉片段后，同一轨道上后面的片段前移补位（默认关闭；关着时删除会留下空白）',
   'tp.zoom': '时间轴缩放',
   'tp.zoomTip': '时间轴缩放（也可 Ctrl+滚轮，以鼠标为锚）',
   /* 当前帧截图：逐帧操作，所以放轨道工具条（§6.7）。文件名是「工程名-frame-帧号.png」。 */

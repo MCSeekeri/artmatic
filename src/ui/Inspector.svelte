@@ -1577,10 +1577,7 @@
         variant="danger"
         shortcut="Del"
         testid="delete-clip"
-        onclick={() => {
-          appState.store.removeClip(clip.id);
-          appState.selectedClipId = null;
-        }}
+        onclick={() => appState.removeClips([clip.id])}
       />
     </div>
   {:else}

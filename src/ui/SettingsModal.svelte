@@ -110,6 +110,7 @@
         { name: 'gl-transitions', license: 'MIT' },
         { name: 'harfbuzzjs', license: 'MIT' },
         { name: 'mediabunny', license: 'MPL-2.0' },
+        { name: 'pinyin-pro', license: 'MIT' },
         { name: 'polygon-clipping', license: 'MIT' },
       ],
     },

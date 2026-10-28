@@ -680,6 +680,18 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_rename_asset',
+    kind: 'write',
+    description:
+      '改素材的**显示名**（媒体池里看到的那个）。只改工程里的 name —— 磁盘文件名、扩展名、' +
+      'linked 素材的原文件路径都不变；已有片段的 label 也不跟着改（那是另一份用户数据）。' +
+      '空名字会被拒绝。',
+    args: {
+      assetId: F.string({ required: true, description: '素材 id（media_list 给）。' }),
+      name: F.string({ required: true, description: '新的显示名（会 trim，不能为空）。' }),
+    },
+  },
+  {
     name: 'artmatic_set_project',
     kind: 'write',
     description: '改工程级参数（name / fps / resolution / duration / beatGrid / overlapBehavior）。',

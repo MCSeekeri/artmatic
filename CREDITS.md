@@ -131,6 +131,7 @@ angel-echo是未公开的内部项目。
 | `harfbuzzjs` | MIT | 字体子集化 + 字形轮廓（文本转路径） |
 | `gl-transitions` | MIT | 转场 |
 | `polygon-clipping` | MIT | 图形布尔运算 |
+| `pinyin-pro` | MIT | 媒体池搜索的中文名拼音匹配（**只在搜索框获得焦点时动态加载**，见 `src/ui/pool-pinyin.ts`） |
 | `wawoff2` | MIT | **仅 devDependency**：`scripts/fonts-woff2-to-sfnt.mjs` 把内置 woff2 无损还原成 TTF |
 
 以上均按依赖引入，不复制源码入库。

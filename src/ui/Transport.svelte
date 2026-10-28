@@ -329,6 +329,26 @@
       />
     </span>
 
+    <!--
+      波纹删除：**两态按钮**（与时间轴形态同一条：只有开 / 关两个状态时，
+      下拉展开再选另一个是多余的一步）。图标表示「后面的往左补位」。
+      开着时用主题色 —— 这是一个会静默挪动别的片段的行为，必须一眼看出它在。
+    -->
+    <button
+      type="button"
+      class="mode-btn"
+      class:on={appState.rippleEdit}
+      data-testid="ripple-edit"
+      data-on={appState.rippleEdit}
+      aria-pressed={appState.rippleEdit}
+      aria-label={tr('tp.rippleTip')}
+      use:tip={{ placement: 'top', text: tr('tp.rippleTip') }}
+      onclick={() => appState.setRippleEdit(!appState.rippleEdit)}
+    >
+      <Icon name="move-horizontal" size={13} />
+      <span>{tr('tp.ripple')}</span>
+    </button>
+
     <span class="ctl zoom" use:tip={{ placement: 'top', text: tr('tp.zoomTip') }}>
       <Icon name="search" size={12} />
       <Slider
@@ -449,6 +469,13 @@
   }
   .mode-btn:hover {
     color: var(--text-primary);
+  }
+  /* 开着 = 主题色（这是会挪动别的片段的行为，必须一眼看出它在） */
+  .mode-btn.on {
+    color: var(--accent);
+  }
+  .mode-btn.on:hover {
+    color: var(--accent);
   }
   .zoom {
     min-width: 140px;

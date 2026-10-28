@@ -893,6 +893,19 @@ export async function listMediaPool(): Promise<MediaPoolSnapshot> {
 }
 
 /**
+ * 改素材的展示名（`rename_asset`）。
+ *
+ * 只动工程表与素材仓里的名字：磁盘文件名、工程副本路径、linked 的原文件路径
+ * 都不变 —— 与「重命名素材」右键菜单是同一个入口（`appState.renameAsset`）。
+ * 返回 false = 没有这条素材 / 没有打开工程。
+ */
+export function renameMediaAsset(assetId: string, name: string): boolean {
+  if (!appState.hasProject || !appState.project.assets[assetId]) return false;
+  appState.renameAsset(assetId, name);
+  return true;
+}
+
+/**
  * 媒体池动作（`media_op`）。返回「真的改了几条」—— 0 = 条件不满足、什么都没做
  * （没有工程目录、素材不在回收站里、源文件已经没了……），调用方据此如实回执。
  */

@@ -1410,6 +1410,42 @@ describe('媒体池（media_list / media_op + 默认需确认）', () => {
     expect(await code(h.cp.listMediaPool())).toBe('unsupported');
     expect(await code(h.cp.mediaPoolOp({ op: 'clear_trash', confirm: true }))).toBe('unsupported');
   });
+
+  it('rename_asset 只改显示名：未知素材 / 空名不动工程，正常路径走注入的桥', async () => {
+    const p = createBlankProject('agent-test');
+    p.assets.a1 = { id: 'a1', kind: 'audio', name: '旧名.wav' };
+    const renamed: { assetId: string; name: string }[] = [];
+    const h = harness(p, {
+      mediaPool: {
+        list: async () => ({ assets: [], usage: null }),
+        run: async () => ({ changed: 0 }),
+        rename: (assetId, name) => {
+          renamed.push({ assetId, name });
+          return true;
+        },
+      },
+    });
+
+    expect(await code(h.cp.renameAsset('nope', 'x'))).toBe('not-found');
+    expect(await code(h.cp.renameAsset('a1', '   '))).toBe('invalid-argument');
+    // 前置校验失败时工程一个字都没动
+    expect(h.store.project.assets.a1!.name).toBe('旧名.wav');
+
+    expect(await ok(h.cp.renameAsset('a1', '  掌声  '))).toEqual({ assetId: 'a1', name: '掌声' });
+    expect(renamed).toEqual([{ assetId: 'a1', name: '掌声' }]);
+  });
+
+  it('rename_asset 没有桥时退回到工程表（headless / CLI 也有这个能力）', async () => {
+    const p = createBlankProject('agent-test');
+    p.assets.a1 = { id: 'a1', kind: 'image', name: 'old.png' };
+    const h = harness(p);
+
+    expect(await ok(h.cp.renameAsset('a1', '主图'))).toEqual({ assetId: 'a1', name: '主图' });
+    expect(h.store.project.assets.a1!.name).toBe('主图');
+    // 一笔撤销能回来
+    h.store.undo();
+    expect(h.store.project.assets.a1!.name).toBe('old.png');
+  });
 });
 
 /**

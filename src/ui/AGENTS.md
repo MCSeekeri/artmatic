@@ -430,6 +430,11 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   它只改三处 —— 标尺文案、工具条显示哪组参数（BPM 组 ⇄ 帧率）、吸附档位表；
   **不改数据、不改渲染管线**。吸附档位按形态各记一份（标准模式没有「拍」可吸）。
   详见 `src/timeline/AGENTS.md`。
+- **波纹删除的开关也在工具条上**（`ripple-edit`，同样是两态按钮，默认关，存
+  `UiPrefs.rippleEdit`）。删片段的入口（Delete 键、检查器删除按钮、右键菜单）**一律走
+  `appState.removeClips`**，由它把 `ripple` 交给 store；某个入口直接调 `store.removeClip`
+  的形态是「开着波纹、那个按钮却不补位」，看起来像偶发 bug。语义（只动同轨、保留原有空隙）
+  见 `src/core/AGENTS.md`。
 - **菜单不要无谓地加层级**：一级平铺能放下的就平铺，只有**会变长**的列表才收进子菜单。
 - **窄侧栏的入口用全屏 modal，不是 flyout**：flyout 只有两百多像素宽，快捷键清单或导出
   信息塞进去就成了带滚动条的小盒子。（**例外是媒体池**：它是一条贴着左侧栏的抽屉，
@@ -517,6 +522,24 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   `ui/media-pool.ts`（纯函数，有单测）；面板只管把 `appState` 喂进去。想改
   「图片默认几拍 / 什么 fit」时改那一处 —— 抄进组件就意味「导入」与「从池里插入」
   两条路会给出两个结果。
+- **媒体池的搜索 / 形态 / 排序都在 `media-pool.ts`**（纯函数，有单测），组件只画：
+  `filterPoolItems`（展示名 + 原始文件名 + id，包含 / 拼音 / 子序列三种命中）·
+  `sortPoolItems`（**只决定组内顺序**，方向写进下拉标签）· `assetUsageSeconds`（「时间轴
+  时长」那一档的数据，与 `clipsUsingAsset` 共用 `clipAssetId` 这一条判据）。
+  **搜索输入框在抽屉头部（`MediaPoolDrawer`）**，查询词是那一刻的临时状态，不进偏好。
+- **媒体池的拼音走按需加载的 `pinyin-pro`**（`ui/pool-pinyin.ts`）：`i18n/pinyin.ts` 的
+  手写表只覆盖固定词表，而素材名是**用户数据（开放集）**。库只在搜索框 `focus` 时
+  `import()`，加载完把 `appState.poolPinyinReady` 翻真让列表重算一次。**别改成静态
+  import** —— 那会把几百 KB 的字典塞进首屏与排版页；也**别为「一致」把手写表删掉**：
+  它仍是加载失败时的兜底。
+- **紧凑形态用 CSS grid `auto-fill` 决定列数**，不在 JS 里算「够不够宽」：条目只留名字，
+  缩略图整个不渲染（也就不为它解视频帧）。两种形态共用一个偏好 `appState.poolView`。
+- **重命名素材只改 `Project.assets[id].name`**（`ProjectStore.renameAsset`，一笔撤销）：
+  台账的 `originName`（决定落盘文件名 / 扩展名）、linked 的原文件路径、已有片段的 label
+  **都不动**。素材仓里的展示名镜像由 `appState.renameAsset` 一起改，否则「未使用素材」
+  会继续报旧名字。Agent 侧是 `rename_asset`（不经过 media_op 的确认闸门 —— 它不碰文件）。
+- **右键与 ⋯ 是同一个菜单**：`Menu` 的 `at`（右键坐标）/ `anchorEl`（按钮）两条入口，
+  条目列表只写一份。行上的 `oncontextmenu` 必须 `preventDefault`（全局右键已禁用）。
 - **linked 素材的三种状态都有唯一出口**：媒体池行内徽标（`引用` / `源已变化`）、
   右键「收集到工程 / 重新链接」走 `project-actions.collectAsset` / `relinkAsset`。
   桌面版的文件监视在 `ui/asset-watch.ts`，**只标 `stale`，绝不自动重读**——

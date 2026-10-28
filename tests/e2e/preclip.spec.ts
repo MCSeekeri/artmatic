@@ -79,8 +79,18 @@ test('单击视频打开预剪辑，保存范围后插入的片段长度与 srcI
   await page.getByTestId('preclip-out').fill(String(OUT_FRAME));
   await page.getByTestId('preclip-out').press('Enter');
 
-  await page.getByTestId('preclip-save-range').click();
+  await page.getByTestId('preclip-new-range').click();
   await expect(page.getByTestId('preclip-range')).toHaveCount(1);
+
+  /*
+   * 第二个范围：改出点再点「新建范围」。
+   * 旧实现里这里只有一个「保存当前为范围」按钮，它会在「更新」与「新建」之间
+   * 随状态跳转，于是「怎么建第二个范围」根本没有答案（点第二次会静默造重复条目）。
+   */
+  await page.getByTestId('preclip-out').fill(String(OUT_FRAME + 10));
+  await page.getByTestId('preclip-out').press('Enter');
+  await page.getByTestId('preclip-new-range').click();
+  await expect(page.getByTestId('preclip-range')).toHaveCount(2);
 
   const saved = await page.evaluate((id) => {
     const A = (window as never as {
@@ -88,10 +98,12 @@ test('单击视频打开预剪辑，保存范围后插入的片段长度与 srcI
     }).__artmatic;
     return A.store.project.assets[id] ?? null;
   }, assetId!);
-  expect(saved?.ranges).toHaveLength(1);
+  expect(saved?.ranges).toHaveLength(2);
   expect(saved!.ranges![0]!.inSec).toBeCloseTo(IN_FRAME / FPS, 6);
   expect(saved!.ranges![0]!.outSec).toBeCloseTo(OUT_FRAME / FPS, 6);
+  // 新建的那条直接成为激活范围（下一步多半就是插它）
   expect(saved!.activeRangeId).toBeTruthy();
+  expect(saved!.activeRangeId).not.toBe((saved!.ranges![0] as { id?: string } | undefined)?.id);
 
   await page.getByTestId('preclip-insert').click();
   await expect(page.getByTestId('preclip-modal')).toHaveCount(0);
@@ -99,7 +111,7 @@ test('单击视频打开预剪辑，保存范围后插入的片段长度与 srcI
   const clip = (await clipsOf(page)).find((c) => c.source?.type === 'video');
   expect(clip, '插入后应当有一条视频片段').toBeTruthy();
   expect(clip!.source!.srcIn).toBeCloseTo(IN_FRAME / FPS, 6);
-  expect(clip!.end - clip!.start).toBeCloseTo((OUT_FRAME - IN_FRAME) / FPS, 6);
+  expect(clip!.end - clip!.start).toBeCloseTo((OUT_FRAME + 10 - IN_FRAME) / FPS, 6);
 
   expect(errors, `不该有未捕获异常：${errors.join(' | ')}`).toEqual([]);
 });

@@ -300,6 +300,13 @@ export interface AgentControlPlane {
     assetId?: string;
     confirm?: boolean;
   }): Promise<ControlResult<{ op: string; changed: number; bytes?: number }>>;
+  /**
+   * 改素材的**展示名**（媒体池里显示的那个名字）。
+   *
+   * 只改工程里的 `assets[id].name`：磁盘文件名、落盘路径、linked 的原文件路径
+   * 一个都不动。**不经过 `mediaPoolConfirm`** —— 它不碰用户的文件。
+   */
+  renameAsset(assetId: string, name: string): Promise<ControlResult<{ assetId: string; name: string }>>;
   undoState(): Promise<ControlResult<UndoState>>;
   /**
    * 场景版本（内容版本 + 播放头）。给会话层的**重复调用判据**用：
@@ -1100,6 +1107,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'editSections'
     | 'estimateBeatGrid'
     | 'mediaPoolOp'
+    | 'renameAsset'
     | 'loadScene'
     | 'beginTx'
     | 'endTx'
@@ -2186,6 +2194,26 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         }
         const result = await ctx.mediaPool.run(op as MediaPoolOp, assetId || undefined);
         return { op, ...result };
+      });
+    },
+
+    async renameAsset(assetId, name) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!store.project.assets[assetId]) {
+          throw new ControlFailure('not-found', tr('agent.args.unknownAsset', { id: assetId }), { assetId });
+        }
+        const next = String(name ?? '').trim();
+        if (!next) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.emptyName'), { assetId });
+        }
+        /*
+         * 走装配点注入的那条路（它同时更新素材仓里的展示名镜像）；没有注入时
+         * 退到工程表那一份 —— 只改名字，不碰任何字节。
+         */
+        if (ctx.mediaPool?.rename) ctx.mediaPool.rename(assetId, next);
+        else store.renameAsset(assetId, next);
+        return { assetId, name: next };
       });
     },
 

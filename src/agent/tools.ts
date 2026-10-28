@@ -664,6 +664,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'rename_asset',
+    description:
+      'Rename an asset\'s DISPLAY name (what the media pool shows). Only project.assets[id].name ' +
+      'changes — the file on disk, its extension, and a linked asset\'s path stay exactly as they are. ' +
+      'Existing clips keep their own labels (those are separate user data). Empty name is rejected.',
+    params: [
+      ASSET_ID,
+      req('name', 'string', 'New display name (trimmed; must not be empty).'),
+    ],
+    writes: true,
+  },
+  {
     name: 'edit_sections',
     description:
       'Add / split / rename / remove / move a section marker. Sections store ONLY their start time: ' +

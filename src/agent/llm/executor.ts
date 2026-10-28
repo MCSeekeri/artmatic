@@ -439,6 +439,11 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             }),
           );
 
+        case 'rename_asset':
+          return unwrap(
+            await control.renameAsset(String(args.assetId ?? ''), String(args.name ?? '')),
+          );
+
         case 'set_project':
           return unwrap(
             await control.setProject({

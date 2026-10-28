@@ -23,10 +23,14 @@ export const preclip = {
   'preclip.in': '入点',
   'preclip.out': '出点',
   'preclip.frameUnit': '帧',
+  /* 写入范围的撤销标签（ProjectStore.setAssetRange 用它）。 */
   'preclip.saveRange': '保存当前为范围',
+  /* 「用当前入点 / 出点新建一条范围」—— 与「更新已有范围」是两个动作，
+     各自一个按钮：合成一个按钮时，用户永远分不清这次点下去是新建还是覆盖。 */
+  'preclip.newRange': '新建范围',
   'preclip.updateRange': '更新「{name}」',
   'preclip.empty': '还没有保存的范围',
-  'preclip.emptyHint': '打好入点 / 出点后点上面的「保存当前为范围」。',
+  'preclip.emptyHint': '拖动时间条上的两个拖柄定出入点 / 出点，再点「新建范围」保存这一段。',
   'preclip.rename': '重命名',
   'preclip.remove': '删除范围',
   'preclip.rangeName': '范围名称',

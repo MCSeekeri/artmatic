@@ -26,8 +26,27 @@ export const pool = {
   'pool.groupImage': '图片',
   'pool.groupAudio': '音频',
 
+  /* ------------------------------------------------ 头部工具条 */
+  /* 搜索：匹配展示名 / 原始文件名 / id，支持拼音与子序列（见 media-pool.ts）。 */
+  'pool.search': '搜索素材',
+  'pool.noMatch': '没有匹配的素材',
+  /* 列表形态：两态图标按钮（缩略图 / 紧凑），同一时刻只有一个形态。 */
+  'pool.viewThumbs': '缩略图列表',
+  'pool.viewCompact': '紧凑列表',
+  /* 排序：只决定分组内的顺序。方向写进标签，省掉「这是升还是降」的猜测。 */
+  'pool.sort': '排序',
+  'pool.sortAdded': '导入顺序',
+  'pool.sortName': '名称',
+  'pool.sortSize': '体积（大→小）',
+  'pool.sortModified': '修改日期（新→旧）',
+  'pool.sortDuration': '时间轴时长（长→短）',
+
   /* ------------------------------------------------ 条目 */
   'pool.insert': '插入到时间轴',
+  /* 右键 / ⋯ 菜单里的改展示名；同时是这笔撤销的标签。
+     只改 Artmatic 里的名字，磁盘文件名与路径不动。 */
+  'pool.renameAsset': '重命名素材',
+  'pool.renameHint': '只改显示名，文件名与路径不变',
   /* 视频条目单击 / ⋯ 菜单里的「预剪辑…」（弹窗见 `ui/preclip/`）。 */
   'pool.preclip': '预剪辑…',
   'pool.preclipTip': '单击视频打开预剪辑（入点 / 出点）',

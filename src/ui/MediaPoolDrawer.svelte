@@ -12,15 +12,36 @@
    */
   import Icon from './Icon.svelte';
   import IconButton from './controls/IconButton.svelte';
+  import Select from './controls/Select.svelte';
   import MediaPool from './MediaPool.svelte';
   import { appState } from './app-state.svelte';
   import { importFiles } from './media-import';
+  import { POOL_SORTS, type PoolSort } from './media-pool';
+  import { loadPoolPinyin } from './pool-pinyin';
   import { DENSITY } from './tokens';
+  import type { MessageKey } from '../i18n/locales';
   import { tr } from '../i18n/index.svelte';
 
   let resizing = $state(false);
   let dragStartX = 0;
   let dragStartW = 0;
+
+  /* --------------------------------------------------------- 搜索 / 形态 / 排序 */
+
+  /** 搜索词是这一层（抽屉）的临时状态：关掉抽屉再开，用户不该还困在上次的过滤里。 */
+  let query = $state('');
+
+  const compact = $derived(appState.poolView === 'compact');
+
+  /** 排序档位 → 文案键。方向写进标签（大→小 / 新→旧），省掉一次猜测。 */
+  const SORT_LABEL: Record<PoolSort, MessageKey> = {
+    added: 'pool.sortAdded',
+    name: 'pool.sortName',
+    size: 'pool.sortSize',
+    modified: 'pool.sortModified',
+    duration: 'pool.sortDuration',
+  };
+  const sortOptions = $derived(POOL_SORTS.map((v) => ({ value: v, label: tr(SORT_LABEL[v]) })));
 
   /* ------------------------------------------------------ 从系统拖文件进来 */
 
@@ -112,21 +133,69 @@
   ></div>
 
   <div class="drawer-head">
-    <span class="drawer-title">
-      <Icon name="images" size={12} />
-      {tr('pool.title')}
-    </span>
-    <IconButton
-      icon="x"
-      label={tr('pool.collapse')}
-      size="sm"
-      testid="media-drawer-toggle"
-      onclick={() => appState.setMediaPoolOpen(false)}
-    />
+    <div class="head-row">
+      <span class="drawer-title">
+        <Icon name="images" size={12} />
+        {tr('pool.title')}
+      </span>
+      <IconButton
+        icon="x"
+        label={tr('pool.collapse')}
+        size="sm"
+        testid="media-drawer-toggle"
+        onclick={() => appState.setMediaPoolOpen(false)}
+      />
+    </div>
+    <!--
+      搜索 / 形态 / 排序同占一行。搜索框吃掉剩余宽度（抽屉只有两三百像素，
+      给排序下拉固定宽度、余下的全给输入框）。
+    -->
+    <div class="head-tools">
+      <span class="search">
+        <Icon name="search" size={12} />
+        <input
+          type="text"
+          class="search-input"
+          placeholder={tr('pool.search')}
+          aria-label={tr('pool.search')}
+          data-testid="pool-search"
+          bind:value={query}
+          onfocus={() => {
+            // 拼音库在这儿才下载：只有「来搜索」的人才付它的体积。
+            void loadPoolPinyin().then(() => appState.markPoolPinyinReady());
+          }}
+          onkeydown={(e) => {
+            // Esc = 清空搜索（抽屉本身的关闭由头部那个 × 负责，不让一个键既是
+            // 「退出搜索」又是「收起面板」）。
+            if (e.key === 'Escape' && query) {
+              e.stopPropagation();
+              query = '';
+            }
+          }}
+        />
+      </span>
+      <!-- 两态图标按钮：当前是缩略图就显示「切到紧凑」的图标，反之亦然。 -->
+      <IconButton
+        icon={compact ? 'layout-grid' : 'list'}
+        label={compact ? tr('pool.viewThumbs') : tr('pool.viewCompact')}
+        size="sm"
+        testid="pool-view-toggle"
+        onclick={() => appState.setPoolView(compact ? 'thumbs' : 'compact')}
+      />
+      <Select
+        value={appState.poolSort}
+        options={sortOptions}
+        onchange={(v) => appState.setPoolSort(v)}
+        ariaLabel={tr('pool.sort')}
+        testid="pool-sort"
+        optionTestidPrefix="pool-sort-opt"
+        minWidth={104}
+      />
+    </div>
   </div>
 
   <div class="drawer-body">
-    <MediaPool />
+    <MediaPool {query} />
   </div>
 
   <!--
@@ -175,15 +244,58 @@
   .resizing {
     user-select: none;
   }
+  /*
+    头部两行：标题行（与顶栏同高，两个抽屉的标题落在同一条水平线上）+ 工具行。
+    不把搜索框塞进标题行：抽屉常态只有 300px 宽，标题与输入框抢宽度时
+    两边都会被截断（标题变成「媒体…」、输入框只剩十几个像素）。
+  */
   .drawer-head {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    padding: 0 var(--sp-2) var(--sp-2) var(--sp-4);
+    border-bottom: 1px solid var(--drawer-border);
+  }
+  .head-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--sp-3);
-    flex-shrink: 0;
     height: var(--topbar-h);
-    padding: 0 var(--sp-2) 0 var(--sp-4);
-    border-bottom: 1px solid var(--drawer-border);
+  }
+  .head-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    min-width: 0;
+  }
+  /* 搜索框与特效选择器同形（图标 + 无边框输入），只是更矮更窄 */
+  .search {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex: 1;
+    min-width: 0;
+    height: var(--control-h);
+    padding: 0 var(--sp-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--input-bg);
+    color: var(--text-muted);
+  }
+  .search:focus-within {
+    border-color: var(--accent);
+  }
+  .search-input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--fs-xs);
+    outline: none;
   }
   .drawer-title {
     display: inline-flex;

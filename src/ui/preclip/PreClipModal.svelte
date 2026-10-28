@@ -40,9 +40,16 @@
    * 多一层 `$derived` 转手没有任何好处，反而让「保存之后列表还是 0 条」这种
    * 依赖追踪问题更难查（实测踩过：外层派生没把更新传下去）。
    */
+  /*
+   * 注意这里是**拷贝**而不是直接返回 `asset.ranges`：`setAssetRange` 新增一条时
+   * 是对同一个数组 `push`（引用不变），而 `$derived` 用 `===` 判断传播 ——
+   * 直接返回的话「新建第二条范围」不会让列表重渲（标题还写着（1），而激活范围
+   * 已经是范围 2）。第一次新建之所以看起来正常，是因为那时 `ranges` 从
+   * `undefined` 变成了一个新数组。
+   */
   const ranges = $derived.by(() => {
     void appState.version;
-    return appState.store.project.assets[item.id]?.ranges ?? [];
+    return [...(appState.store.project.assets[item.id]?.ranges ?? [])];
   });
   const activeRange = $derived.by(() => {
     void appState.version;
@@ -285,11 +292,33 @@
     seek(inF);
   }
 
-  function saveCurrent(): void {
+  /** 把改过的入点 / 出点写回**当前激活范围**（只有它存在且真的变了时才点得到）。 */
+  function updateActive(): void {
+    if (!activeRange || !dirty) return;
     const norm = normalizeRange({ inSec: inF / fps, outSec: outF / fps }, item.durationSec ?? 0, fps);
     if (!norm) return;
-    if (activeRange && dirty) {
-      appState.store.setAssetRange(item.id, { ...activeRange, ...norm });
+    appState.store.setAssetRange(item.id, { ...activeRange, ...norm });
+  }
+
+  /**
+   * 用当前入点 / 出点**新建**一条范围。
+   *
+   * 与「更新」拆成两个按钮是刻意的：合成一个时标签会在「保存」与「更新」之间跳，
+   * 用户分不清这一次点下去是新建还是覆盖 —— 「第二个范围怎么建」这个问题就是
+   * 这么来的（旧实现里再点一次「保存」会静默造一条与当前范围一模一样的重复条目）。
+   *
+   * 当前区间与某条已有范围**完全重合**时不再造重复条目，直接把它设为激活：
+   * 插入片段用的是激活范围，一条重复条目只会让列表变长而不改变任何行为。
+   */
+  function createRange(): void {
+    const norm = normalizeRange({ inSec: inF / fps, outSec: outF / fps }, item.durationSec ?? 0, fps);
+    if (!norm) return;
+    const same = ranges.find(
+      (r) => frameOfSec(r.inSec, fps) === frameOfSec(norm.inSec, fps)
+        && frameOfSec(r.outSec, fps) === frameOfSec(norm.outSec, fps),
+    );
+    if (same) {
+      selectRange(same);
       return;
     }
     const range = newRange(
@@ -422,11 +451,28 @@
     <aside class="ranges">
       <div class="ranges-head">
         <span class="ranges-title">{rangeTitle}</span>
-        <button class="text-btn" type="button" data-testid="preclip-save-range" onclick={saveCurrent}>
-          {activeRange && dirty
-            ? tr('preclip.updateRange', { name: activeRange.name })
-            : tr('preclip.saveRange')}
-        </button>
+        <span class="range-actions">
+          <!-- 只有入出点真的被改过时才出现「更新」：平时它点了什么也不会发生。 -->
+          {#if activeRange && dirty}
+            <button
+              class="text-btn"
+              type="button"
+              data-testid="preclip-update-range"
+              onclick={updateActive}
+            >
+              {tr('preclip.updateRange', { name: activeRange.name })}
+            </button>
+          {/if}
+          <!-- 新建范围常驻：这是「想再存一段」的唯一入口，不该藏在某个状态后面。 -->
+          <button
+            class="text-btn"
+            type="button"
+            data-testid="preclip-new-range"
+            onclick={createRange}
+          >
+            {tr('preclip.newRange')}
+          </button>
+        </span>
       </div>
       <div class="range-list">
         {#each ranges as r (r.id)}
@@ -695,11 +741,23 @@
   }
   .ranges-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--sp-2);
     padding: var(--sp-3) var(--sp-3) var(--sp-2);
     border-bottom: 1px solid var(--border);
+  }
+  /*
+    两个动作放在右侧一簇。「更新「范围 1」」+「新建范围」在 260px 里放不下时
+    换行，而不是把标题挤没 —— 挤掉标题会让人看不出这几条是什么。
+  */
+  .range-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--sp-2);
+    margin-left: auto;
   }
   .ranges-title {
     color: var(--text-secondary);

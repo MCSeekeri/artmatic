@@ -3,15 +3,20 @@ import { ProjectStore } from '../../src/core/project-store';
 import { defaultProject, type Asset, type Project } from '../../src/core/schema';
 import type { AssetStore } from '../../src/project/asset-store';
 import {
+  assetUsageSeconds,
   buildPoolItems,
+  clipAssetId,
   clipForAsset,
+  filterPoolItems,
   groupPool,
   insertAssetClip,
   kindOfFile,
   poolItemById,
+  sortPoolItems,
   stillLength,
   type PoolItem,
 } from '../../src/ui/media-pool';
+import { loadPoolPinyin, poolPinyinHaystack } from '../../src/ui/pool-pinyin';
 
 /**
  * media-pool.ts 的守卫：列表怎么合成、怎么分组、以及「从素材建片段」的默认值。
@@ -55,9 +60,12 @@ function item(kind: Asset['kind'], id = `${kind}-1`, extra: Partial<PoolItem> = 
     id,
     kind,
     name: id,
+    fileName: `${id}.bin`,
     durationSec: null,
     size: null,
     bytes: 8,
+    addedAt: 0,
+    modifiedAt: null,
     missing: false,
     ...extra,
   };
@@ -258,5 +266,128 @@ describe('insertAssetClip', () => {
     expect(insertAssetClip(store, item('image', 'x', { missing: true }), { at: 0, grid })).toBeNull();
     expect(store.version).toBe(before);
     expect(store.project.tracks[0]!.clips).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------ 搜索 / 排序 */
+
+const pool = [
+  item('video', 'a', { name: '片头镜头', fileName: 'intro-take-01.mp4', bytes: 900 }),
+  item('image', 'b', { name: 'cover', fileName: '封面最终.png', bytes: 100 }),
+  item('audio', 'c', { name: 'bgm', fileName: 'bgm-v2.wav', bytes: 400 }),
+];
+
+describe('filterPoolItems', () => {
+  it('拼音：媒体池用的是按需加载的转换器（中文文件名也能按拼音命中）', async () => {
+    await loadPoolPinyin();
+    const items = [item('video', 'v', { name: '片头镜头', fileName: '片头镜头.mp4' })];
+    // 全拼 / 首字母
+    expect(filterPoolItems(items, 'piantou', poolPinyinHaystack).map((i) => i.id)).toEqual(['v']);
+    expect(filterPoolItems(items, 'pt', poolPinyinHaystack).map((i) => i.id)).toEqual(['v']);
+    /*
+     * 没注入转换器（= 手写表那条路）时这条名字搜不到 —— 这正说明「按需加载的库」
+     * 不是装饰：素材名是用户数据，手写表覆盖不了。
+     */
+    expect(filterPoolItems(items, 'piantou')).toEqual([]);
+  });
+
+  it('空查询返回全部，且保持原顺序', () => {
+    expect(filterPoolItems(pool, '   ').map((i) => i.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('包含匹配：展示名与原始文件名都算命中', () => {
+    expect(filterPoolItems(pool, 'bgm').map((i) => i.id)).toEqual(['c']);
+    // 展示名是 cover，但用户记得的是文件名
+    expect(filterPoolItems(pool, '封面').map((i) => i.id)).toEqual(['b']);
+  });
+
+  it('子序列匹配：打漏分隔符也能命中文件名', () => {
+    // `introtake` → `intro-take-01.mp4`
+    expect(filterPoolItems(pool, 'introtake').map((i) => i.id)).toEqual(['a']);
+  });
+
+  it('拼音命中（走 i18n 的手写表；表里没有的名字退化成另外两条）', () => {
+    const withPinyin = [item('image', 'd', { name: '像素化', fileName: 'x.png' })];
+    expect(filterPoolItems(withPinyin, 'xiangsu').map((i) => i.id)).toEqual(['d']);
+    expect(filterPoolItems(withPinyin, 'xsh').map((i) => i.id)).toEqual(['d']);
+  });
+
+  it('单字符只做包含，不启用子序列（否则「搜 a」会命中一大片）', () => {
+    expect(filterPoolItems(pool, 'z')).toEqual([]);
+  });
+});
+
+describe('sortPoolItems', () => {
+  it('默认（added）不动顺序 —— 它就是导入顺序', () => {
+    expect(sortPoolItems(pool, 'added').map((i) => i.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('名称按本地化比较（中文按拼音排）', () => {
+    const items = [
+      item('image', '1', { name: '波' }),
+      item('image', '2', { name: '阿' }),
+      item('image', '3', { name: '册' }),
+    ];
+    expect(sortPoolItems(items, 'name').map((i) => i.name)).toEqual(['阿', '波', '册']);
+  });
+
+  it('体积：大的在前，未知（null）排最后', () => {
+    const items = [...pool, item('image', 'z', { name: 'generated', bytes: null })];
+    expect(sortPoolItems(items, 'size').map((i) => i.id)).toEqual(['a', 'c', 'b', 'z']);
+  });
+
+  it('修改日期：新的在前；mtime 未知时退回导入时间', () => {
+    const items = [
+      item('image', 'old', { modifiedAt: 1000, addedAt: 1 }),
+      item('image', 'new', { modifiedAt: 5000, addedAt: 2 }),
+      item('image', 'unknown', { modifiedAt: null, addedAt: 9000 }),
+      item('image', 'nothing', { modifiedAt: null, addedAt: null }),
+    ];
+    expect(sortPoolItems(items, 'modified').map((i) => i.id)).toEqual([
+      'unknown',
+      'new',
+      'old',
+      'nothing',
+    ]);
+  });
+
+  it('时间轴时长：按使用总秒数降序', () => {
+    const used = new Map([
+      ['b', 12],
+      ['c', 3],
+    ]);
+    expect(sortPoolItems(pool, 'duration', used).map((i) => i.id)).toEqual(['b', 'c', 'a']);
+  });
+});
+
+describe('assetUsageSeconds / clipAssetId', () => {
+  it('同一素材被多个片段引用时时长累加', () => {
+    const project = projectWith('visual', 'audio');
+    const store = new ProjectStore(project);
+    store.addClip('v0', { ...clipForAsset(item('image', 'pic'), 0, grid)! });
+    store.addClip('v0', { ...clipForAsset(item('image', 'pic'), 10, grid)! });
+    store.addClip('a1', { ...clipForAsset(item('audio', 'song', { durationSec: 6 }), 0, grid)! });
+
+    const usage = assetUsageSeconds(store.project);
+    // 两张图各 2 秒（4 拍 @120BPM）
+    expect(usage.get('pic')).toBeCloseTo(4, 9);
+    expect(usage.get('song')).toBeCloseTo(6, 9);
+  });
+
+  it('不引用素材的片段（特效）返回 null，不进统计', () => {
+    const project = projectWith('visual');
+    project.tracks[0]!.clips.push({
+      kind: 'effect',
+      id: 'fx',
+      start: 0,
+      end: 1,
+      label: 'fx',
+      fadeSec: 0,
+      curves: {},
+      chain: [],
+      affectDepth: 1,
+    } as never);
+    expect(clipAssetId(project.tracks[0]!.clips[0]!)).toBeNull();
+    expect(assetUsageSeconds(project).size).toBe(0);
   });
 });

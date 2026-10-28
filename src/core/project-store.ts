@@ -40,6 +40,7 @@ import {
   type Span,
 } from './clips';
 import { clampTransitionDuration, transitionMaxDuration, type TransitionSide } from './transitions';
+import { rippleShift } from './ripple';
 import { evalCurve, type Curve } from './curve';
 import { SPEED_CURVE_KEY, speedIntegralOf } from './speed';
 import type { BeatGrid } from './time';
@@ -75,6 +76,46 @@ function writeFade(clip: AudioClip, which: 'in' | 'out', v: number): boolean {
   if (v === 0) delete clip[key];
   else clip[key] = v;
   return true;
+}
+
+/** 删除选项。`ripple` = 波纹删除（后面的片段前移补位），默认关。 */
+export interface RemoveOptions {
+  ripple?: boolean;
+}
+
+/** 被删掉的一段空白：哪条轨、起止多少秒。 */
+interface RippleGap {
+  trackId: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * 把被删片段留下的空洞合上：**只动被删片段所在的那几条轨**，且只扣掉被删的
+ * 那几段长度（用户原本留的空隙保持原样）。
+ *
+ * 片段长度严格不变（`end - start` 原样带过去）：波纹删除搬的是位置，
+ * 不是裁掉内容。
+ */
+function closeRippleGaps(p: Project, gaps: readonly RippleGap[]): void {
+  if (!gaps.length) return;
+  const byTrack = new Map<string, RippleGap[]>();
+  for (const g of gaps) {
+    const list = byTrack.get(g.trackId);
+    if (list) list.push(g);
+    else byTrack.set(g.trackId, [g]);
+  }
+  for (const t of p.tracks) {
+    const removals = byTrack.get(t.id);
+    if (!removals?.length) continue;
+    for (const c of t.clips) {
+      const shift = rippleShift(c.start, removals);
+      if (!(shift > 0)) continue;
+      const len = c.end - c.start;
+      c.start = Math.max(0, c.start - shift);
+      c.end = c.start + len;
+    }
+  }
 }
 
 export class ProjectStore {
@@ -364,12 +405,15 @@ export class ProjectStore {
     });
   }
 
-  removeClip(clipId: string): void {
+  removeClip(clipId: string, opts: RemoveOptions = {}): void {
     this.commit(tr('tl.removeClip'), (p) => {
       // 删视频时把锁定 / 分离出来的音频一起删掉：只留一条无声的音频轨
       // 是「删了画面、声音还在响」，那几乎不会是用户想要的。
       const extra = this.linkedAudioIdIn(p, clipId);
-      this.removeClipIds(p, new Set(extra ? [clipId, extra] : [clipId]));
+      const ids = new Set(extra ? [clipId, extra] : [clipId]);
+      const gaps = opts.ripple ? this.spansOf(p, ids) : [];
+      this.removeClipIds(p, ids);
+      closeRippleGaps(p, gaps);
     });
   }
 
@@ -378,11 +422,15 @@ export class ProjectStore {
    *
    * 逐个调 `removeClip` 也能删对，但撤销栈里会多出 N 条记录 ——
    * 用户按一次 Ctrl+Z 只回来一个，看起来就是「撤销坏了」。
+   *
+   * `ripple` = 波纹删除：删完把这些片段所在的每条轨上、排在它们之后的片段
+   * 前移补位（规则见 `core/ripple.ts`）。**必须与删除同一笔提交**，
+   * 否则撤销一次只回来一半，看起来像「撤销坏了」。
    */
-  removeClips(clipIds: readonly string[]): void {
+  removeClips(clipIds: readonly string[], opts: RemoveOptions = {}): void {
     if (!clipIds.length) return;
     if (clipIds.length === 1) {
-      this.removeClip(clipIds[0]!);
+      this.removeClip(clipIds[0]!, opts);
       return;
     }
     const set = new Set(clipIds);
@@ -391,8 +439,21 @@ export class ProjectStore {
       if (extra) set.add(extra);
     }
     this.commit(tr('tl.removeClips', { n: clipIds.length }), (p) => {
+      const gaps = opts.ripple ? this.spansOf(p, set) : [];
       this.removeClipIds(p, set);
+      closeRippleGaps(p, gaps);
     });
+  }
+
+  /** 这些片段此刻占的区间（按轨记账，波纹删除要用）。删之前算，删完就没有了。 */
+  private spansOf(p: Project, ids: ReadonlySet<string>): RippleGap[] {
+    const out: RippleGap[] = [];
+    for (const t of p.tracks) {
+      for (const c of t.clips) {
+        if (ids.has(c.id)) out.push({ trackId: t.id, start: c.start, end: c.end });
+      }
+    }
+    return out;
   }
 
   /** 视频片段分离出来的音频 id（没有 / 不是视频 → null）。 */
@@ -1005,6 +1066,29 @@ export class ProjectStore {
       const clip = host.track.clips[host.index] as SourceClip;
       const ref = side === 'out' ? clip.transitionOut : clip.transitionIn;
       if (ref) fn(ref);
+    });
+  }
+
+  /* ---------------------------------------------------------- 素材（显示名） */
+
+  /**
+   * 改素材的**展示名**（`Project.assets[id].name`）。
+   *
+   * 只动这一份工程里的名字：台账里的 `originName`（决定落盘文件名与扩展名）、
+   * 用户的磁盘文件、linked 素材的原文件路径**一个都不碰** —— 这条边界是
+   * 需求点名的，也是「改名」与「重新链接 / 收集到工程」的分界。
+   *
+   * 空名字不写库（与 `renameTrack` / `renameClip` 同口径）：媒体池靠名字认人，
+   * 变成一行空白等于把那条素材藏起来。已有片段 label 不跟着改 —— 片段名是
+   * 另一份用户数据（用户可能已经按剪辑意图改过它）。
+   */
+  renameAsset(assetId: string, name: string): void {
+    const next = name.trim();
+    const asset = this.project.assets[assetId];
+    if (!asset || !next || asset.name === next) return;
+    this.commit(tr('pool.renameAsset'), (p) => {
+      const a = p.assets[assetId];
+      if (a) a.name = next;
     });
   }
 

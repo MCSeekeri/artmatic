@@ -461,6 +461,10 @@ async function dispatch(name, args, extra) {
       // 不带 confirm：需要审批时应用会弹卡，用户确认之前不会真的动文件。
       return unwrap(await bridge.call('mediaPoolOp', [{ op: args.op, assetId: args.assetId }]));
 
+    case 'artmatic_rename_asset':
+      // 只改显示名，不碰磁盘文件 —— 所以不经过媒体池动作的确认闸门。
+      return unwrap(await bridge.call('renameAsset', [args.assetId, args.name]));
+
     case 'artmatic_edit_sections': {
       const op = args.op;
       // 只把该 op 需要的键送过去：其余 `undefined` 会让控制平面的类型判断更难读。

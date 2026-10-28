@@ -72,6 +72,7 @@ import {
 } from '../project/agent-history';
 import { upsertAgentSession, type AgentSessionRecord } from '../agent/history';
 import { DENSITY } from './tokens';
+import { POOL_SORTS, type PoolSort, type PoolView } from './media-pool';
 // `TimelineMode` 的概念属于时间轴（标尺怎么读），值与「每个形态有哪些吸附档位」
 // 都在那边 —— 这里只保管用户选了哪个，不在 UI 层再抄一份表。
 import { defaultSnapForMode, snapFitsMode, type TimelineMode } from '../timeline/view-model';
@@ -163,6 +164,16 @@ interface UiPrefs {
    * 它描述的是「这次剪辑想给预览留多大地方」，与工程内容无关。
    */
   timelineHeight: number;
+  /**
+   * **波纹删除**（默认关）。开着时删片段会把同轨后面的片段前移补位
+   * （见 `core/ripple.ts`）。存 UI 偏好而不是工程：它是「这一轮怎么剪」的
+   * 习惯，同一份工程换个人打开不该被别人的开关带走。
+   */
+  rippleEdit: boolean;
+  /** 媒体池的列表形态（缩略图 / 紧凑）。两个视图共用一份偏好。 */
+  poolView: PoolView;
+  /** 媒体池排序档位。 */
+  poolSort: PoolSort;
 }
 
 /** 排版右栏宽度档位。与检查器抽屉同一套上下限口径。 */
@@ -264,6 +275,10 @@ function loadUiPrefs(): UiPrefs {
     scaleLinked: true,
     // **默认关**：脚本是工程带进来的任意代码，不能「打开即执行」。
     runTypoScripts: false,
+    // **默认关**：波纹删除会静默挪动别的片段，属于「明确想要才开」的行为。
+    rippleEdit: false,
+    poolView: 'thumbs',
+    poolSort: 'added',
   };
   try {
     const raw = localStorage.getItem(UI_KEY);
@@ -302,6 +317,9 @@ function loadUiPrefs(): UiPrefs {
       scaleLinked: typeof p.scaleLinked === 'boolean' ? p.scaleLinked : fallback.scaleLinked,
       runTypoScripts:
         typeof p.runTypoScripts === 'boolean' ? p.runTypoScripts : fallback.runTypoScripts,
+      rippleEdit: typeof p.rippleEdit === 'boolean' ? p.rippleEdit : fallback.rippleEdit,
+      poolView: p.poolView === 'compact' ? 'compact' : 'thumbs',
+      poolSort: POOL_SORTS.includes(p.poolSort as PoolSort) ? (p.poolSort as PoolSort) : fallback.poolSort,
     };
   } catch {
     return fallback;
@@ -639,6 +657,24 @@ class AppState {
   runTypoScripts = $state<boolean>(false);
   /** 轨道区高度（可拖；与两个抽屉宽度同一套「实例值 + setter」纪律）。 */
   timelineHeight = $state<number>(TRACKS_H.default);
+  /** 波纹删除（删片段后同轨后面的片段前移补位）。默认关，见 `UiPrefs.rippleEdit`。 */
+  rippleEdit = $state<boolean>(false);
+  /** 媒体池列表形态（缩略图 / 紧凑），两个视图共用。 */
+  poolView = $state<PoolView>('thumbs');
+  /** 媒体池排序档位（组内顺序）。 */
+  poolSort = $state<PoolSort>('added');
+  /**
+   * 媒体池的拼音转换器是否已就绪（`ui/pool-pinyin.ts` 按需加载）。
+   *
+   * 它**不是偏好**（不落盘）：只是一个「列表该重算一次」的信号 —— 用户点进搜索框
+   * 之后库才开始下载，下载完必须让已经打出的那串查询重新过滤一遍，否则拼音命中
+   * 的条目要等到下一次敲键才出现。
+   */
+  poolPinyinReady = $state(false);
+
+  markPoolPinyinReady(): void {
+    if (!this.poolPinyinReady) this.poolPinyinReady = true;
+  }
   /**
    * 已注册的字体族（Ribbon 的字体下拉读它）。
    * 做成响应式而不是每次读 registry：注册发生在异步导入之后，
@@ -861,10 +897,35 @@ class AppState {
    * 看起来就是「撤销坏了」。
    */
   removeSelectedClips(): void {
-    const ids = [...this.activeProject.selectedClipIds];
-    if (!ids.length) return;
-    this.store.removeClips(ids);
-    this.activeProject.selectedClipIds = [];
+    this.removeClips([...this.activeProject.selectedClipIds]);
+  }
+
+  /**
+   * 删除若干片段（一笔撤销）。`rippleEdit` 开着时同时把同轨后面的片段前移补位
+   * —— 屏幕上的删除按钮、Delete 键、检查器的删除按钮都走这里，否则「开着波纹
+   * 但在某个入口点删除却没补位」会让人以为是偶发 bug。
+   */
+  removeClips(clipIds: readonly string[]): void {
+    if (!clipIds.length) return;
+    this.store.removeClips(clipIds, { ripple: this.rippleEdit });
+    const gone = new Set(clipIds);
+    this.activeProject.selectedClipIds = this.activeProject.selectedClipIds.filter(
+      (id) => !gone.has(id),
+    );
+  }
+
+  /**
+   * 改素材的展示名（媒体池右键 → 重命名素材）。文件名与路径一个字都不动。
+   *
+   * 工程表那一份是真相（随工程保存），素材仓里的镜像跟着改，否则「未使用素材」
+   * 与源变化提示会继续报旧名字。
+   */
+  renameAsset(id: string, name: string): void {
+    const next = name.trim();
+    const asset = this.store.project.assets[id];
+    if (!asset || !next || asset.name === next) return;
+    this.store.renameAsset(id, next);
+    this.assets.setInputName(id, next);
   }
 
   /* -------------------------------------------------- 片段剪贴板（复制 / 剪切 / 粘贴）
@@ -1977,6 +2038,26 @@ class AppState {
     this.persistUi();
   }
 
+  /** 波纹删除开关（工具条的两态按钮）。 */
+  setRippleEdit(on: boolean): void {
+    if (this.rippleEdit === on) return;
+    this.rippleEdit = on;
+    this.persistUi();
+  }
+
+  /** 媒体池列表形态。缩略图是默认，紧凑是「一屏装更多」。 */
+  setPoolView(view: PoolView): void {
+    if (this.poolView === view) return;
+    this.poolView = view;
+    this.persistUi();
+  }
+
+  setPoolSort(sort: PoolSort): void {
+    if (this.poolSort === sort) return;
+    this.poolSort = sort;
+    this.persistUi();
+  }
+
   /**
    * 全屏预览时允许预览缓冲**放大**到显示尺寸（默认只缩不放，见
    * `preview-size.ts` 的 `k = Math.min(1, scale)`）。
@@ -2014,6 +2095,9 @@ class AppState {
       timelineHeight: this.timelineHeight,
       scaleLinked: this.scaleLinked,
       runTypoScripts: this.runTypoScripts,
+      rippleEdit: this.rippleEdit,
+      poolView: this.poolView,
+      poolSort: this.poolSort,
     });
   }
 

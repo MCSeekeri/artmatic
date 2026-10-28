@@ -625,6 +625,76 @@ test('从媒体池把素材拖到时间轴：落在指针处，并选中新片�
 
 /* ------------------------------------------------------------------ 空状态 */
 
+/* -------------------------------------------------- 搜索 / 形态 / 重命名 */
+
+test('右键菜单改显示名、搜索过滤、缩略图↔紧凑切换', async ({ page }) => {
+  await boot(page);
+  const track = await cleanStage(page);
+  const assetId = await importImage(page, track, 'e2e-pic.png');
+
+  await page.getByTestId('rail-media').click();
+  const row = page.locator(`[data-testid=pool-item][data-asset-id="${assetId}"]`);
+  await expect(row).toHaveCount(1);
+
+  /* ① 右键唤出菜单（不必先找 ⋯ 按钮）→ 重命名素材 */
+  await row.click({ button: 'right' });
+  await expect(page.getByTestId('pool-menu-panel')).toBeVisible();
+  await page.getByTestId('pool-menu-rename').click();
+  await expect(page.getByTestId('pool-rename-input')).toBeVisible();
+  await page.getByTestId('pool-rename-input').fill('片头主图');
+  await page.getByTestId('pool-rename-input').press('Enter');
+
+  // DOM 上是新名字
+  await expect(row.getByTestId('pool-name')).toHaveText('片头主图');
+  // 工程表里也改了，而**原始文件名没动**（文件与路径保持原样）
+  const names = await page.evaluate((id) => {
+    const A = (window as never as {
+      __artmatic: {
+        store: { project: { assets: Record<string, { name: string }> } };
+        assets: { input: (id: string) => { name: string; originName: string } | null };
+      };
+    }).__artmatic;
+    return { display: A.store.project.assets[id]!.name, input: A.assets.input(id) };
+  }, assetId);
+  expect(names.display).toBe('片头主图');
+  expect(names.input!.originName).toBe('e2e-pic.png');
+  expect(names.input!.name).toBe('片头主图');
+
+  /* ② 搜索：命中展示名 / 原始文件名，命中不到时给「没有匹配」 */
+  const search = page.getByTestId('pool-search');
+  /*
+   * 拼音走**按需加载**的转换器：点进搜索框才拉那块 chunk，拉完列表要自己重算一次
+   * （靠 `appState.poolPinyinReady`）。这里的超时给够是因为它真的是一次网络加载。
+   */
+  await search.focus();
+  await search.fill('piantou');
+  await expect(page.getByTestId('pool-item')).toHaveCount(1, { timeout: 20_000 });
+  await search.fill('片头');
+  await expect(page.getByTestId('pool-item')).toHaveCount(1);
+  await search.fill('e2e-pic');
+  await expect(page.getByTestId('pool-item')).toHaveCount(1);
+  await search.fill('没有这个素材');
+  await expect(page.getByTestId('pool-no-match')).toBeVisible();
+  await expect(page.getByTestId('pool-item')).toHaveCount(0);
+  // 清空后全部回来：这张图 + demo 里那条程序生成的音频
+  await search.fill('');
+  await expect(page.getByTestId('pool-item')).toHaveCount(2);
+
+  /* ③ 紧凑形态：缩略图消失，条目还在（不是「筛掉了」） */
+  await expect(row.getByTestId('pool-thumb')).toHaveCount(1);
+  const tallRow = (await row.boundingBox())!.height;
+  await page.getByTestId('pool-view-toggle').click();
+  await expect(row.getByTestId('pool-thumb')).toHaveCount(0);
+  await expect(row).toBeVisible();
+  // 形态切换真的收紧了行高（只改样式不改结构的话这条会失败）
+  const shortRow = (await row.boundingBox())!.height;
+  expect(shortRow).toBeLessThan(tallRow);
+
+  // 切回来：缩略图回来
+  await page.getByTestId('pool-view-toggle').click();
+  await expect(row.getByTestId('pool-thumb')).toHaveCount(1);
+});
+
 test('空工程：媒体池说「还没有素材」，不列出上一份工程的素材', async ({ page }) => {
   await boot(page);
 

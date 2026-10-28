@@ -41,6 +41,7 @@ import {
   refreshRecentProjects,
   registerDemoAssets,
   listMediaPool,
+  renameMediaAsset,
   runMediaPoolOp,
   saveProjectNow,
 } from './ui/project-actions';
@@ -394,7 +395,7 @@ const controlContext: ControlContext = {
    * 媒体池。这些动作会移动 / 删除磁盘文件，所以默认要用户确认一次；
    * 偏好关掉时控制平面直接执行（见 `mediaPoolOp`）。
    */
-  mediaPool: { list: listMediaPool, run: runMediaPoolOp },
+  mediaPool: { list: listMediaPool, run: runMediaPoolOp, rename: renameMediaAsset },
   getMediaPoolConfirm: () => agentState.prefs.mediaPoolConfirm,
   // 打字是直接改 doc.runs，不经过手势事务；agent 写文档前必须先停掉。
   stopTextEditing: () => editorState.stopEditing(),
