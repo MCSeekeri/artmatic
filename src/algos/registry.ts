@@ -47,6 +47,7 @@ import { flashbackDef } from './flashback';
 import { barsDef } from './bars';
 import { gridDef } from './grid';
 import { gradientDef } from './gradient';
+import { streamlinesDef } from './streamlines';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
 import type { GeneratorDef } from './types';
@@ -82,6 +83,8 @@ const DEFS = new Map<string, GeneratorDef>(
     barsDef,
     gridDef,
     gradientDef,
+    // 流线：发射点 → 接受点的成束曲线（realtime，无状态）
+    streamlinesDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，五个 def
     ...sceneDefs,
     // 体积烟雾：唯一会写 a < 1 的生成器（可压到别的轨道上）

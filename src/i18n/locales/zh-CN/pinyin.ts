@@ -114,6 +114,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   彩条: 'cai tiao',
   网格: 'wang ge',
   渐变: 'jian bian',
+  流线: 'liu xian',
   闪回: 'shan hui',
   '分形（逃逸时间）': 'fen xing tao yi shi jian',
   一维映射分岔图: 'yi wei ying she fen cha tu',

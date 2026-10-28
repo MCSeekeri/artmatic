@@ -150,6 +150,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   bars: rt('geometry', 'algo.desc.bars', 0),
   grid: rt('geometry', 'algo.desc.grid', 0),
   gradient: rt('geometry', 'algo.desc.gradient', 0),
+  /*
+   * 流线：有 `u_time`（笔画在生长），所以按缺省的 4 秒截 ——
+   * 那时每束线都已铺开，又不是「刚起步」的空屏。
+   */
+  streamlines: rt('geometry', 'algo.desc.streamlines'),
   mandelbrot: rt('math', 'algo.desc.mandelbrot', 0),
   menger: rt('math', 'algo.desc.menger'),
   mandelbulb: rt('math', 'algo.desc.mandelbulb'),
