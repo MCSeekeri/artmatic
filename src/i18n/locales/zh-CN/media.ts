@@ -1073,6 +1073,31 @@ export const media = {
   'algo.lyapunov.colorChaos': '混沌色',
   'algo.lyapunov.scale': '对比',
 
+  /* ---- 二维码：文本 → 七种机器可读符号的模块图（algos/qr-code.ts）----
+     注意「静区」与「条高」是两个不同的量：静区是模块单位（两种符号共用），
+     条高只对一维码有意义（二维符号没有「条」）。 */
+  'algo.qrCode': '二维码',
+  'algo.qr.content': '内容',
+  'algo.qr.contentPlaceholder': '输入文本或网址',
+  'algo.qr.symbology': '符号',
+  'algo.qr.symQr': 'QR Code',
+  'algo.qr.symCode128': '一维条形码',
+  'algo.qr.symAztec': 'Aztec',
+  'algo.qr.symDataMatrix': 'Data Matrix',
+  'algo.qr.symMaxiCode': 'MaxiCode',
+  'algo.qr.symGridMatrix': '网格矩阵',
+  'algo.qr.symHanXin': '汉信码',
+  'algo.qr.ec': '纠错级别',
+  'algo.qr.ecL': 'L（约 7%）',
+  'algo.qr.ecM': 'M（约 15%）',
+  'algo.qr.ecQ': 'Q（约 25%）',
+  'algo.qr.ecH': 'H（约 30%）',
+  'algo.qr.quiet': '静区',
+  'algo.qr.barHeight': '条高',
+  'algo.qr.round': '圆角',
+  'algo.qr.colorBg': '背景色',
+  'algo.qr.colorLive': '码色',
+
   /* ---- 生成器的一句话说明（右键菜单的预览浮层用；`algos/catalog.ts`）----
      长度与语气统一在这里成批看得见，所以全部集中在一处。 */
   'algo.desc.rule110': '一维元胞自动机：上一行的三个格子决定下一行，能长出不重复的图案。',
@@ -1098,6 +1123,7 @@ export const media = {
   'algo.desc.newton': '用牛顿迭代法求 zⁿ−1 的根，每个根分到一块斑驳的吸引域。',
   'algo.desc.kleinian': '两个 Möbius 变换生成的群的极限集：无穷多个互相相切的圆。',
   'algo.desc.lyapunov': 'logistic 映射的参数按 A/B 序列交替，画出稳定与混沌的边界。',
+  'algo.desc.qrCode': '把文字编成二维码、条形码等七种机器符号，圆角与静区可调。',
   'algo.desc.buddhabrot': '把逃逸轨道的落点一层层叠起来，从噪点里显影出一尊坐佛。',
   'algo.desc.chaosGame': '每次朝随机一个顶点走一半，一团乱点自己收敛成分形。',
   'algo.desc.dla': '一群随机游走的粒子撞上就粘住，长出珊瑚一样的枝晶团。',

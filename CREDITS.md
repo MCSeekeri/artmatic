@@ -72,6 +72,16 @@
 
 版权行与许可原文见 `public/fonts/OFL.txt`；`*.ttf` 是同一份 `*.woff2` 的无损解压，供 HarfBuzz 取轮廓；woff2 取自 `@fontsource/*` 的 latin 子集，未改动字体。
 
+### kazuhikoarase/qrcode-generator（MIT，`src/algos/symbology/`）
+
+- `qr-tables.ts` 里的两张标准表（对齐图形中心坐标、纠错块结构）是**脚本从 npm 包 `qrcode-generator@1.4.4` 的 `qrcode.js` 逐字提取**的，不是手抄；提取脚本与理由记在 `src/algos/AGENTS.md` 的「机器可读符号」一节。
+- `qr.ts` 的编码流程按该实现的同一条路径重写为 TypeScript：byte 模式位流、RS 分块与交织、之字形铺码、格式 / 版本信息布局、掩码惩罚 `getLostPoint`，以及 BCH 的三个常数 `G15` / `G18` / `G15_MASK`。`tests/unit/symbology.test.ts` 用它的**整幅矩阵**做金标对拍。
+
+### lindell/JsBarcode（MIT，`src/algos/symbology/code128.ts`）
+
+- Code 128 的 108 个符号图案表（`src/barcodes/CODE128/constants.js` 的 `BARS`）逐字取自该仓库。
+- 码值 / 校验位（mod 103）/ Stop 的排布按标准 §4.3.5 自己实现，并且只做 subset B。
+
 ### angel-echo（内部移植）
 
 angel-echo是未公开的内部项目。

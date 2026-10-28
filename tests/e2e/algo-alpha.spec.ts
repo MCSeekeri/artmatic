@@ -36,6 +36,8 @@ const CASES = [
   // 「数得到纯红」的前提（真实存在的空白区）就没了 —— 那是**用例的错**，不是实现的。
   { gen: 'reaction-diffusion', t: 6 },
   { gen: 'kleinian', t: 0 },
+  // 二维码：静区 + 留白是天然的「大量空白像素」，最能暴露直通 alpha 写错的那类 bug
+  { gen: 'qr-code', t: 1 },
   { gen: 'smoke', t: 1 },
 ] as const;
 

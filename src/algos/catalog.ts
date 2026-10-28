@@ -160,6 +160,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   mandelbulb: rt('math', 'algo.desc.mandelbulb'),
   apollonian: rt('math', 'algo.desc.apollonian'),
   newton: rt('math', 'algo.desc.newton', 0),
+  /*
+   * 二维码：`sim` 型但**没有步进状态**（图案与 t 无关），所以 1 秒只是满足
+   * 「sim/bake 必须显式给 previewT 且 > 0」那条守卫，画面上与 t = 0 逐像素相同。
+   */
+  'qr-code': { descKey: 'algo.desc.qrCode', group: 'math', previewT: 1 },
   kleinian: rt('math', 'algo.desc.kleinian', 0),
   lyapunov: rt('math', 'algo.desc.lyapunov', 0),
 

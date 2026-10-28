@@ -189,7 +189,8 @@ src/
 ├── algos/         算法生成器注册表 + 烘焙 Worker
 │   ├── shader-lib.ts     realtime 生成器的头（ALGO_HEAD）· intResParam · program 命名
 │   ├── pattern-codec.ts  手绘位图的编解码（永不抛 / 自带尺寸 / 跨环境稳定）
-│   └── pattern-presets.ts 标准种子图案（滑翔机 / 滑翔机枪 / 脉冲星 …）
+│   ├── pattern-presets.ts 标准种子图案（滑翔机 / 滑翔机枪 / 脉冲星 …）
+│   └── symbology/        机器可读符号编码（QR / Code 128 是完整标准，另五种结构复刻）
 ├── render/        ★ 合成根（见 `src/render/AGENTS.md`）
 ├── audio/         离线 FFT · BPM/offset 估计 · 波形桶 · 播放器
 ├── typography/    TypographyDocument 模型 + 光栅化后端 + 字体注册表 / HarfBuzz 子集化

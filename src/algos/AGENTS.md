@@ -103,6 +103,48 @@
 - 彩条用 HSV 等分色相而不是硬编码 7 色：条数是参数，硬编码表跟不了。
   渐变的三形态用 `int` uniform 分派（`selectInt`），不要用字符串 uniform。
 
+### 机器可读符号（`qr-code.ts` + `symbology/`，2026-10）
+
+一个生成器把文本编成七种符号之一：QR Code / Code 128 / Aztec / Data Matrix /
+MaxiCode / Grid Matrix / 汉信码。
+
+**保真度是两档，别混着说**：
+
+| 档 | 符号 | 判据 |
+|---|---|---|
+| 完整标准（**扫得出来**） | `qr` / `code128` | 与 MIT 参考实现逐位对拍（`tests/unit/symbology.test.ts` 的金标） |
+| 结构复刻（**不保证可扫**） | 其余五种 | 定位图形 / 尺寸增长 / 真实 RS 纠错都在，精确的码字布局没做 |
+
+- **界面文案不许承诺「可扫」**。`structural.ts` 文件头写了为什么不做那五种：
+  它们是真·表数据 + 分支特例，没有可信参考实现就只能是猜，而猜错恰恰是
+  「看着完全正确、扫不出来」—— 这条比「少五种」贵得多。
+- **借 `sim` 通路，但它没有步进状态**：`create()` 里编码一次、`seek()` 是 no-op、
+  `current()` 交同一份字节。三个硬需求筛掉了另外两种型 —— CPU 编码（GLSL 做不了）、
+  **不能有揭示动画**（bake 的 front 由 `t` 驱动，片段头那一帧前沿为 0 ⇒ 整幅不显示）、
+  每帧要有一张按参数烘好的纹理（realtime 的 `auxTextures` 只按 kind 全局缓存，不看参数）。
+  `seek(f) ≡ 顺序 step f 次` 因此**平凡成立**。
+- **纠错级有两套编号，混用是静默的**：表行序是 L/M/Q/H = 0/1/2/3，而格式信息那几位是
+  L=1 / M=0 / Q=3 / H=2（`EC_FORMAT_BITS`）。首版混用，结果 16 个格子全错
+  （15 位格式信息 + 固定黑模块）但图看着完全正常。
+- **GF 的尺寸必须与码字宽度匹配**：拿 GF(64) 算 8 位字节会读到 `log[200]`（越界 →
+  `undefined`）→ 乘法 NaN → 异或当 0 ⇒ 纠错码字整段归零。实测形态是「数据区尾巴
+  整行全白」。8 位码字一律 GF(256)，4 位（Aztec 的 mode message）才用 GF(16)。
+- **AA 不能逐格算 SDF**：两个相邻暗模块的公共边上距离恰好为 0，会被画成一条 50% 的
+  缝 —— 整张码浮出一层细网格线，定位图形的实心区域里也全是线。默认模式按
+  「邻格是白才算轮廓」判（并集），`round ≥ 0.02` 才逐格画圆角（那时缝是目的）。
+  另外 `smoothstep` 的带宽取 `fwidth(q)`（模块空间像素尺寸），不要取距离场的导数 ——
+  距离场在分支里取值，非一致控制流下导数不可靠。
+- `qr-tables.ts` 是**生成物**：两张表由一次性脚本从上游 `qrcode.js` 提取
+  （脚本思路：找到 `VAR = [ ... ]` 字面量、去注释、`JSON.parse`）。手改一位不会有
+  任何报错，只会让码扫不出来 —— 金标会红，但别让金标先红再改表。
+- 金标怎么重放：把 `qrcode-generator` 的 `qrcode.js` 存成 `.cjs`（工程是
+  `type: module`），`qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8']`，
+  再对每组 `(text, ec)` 取 `isDark(row, col)` 拼成 `0/1` 行、`sha256` 前 32 位。
+  **金标必须来自参考实现**，自己算自己当金标等于没测。
+- 缩略图：`node scripts/gen-algo-thumbs.mjs --only=qr-code`。
+- 新增一种符号 = `symbology/index.ts` 的 `SYMBOLOGIES` + `STANDARD` + 选择器文案
+  （`algo.qr.sym*`）；结构复刻放 `structural.ts`，能对拍放自己一个文件。
+
 ### 流线（`streamlines.ts`，2026-10）
 
 `realtime` 型，**没有任何逐帧状态**：整条线是 `u_time` 的闭式函数（错相 +
