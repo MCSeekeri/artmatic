@@ -52,6 +52,7 @@
 import { hashSeed, mulberry32 } from '../core/prng';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 /** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
@@ -242,7 +243,7 @@ export const sandpileDef: GeneratorDef = {
   id: 'sandpile',
   nameKey: 'algo.sandpile',
   kind: 'sim',
-  volatile: ['rate', 'colorBg', 'colorLive', 'palette'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'palette', 'bgMode'],
   params: [
     // ⚠️ 默认网格是 160 而**不是** 256。理由不是审美，是**成本随倒在中间的沙量
     // 超线性增长**：所有沙都落在同一个格子，得靠崩塌把它推到边界，总崩塌数
@@ -276,8 +277,15 @@ export const sandpileDef: GeneratorDef = {
       ],
     },
     { key: 'rate', labelKey: 'algo.sandpile.speed', type: 'range', min: 1, max: 120, step: 1, defaultValue: 30 },
-    { key: 'colorBg', labelKey: 'algo.sandpile.colorBg', type: 'color', defaultValue: '#05060c' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.sandpile.colorBg',
+      type: 'color',
+      defaultValue: '#05060c',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.sandpile.colorLive', type: 'color', defaultValue: '#ffd489' },
+    bgModeParam(),
   ],
   create: createSandpile,
 };

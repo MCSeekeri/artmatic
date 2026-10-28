@@ -22,9 +22,10 @@
  * 能省的地方全在这里，别再添第二处：域扭曲**每像素一次**（不是每步）、
  * 旋流只在 `u_swirl > 0` 才做三角函数、包络外的射线靠 `e < 0.01` 直接跳过。
  *
- * ## 输出 alpha：它是唯一会写 `a < 1` 的生成器
+ * ## 输出 alpha：全家族第一个支持透明底的生成器
  *
- * 其余生成器一律 `vec4(c, 1.0)`。烟雾要能压到别的轨道上，就必须自己给覆盖度：
+ * 协议见 `shader-lib.ts` 的 `bgModeParam()` 与 `AGENTS.md` 的「透明背景」一节。
+ * 烟雾要能压到别的轨道上，就必须自己给覆盖度：
  * 累积完是**预乘**颜色（`acc` 已经乘过穿透率），而合成链的 render target 是
  * **直通 alpha**（见 `engine/placement.frag.ts`），所以最后一步要**除掉 alpha**
  * 才输出。`bgMode` 两档：`transparent` 直接吐 `vec4(smoke, a)`；
@@ -38,7 +39,7 @@
 
 import { HASH_FAST_GLSL, selectInt } from '../effects/shader-def';
 import { colorVec3 } from '../core/color';
-import { intResParam, type AlgoUniformCtx } from './shader-lib';
+import { bgColorVisible, bgModeParam, intResParam, type AlgoUniformCtx } from './shader-lib';
 import type { GeneratorDef } from './types';
 
 /* ------------------------------------------------------------------ 着色器 */
@@ -72,7 +73,7 @@ uniform float u_light;       // 受光强度
 uniform float u_shadow;      // 自阴影强度（0 = 关掉第二次采样）
 uniform vec3  u_colorDark;   // 阴影里的颜色
 uniform vec3  u_colorLit;    // 受光面的颜色
-uniform int   u_bgMode;      // 0 = 透明 · 1 = 纯色
+uniform int   u_bgMode;      // 0 = 纯色 · 1 = 透明（全家族统一口径，见 bgModeParam）
 uniform vec3  u_bg;          // 纯色底色
 
 /* 三维 value noise。用 hash31（无 sin 族）：坐标跑到几十之后 sin 那族的低位不稳，
@@ -270,7 +271,7 @@ void main() {
 
   /* acc 是预乘的，合成链要直通 alpha（见文件头）。 */
   vec3 smoke = alpha > 1e-3 ? acc / alpha : vec3(0.0);
-  if (u_bgMode == 1) {
+  if (u_bgMode == 0) {
     outColor = vec4(mix(u_bg, smoke, alpha), 1.0);
   } else {
     outColor = vec4(smoke, alpha);
@@ -282,11 +283,9 @@ void main() {
 const MODES: Record<string, number> = { plume: 0, edge: 1 };
 const EDGES: Record<string, number> = { bottom: 0, top: 1, left: 2, right: 3 };
 const OCTAVES: Record<string, number> = { '2': 2, '3': 3, '4': 4 };
-const BG_MODES: Record<string, number> = { transparent: 0, solid: 1 };
 
 const isPlume = (v: Record<string, number | string>): boolean => v.mode === 'plume';
 const isEdge = (v: Record<string, number | string>): boolean => v.mode === 'edge';
-const isSolid = (v: Record<string, number | string>): boolean => v.bgMode === 'solid';
 
 export const smokeDef: GeneratorDef = {
   id: 'smoke',
@@ -406,22 +405,15 @@ export const smokeDef: GeneratorDef = {
     { key: 'colorDark', labelKey: 'algo.smoke.colorDark', type: 'color', defaultValue: '#20232b' },
     { key: 'colorLit', labelKey: 'algo.smoke.colorLit', type: 'color', defaultValue: '#e2e8f2' },
 
-    {
-      key: 'bgMode',
-      labelKey: 'algo.smoke.bgMode',
-      type: 'select',
-      defaultValue: 'transparent',
-      options: [
-        { labelKey: 'algo.smoke.bgTransparent', value: 'transparent' },
-        { labelKey: 'algo.smoke.bgSolid', value: 'solid' },
-      ],
-    },
+    /* 出厂透明（烟雾的本性就是压在别的东西上）—— 它是全家族第一个有这个东西的，
+       所以缺省与别人相反；缩略图因此必须强制 solid，见 catalog.ts。 */
+    { ...bgModeParam(), defaultValue: 'transparent' },
     {
       key: 'bg',
       labelKey: 'algo.smoke.bg',
       type: 'color',
       defaultValue: '#000000',
-      visibleWhen: isSolid,
+      visibleWhen: bgColorVisible,
     },
     intResParam(),
   ],
@@ -455,10 +447,10 @@ export const smokeDef: GeneratorDef = {
 
     /* select 一律走 `selectInt`：它与 mandelbrot 的 variant 同一条路 ——
        `floats()` 的 `Number(v[key]) || 0` 会把字符串派发成 0。 */
+    /* `u_bgMode` 由 AlgoRuntime 统一派发（全家族一套口径），这里不重复写。 */
     selectInt<AlgoUniformCtx>('mode', MODES)(gl, l, v, ctx);
     selectInt<AlgoUniformCtx>('edge', EDGES)(gl, l, v, ctx);
     selectInt<AlgoUniformCtx>('octaves', OCTAVES)(gl, l, v, ctx);
-    selectInt<AlgoUniformCtx>('bgMode', BG_MODES)(gl, l, v, ctx);
 
     u2('u_emit', num('emitX'), num('emitY'));
     u2('u_wind', num('windX'), num('windY'));

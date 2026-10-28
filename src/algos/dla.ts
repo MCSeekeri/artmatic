@@ -36,6 +36,7 @@
  */
 
 import { hashSeed, mulberry32 } from '../core/prng';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef } from './types';
 
 /** 丢弃半径相对聚集体半径的倍数。见文件头第 2 条。 */
@@ -183,7 +184,7 @@ export const dlaDef: GeneratorDef = {
   nameKey: 'algo.dla',
   kind: 'bake',
   reveal: 'value',
-  volatile: ['speed', 'colorBg', 'colorLive'],
+  volatile: ['speed', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'size', labelKey: 'algo.dla.size', type: 'range', min: 256, max: 768, step: 64, defaultValue: 448 },
     { key: 'particles', labelKey: 'algo.dla.particles', type: 'range', min: 1000, max: 20000, step: 500, defaultValue: 6000 },
@@ -199,8 +200,15 @@ export const dlaDef: GeneratorDef = {
       ],
     },
     { key: 'speed', labelKey: 'algo.dla.speed', type: 'range', min: 5, max: 255, step: 1, defaultValue: 30 },
-    { key: 'colorBg', labelKey: 'algo.dla.colorBg', type: 'color', defaultValue: '#03080a' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.dla.colorBg',
+      type: 'color',
+      defaultValue: '#03080a',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.dla.colorLive', type: 'color', defaultValue: '#8ff0d0' },
+    bgModeParam(),
   ],
   bake(params, seed) {
     const { data, w, h } = dlaRun({

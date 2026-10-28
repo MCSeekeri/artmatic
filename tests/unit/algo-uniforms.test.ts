@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { getGenerator, listGenerators } from '../../src/algos/registry';
-import { ALGO_HEAD } from '../../src/algos/shader-lib';
+import { ALGO_HEAD, BG_MODES } from '../../src/algos/shader-lib';
 import { emptyFeatures } from '../../src/algos/feature-source';
 import { makeStubGl, parseUniforms, typeMismatches } from './_uniform-probe';
 import type { AlgoUniformCtx } from '../../src/algos/shader-lib';
@@ -21,6 +21,18 @@ import type { SourceClip } from '../../src/core/schema';
 
 /** `ALGO_HEAD` 自己提供、由 `AlgoRuntime.resolve` 负责写的 uniform。 */
 const HEAD_OWNED = new Set(['u_time', 'u_delta', 'u_seed', 'u_resolution', 'u_aspect']);
+
+/**
+ * **运行期**统一派发、但不属于 `ALGO_HEAD` 的 uniform。
+ *
+ * `u_bgMode`（透明背景开关）就是这一档：派发点在 `AlgoRuntime.resolve`，全家族
+ * 一套口径。它**不能**放进 `ALGO_HEAD` —— 那样二十来个不支持透明的 fragment
+ * 也会声明它，而它们从不读 ⇒ 链接器丢掉 ⇒ `compile-all` 的 `dropped` 判据
+ * （`lab.spec` 里那条「声明了但没被读过」）会整体变红。
+ *
+ * 所以各 def 自己声明、运行期统一写，这里也不能算作「漏写」。
+ */
+const RUNTIME_OWNED = new Set([...HEAD_OWNED, 'u_bgMode']);
 
 interface Probe {
   /** fragment **自己**声明的 uniform（不含 head）。 */
@@ -86,7 +98,7 @@ describe('生成器接线自检', () => {
   test.each(REALTIME)('%s：fragment 声明的参数都被 setUniforms 写到', (id) => {
     const probe = probeGenerator(id)!;
     const missed = [...probe.own.keys()].filter(
-      (n) => !HEAD_OWNED.has(n) && !probe.written.has(n),
+      (n) => !RUNTIME_OWNED.has(n) && !probe.written.has(n),
     );
     expect(
       missed,
@@ -105,6 +117,42 @@ describe('生成器接线自检', () => {
   test.each(REALTIME)('%s：没有摸到未声明的 uniform', (id) => {
     const probe = probeGenerator(id)!;
     expect([...probe.undeclared], `${id} 摸了不存在的 uniform → 名字拼错了`).toEqual([]);
+  });
+
+  test('bgMode 的取值只有 solid / transparent', () => {
+    expect(Object.keys(BG_MODES).sort()).toEqual(['solid', 'transparent']);
+  });
+
+  // `bgMode` 是**参数**，透明是**着色器里的分支**。两边脱节的形态是
+  // 「选了透明，画面一点没变」—— 不报错、也不崩，所以必须有一条结构守卫。
+  //
+  // 覆盖面分三层：`realtime` 看自己的 fragment；`sim` 的自定义着色看
+  // `tintFragment`（`u_bgMode` 的声明在 `TINT_HEAD` 里，但**读不读**在各家）；
+  // `bake` 与默认着色的 `sim` 走 `runtime.ts` 里那两份共用 shader（同一段代码
+  // 服务十几个生成器，改坏了会一起坏，由 E2E 的像素断言兜住）。
+  const withBgMode = ALL.filter((id) =>
+    getGenerator(id)!.params.some((p) => p.key === 'bgMode'),
+  );
+
+  test('大多数生成器都能透明（覆盖面本身是需求）', () => {
+    expect(withBgMode.length).toBeGreaterThanOrEqual(15);
+  });
+
+  test.each(withBgMode)('%s：有 bgMode 参数，着色器就必须真的读 u_bgMode', (id) => {
+    const def = getGenerator(id)!;
+    const src = def.kind === 'realtime' ? def.fragment : def.kind === 'sim' ? def.tintFragment : undefined;
+    // bake 与默认着色的 sim 没有自己的 shader：共用 runtime.ts 的 reveal / tint。
+    if (src === undefined) return;
+    expect(/\bu_bgMode\b/.test(src), `${id} 有 bgMode 参数但 shader 不读它 → 选透明什么都不发生`).toBe(true);
+  });
+
+  test.each(withBgMode)('%s：bgMode 的缺省与取值都在共用那一份里', (id) => {
+    const p = getGenerator(id)!.params.find((q) => q.key === 'bgMode')!;
+    expect(p.type).toBe('select');
+    if (p.type !== 'select') return;
+    expect(p.options.map((o) => o.value).sort()).toEqual(['solid', 'transparent']);
+    // 出厂纯色是这一族的常态；`smoke` 是唯一例外（它的本性就是压在别的东西上）。
+    expect(p.defaultValue).toBe(id === 'smoke' ? 'transparent' : 'solid');
   });
 
   // 每种 reveal 方式都要有人用 —— 否则它没被实战验证过。

@@ -36,7 +36,7 @@
  */
 
 import { colorVec3 } from '../core/color';
-import { intResParam, type AlgoUniformCtx } from './shader-lib';
+import { bgColorVisible, bgModeParam, intResParam, type AlgoUniformCtx } from './shader-lib';
 import type { GeneratorDef } from './types';
 
 export const KLEINIAN_FRAG = `
@@ -49,6 +49,7 @@ uniform float u_glow;
 uniform vec3  u_colorIn;
 uniform vec3  u_colorOut;
 uniform vec3  u_colorGlow;
+uniform int   u_bgMode;    // 0 = 纯色底 · 1 = 透明底（见 bgModeParam）
 
 /* 周期 w、左端 s 的折返。b(z) = z + 2 在 x 上的作用就是这个。 */
 float wrapf(float x, float w, float s) {
@@ -133,8 +134,17 @@ void main() {
     col = mix(u_colorOut, u_colorIn, acc);
   }
   // 边界辉光：cov 恰好在边界上是 0.5，4·cov·(1−cov) 就在那里取到 1
-  col += u_colorGlow * (u_glow * 4.0 * cov * (1.0 - cov));
-  outColor = vec4(col, 1.0);
+  vec3 glow = u_colorGlow * (u_glow * 4.0 * cov * (1.0 - cov));
+  col += glow;
+  /*
+   * 覆盖度就是超采样算出来的占比（含边界辉光的那一圈）——
+   * 这个生成器的 2×2 采样本来就在算它，不需要额外的工作。
+   * 透明底吐「墨色 + 覆盖度」：col 里含底色的部分必须剥掉，否则半覆盖的
+   * 边界会带一圈底色轮廓（直通 alpha，见 shader-lib.ts 的 TINT_FRAG）。
+   */
+  float ink = u_coloring == 1 ? acc : cov;
+  if (u_bgMode == 1) outColor = vec4(u_colorIn + glow, ink);
+  else outColor = vec4(col, 1.0);
 }`;
 
 const COLORINGS: Record<string, number> = { binary: 0, depth: 1 };
@@ -172,8 +182,15 @@ export const kleinianDef: GeneratorDef = {
     },
     { key: 'glow', labelKey: 'algo.kleinian.glow', type: 'range', min: 0, max: 2, step: 0.01, defaultValue: 0.35 },
     { key: 'colorIn', labelKey: 'algo.kleinian.colorInside', type: 'color', defaultValue: '#f6e7c8' },
-    { key: 'colorOut', labelKey: 'algo.kleinian.colorOutside', type: 'color', defaultValue: '#07080e' },
+    {
+      key: 'colorOut',
+      labelKey: 'algo.kleinian.colorOutside',
+      type: 'color',
+      defaultValue: '#07080e',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorGlow', labelKey: 'algo.kleinian.colorGlow', type: 'color', defaultValue: '#4a6cff' },
+    bgModeParam(),
     intResParam(),
   ],
   setUniforms: (gl, l, v, _ctx: AlgoUniformCtx) => {

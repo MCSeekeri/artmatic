@@ -26,7 +26,13 @@
  */
 
 import { colorVec3 } from '../core/color';
-import { intResParam, type AlgoSetUniforms, type AlgoUniformCtx } from './shader-lib';
+import {
+  bgColorVisible,
+  bgModeParam,
+  intResParam,
+  type AlgoSetUniforms,
+  type AlgoUniformCtx,
+} from './shader-lib';
 import type { SelectParam, RangeParam, ParamDef } from '../effects/types';
 
 /**
@@ -90,6 +96,19 @@ uniform int   u_palette;   // 0 单色 · 1 按高度双色 · 2 按法线双色
 uniform vec3  u_color;
 uniform vec3  u_colorB;
 uniform vec3  u_bg;
+/* 0 = 纯色底 · 1 = 透明底（AlgoRuntime 统一派发，见 bgModeParam()）。 */
+uniform int   u_bgMode;
+
+/**
+ * 射线没命中时写什么：纯色底 / 全透明。
+ *
+ * 抽成函数而不是让三个 3D 生成器各写一遍 hit 判定分支：透明底这件事的
+ * 「未命中 = alpha 0」语义只该有一处定义，各写一遍必然有一处漏掉
+ * （漏掉的表现是「透明模式下背景是一块实心色」—— 看起来像 blend 坏了）。
+ */
+vec4 sdfBackground() {
+  return u_bgMode == 1 ? vec4(0.0) : vec4(u_bg, 1.0);
+}
 
 /** 相机基。列 = 右 / 上 / 前，所以 \`cam * vec3(x, y, 1)\` 就是视线方向。 */
 mat3 sdfCam(vec3 eye, vec3 target) {
@@ -329,11 +348,11 @@ export function sdfLightParams(opts: { fog?: number; ao?: number } = {}): ParamD
       defaultValue: '#3a6ea5',
       visibleWhen: (v) => v.palette !== 'single',
     },
-    { key: 'bg', labelKey: 'algo.sdf.bg', type: 'color', defaultValue: '#000000' },
+    { key: 'bg', labelKey: 'algo.sdf.bg', type: 'color', defaultValue: '#000000', visibleWhen: bgColorVisible },
   ];
 }
 
-/** 3D 生成器共用的参数尾巴：质量 + 光照 + 内部分辨率。 */
+/** 3D 生成器共用的参数尾巴：质量 + 光照 + 背景开关 + 内部分辨率。 */
 export function sdfParams(
   opts: { steps?: number; stepScale?: number; fog?: number; ao?: number } = {},
 ): ParamDef[] {
@@ -342,7 +361,7 @@ export function sdfParams(
       ? ({ ...p, defaultValue: opts.stepScale } as ParamDef)
       : p,
   );
-  return [...quality, ...sdfLightParams(opts), intResParam()];
+  return [...quality, ...sdfLightParams(opts), bgModeParam(), intResParam()];
 }
 
 /**

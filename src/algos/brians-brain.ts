@@ -21,6 +21,7 @@ import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCentered } from './pattern-codec';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 export const BB_READY = 0;
@@ -135,7 +136,7 @@ export const briansBrainDef: GeneratorDef = {
   id: 'brians-brain',
   nameKey: 'algo.briansBrain',
   kind: 'sim',
-  volatile: ['rate', 'colorBg', 'colorLive'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
     { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
@@ -169,8 +170,15 @@ export const briansBrainDef: GeneratorDef = {
       visibleWhen: (v) => v.seedMode !== 'pattern',
     },
     { key: 'rate', labelKey: 'algo.briansBrain.speed', type: 'range', min: 2, max: 120, step: 1, defaultValue: 30 },
-    { key: 'colorBg', labelKey: 'algo.briansBrain.colorBg', type: 'color', defaultValue: '#050a12' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.briansBrain.colorBg',
+      type: 'color',
+      defaultValue: '#050a12',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.briansBrain.colorLive', type: 'color', defaultValue: '#6fe3ff' },
+    bgModeParam(),
   ],
   create: createBriansBrain,
 };

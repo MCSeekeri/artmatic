@@ -56,6 +56,7 @@
 
 import { mulberry32 } from '../core/prng';
 import { SnapshotRing } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 /** 复平面视野：以 `CENTER` 为中心、半宽 `HALF`（`zoom` 再缩）。 */
@@ -208,7 +209,7 @@ export const buddhabrotDef: GeneratorDef = {
   nameKey: 'algo.buddhabrot',
   kind: 'sim',
   // `zoom` / `exposure` 是**显示**参数，不进哈希 ⇒ 拉滑杆不重置累积。
-  volatile: ['rate', 'zoom', 'exposure', 'colorBg', 'colorLive'],
+  volatile: ['rate', 'zoom', 'exposure', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'size', labelKey: 'algo.buddhabrot.grid', type: 'range', min: 192, max: 640, step: 64, defaultValue: 384 },
     { key: 'maxIter', labelKey: 'algo.buddhabrot.maxIter', type: 'range', min: 64, max: 1200, step: 16, defaultValue: 320 },
@@ -216,8 +217,15 @@ export const buddhabrotDef: GeneratorDef = {
     { key: 'zoom', labelKey: 'algo.buddhabrot.zoom', type: 'range', min: 1, max: 6, step: 0.05, defaultValue: 1 },
     { key: 'exposure', labelKey: 'algo.buddhabrot.exposure', type: 'range', min: 0.2, max: 2.5, step: 0.05, defaultValue: 1 },
     { key: 'rate', labelKey: 'algo.buddhabrot.speed', type: 'range', min: 1, max: 60, step: 1, defaultValue: 20 },
-    { key: 'colorBg', labelKey: 'algo.buddhabrot.colorBg', type: 'color', defaultValue: '#050208' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.buddhabrot.colorBg',
+      type: 'color',
+      defaultValue: '#050208',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.buddhabrot.colorLive', type: 'color', defaultValue: '#ffd9a8' },
+    bgModeParam(),
   ],
   create: (params, seed) => createBuddhabrot(params, seed),
 };

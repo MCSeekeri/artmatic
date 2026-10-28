@@ -13,7 +13,7 @@
  */
 
 import { colors, floats } from '../effects/shader-def';
-import { intResParam, type AlgoUniformCtx } from './shader-lib';
+import { bgColorVisible, bgModeParam, intResParam, type AlgoUniformCtx } from './shader-lib';
 import type { GeneratorDef } from './types';
 
 const FRAG = `
@@ -23,6 +23,7 @@ uniform float u_major;      // 每 N 格一条粗线（0/1 = 关）
 uniform float u_scroll;     // 平移（格/秒）
 uniform vec3 u_colorBg;
 uniform vec3 u_colorLine;
+uniform int u_bgMode;       // 0 = 纯色底 · 1 = 透明底（见 bgModeParam）
 
 void main() {
   // 以「格」为单位的坐标：纵向 cells 格、横向按宽高比展开 ⇒ 格子是正方形
@@ -46,7 +47,8 @@ void main() {
   float majorLine = (1.0 - smoothstep(hw * 1.7, hw * 1.7 + 0.02, md)) * on;
 
   float ink = max(line, majorLine);
-  outColor = vec4(mix(u_colorBg, u_colorLine, ink), 1.0);
+  if (u_bgMode == 1) outColor = vec4(u_colorLine, ink);
+  else outColor = vec4(mix(u_colorBg, u_colorLine, ink), 1.0);
 }`;
 
 export const gridDef: GeneratorDef = {
@@ -59,8 +61,15 @@ export const gridDef: GeneratorDef = {
     { key: 'thickness', labelKey: 'algo.grid.thickness', type: 'range', min: 0.01, max: 0.4, step: 0.01, defaultValue: 0.08 },
     { key: 'major', labelKey: 'algo.grid.major', type: 'range', min: 0, max: 8, step: 1, defaultValue: 4 },
     { key: 'scroll', labelKey: 'algo.grid.scroll', type: 'range', min: -2, max: 2, step: 0.01, defaultValue: 0 },
-    { key: 'colorBg', labelKey: 'algo.grid.colorBg', type: 'color', defaultValue: '#0c0d10' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.grid.colorBg',
+      type: 'color',
+      defaultValue: '#0c0d10',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLine', labelKey: 'algo.grid.colorLine', type: 'color', defaultValue: '#cfd6e4' },
+    bgModeParam(),
     intResParam(),
   ],
   setUniforms: (gl, l, v, ctx) => {

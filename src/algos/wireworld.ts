@@ -30,6 +30,7 @@
 import { patternFromParam, stampCentered } from './pattern-codec';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 /** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
@@ -164,7 +165,7 @@ export const wireworldDef: GeneratorDef = {
   id: 'wireworld',
   nameKey: 'algo.wireworld',
   kind: 'sim',
-  volatile: ['rate', 'colorBg', 'colorLive'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 32, max: 384, step: 32, defaultValue: 200 },
     { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 32, max: 384, step: 32, defaultValue: 200 },
@@ -188,8 +189,15 @@ export const wireworldDef: GeneratorDef = {
       visibleWhen: (v) => v.seedMode === 'pattern',
     },
     { key: 'rate', labelKey: 'algo.wireworld.speed', type: 'range', min: 2, max: 200, step: 2, defaultValue: 60 },
-    { key: 'colorBg', labelKey: 'algo.wireworld.colorBg', type: 'color', defaultValue: '#05070c' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.wireworld.colorBg',
+      type: 'color',
+      defaultValue: '#05070c',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.wireworld.colorLive', type: 'color', defaultValue: '#ffd166' },
+    bgModeParam(),
   ],
   create: (params) => createWireworld(params),
 };

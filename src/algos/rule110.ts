@@ -22,6 +22,7 @@
 import { mulberry32 } from '../core/prng';
 import { clampMask } from '../core/bitmask';
 import { patternFromParam, stampRow, type Bitmap } from './pattern-codec';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { MessageKey } from '../i18n/locales';
 import type { GeneratorDef } from './types';
 
@@ -149,7 +150,7 @@ export const rule110Def: GeneratorDef = {
   nameKey: 'algo.rule110',
   kind: 'bake',
   // 揭示速度与配色只在 reveal pass 里读 —— 改它们不该重烘整张时空图。
-  volatile: ['speed', 'colorBg', 'colorLive'],
+  volatile: ['speed', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     {
       key: 'rule',
@@ -205,8 +206,15 @@ export const rule110Def: GeneratorDef = {
       ],
     },
     { key: 'speed', labelKey: 'algo.rule110.speed', type: 'range', min: 0, max: 400, step: 1, defaultValue: 96 },
-    { key: 'colorBg', labelKey: 'algo.rule110.colorBg', type: 'color', defaultValue: '#05070f' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.rule110.colorBg',
+      type: 'color',
+      defaultValue: '#05070f',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.rule110.colorLive', type: 'color', defaultValue: '#7fd4ff' },
+    bgModeParam(),
   ],
   bake(params, seed) {
     const w = Math.round(Number(params.width) || 1024);

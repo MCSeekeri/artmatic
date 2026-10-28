@@ -404,7 +404,7 @@
 
 ### 体积烟雾（`smoke.ts`，2026-10）
 
-`realtime` 型，**唯一会写 `a < 1` 的生成器**（其余一律 `vec4(c, 1.0)`）。
+`realtime` 型，**全家族第一个支持透明底的生成器**（协议见下面「透明背景」一节）。
 沿射线固定步长前向累积 + Beer–Lambert；`浓度` 是光学厚度、`采样精度` 是步数。
 
 **调节过程中有四次「改了但看起来没变」，每次都是同一个病根：某一项被积分平均掉了。**
@@ -449,6 +449,38 @@
 性能（40 步 / 3 阶 / 自阴影开）：480p **0.88 ms**、720p **1.48 ms**、1080p **3.32 ms**；
 720p 关自阴影 1.13 ms，720p 拉到 96 步 2.82 ms。`edge` 模式覆盖整屏，
 包络剪枝失效，同分辨率约贵一倍。
+
+### 透明背景（`bgMode`，2026-10）
+
+烟雾之外还有 **20 个**生成器支持透明底：5 个 bake（rule110 / bifurcation / lsystem /
+chaos-game / dla）、10 个 sim（game-of-life / langtons-ant / reaction-diffusion /
+brians-brain / cyclic-ca / sandpile / snowflake / lenia / wireworld / buddhabrot）、
+3 个 3D（menger / mandelbulb / apollonian）、以及 `grid` / `kleinian`。
+
+- **参数与派发各只有一份**：`bgModeParam()` 造参数、`bgModeOf()` 读值
+  （都在 `shader-lib.ts`），`u_bgMode` 由 `AlgoRuntime.resolve` **统一派发**
+  （0 = 纯色 · 1 = 透明）。def 自己不要再写一遍 —— 二十个文件各写一遍就等于
+  留二十个「选了透明什么都没发生」的静默失效点。`smoke` 原本自带一份，
+  而且取值是**反的**（0 = 透明），并入时最容易翻车的地方就在那里。
+- **覆盖面是「墨 + 底」那一族**：有 `colorBg`（bake / sim）或 `bg`（3D）的生成器。
+  `gradient` / `bars` / `mandelbrot` / `newton` / `lyapunov` / 五个 `scene-*` **刻意不给**：
+  它们整帧都是内容，没有「哪一块是背景」这回事。硬造一个（比如按亮度取 alpha）
+  会在边界留下一圈脏边 —— 比没有更糟。
+- **必须吐直通 alpha**：`vec4(墨色, 覆盖度)`，**不是** `vec4(mix(底, 墨, 覆盖度), 覆盖度)`。
+  合成链是直通（非预乘）alpha（`engine/placement.frag.ts`），半覆盖的像素再乘一次
+  alpha 等于把底色又画了一遍 —— 表现是边界上一圈深色轮廓。所以自定义 tint
+  （RD / cyclic）还要多算一个「不掺底色的墨色」。
+- **缺省一律 `solid`**（`smoke` 除外，它出厂就是透明）。理由不是「保住老工程」：
+  `colorBg` 是这一族的正常参数，缺省透明会让它**默认失效**，而缩略图在浅色菜单
+  底板上会糊成脏灰（`catalog.ts` 给 smoke 强制 `solid` 就是那么踩出来的）。
+  透明模式下底色参数由 `bgColorVisible` 藏起来 —— 不留「拖了没反应」的控件。
+- **`bgMode` 必须进 `volatile`**：它只在 reveal / tint 里读，不进 `bake()` / `create()`。
+  漏了就是「切一下透明，跑了几千步的模拟从头重放」。
+- 守卫：`tests/unit/algo-uniforms.test.ts`（有参数就必须真的读 `u_bgMode`；
+  它列在 `RUNTIME_OWNED` 里，不算「声明了没写」）+ `tests/e2e/algo-alpha.spec.ts`。
+  ⚠️ **E2E 只能测「下层透出来」**：渲染上下文是 `alpha: false`（`engine/kit.ts`），
+  `readPixels` 的 A 通道**恒为 255** —— 直接断言 alpha 等于什么都没测。
+  那里用的判据是：透明 + 下层纯红 ⇒ 必须数得到红像素；纯色 + 下层纯红 ⇒ 一个都不许有。
 
 ### Lenia 的卷积（`sim-util.TorusField`）
 

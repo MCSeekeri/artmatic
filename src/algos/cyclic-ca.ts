@@ -24,6 +24,7 @@ import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCentered } from './pattern-codec';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 /** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
@@ -211,7 +212,13 @@ void main() {
   } else {
     col = cyclicHue(t);
   }
-  outColor = vec4(mix(u_colorBg, col, insideUv(uv)), 1.0);
+  /*
+   * 透明底：状态 0 是「空」——覆盖度直接取归一化状态号 t，rgb 取**不掺底色**
+   * 的墨色（phase 那档的 0.25 底衬与底色一样是给纯色底用的，透明模式下要丢掉）。
+   */
+  float inside = insideUv(uv);
+  if (u_bgMode == 1) outColor = vec4(u_palette == 2 ? vec3(t) : cyclicHue(t), t * inside);
+  else outColor = vec4(mix(u_colorBg, col, inside), 1.0);
 }`;
 
 const CYCLIC_PALETTES: Record<string, number> = { wheel: 0, phase: 1, mono: 2 };
@@ -220,7 +227,7 @@ export const cyclicCaDef: GeneratorDef = {
   id: 'cyclic-ca',
   nameKey: 'algo.cyclicCa',
   kind: 'sim',
-  volatile: ['rate', 'colorBg', 'colorLive', 'palette'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'palette', 'bgMode'],
   params: [
     { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
     { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 32, max: 512, step: 32, defaultValue: 256 },
@@ -277,7 +284,13 @@ export const cyclicCaDef: GeneratorDef = {
       visibleWhen: (v) => v.seedMode !== 'pattern',
     },
     { key: 'rate', labelKey: 'algo.cyclicCa.speed', type: 'range', min: 2, max: 200, step: 2, defaultValue: 40 },
-    { key: 'colorBg', labelKey: 'algo.cyclicCa.colorBg', type: 'color', defaultValue: '#05060e' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.cyclicCa.colorBg',
+      type: 'color',
+      defaultValue: '#05060e',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.cyclicCa.colorLive', type: 'color', defaultValue: '#ffe9a8' },
     {
       key: 'palette',
@@ -290,6 +303,7 @@ export const cyclicCaDef: GeneratorDef = {
         { labelKey: 'algo.cyclicCa.palMono', value: 'mono' },
       ],
     },
+    bgModeParam(),
   ],
   create: createCyclicCa,
   tintFragment: CYCLIC_TINT_FRAG,

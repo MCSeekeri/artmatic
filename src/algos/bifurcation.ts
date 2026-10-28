@@ -33,6 +33,7 @@
  *   蓝色的「周期窗口」在 λ 图上会变成一块清晰的黑斑，这是密度图看不出的结构。
  */
 
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef } from './types';
 
 /** 每命中一次轨道落点给这一列加的量。255 / 34 ≈ 7.5 次命中到顶。 */
@@ -175,7 +176,7 @@ export const bifurcationDef: GeneratorDef = {
   nameKey: 'algo.bifurcation',
   kind: 'bake',
   reveal: 'front-x',
-  volatile: ['speed', 'colorBg', 'colorLive'],
+  volatile: ['speed', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     {
       key: 'map',
@@ -217,8 +218,15 @@ export const bifurcationDef: GeneratorDef = {
       visibleWhen: (v) => v.colorMode !== 'lyapunov',
     },
     { key: 'speed', labelKey: 'algo.bifurcation.speed', type: 'range', min: 0, max: 2000, step: 10, defaultValue: 320 },
-    { key: 'colorBg', labelKey: 'algo.bifurcation.colorBg', type: 'color', defaultValue: '#07060c' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.bifurcation.colorBg',
+      type: 'color',
+      defaultValue: '#07060c',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.bifurcation.colorLive', type: 'color', defaultValue: '#ffd9a0' },
+    bgModeParam(),
   ],
   bake(params) {
     const w = Math.round(Number(params.width) || 1024);

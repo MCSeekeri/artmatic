@@ -27,6 +27,7 @@ import {
   TINT_HEAD,
   algoProgramName,
   algoTintProgramName,
+  bgModeOf,
   type AlgoAuxTexture,
   type AlgoUniformCtx,
 } from './shader-lib';
@@ -57,6 +58,8 @@ uniform float u_front;
 uniform int u_reveal;
 uniform vec3 u_colorBg;
 uniform vec3 u_colorLive;
+/* 由 AlgoRuntime 统一派发（不经 def）—— 见 shader-lib.ts 的 bgModeParam()。 */
+uniform int u_bgMode;
 ${FIT_GLSL}
 void main() {
   vec2 uv = containUv(vUv);
@@ -65,8 +68,10 @@ void main() {
   if (u_reveal == 2) revealed = step(cell, u_front);
   else if (u_reveal == 1) revealed = step(uv.x, u_front);
   else revealed = step(uv.y, u_front);
-  vec3 c = mix(u_colorBg, u_colorLive, cell * revealed * insideUv(uv));
-  outColor = vec4(c, 1.0);
+  float ink = cell * revealed * insideUv(uv);
+  // 透明底：墨色 + 覆盖度（直通 alpha，理由见 shader-lib.ts 的 TINT_FRAG）。
+  if (u_bgMode == 1) outColor = vec4(u_colorLive, ink);
+  else outColor = vec4(mix(u_colorBg, u_colorLive, ink), 1.0);
 }`;
 
 interface SimEntry {
@@ -411,7 +416,8 @@ export class AlgoRuntime {
         .u('u_colorBg', colorVec3(String(params.colorBg ?? '#000000')))
         .u('u_colorLive', colorVec3(String(params.colorLive ?? '#ffffff')))
         .u('u_srcAspect', baked.w / baked.h)
-        .u('u_outAspect', renderW / renderH);
+        .u('u_outAspect', renderW / renderH)
+        .u1i('u_bgMode', bgModeOf(params));
       this.kit.pass(this.revealProg, out);
       return { tex: out.tex, w: renderW, h: renderH };
     }
@@ -499,7 +505,8 @@ export class AlgoRuntime {
         .u('u_colorBg', colorVec3(String(params.colorBg ?? '#000000')))
         .u('u_colorLive', colorVec3(String(params.colorLive ?? '#ffffff')))
         .u('u_srcAspect', entry.handle.gridW / entry.handle.gridH)
-        .u('u_outAspect', renderW / renderH);
+        .u('u_outAspect', renderW / renderH)
+        .u1i('u_bgMode', bgModeOf(params));
       if (def.setTintUniforms) {
         def.setTintUniforms(
           this.kit.gl,
@@ -527,7 +534,8 @@ export class AlgoRuntime {
       .u('u_delta', fps > 0 ? 1 / fps : 0)
       .u('u_seed', seed / 4294967296)
       .u('u_resolution', [w, h])
-      .u('u_aspect', w / h);
+      .u('u_aspect', w / h)
+      .u1i('u_bgMode', bgModeOf(params));
     if (auxMap) {
       for (const a of def.auxTextures!) {
         const tex = auxMap.get(a.uniform);

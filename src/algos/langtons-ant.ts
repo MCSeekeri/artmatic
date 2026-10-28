@@ -28,6 +28,7 @@ import { mulberry32 } from '../core/prng';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import { LIVE } from './rule110';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 /** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
@@ -231,7 +232,7 @@ export const langtonsAntDef: GeneratorDef = {
   id: 'langtons-ant',
   nameKey: 'algo.langtonsAnt',
   kind: 'sim',
-  volatile: ['rate', 'colorBg', 'colorLive'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     {
       key: 'variant',
@@ -266,8 +267,15 @@ export const langtonsAntDef: GeneratorDef = {
     },
     { key: 'wrap', labelKey: 'algo.langtonsAnt.wrap', type: 'checkbox', defaultValue: 1 },
     { key: 'rate', labelKey: 'algo.langtonsAnt.speed', type: 'range', min: 10, max: 4000, step: 10, defaultValue: 400 },
-    { key: 'colorBg', labelKey: 'algo.langtonsAnt.colorBg', type: 'color', defaultValue: '#06070d' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.langtonsAnt.colorBg',
+      type: 'color',
+      defaultValue: '#06070d',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.langtonsAnt.colorLive', type: 'color', defaultValue: '#c9a2ff' },
+    bgModeParam(),
   ],
   create: (params, seed) => createAnt(params, seed),
 };

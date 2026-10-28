@@ -32,6 +32,7 @@ import { patternFromParam, stampCentered } from './pattern-codec';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
 import { LIVE } from './rule110';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { MessageKey } from '../i18n/locales';
 import type { GeneratorDef, SimHandle } from './types';
 
@@ -281,7 +282,7 @@ export const gameOfLifeDef: GeneratorDef = {
   nameKey: 'algo.gameOfLife',
   kind: 'sim',
   // 速度与配色不参与 create() —— 改它们不该把跑了几百代的群落重建。
-  volatile: ['rate', 'colorBg', 'colorLive'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 64, max: 256, step: 16, defaultValue: 112 },
     { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 64, max: 256, step: 16, defaultValue: 112 },
@@ -339,8 +340,15 @@ export const gameOfLifeDef: GeneratorDef = {
     { key: 'wrap', labelKey: 'algo.gameOfLife.wrap', type: 'checkbox', defaultValue: 1 },
     { key: 'trail', labelKey: 'algo.gameOfLife.trail', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0 },
     { key: 'rate', labelKey: 'algo.gameOfLife.speed', type: 'range', min: 1, max: 60, step: 1, defaultValue: 12 },
-    { key: 'colorBg', labelKey: 'algo.gameOfLife.colorBg', type: 'color', defaultValue: '#050a08' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.gameOfLife.colorBg',
+      type: 'color',
+      defaultValue: '#050a08',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.gameOfLife.colorLive', type: 'color', defaultValue: '#8affc1' },
+    bgModeParam(),
   ],
   create: createLife,
 };

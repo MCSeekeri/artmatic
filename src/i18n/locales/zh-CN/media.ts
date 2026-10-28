@@ -718,6 +718,11 @@ export const media = {
   'algo.intRes.480': '480p',
   'algo.intRes.720': '720p',
 
+  /* 共用的背景开关（algos/shader-lib.ts 的 bgModeParam —— 二十来个生成器一套） */
+  'algo.bg.mode': '背景',
+  'algo.bg.solid': '纯色',
+  'algo.bg.transparent': '透明',
+
   'algo.rule110': '基本元胞自动机',
   'algo.rule110.rule': '规则',
   'algo.rule110.neighbourhood': '邻域 → 下一代',
@@ -1241,9 +1246,6 @@ export const media = {
   'algo.smoke.shadow': '自阴影',
   'algo.smoke.colorDark': '暗部色',
   'algo.smoke.colorLit': '受光色',
-  'algo.smoke.bgMode': '背景',
-  'algo.smoke.bgTransparent': '透明',
-  'algo.smoke.bgSolid': '纯色',
   'algo.smoke.bg': '背景色',
 
   /* ---- Buddhabrot（逃逸轨道密度）---- */

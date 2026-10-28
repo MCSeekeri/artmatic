@@ -63,6 +63,7 @@
 
 import { patternFromParam, stampCenteredInto } from './pattern-codec';
 import { SnapshotRing } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 /** 冻结阈值。`s ≥ 1` 即成冰，之后不再变化。 */
@@ -326,7 +327,7 @@ export const snowflakeDef: GeneratorDef = {
   id: 'snowflake',
   nameKey: 'algo.snowflake',
   kind: 'sim',
-  volatile: ['rate', 'colorBg', 'colorLive'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'size', labelKey: 'algo.snowflake.grid', type: 'range', min: 128, max: 512, step: 32, defaultValue: 320 },
     {
@@ -368,8 +369,15 @@ export const snowflakeDef: GeneratorDef = {
       visibleWhen: (v) => v.seedMode === 'pattern',
     },
     { key: 'rate', labelKey: 'algo.snowflake.speed', type: 'range', min: 1, max: 60, step: 1, defaultValue: 30 },
-    { key: 'colorBg', labelKey: 'algo.snowflake.colorBg', type: 'color', defaultValue: '#04121f' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.snowflake.colorBg',
+      type: 'color',
+      defaultValue: '#04121f',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.snowflake.colorLive', type: 'color', defaultValue: '#dff3ff' },
+    bgModeParam(),
   ],
   create: (params) => createSnowflake(params),
 };

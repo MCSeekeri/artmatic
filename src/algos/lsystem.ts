@@ -33,6 +33,7 @@
  */
 
 import { hashSeed, mulberry32 } from '../core/prng';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { MessageKey } from '../i18n/locales';
 import type { GeneratorDef } from './types';
 
@@ -268,7 +269,7 @@ export const lsystemDef: GeneratorDef = {
   nameKey: 'algo.lsystem',
   kind: 'bake',
   reveal: 'value',
-  volatile: ['speed', 'colorBg', 'colorLive'],
+  volatile: ['speed', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     {
       key: 'preset',
@@ -299,8 +300,15 @@ export const lsystemDef: GeneratorDef = {
     },
     // 'value' 模式的前沿以 0..1 走完整个 255 值域，所以速度单位是「值/秒」。
     { key: 'speed', labelKey: 'algo.lsystem.speed', type: 'range', min: 5, max: 255, step: 1, defaultValue: 42 },
-    { key: 'colorBg', labelKey: 'algo.lsystem.colorBg', type: 'color', defaultValue: '#04070a' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.lsystem.colorBg',
+      type: 'color',
+      defaultValue: '#04070a',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.lsystem.colorLive', type: 'color', defaultValue: '#9fe8ff' },
+    bgModeParam(),
   ],
   bake(params, seed) {
     const w = Math.round(Number(params.width) || 768);

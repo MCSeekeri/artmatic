@@ -40,6 +40,7 @@
  */
 
 import { hashSeed, mulberry32 } from '../core/prng';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef } from './types';
 
 export type ChaosRestriction = 'none' | 'noRepeat';
@@ -142,7 +143,7 @@ export const chaosGameDef: GeneratorDef = {
   nameKey: 'algo.chaos',
   kind: 'bake',
   reveal: 'value',
-  volatile: ['speed', 'colorBg', 'colorLive'],
+  volatile: ['speed', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'vertices', labelKey: 'algo.chaos.vertices', type: 'range', min: 3, max: 8, step: 1, defaultValue: 5 },
     { key: 'ratio', labelKey: 'algo.chaos.ratio', type: 'range', min: 0.2, max: 0.8, step: 0.01, defaultValue: 0.5 },
@@ -159,8 +160,15 @@ export const chaosGameDef: GeneratorDef = {
     },
     { key: 'size', labelKey: 'algo.chaos.size', type: 'range', min: 256, max: 1024, step: 64, defaultValue: 512 },
     { key: 'speed', labelKey: 'algo.chaos.speed', type: 'range', min: 5, max: 255, step: 1, defaultValue: 40 },
-    { key: 'colorBg', labelKey: 'algo.chaos.colorBg', type: 'color', defaultValue: '#07060c' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.chaos.colorBg',
+      type: 'color',
+      defaultValue: '#07060c',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.chaos.colorLive', type: 'color', defaultValue: '#ffb46b' },
+    bgModeParam(),
   ],
   bake(params, seed) {
     const { data, w, h } = chaosGameRun({

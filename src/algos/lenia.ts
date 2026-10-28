@@ -33,6 +33,7 @@ import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCenteredInto } from './pattern-codec';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing, TorusField, annulusKernel } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { GeneratorDef, SimHandle } from './types';
 
 /** 网格尺寸约束：与参数表里 `width` / `height` 的 min / max / default 同源。 */
@@ -170,7 +171,7 @@ export const leniaDef: GeneratorDef = {
   id: 'lenia',
   nameKey: 'algo.lenia',
   kind: 'sim',
-  volatile: ['rate', 'colorBg', 'colorLive'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'bgMode'],
   params: [
     { key: 'width', labelKey: 'algo.simGrid.width', type: 'range', min: 48, max: 192, step: 16, defaultValue: 112 },
     { key: 'height', labelKey: 'algo.simGrid.height', type: 'range', min: 48, max: 192, step: 16, defaultValue: 112 },
@@ -225,8 +226,15 @@ export const leniaDef: GeneratorDef = {
       visibleWhen: (v) => v.seedMode === 'random',
     },
     { key: 'rate', labelKey: 'algo.lenia.speed', type: 'range', min: 2, max: 40, step: 1, defaultValue: 12 },
-    { key: 'colorBg', labelKey: 'algo.lenia.colorBg', type: 'color', defaultValue: '#04070c' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.lenia.colorBg',
+      type: 'color',
+      defaultValue: '#04070c',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.lenia.colorLive', type: 'color', defaultValue: '#7cf2c0' },
+    bgModeParam(),
   ],
   create: createLenia,
 };

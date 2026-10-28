@@ -104,6 +104,61 @@ export function intResParam(): SelectParam {
   };
 }
 
+/* ---------------------------------------------- 背景 / 透明度（全家族共用） */
+
+/**
+ * `bgMode` 的取值 → `u_bgMode`。
+ *
+ * ## 为什么是 select 而不是 checkbox
+ *
+ * 工程 JSON 里存的是字符串（`'solid'` / `'transparent'`），与 `smoke` 早已发布的
+ * 参数同形 —— 那边已经是这套取值，另造一个布尔会让「同一个概念两种写法」。
+ * 而且 select 的**选项名会进能力清单**（`serializeParam`），模型因此读得到
+ * 「有透明这一档」；布尔只能告诉它「有个开关」。
+ *
+ * ## 缺省是 `solid`（不是透明）
+ *
+ * 这一族生成器的出厂画面是「墨色 + 底色」两件套，`colorBg` 是其中一个正常参数。
+ * 缺省透明会让那个参数**默认失效**（拖它什么也不动），而缩略图在浅色菜单底板上
+ * 会糊成一片脏灰（`smoke` 就是这样，所以它在 `catalog.ts` 里必须强制 `solid`）。
+ * 所以透明是**显式选择**，不是缺省 —— 与「透明度通道存在」这件事不冲突。
+ */
+export const BG_MODES: Record<string, number> = { solid: 0, transparent: 1 };
+
+/**
+ * 背景开关参数。**唯一真源** —— 二十来个生成器共用一套文案键与取值。
+ *
+ * 读值一律走 `bgModeOf()`（缺键 → solid），不要自己写 `v.bgMode === 'transparent'`：
+ * 手改过的老工程里根本没有这个键。
+ */
+export function bgModeParam(): SelectParam {
+  return {
+    key: 'bgMode',
+    labelKey: 'algo.bg.mode',
+    type: 'select',
+    defaultValue: 'solid',
+    options: [
+      { labelKey: 'algo.bg.solid', value: 'solid' },
+      { labelKey: 'algo.bg.transparent', value: 'transparent' },
+    ],
+  };
+}
+
+/** 参数表 → `u_bgMode` 的整数。**缺键 / 未知值一律 solid**（= 历史行为）。 */
+export function bgModeOf(values: Record<string, number | string>): number {
+  return BG_MODES[String(values['bgMode'] ?? 'solid')] ?? 0;
+}
+
+/**
+ * 背景色参数的 `visibleWhen`：透明模式下底色不参与任何运算，**必须藏起来**。
+ *
+ * 留着它的代价不是多一个控件，而是「拖它画面不动」—— 那是本项目最不能接受
+ * 的失效形态（见根 AGENTS §1.6 与各处的「静默无效」条目）。
+ */
+export function bgColorVisible(values: Record<string, number | string>): boolean {
+  return values['bgMode'] !== 'transparent';
+}
+
 /**
  * 解析 `uniform <type> u_<name>;`（一行一个）。返回名字 → 类型。
  *
@@ -320,14 +375,24 @@ out vec4 outColor;
 uniform sampler2D u_tex;
 uniform vec3 u_colorBg;
 uniform vec3 u_colorLive;
+/* 由 AlgoRuntime 统一派发（不经 def 的 setTintUniforms）—— 见 bgModeParam()。
+   0 = 纯色底 · 1 = 透明底。自定义 tint 直接用这个名字，不要再声明一次。 */
+uniform int u_bgMode;
 ${FIT_GLSL}
 `;
 
-/** `sim` 型的默认着色：单通道 R8 状态 + 双色调。 */
+/**
+ * `sim` 型的默认着色：单通道 R8 状态 + 双色调。
+ *
+ * **透明底时必须吐「墨色 + 覆盖度」**，不能吐 `mix(底色, 墨色, ink)`：合成链是
+ * 直通（非预乘）alpha（`engine/placement.frag.ts`），半覆盖的像素再乘一次 alpha
+ * 就等于把底色又画了一遍 —— 边界上会出现一圈深色轮廓。
+ */
 export const TINT_FRAG = `${TINT_HEAD}
 void main() {
   vec2 uv = containUv(vUv);
   float cell = texture(u_tex, clamp(uv, 0.0, 1.0)).r;
-  vec3 c = mix(u_colorBg, u_colorLive, cell * insideUv(uv));
-  outColor = vec4(c, 1.0);
+  float ink = cell * insideUv(uv);
+  if (u_bgMode == 1) outColor = vec4(u_colorLive, ink);
+  else outColor = vec4(mix(u_colorBg, u_colorLive, ink), 1.0);
 }`;

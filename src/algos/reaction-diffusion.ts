@@ -37,6 +37,7 @@ import { mulberry32 } from '../core/prng';
 import { patternFromParam, stampCenteredInto } from './pattern-codec';
 import { gridSizeOf } from './grid-dims';
 import { SnapshotRing } from './sim-util';
+import { bgColorVisible, bgModeParam } from './shader-lib';
 import type { MessageKey } from '../i18n/locales';
 import type { GeneratorDef, SimHandle } from './types';
 
@@ -328,24 +329,36 @@ void main() {
   float u = c.r;
   float v = c.g * (1.0 / ${RD_V_SCALE}.0);
 
+  /* 覆盖度：这一格有多少「墨」。四种调色板共用同一个量 ——
+     chemical 里 u 只改亮度（乘子），不参与「哪里算画到了」。 */
+  float ink = u_showU == 1 ? rdHard(u) : rdHard(v * 2.6);
+
   vec3 col;
+  /* 透明底要的是**全覆度的墨色**（不含底色），直通 alpha 下 rgb 不该再掺底色。 */
+  vec3 pure;
   if (u_showU == 1) {
-    col = mix(u_colorBg, u_colorLive, rdHard(u));
+    col = mix(u_colorBg, u_colorLive, ink);
+    pure = u_colorLive;
   } else if (u_palette == 1) {
     // chemical：活性区是亮色，被消耗的底变暗
-    col = mix(u_colorBg, u_colorLive, rdHard(v * 2.6)) * (0.55 + 0.45 * u);
+    col = mix(u_colorBg, u_colorLive, ink) * (0.55 + 0.45 * u);
+    pure = u_colorLive * (0.55 + 0.45 * u);
   } else if (u_palette == 2) {
-    // thermal：低端沉黑、高端过曝成暖白
-    float t = rdHard(v * 2.6);
-    col = mix(vec3(0.02, 0.0, 0.05), vec3(1.0, 0.86, 0.42), t * t);
+    // thermal：低端沉黑、高端过曝成暖白（自成一体的色阶，与底色无关）
+    pure = mix(vec3(0.02, 0.0, 0.05), vec3(1.0, 0.86, 0.42), ink * ink);
+    col = pure;
   } else if (u_palette == 3) {
     // mono：纯灰阶 —— 给下游的通道错位 / 边缘类特效当底图
-    col = vec3(rdHard(v * 2.6));
+    pure = vec3(ink);
+    col = pure;
   } else {
-    col = mix(u_colorBg, u_colorLive, rdHard(v * 2.6));
+    col = mix(u_colorBg, u_colorLive, ink);
+    pure = u_colorLive;
   }
-  // contain 之外填底色（与共享 TINT_FRAG 的观感一致，不是黑边）
-  outColor = vec4(mix(u_colorBg, col, insideUv(uv)), 1.0);
+  // contain 之外：透明底是空的，纯色底填底色（与共享 TINT_FRAG 的观感一致）
+  float inside = insideUv(uv);
+  if (u_bgMode == 1) outColor = vec4(pure, ink * inside);
+  else outColor = vec4(mix(u_colorBg, col, inside), 1.0);
 }`;
 
 const PALETTES: Record<string, number> = { duotone: 0, chemical: 1, thermal: 2, mono: 3 };
@@ -373,7 +386,7 @@ export const reactionDiffusionDef: GeneratorDef = {
   nameKey: 'algo.reactionDiffusion',
   kind: 'sim',
   // 只影响着色与播放的键：改它们不重建模拟（否则跑了几千步的图案瞬间丢失）
-  volatile: ['rate', 'colorBg', 'colorLive', 'palette', 'contrast', 'showU'],
+  volatile: ['rate', 'colorBg', 'colorLive', 'palette', 'contrast', 'showU', 'bgMode'],
   params: [
     {
       key: 'preset',
@@ -470,7 +483,13 @@ export const reactionDiffusionDef: GeneratorDef = {
     // 网格拉到 384²（约 5.8 倍）时要自己把速度降下来 —— 静态参数表表达不了
     // 「速度与网格的乘积」，这是本生成器的已知限制。
     { key: 'rate', labelKey: 'algo.reactionDiffusion.speed', type: 'range', min: 15, max: 240, step: 5, defaultValue: 120 },
-    { key: 'colorBg', labelKey: 'algo.reactionDiffusion.colorBg', type: 'color', defaultValue: '#04060a' },
+    {
+      key: 'colorBg',
+      labelKey: 'algo.reactionDiffusion.colorBg',
+      type: 'color',
+      defaultValue: '#04060a',
+      visibleWhen: bgColorVisible,
+    },
     { key: 'colorLive', labelKey: 'algo.reactionDiffusion.colorLive', type: 'color', defaultValue: '#ffb35c' },
     {
       key: 'palette',
@@ -486,6 +505,7 @@ export const reactionDiffusionDef: GeneratorDef = {
     },
     { key: 'contrast', labelKey: 'algo.reactionDiffusion.contrast', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0.35 },
     { key: 'showU', labelKey: 'algo.reactionDiffusion.showU', type: 'checkbox', defaultValue: 0 },
+    bgModeParam(),
   ],
   create: createReactionDiffusion,
   tintFragment: RD_TINT_FRAG,

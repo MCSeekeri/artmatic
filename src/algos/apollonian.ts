@@ -67,7 +67,7 @@ void main() {
 
   float hit = sdfMarch(eye, rd);
   if (hit <= 0.0) {
-    outColor = vec4(u_bg, 1.0);
+    outColor = sdfBackground();
     return;
   }
   vec3 q = eye + rd * hit;
