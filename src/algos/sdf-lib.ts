@@ -64,6 +64,53 @@ export const SDF_TONEMAPS: Record<string, number> = {
 };
 
 /**
+ * 镜头模式的取值映射（**唯一定义**：两个生成器的派发与单测都读它）。
+ *
+ * `orbit` 是历史行为（绕原点公转），必须留在缺省位 —— 新加的参数没有键时
+ * `raw[key] ?? defaultValue` 会取它，老工程的取景因此不变。
+ */
+export const SDF_CAMERAS: Record<string, number> = { orbit: 0, fly: 1 };
+
+/**
+ * 穿梭相机的路径。两个生成器共用（menger / apollonian）。
+ *
+ * ## 为什么是正弦叠加而不是真随机
+ *
+ * 硬约束 1.1：唯一时钟是 t，同一个 t 必须给出同一帧。所以路径必须是 t 的
+ * **闭式函数** —— 积分「速度 + 随机转向」那种写法在 seek 时不可复现。
+ *
+ * 三层正弦的频率比取互质的小数（0.37 / 0.91 / 2.03 …）：单层是明显的闭环，
+ * 三层叠加在一个镜头（几秒）里看不出周期，而在 24 秒的工程里也不会正好撞回
+ * 起点。相位由 `u_seed` 给，所以同一个工程里两条轨道不会飞同一条线。
+ *
+ * ## 切线与退化
+ *
+ * 视线朝路径的切线（0.25 秒的有限差分）。解析导数写起来更容易错，而这里
+ * 每帧只要两次求值。切线长度趋零时（路径在某个轴上到了极值点）退回 +z ——
+ * `normalize` 零向量会给 NaN，而 NaN 相机让整幅画面消失且不报错。
+ */
+const SDF_FLY_GLSL = `
+vec3 sdfFlyPos(float t, float seed) {
+  float a = seed * 6.2831853;
+  return vec3(
+    sin(t * 0.37 + a)       + 0.45 * sin(t * 0.91 + a * 1.7) + 0.18 * sin(t * 2.03 + a * 2.3),
+    sin(t * 0.43 + a * 1.3) + 0.45 * sin(t * 1.07 + a * 2.9) + 0.18 * sin(t * 1.87 + a * 0.7),
+    sin(t * 0.29 + a * 2.1) + 0.45 * sin(t * 0.83 + a * 0.4) + 0.18 * sin(t * 1.71 + a * 1.9));
+}
+
+/** 穿梭相机：位置在原点附近游走，视线朝切线。amp 用来把某一轴压扁。 */
+void sdfFlyCam(float t, float seed, float speed, float range, vec3 amp, out vec3 eye, out vec3 fwd) {
+  float tt = t * speed;
+  vec3 p0 = sdfFlyPos(tt, seed) * range * amp;
+  vec3 p1 = sdfFlyPos(tt + 0.25, seed) * range * amp;
+  vec3 d = p1 - p0;
+  float l = length(d);
+  eye = p0;
+  fwd = l > 1e-4 ? d / l : vec3(0.0, 0.0, 1.0);
+}
+`;
+
+/**
  * 调色板值的映射（**唯一定义**：`sdfUniforms` 与单测都读它）。
  *
  * ⚠️ **`dual` 是一个不在选项里的别名**，指向 `height`。它曾是
@@ -197,6 +244,7 @@ vec4 sdfBackground() {
 }
 ${SDF_CAM_GLSL}
 ${SDF_EPS_GLSL}
+${SDF_FLY_GLSL}
 
 /**
  * 光线步进。**命中返回行进距离，没命中返回负值**（哨兵值而不是 out 参数：
@@ -291,6 +339,37 @@ float sdfShadow(vec3 ro, vec3 rd, float mint, float maxt, float k, int steps) {
     if (t > maxt) break;
   }
   return clamp(res, 0.0, 1.0);
+}
+
+/**
+ * 把镜头推出实体：沿距离场梯度推到离表面至少 margin。
+ *
+ * 穿梭时这是**唯一**防止「镜头卡在墙里」的手段。卡进去的表现不是崩溃，而是
+ * 整幅画面变成一块纯色 —— 第一段步进立刻以 d 接近 0 判成命中，于是整屏都是
+ * 同一个表面点的颜色。不报错，看起来像「这个生成器坏了」。
+ *
+ * 三处防御：
+ * - 梯度用 6 点差分而不是四面体：四面体在退化点（深处 / 对称中心）会
+ *   normalize 零向量 → NaN → 相机坐标全 NaN → 画面整个消失。
+ *   6 点差分能自己判长度，退化时退回沿 +y 推。
+ * - 单步位移封顶（0.5）：深处 d 可能是个大负数，不封顶会把镜头弹到场景外。
+ * - 最多 5 轮：折叠型距离场在深处会低估（真实距离比返回值大），一轮推不出去，
+ *   而推不出去的表现就是整屏纯色 —— 多花几次求值换「不出现坏帧」是划算的。
+ */
+vec3 sdfCameraClear(vec3 p, float margin) {
+  for (int i = 0; i < 5; i++) {
+    float d = ${sd}(p);
+    if (d >= margin) break;
+    float h = max(u_eps, 0.002);
+    vec3 g = vec3(
+      ${sd}(p + vec3(h, 0.0, 0.0)) - ${sd}(p - vec3(h, 0.0, 0.0)),
+      ${sd}(p + vec3(0.0, h, 0.0)) - ${sd}(p - vec3(0.0, h, 0.0)),
+      ${sd}(p + vec3(0.0, 0.0, h)) - ${sd}(p - vec3(0.0, 0.0, h)));
+    float gl2 = dot(g, g);
+    vec3 dir = gl2 > 1e-14 ? g * inversesqrt(gl2) : vec3(0.0, 1.0, 0.0);
+    p += dir * min(margin - d, 0.5);
+  }
+  return p;
 }
 
 /** 调色板。按高度/按法线两种双色 —— 分形的高度分布差异很大，够用。 */
@@ -776,6 +855,48 @@ export function sdfShadeParams(
         { labelKey: 'algo.sdf.tonemapAces', value: 'aces' },
       ],
     } satisfies SelectParam,
+  ];
+}
+
+/**
+ * 镜头模式 + 穿梭的两个量。**只给需要穿梭的生成器**（menger / apollonian）——
+ * 放进 `sdfParams()` 会给 mandelbulb 也塞三个它不认识的滑杆。
+ *
+ * `camera` 的缺省必须是 `orbit`：新参数在老工程里没有键，
+ * `raw[key] ?? defaultValue` 会取它，取景因此不变。
+ */
+export function sdfCameraParams(): ParamDef[] {
+  return [
+    {
+      key: 'camera',
+      labelKey: 'algo.sdf.camera',
+      type: 'select',
+      defaultValue: 'orbit',
+      options: [
+        { labelKey: 'algo.sdf.cameraOrbit', value: 'orbit' },
+        { labelKey: 'algo.sdf.cameraFly', value: 'fly' },
+      ],
+    } satisfies SelectParam,
+    {
+      key: 'flySpeed',
+      labelKey: 'algo.sdf.flySpeed',
+      type: 'range',
+      min: 0.05,
+      max: 3,
+      step: 0.05,
+      defaultValue: 0.6,
+      visibleWhen: (v) => v.camera === 'fly',
+    } satisfies RangeParam,
+    {
+      key: 'flyRange',
+      labelKey: 'algo.sdf.flyRange',
+      type: 'range',
+      min: 0.2,
+      max: 4,
+      step: 0.05,
+      defaultValue: 1.2,
+      visibleWhen: (v) => v.camera === 'fly',
+    } satisfies RangeParam,
   ];
 }
 

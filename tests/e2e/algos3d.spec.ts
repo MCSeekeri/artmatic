@@ -110,6 +110,57 @@ test('Apollonian：画出球堆（不是一块平面 / 一条线），迭代次�
  * 这条同时把「L1 > N 才算画面变了」这个判据钉在地上：噪声底必须远小于 N，
  * 否则上面三条只是在量噪声。
  */
+/*
+ * ---- 无限延伸 + 穿梭镜头 ----
+ *
+ * 两条判据都选**结构性**的量，不是「像素变了」：
+ * - 无限延伸的形态特征是「画面里没有背景」——单体档有 60% 的天空，铺满空间的
+ *   阵列不可能有。用**亮像素占比**（lit）比，阈值给的是数量级差。
+ * - 穿梭是「镜头在移动」，与环绕的区别在于视点位置完全不同。用分块 L1 比，
+ *   同时先证明两边都有实体（否则「两张黑图不同」会假通过）。
+ */
+test('Menger：无限延伸真的铺满画面，不只是换了张图', async ({ page }) => {
+  test.setTimeout(180_000);
+  const bounded = await shoot(page, 'menger', { intRes: '480', extent: 'bounded' });
+  const infinite = await shoot(page, 'menger', { intRes: '480', extent: 'infinite' });
+  expect(bounded.lit / bounded.total, '单体档必须有实体').toBeGreaterThan(0.02);
+  expect(infinite.lit / infinite.total, '无限档必须有实体').toBeGreaterThan(0.02);
+  expect(
+    infinite.lit / infinite.total,
+    '无限延伸应当几乎没有背景（单体档有大片天空）',
+  ).toBeGreaterThan(bounded.lit / bounded.total + 0.3);
+  expect(gridL1(infinite.grid, bounded.grid), '两档画面必须不同').toBeGreaterThan(10);
+});
+
+test('Menger：穿梭镜头走的是另一条路径，而不是绕原点公转', async ({ page }) => {
+  test.setTimeout(180_000);
+  const cfg = { intRes: '480', extent: 'infinite' };
+  const orbit = await shoot(page, 'menger', cfg);
+  const fly = await shoot(page, 'menger', { ...cfg, camera: 'fly' });
+  expect(orbit.lit / orbit.total, '环绕档必须有实体（否则下面的「不同」是空转）').toBeGreaterThan(
+    0.02,
+  );
+  expect(fly.lit / fly.total, '穿梭档必须有实体').toBeGreaterThan(0.02);
+  expect(gridL1(fly.grid, orbit.grid), '换镜头必须换视点（分块 L1）').toBeGreaterThan(10);
+});
+
+test('Menger：穿梭镜头也是确定的（路径是 t 的闭式函数，不许有随机源）', async ({ page }) => {
+  test.setTimeout(180_000);
+  const cfg = { intRes: '480', extent: 'infinite', camera: 'fly' };
+  const a = await shoot(page, 'menger', cfg);
+  const b = await shoot(page, 'menger', cfg);
+  expect(gridL1(a.grid, b.grid), '同 t 两次加载必须一致').toBeLessThan(1);
+});
+
+test('Apollonian：穿梭镜头与环绕给出不同的视点', async ({ page }) => {
+  test.setTimeout(180_000);
+  const orbit = await shoot(page, 'apollonian', { intRes: '480', iter: 8 });
+  const fly = await shoot(page, 'apollonian', { intRes: '480', iter: 8, camera: 'fly' });
+  expect(orbit.lit / orbit.total, '环绕档必须有实体').toBeGreaterThan(0.02);
+  expect(fly.lit / fly.total, '穿梭档必须有实体').toBeGreaterThan(0.02);
+  expect(gridL1(fly.grid, orbit.grid), '换镜头必须换视点（分块 L1）').toBeGreaterThan(10);
+});
+
 test('同参数跨两次加载逐块一致（分块 L1 的噪声底）', async ({ page }) => {
   test.setTimeout(120_000);
   /* 带上阴影：软阴影是唯一可能被写成「每帧抖一下」的东西（抖动换平滑是常规做法，

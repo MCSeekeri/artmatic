@@ -1003,6 +1003,9 @@ export const media = {
   'algo.menger.variant': '形体',
   'algo.menger.variantSponge': '海绵（三维）',
   'algo.menger.variantCarpet': '地毯（挤出）',
+  'algo.menger.extent': '范围',
+  'algo.menger.extentBounded': '单体',
+  'algo.menger.extentInfinite': '无限延伸',
   'algo.menger.push': '推近',
   'algo.menger.rate': '公转速度',
   'algo.menger.depth': '递归深度',
@@ -1225,6 +1228,12 @@ export const media = {
   'algo.sdf.tonemap': '色调映射',
   'algo.sdf.tonemapNone': '线性',
   'algo.sdf.tonemapAces': 'ACES',
+  /* 镜头（只有 menger / apollonian 有，文案共用一套） */
+  'algo.sdf.camera': '镜头',
+  'algo.sdf.cameraOrbit': '环绕',
+  'algo.sdf.cameraFly': '穿梭',
+  'algo.sdf.flySpeed': '穿梭速度',
+  'algo.sdf.flyRange': '穿梭幅度',
 
   /* ---- 反应扩散（Gray-Scott）---- */
   'algo.reactionDiffusion': '反应扩散',
