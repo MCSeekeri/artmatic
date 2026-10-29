@@ -19,7 +19,7 @@
  * | `bail`  | 逃逸半径。取 2 是惯例；调大只是把远处那些小凸起算得更准，更贵 |
  */
 
-import { sdfKernel, sdfParams, sdfUniforms } from './sdf-lib';
+import { sdfKernel, sdfParams, sdfShadeUniforms, sdfUniforms } from './sdf-lib';
 import type { GeneratorDef } from './types';
 
 const SD = 'sdMandelbulb';
@@ -66,7 +66,7 @@ void main() {
     return;
   }
   vec3 q = eye + rd * hit;
-  vec3 n = sdfNormal(q, 0.0009);
+  vec3 n = sdfNormal(q, sdfNormalEps(hit));
   outColor = vec4(sdfShade(q, n, rd, hit, sdfTint(q, n)), 1.0);
 }`;
 
@@ -84,10 +84,11 @@ export const mandelbulbDef: GeneratorDef = {
     { key: 'dist', labelKey: 'algo.sdf.dist', type: 'range', min: 1.2, max: 5, step: 0.01, defaultValue: 2.4 },
     { key: 'push', labelKey: 'algo.sdf.push', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0 },
     { key: 'rate', labelKey: 'algo.sdf.rate', type: 'range', min: 0, max: 6, step: 0.05, defaultValue: 1 },
-    ...sdfParams(),
+    ...sdfParams({ gloss: 0.4, ambient: '#141f38', pointPow: 0.35, pointDist: 2.6 }),
   ],
   setUniforms: (gl, l, v, ctx) => {
     sdfUniforms()(gl, l, v, ctx);
+    sdfShadeUniforms()(gl, l, v, ctx);
     const set1f = (name: string, value: number): void => {
       const loc = l[name];
       if (loc) gl.uniform1f(loc, value);

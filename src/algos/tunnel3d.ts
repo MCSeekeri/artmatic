@@ -116,6 +116,12 @@ uniform vec3  u_colorB;
 uniform vec3  u_bg;
 /* 0 = 纯色底 · 1 = 透明底（运行期统一派发，不在这里写）。 */
 uniform int   u_bgMode;
+/*
+ * 软阴影强度。**不能并进 sdfUniforms()** —— 那是两个内核共用的基础批，
+ * 加进去就要求材质型内核也声明它，而 algo-uniforms 测试的「摸到未声明的
+ * uniform」会立刻红。名字与 sdfKernel 那套同名同义，由隧道自己派发。
+ */
+uniform float u_shadow;
 
 uniform int   u_style;     // 0 霓虹 · 1 废墟 · 2 线框 · 3 示波仪
 uniform int   u_section;   // 截面分支
@@ -842,7 +848,18 @@ void main() {
   float ao = mix(1.0, sdfAOMat(q, n), clamp(u_ao, 0.0, 1.0));
   /* 废墟的主光偏向「隧道尽头」：走廊的墙都朝内，纯方向光几乎不产生明暗 */
   vec3 keyDir = u_style == 1 ? normalize(u_light + vec3(0.15, 0.35, -1.1)) : u_light;
-  float lam = max(dot(n, keyDir), 0.0);
+  /*
+   * 软阴影只管主光，不乘 AO 也不乘自发光。
+   *
+   * 起点抬到 4e-3：刻符宽 6e-3 的一半，比 sdfNormalMat 的差分步长 2.2e-3
+   * 大一档 —— 再小就是整片表面的自阴影痤疮。
+   * maxt 只给 3.0（不是 u_maxDist）：隧道深景本来就是雾的活，阴影只需要管
+   * 近处拱架与壁面之间的遮挡，给远了是白烧步数。
+   */
+  float sh = u_shadow > 0.0
+    ? mix(1.0, sdfShadowMat(q + n * 0.004, keyDir, 0.004, 3.0, 10.0, 10), clamp(u_shadow, 0.0, 1.0))
+    : 1.0;
+  float lam = max(dot(n, keyDir), 0.0) * sh;
   float bak = max(dot(n, -u_light), 0.0) * 0.35;
   float rim = pow(1.0 - max(dot(n, -rd), 0.0), 2.4);
   /*
@@ -1144,6 +1161,9 @@ export const tunnel3dDef: GeneratorDef = {
       if (p.key === 'colorB') return { ...p, defaultValue: '#38d8ff' } as ParamDef;
       return p;
     }),
+    /* 软阴影。文案键借用 `algo.sdf.shadow`（同一个概念），但**取值与实现是隧道自己的**：
+       它的 eps 与刻符尺度是另一套，复用那 9 个着色参数只会把两套尺度混成一个。 */
+    { key: 'shadow', labelKey: 'algo.sdf.shadow', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0.6 },
     bgModeParam(),
     intResParam(),
   ],
@@ -1186,6 +1206,7 @@ export const tunnel3dDef: GeneratorDef = {
     set1f('u_bank', Number(v.bank ?? 0.5));
     set1f('u_pulse', Number(v.pulse ?? 0.6));
     set1f('u_haze', Number(v.haze ?? 0.8));
+    set1f('u_shadow', Number(v.shadow ?? 0.6));
 
     /*
      * 前进距离：**闭式**，不累积（硬约束 1.1）。`t` 是片段内的秒数。

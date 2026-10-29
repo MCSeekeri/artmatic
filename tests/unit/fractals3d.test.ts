@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { listGenerators, getGenerator } from '../../src/algos/registry';
-import { SDF_PALETTES, sdfKernel, sdfParams } from '../../src/algos/sdf-lib';
+import { SDF_PALETTES, SDF_TONEMAPS, sdfKernel, sdfParams } from '../../src/algos/sdf-lib';
 
 /** 判定一个生成器是不是走 3D 内核 —— 内核的标志是那段共享的步进函数。 */
 const usesKernel = (fragment: string): boolean => fragment.includes('sdfMarch(');
@@ -87,6 +87,52 @@ describe('3D 内核家族', () => {
   it('`dual` 保留成 height 的别名 —— 老工程里的 menger 用的是这个名字', () => {
     // 参数值按字符串存进工程 JSON：删掉别名，老工程会静默退回单色。
     expect(SDF_PALETTES['dual']).toBe(SDF_PALETTES['height']);
+  });
+
+  it('tonemap 的选项值都在映射表里（拼错就是静默退回线性）', () => {
+    for (const def of THREED) {
+      const p = def.params.find((q) => q.key === 'tonemap');
+      expect(p, `${def.id} 没有 tonemap`).toBeDefined();
+      if (p?.type !== 'select') throw new Error(`${def.id} 的 tonemap 不是 select`);
+      for (const o of p.options) {
+        expect(SDF_TONEMAPS[String(o.value)], `${def.id}: tonemap 选项 ${o.value} 没有映射`).toBeDefined();
+      }
+    }
+  });
+
+  it('着色模型的每个 uniform 都被内核真的读到（声明了不读 = 链接器丢掉 + 滑杆空转）', () => {
+    /*
+     * 真 GL 那条判据在 `lab.spec`（`ACTIVE_UNIFORMS` 的差集），但它要起浏览器。
+     * 这条是它的毫秒级前置：声明 1 次 + 在函数体里至少出现 1 次。
+     * 不覆盖「写了但类型错」—— 那是 `algo-uniforms.test.ts` 的事。
+     */
+    const k = sdfKernel('sdX');
+    for (const n of [
+      'u_shadowSteps',
+      'u_shadow',
+      'u_gloss',
+      'u_ambient',
+      'u_pointPos',
+      'u_pointPow',
+      'u_pointCol',
+      'u_fogCol',
+      'u_tonemap',
+    ]) {
+      const hits = k.match(new RegExp(`\\b${n}\\b`, 'g')) ?? [];
+      expect(hits.length, `${n} 在核心里只被声明、没有被读`).toBeGreaterThan(1);
+    }
+  });
+
+  it('软阴影的步长上界按 maxt 的比例夹，不按 mint 夹', () => {
+    /*
+     * 踩过的坑：`clamp(h * stepScale, mint * 0.5, mint * 8.0)`。
+     * mint 是命中容差的 2 倍（近景只有几毫），乘 8 之后 12 步总共走不到一个单位，
+     * 阴影射线还没到遮挡物就烧完了步数 —— 表现是「开了阴影画面几乎不变」，
+     * 而且不报错。E2E 那条 `mean 比 < 0.97` 是它的最终防线，这条让它更难回来。
+     */
+    const k = sdfKernel('sdX');
+    expect(k).not.toMatch(/mint \* 8\.0/);
+    expect(k).toMatch(/maxt \* 0\.1/);
   });
 
   it('内核不自带相机调用 —— 相机由生成器自己决定（menger 保上游取景）', () => {

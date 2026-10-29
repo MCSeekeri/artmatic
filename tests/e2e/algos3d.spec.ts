@@ -33,8 +33,47 @@ test('Mandelbulb：画出实体、幂次真的改变形体', async ({ page }) =>
   expect(p3.lit / p3.total, 'power=3 也必须有实体，否则下面的「不同」是空转').toBeGreaterThan(
     0.005,
   );
-  expect(Math.abs(p3.mean - p8.mean), 'power 应当改变画面').toBeGreaterThan(0.2);
+  /*
+   * 均值差的阈值从 0.2 降到 0.1：**着色模型换过一次**（三项假光照 → 半球环境光
+   * + GGX + 软阴影），旧模型的明暗由 `lam * 0.6` 主导，而 `lam` 与形体高度相关；
+   * 新模型里环境光与阴影都在归一化整体亮度，实测 power 3 与 8 的均值差只剩 0.16。
+   * 形体确实变了 —— 那是下面那条 L1 在守的事，这条只负责挡「两张一样亮的图」。
+   */
+  expect(Math.abs(p3.mean - p8.mean), 'power 应当改变画面').toBeGreaterThan(0.1);
   expect(gridL1(p3.grid, p8.grid), '两个幂次的画面应当处处不同（分块 L1）').toBeGreaterThan(20);
+});
+
+/*
+ * 光照模型本身的守卫。三条判据各自对应一种真实的坏法，**都不是「像素变了」**：
+ *
+ * | 判据 | 抓什么 |
+ * |---|---|
+ * | `L1 > 4` | 阴影根本没接上（恒返 1 / uniform 没派发）—— 两张图一模一样 |
+ * | `mean 比 > 0.5` | 全自阴影：起点没抬离表面，或 mint 太小 |
+ * | `mean 比 < 0.97` | 阴影过弱：只压了几个像素，等于没做 |
+ *
+ * 顺带钉住一条踩过的坑：软阴影的步长上界如果按 `mint * 8` 夹（而不是按 `maxt`
+ * 的比例），12 步总共只走不到一个单位，射线还没到遮挡物就用完了步数 ——
+ * 那时的表现正是「mean 比 ≈ 0.93，看起来像阴影很弱」。
+ */
+test('Mandelbulb：阴影真的在遮挡，而且没有吃掉整个物体', async ({ page }) => {
+  test.setTimeout(180_000);
+  const off = await shoot(page, 'mandelbulb', { intRes: '480', power: 8, iter: 8, shadow: 0 });
+  const on = await shoot(page, 'mandelbulb', { intRes: '480', power: 8, iter: 8, shadow: 0.9 });
+  expect(on.lit / on.total, '开阴影后必须有实体').toBeGreaterThan(0.02);
+  expect(gridL1(on.grid, off.grid), '阴影必须改变画面').toBeGreaterThan(4);
+  const ratio = on.mean / off.mean;
+  expect(ratio, '阴影不能把整个物体吃掉').toBeGreaterThan(0.5);
+  expect(ratio, '阴影必须真的压暗，而不是只动几个像素').toBeLessThan(0.97);
+});
+
+test('Mandelbulb：阴影跟着光走，不是一张画死的图', async ({ page }) => {
+  test.setTimeout(180_000);
+  const a = await shoot(page, 'mandelbulb', { intRes: '480', power: 8, iter: 8, lightAz: -45, shadow: 0.9 });
+  const b = await shoot(page, 'mandelbulb', { intRes: '480', power: 8, iter: 8, lightAz: 135, shadow: 0.9 });
+  expect(a.lit / a.total).toBeGreaterThan(0.02);
+  expect(b.lit / b.total).toBeGreaterThan(0.02);
+  expect(gridL1(a.grid, b.grid), '换光向 ⇒ 阴影必须换边').toBeGreaterThan(10);
 });
 
 test('Mandelbulb：迭代次数决定细节层级（同幂次下画面不同）', async ({ page }) => {
@@ -73,8 +112,11 @@ test('Apollonian：画出球堆（不是一块平面 / 一条线），迭代次�
  */
 test('同参数跨两次加载逐块一致（分块 L1 的噪声底）', async ({ page }) => {
   test.setTimeout(120_000);
-  const a = await shoot(page, 'mandelbulb', { intRes: '480', power: 8, iter: 8 });
-  const b = await shoot(page, 'mandelbulb', { intRes: '480', power: 8, iter: 8 });
+  /* 带上阴影：软阴影是唯一可能被写成「每帧抖一下」的东西（抖动换平滑是常规做法，
+     而这里不许）。开了阴影仍然逐块一致 ⇒ 阴影路径里没有随机源。 */
+  const cfg = { intRes: '480', power: 8, iter: 8, shadow: 0.9, shadowSteps: 16 };
+  const a = await shoot(page, 'mandelbulb', cfg);
+  const b = await shoot(page, 'mandelbulb', cfg);
   const noise = gridL1(a.grid, b.grid);
   expect(noise, '同参数两次加载应当逐块一致（只允许读回竞态那点噪声）').toBeLessThan(1);
   expect(Math.abs(a.mean - b.mean)).toBeLessThan(0.05);

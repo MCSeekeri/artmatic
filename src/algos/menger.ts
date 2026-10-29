@@ -11,8 +11,13 @@
  * 两条保真细节：
  * - **递归深度是渲染档位，不是着色参数。** 3 层是「一个带洞的方块」，
  *   4 层自相似才开始读得出来，5 层在 640 像素宽下是白费功夫。
- * - **明暗压在 1.2 以下。** 上游第一版求和到 1.65，平面对着一片纸白，
- *   把唯一值得看的东西 —— 洞的阶梯内部 —— 全抹掉了。
+ * - **不要把面打爆白。** 上游第一版把光项求和到 1.65，平面糊成一片纸白，
+ *   把唯一值得看的东西 —— 洞的阶梯内部 —— 全抹掉了。这条现在由 `gain = 1`
+ *   加 ACES 的肩来守（`sdf-lib` 的 `sdfShade`），不再是硬编码的系数。
+ *
+ * ⚠️ **着色模型换过一次**（三项假光照 → 半球环境光 + GGX + 软阴影），
+ * 所以上游那张参考画面**不可能再逐像素复现**。`steps / fog` 保的是几何与
+ * 干净背景，那两项仍然有效；明暗值只能比「像不像」。
  *
  * `u_push` 代替上游的 `uMathGrow`：那是「镜头在这一个 shot 里走了多远」，
  * 属于**编排层**（硬编码的镜头表）。artmatic 的模型是用户自己编排，
@@ -26,7 +31,7 @@
  * 新的三个 3D 分形都走 `sdfOrbitCam`。
  */
 
-import { sdfKernel, sdfParams, sdfUniforms } from './sdf-lib';
+import { sdfKernel, sdfParams, sdfShadeUniforms, sdfUniforms } from './sdf-lib';
 import type { GeneratorDef } from './types';
 
 const SD = 'sdMenger';
@@ -95,7 +100,7 @@ void main() {
     return;
   }
   vec3 q = ro + rd * hit;
-  vec3 n = sdfNormal(q, 0.0016);
+  vec3 n = sdfNormal(q, sdfNormalEps(hit));
   outColor = vec4(sdfShade(q, n, rd, hit, sdfTint(q, n)), 1.0);
 }`;
 
@@ -124,14 +129,31 @@ export const mengerDef: GeneratorDef = {
     /*
      * 光照 / 配色 / 质量 / intRes 全是 3D 内核那套（文案键共用 `algo.sdf.*`）。
      *
-     * 三个值刻意与内核默认不同，为的是**保住上游那张画面**：
+     * 两个值刻意与内核默认不同，为的是**保住上游那张画面**：
      * `steps = 48`（上游的硬编码上界，72 会让远处的洞多爬出几层，取景变了）、
-     * `fog = 0`（上游不开雾）、`ao = 0`（上游用的是「距离衰减」而不是采样遮蔽）。
+     * `fog = 0`（上游不开雾）。
+     *
+     * `ao` 反向破例：上游是 0（它用「距离衰减」代替采样遮蔽），这里给 0.55。
+     * 新版着色把那条「距离衰减压全部明暗」的腿拆掉了（现在只压环境光），
+     * AO 归零会让深洞变成一片平灰 —— 这不是保真，是丢掉了海绵唯一值得看的内部阶梯。
+     * 阴影给得比另两个分形弱一点（0.55 / 10 步）：海绵的洞本来就深，阴影一硬
+     * 整块塌成黑的。
      */
-    ...sdfParams({ steps: 48, fog: 0, ao: 0 }),
+    ...sdfParams({
+      steps: 48,
+      fog: 0,
+      ao: 0.55,
+      shadow: 0.55,
+      shadowSteps: 10,
+      gloss: 0.5,
+      ambient: '#1b2233',
+      pointPow: 0.22,
+      pointDist: 3.2,
+    }),
   ],
   setUniforms: (gl, l, v, ctx) => {
     sdfUniforms()(gl, l, v, ctx);
+    sdfShadeUniforms()(gl, l, v, ctx);
     const set1f = (name: string, value: number): void => {
       const loc = l[name];
       if (loc) gl.uniform1f(loc, value);

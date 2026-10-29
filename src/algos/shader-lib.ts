@@ -97,9 +97,11 @@ export function intResParam(): SelectParam {
     type: 'select',
     defaultValue: '480',
     options: [
+      { labelKey: 'algo.intRes.auto', value: 'auto' },
       { labelKey: 'algo.intRes.240', value: '240' },
       { labelKey: 'algo.intRes.480', value: '480' },
       { labelKey: 'algo.intRes.720', value: '720' },
+      { labelKey: 'algo.intRes.1080', value: '1080' },
     ],
   };
 }

@@ -714,9 +714,11 @@ export const media = {
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */
   'algo.intRes': '内部分辨率',
+  'algo.intRes.auto': '跟随画面',
   'algo.intRes.240': '240p（最快）',
   'algo.intRes.480': '480p',
   'algo.intRes.720': '720p',
+  'algo.intRes.1080': '1080p',
 
   /* 共用的背景开关（algos/shader-lib.ts 的 bgModeParam —— 二十来个生成器一套） */
   'algo.bg.mode': '背景',
@@ -1211,6 +1213,18 @@ export const media = {
   'algo.sdf.push': '推近',
   'algo.sdf.rate': '公转速度',
   'algo.sdf.dist': '相机距离',
+  /* 着色模型 */
+  'algo.sdf.shadow': '阴影',
+  'algo.sdf.shadowSteps': '阴影步数',
+  'algo.sdf.gloss': '高光',
+  'algo.sdf.ambient': '环境光色',
+  'algo.sdf.pointPow': '点光强度',
+  'algo.sdf.pointDist': '点光距离',
+  'algo.sdf.pointColor': '点光颜色',
+  'algo.sdf.fogColor': '雾色',
+  'algo.sdf.tonemap': '色调映射',
+  'algo.sdf.tonemapNone': '线性',
+  'algo.sdf.tonemapAces': 'ACES',
 
   /* ---- 反应扩散（Gray-Scott）---- */
   'algo.reactionDiffusion': '反应扩散',

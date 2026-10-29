@@ -26,7 +26,7 @@
  * 相机 / 步进 / 法线 / 光照 / 雾全在 `sdf-lib.ts`。
  */
 
-import { sdfKernel, sdfParams, sdfUniforms } from './sdf-lib';
+import { sdfKernel, sdfParams, sdfShadeUniforms, sdfUniforms } from './sdf-lib';
 import type { GeneratorDef } from './types';
 
 const SD = 'sdApollonian';
@@ -71,7 +71,7 @@ void main() {
     return;
   }
   vec3 q = eye + rd * hit;
-  vec3 n = sdfNormal(q, 0.0009);
+  vec3 n = sdfNormal(q, sdfNormalEps(hit));
   outColor = vec4(sdfShade(q, n, rd, hit, sdfTint(q, n)), 1.0);
 }`;
 
@@ -88,10 +88,11 @@ export const apollonianDef: GeneratorDef = {
     { key: 'dist', labelKey: 'algo.sdf.dist', type: 'range', min: 1, max: 6, step: 0.02, defaultValue: 2.6 },
     { key: 'push', labelKey: 'algo.sdf.push', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 0 },
     { key: 'rate', labelKey: 'algo.sdf.rate', type: 'range', min: 0, max: 6, step: 0.05, defaultValue: 1 },
-    ...sdfParams({ fog: 0.25, ao: 0.5 }),
+    ...sdfParams({ fog: 0.25, ao: 0.5, gloss: 0.45, ambient: '#182338', pointPow: 0.3, pointDist: 2.4 }),
   ],
   setUniforms: (gl, l, v, ctx) => {
     sdfUniforms()(gl, l, v, ctx);
+    sdfShadeUniforms()(gl, l, v, ctx);
     const set1f = (name: string, value: number): void => {
       const loc = l[name];
       if (loc) gl.uniform1f(loc, value);

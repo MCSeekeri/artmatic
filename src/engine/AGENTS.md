@@ -129,6 +129,11 @@ function buildStack(project: Project, t: number): Stack {
   `u_opacity` 仍由 blend pass 负责，两者互不干扰。
 - `crop` 只乘 `inside`（可见窗口），**不动采样坐标**：内容不缩放不位移，所以它和
   `transform.sx/sy` 不是一回事。四条边全 0 时 `stack.ts` 不带这个字段、`u_cropOn = 0`。
+- **层边界是解析覆盖率，不是 `step`**：`coverage(uv, lo, hi)` 用 `fwidth` 把边界展开成
+  1 像素宽的坡，`insideLayer` 与 `crop` 共用它。MSAA 在这里帮不上忙 —— 全部绘制都是
+  全屏三角形，没有光栅化边缘，抗锯齿只能自己算。**`inside` 精确为 1 的像素逐位不变**
+  （smoothstep 在边界内部返回 1.0），这是保住既有逐位断言的条件。宽度上下都要夹：
+  下界防 drawSize 极大时坡退化成 step，上界（0.25）防图层被缩到几像素时整块糊掉。
   判定用的是**源 uv**（四角变形之后的 `srcTd`），因此与 quad 的顺序无关。
 - 坐标空间与 UI 拖角共用 `core/quad.ts`（层空间 = 默认图层矩形），改动语义时先看
   `src/core/AGENTS.md` 的「片段级图像处理」。

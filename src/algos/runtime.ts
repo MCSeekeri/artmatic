@@ -32,6 +32,7 @@ import {
   type AlgoUniformCtx,
 } from './shader-lib';
 import { getGenerator } from './registry';
+import { intResSize } from './int-res';
 import { BakeClient } from './bake-client';
 import { REVEAL_MODE, type AlgoAuxRef, type SimHandle } from './types';
 import { emptyFeatures, zeroFeatures, type AudioFeatureSource } from './feature-source';
@@ -520,9 +521,13 @@ export class AlgoRuntime {
     }
 
     // realtime：逐帧实时 shader（不做跳帧缓存——那是对确定性的破坏）
-    const res = Number(params.intRes) || 480;
-    const w = Math.round((res * 16) / 9);
-    const h = res;
+    /*
+     * 内部尺寸来自 `intRes`，**宽高比取自渲染目标**（见 `int-res.ts`）。
+     * `auto` 就是「跟渲染目标一样大」：预览跟画布，导出跟导出尺寸。
+     */
+    const size = intResSize(String(params.intRes ?? '480'), renderW, renderH);
+    const w = size.w;
+    const h = size.h;
     const out = this.outFor(w, h);
     const prog = this.kit.quad(ALGO_HEAD + def.fragment, algoProgramName(def.id));
     // aux 纹理必须在 `prog.use()` **之前**建好：创建纹理要 bindTexture，

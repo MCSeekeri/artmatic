@@ -24,6 +24,11 @@
     `AlgoSource.generator` 是自由字符串、realtime 本就渲染整帧，**不需要新的 SourceClip 类型**。
   - 内部渲染高度统一走 `intResParam()`（键 `intRes`，文案 `algo.intRes*` 共用一套），
     别再一个生成器写一份 select。内部低分辨率再放大是性能手段，**不是跳帧缓存**（那破坏确定性）。
+  - **尺寸换算只有一处**：`int-res.ts::intResSize(v, renderW, renderH)`。宽高比取自**渲染目标**，
+    不许再写 `res * 16 / 9` —— 那会让竖屏工程的 3D 按 16:9 渲染再 letterbox，而参数面板上毫无异常。
+    `auto`（= 跟渲染目标一样大，高度封顶 1440）是**只有 3D 用**的缺省值（`sdfParams()` 覆写），
+    `intResParam()` 本身的缺省仍是 `480`：那一个键全 realtime 家族共用，把缺省抬上去会让
+    二十来个 2D 分形也按全分辨率渲染、并让全部缩略图重烘。
 - **bake 型的「揭示」有三种轴**（`types.ts` 的 `BakeReveal` → reveal shader 的 `u_reveal`）：
   `'front-y'`（默认，输出纵坐标，如 Rule 110 逐代向上）/ `'front-x'`（输出横坐标，如分岔图逐列算出来）/
   `'value'`（**像素值本身**，如 L-system 的离根距离场 —— 生长顺序编在值里）。
@@ -452,19 +457,38 @@ MaxiCode / Grid Matrix / 汉信码。
   还得配一句**前向声明**（使用点在定义之前），两处要同步；模板只有一个真源。
   ⚠️ 但模板也**必须自带前向声明** `float sdX(vec3 p);` —— 忘了就是
   `no matching overloaded function`，而报错行指向内核里那句调用，像内核写错了。
-- **共享 uniform 12 个**（`u_steps/u_maxDist/u_stepScale/u_eps/u_fov/u_light/
-  u_gain/u_fog/u_ao/u_palette/u_color/u_colorB/u_bg`），由 `sdfUniforms()` 一次派发；
-  参数与文案键共用 `sdfParams()` / `algo.sdf.*`。`menger` 的 `steps/fog/ao`
-  默认值刻意不同（保住上游那张画面），**但文案键必须同源**。
+- **uniform 分两批派发，不许合并**：基础 14 个（`u_steps/u_maxDist/u_stepScale/
+  u_eps/u_fov/u_light/u_gain/u_fog/u_ao/u_palette/u_color/u_colorB/u_bg/u_bgMode`）
+  走 `sdfUniforms()`；着色 9 个（`u_shadow/u_shadowSteps/u_gloss/u_ambient/
+  u_pointPos/u_pointPow/u_pointCol/u_fogCol/u_tonemap`）走 `sdfShadeUniforms()`。
+  **`tunnel3d` 也调 `sdfUniforms()`，但它不声明着色那批** —— 把着色塞进基础批就是
+  「摸到未声明的 uniform」，`algo-uniforms.test.ts` 直接红。参数侧同构：
+  `sdfLightParams()` 两边共用，`sdfShadeParams()` 只进 `sdfParams()`（三个分形）。
+- **`menger` 的 `steps/fog` 默认值刻意不同**（保住上游那张画面），**但文案键必须同源**。
+  `ao` 是反向破例（0 → 0.55）：新着色把「距离衰减压全部明暗」那条腿拆掉了，
+  AO 归零会让深洞塌成一片平灰。**上游那张参考画面已不可能逐像素复现**。
 - **`u_stepScale` 不是「越接近 1 越好」**：分形 DE 多是**过估**，按 1.0 走会
   在结构内部直接穿过去，表现为整块噪点。Menger 0.9 够用，其他分形按需压。
 - **光方向用两个角度**（`lightAz`/`lightEl`）而不是 vec3 —— `ParamDef` 没有
-  vec3 这一档。默认 (-45°, 44°) 复现 `menger` 上游那个固定光向。
+  vec3 这一档。默认 (-45°, 44°) 复现 `menger` 上游那个固定光向。点光位置复用同一
+  对角度加一个 `pointDist`（不另开 `pointAz/pointEl`）。
+- **`sdfNormal` 的 eps 必须走 `sdfNormalEps(dist)`**（= 命中容差的 2 倍）。硬编码
+  常数的两种坏法：低于容差 ⇒ 差分点落在判据带内、法线逐像素翻向（高光闪烁）；
+  远大于容差 ⇒ 抹掉细节。`tunnel3d` 是例外（`sdfNormalMat(q, 0.0022)`），
+  它的 eps 是按壁面刻符 6e-3 宽调的，换成自适应会把刻符抹平。
+- **软阴影没有随机源**：不许用 `gl_FragCoord` 抖动、不许用帧号。抖动换平滑是
+  常规做法，而这里的判据是「同一个 t 两渲逐像素相同」（`algos3d.spec` 的 L1 < 1）。
+- **软阴影的步长上界按 `maxt` 的比例夹**（`maxt * 0.1`），**不能按 `mint` 的比例**。
+  `mint` 是容差的 2 倍、近景只有几毫，乘 8 之后 12 步总共走不到一个单位 ——
+  射线还没到遮挡物就烧完步数，表现是「开了阴影画面几乎不变」而且不报错。
+- **`tonemap` 默认是 `none`，不是 ACES**：ACES 会连暗部一起抬（`ACES(0.1) ≈ 0.13`），
+  默认开着就是一层灰雾，分形的褶皱全糊平。它是「压高光」的可选档，不是画质档。
 - **`menger` 保留自己的相机**（同时转 `ro` 与 `rd`，上游写法）：与 `sdfOrbitCam`
   数值等价但参数化不同，换过去取景就变了 —— 它是唯一有上游参考画面的对象。
 - 成本实测（headless，720p / 70 步 / 5 级递归）：比纯色只贵 **约 3 ms/帧**，
-  读出同步才是大头。**不需要为 3D 降 `intRes` 默认**；要盯的是 `iter`/`depth`
-  （每步的 SDF 成本）而不是像素数。
+  读出同步才是大头。加软阴影（12 步预算、提前返回后平均 6~8 步）+ 点光阴影
+  （减半预算）实测量级是 ×1.25，最坏配置（24 步 + 点光全开）约 ×1.9。
+  要盯的是 `iter`/`depth`/`shadowSteps`（每步的 SDF 成本）而不是像素数。
 
 ### 材质型内核（`sdfKernelMaterial`）与走廊场景（`tunnel3d.ts`）
 

@@ -1,5 +1,5 @@
 /**
- * sdf-lib.ts — 3D 光线步进内核：相机 + 步进 + 法线 + 光照 + 雾。
+ * sdf-lib.ts — 3D 光线步进内核：相机 + 步进 + 法线 + 光照 + 软阴影 + 雾。
  *
  * 与 `shader-lib.ts` 的 `SCENE_GLSL` 同构：**一段共享 GLSL + 一份共用的
  * uniform 派发 + 一组共用参数**。各 3D 生成器只写自己的 SDF 与 `main`，
@@ -43,6 +43,25 @@ import type { SelectParam, RangeParam, ParamDef } from '../effects/types';
  * 超不过这个数（`sdfQualityParams` 的 `max` 与它对齐）。
  */
 const MAX_MARCH_STEPS = 160;
+
+/**
+ * 软阴影的**编译期**步数上界（运行期 `u_shadowSteps` 超不过它）。
+ *
+ * 比步进小一个量级：阴影射线只需要判断「这段距离内有没有东西」，而且
+ * `res < 0.004` 会提前返回，实测平均只走 6~8 步。
+ */
+const MAX_SHADOW_STEPS = 24;
+
+/**
+ * tonemap 的取值映射（**唯一定义**：`sdfShadeUniforms` 与单测都读它）。
+ *
+ * 与 `SDF_PALETTES` 同一套约定：参数值以字符串存进工程 JSON，拼错的名字
+ * 必须能在映射表里查不到时有一个明确的缺省，而不是静默变成 0（= 关闭）。
+ */
+export const SDF_TONEMAPS: Record<string, number> = {
+  none: 0,
+  aces: 1,
+};
 
 /**
  * 调色板值的映射（**唯一定义**：`sdfUniforms` 与单测都读它）。
@@ -96,6 +115,24 @@ mat3 sdfOrbitCam(float yaw, float pitch, float dist, out vec3 eye) {
 `;
 
 /**
+ * 法线差分步长。两个内核共享。
+ *
+ * 固定 eps 的问题是两边都错：**低于命中容差**时四个差分点落在判据带内部，
+ * 法线逐像素翻向（高光闪烁、暗部发麻）；**远大于容差**时又开始抹掉真实细节。
+ * 只有跟着行进距离走才和命中精度同口径 —— 容差本身就是 `u_eps * (1 + t * 0.5)`。
+ *
+ * 取 2 倍而不是 1 倍：1 倍时差分点仍在容差带内，法线会跟着容差抖。
+ *
+ * 注意 `sdfNormal` / `sdfNormalMat` 的签名**没有**改成吃距离 —— 隧道那边
+ * 的 eps（0.0022）是按壁面刻符 6e-3 宽调出来的，换成自适应会直接抹平刻符。
+ */
+const SDF_EPS_GLSL = `
+float sdfNormalEps(float dist) {
+  return u_eps * (1.0 + dist * 0.5) * 2.0;
+}
+`;
+
+/**
  * 造共享内核的 GLSL 代码块。`sd` 是这个生成器的 SDF 函数名。
  *
  * 提供（全部读下面的共用 uniform，生成器不必传参）：
@@ -103,9 +140,11 @@ mat3 sdfOrbitCam(float yaw, float pitch, float dist, out vec3 eye) {
  *   `sdfRay(uv, aspect, cam)` → 归一化的世界方向
  *   `sdfMarch(ro, rd)`     → 命中距离；**没命中返回负值**
  *   `sdfNormal(p, e)`      → 法线（四面体差分，4 次 SDF）
+ *   `sdfNormalEps(dist)`   → 该距离上合适的差分步长（别再用硬编码常数）
  *   `sdfAO(p, n)`          → 采样式环境遮蔽
+ *   `sdfShadow(ro, rd, mint, maxt, k, steps)` → 软阴影（1 = 全亮 · 0 = 全遮）
  *   `sdfTint(p, n)`        → 调色板
- *   `sdfShade(p, n, rd, dist, albedo)` → 最终颜色（含雾与增益）
+ *   `sdfShade(p, n, rd, dist, albedo)` → 最终颜色（半球环境光 + GGX + 点光 + 雾）
  */
 export function sdfKernel(sd: string): string {
   return `
@@ -135,6 +174,17 @@ uniform vec3  u_bg;
 /* 0 = 纯色底 · 1 = 透明底（AlgoRuntime 统一派发，见 bgModeParam()）。 */
 uniform int   u_bgMode;
 
+/* ---- 着色模型（由 sdfShadeUniforms() 派发，**不在 sdfUniforms 里**） ---- */
+uniform int   u_shadowSteps; // 主光阴影的采样上限（0 = 关）
+uniform float u_shadow;      // 阴影强度 0..1，同时是唯一开关
+uniform float u_gloss;       // 高光锐度（0 哑光 · 1 近镜面）
+uniform vec3  u_ambient;     // 半球天光的天顶色（地面取它的 30%）
+uniform vec3  u_pointPos;    // 点光世界位置
+uniform float u_pointPow;    // 点光强度（0 = 关）
+uniform vec3  u_pointCol;    // 点光颜色
+uniform vec3  u_fogCol;      // 雾色（显示空间，见 sdfShade 的注释）
+uniform int   u_tonemap;     // 0 线性 · 1 ACES 近似
+
 /**
  * 射线没命中时写什么：纯色底 / 全透明。
  *
@@ -146,6 +196,7 @@ vec4 sdfBackground() {
   return u_bgMode == 1 ? vec4(0.0) : vec4(u_bg, 1.0);
 }
 ${SDF_CAM_GLSL}
+${SDF_EPS_GLSL}
 
 /**
  * 光线步进。**命中返回行进距离，没命中返回负值**（哨兵值而不是 out 参数：
@@ -202,6 +253,46 @@ float sdfAO(vec3 p, vec3 n) {
   return clamp(1.0 - 1.6 * occ, 0.0, 1.0);
 }
 
+/**
+ * 软阴影（penumbra 估计）。**没有抖动、没有帧号、没有 gl_FragCoord**。
+ *
+ * 确定性不是可选项：同一个 t 的两次渲染必须逐像素相同（硬约束 1.1），
+ * 而分形着色里任何与像素位置无关的随机都是可见的闪烁。抖动换来的那点
+ * 平滑在这里没有对应收益 —— 这个估计本身是解析的。
+ *
+ * - \`y = h*h/(2*ph)\`：把「离表面多近」折算成「离遮挡物多远」。少了这一项，
+ *   阴影带会在遮挡物逼近时分层（一圈圈同心环，而不是连续的半影）。
+ * - 步长乘 \`u_stepScale\`：分形 DE 是**过估**，按 h 直走会跨过薄构件
+ *   （menger 的壁厚只有 1/27）。
+ * - 步长**上界按 maxt 的 10%** 夹，不按 mint 夹。别用 \`mint * 8\` 那种相对写法：
+ *   mint 在近景只有几毫（它是命中容差的 2 倍），乘 8 之后 12 步总共只走 0.7 个
+ *   单位 —— 阴影射线还没走到遮挡物就用完了步数，表现是「开了阴影画面几乎不变」。
+ *   这条踩过：\`shadow 0.65 → 0\` 只让均值差 7%，不是阴影弱，是它根本没走出去。
+ * - \`res < 0.004\` 提前返回：已全遮，再采也不会更黑。这是主要的省步数处。
+ * - 下界 \`mint * 0.5\`：h 接近 0 时不推进就是白烧 steps 次循环。
+ *
+ * \`k\` 越大阴影越硬。12 是中等柔（分形褶皱多，硬阴影会碎成噪点）。
+ * \`steps\` 做成入参而不是读 \`u_shadowSteps\`：点光要用一半预算，而材质型内核
+ * 一个 uniform 都不想多声明。
+ */
+float sdfShadow(vec3 ro, vec3 rd, float mint, float maxt, float k, int steps) {
+  float res = 1.0;
+  float t = mint;
+  float ph = 1e10;
+  for (int i = 0; i < ${MAX_SHADOW_STEPS}; i++) {
+    if (i >= steps) break;
+    float h = ${sd}(ro + rd * t);
+    float y = h * h / (2.0 * ph);
+    float d = sqrt(max(h * h - y * y, 0.0));
+    res = min(res, k * d / max(t - y, mint * 0.5));
+    if (res < 0.004) return 0.0;
+    ph = h;
+    t += clamp(h * u_stepScale, mint * 0.5, maxt * 0.1);
+    if (t > maxt) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
 /** 调色板。按高度/按法线两种双色 —— 分形的高度分布差异很大，够用。 */
 vec3 sdfTint(vec3 p, vec3 n) {
   if (u_palette == 1) return mix(u_color, u_colorB, clamp(p.y * 0.5 + 0.5, 0.0, 1.0));
@@ -209,22 +300,107 @@ vec3 sdfTint(vec3 p, vec3 n) {
   return u_color;
 }
 
+/* ---------------------------------------------------------------- 着色原语 */
+
 /**
- * 着色。三个光项 + 遮蔽 + 距离衰减 + 雾，与 \`menger\` 上游那套逐字同源
- * （明暗刻意压在 1.2 以下：把面打爆白就把唯一值得看的褶皱全抹掉了）。
+ * ACES 近似（Narkowicz 2015 的拟合）：把 >1 的高光滚成一个肩，而不是削成一块白。
+ *
+ * ⚠️ 整条链是 **gamma 空间**（\`colorVec3\` 只除 255，主链是 RGBA8），所以这
+ * **不是**物理正确的 tonemap —— 它是一个好看的肩，参数靠肉眼定。真做线性
+ * 工作流要连主链一起换（见 AGENTS 的 HDR 待办），那是另一件事。
+ */
+vec3 sdfACES(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+/** GGX 法线分布。a = 粗糙度（0.02 近镜面 · 0.35 哑光）。 */
+float sdfD_GGX(float NoH, float a) {
+  float a2 = a * a;
+  float d = NoH * NoH * (a2 - 1.0) + 1.0;
+  return a2 / max(3.14159265 * d * d, 1e-6);
+}
+
+/** Smith-Schlick 几何项。直接光用 k = a/2（IBL 才是 a 的平方除以 2）。 */
+float sdfG_Smith(float NoV, float NoL, float a) {
+  float k = a * 0.5;
+  return (NoV / (NoV * (1.0 - k) + k)) * (NoL / (NoL * (1.0 - k) + k));
+}
+
+/** Schlick 菲涅尔，f0 = 0.04（电介质：石、塑料、氧化金属都够用）。 */
+vec3 sdfF_Schlick(float VoH) {
+  return vec3(0.04 + 0.96 * pow(1.0 - VoH, 5.0));
+}
+
+/**
+ * GGX 直接光高光（白光源）。返回值已含 NoL —— 辐射方程里
+ * \`F*D*G/(4*NoV*NoL) * NoL\` 约掉之后就是 \`F*D*G/(4*NoV)\`，调用方只乘光的颜色与强度。
+ */
+vec3 sdfSpec(vec3 n, vec3 V, vec3 L, float NoV, float NoL, float a) {
+  if (NoL <= 0.0) return vec3(0.0);
+  vec3 H = normalize(L + V);
+  float NoH = max(dot(n, H), 0.0);
+  return sdfF_Schlick(max(dot(V, H), 0.0))
+       * (sdfD_GGX(NoH, a) * sdfG_Smith(NoV, NoL, a) / max(4.0 * NoV, 1e-4));
+}
+
+/**
+ * 着色。与上一版（三项假光照 + 乘性黑雾）的六处取舍：
+ *
+ * 1. **环境光是半球色，不是常量 0.06。** 褶皱里朝下的面拿不到天光，「朝向」
+ *    因此自己读得出来 —— 这是任何固定三项光都给不了的东西。
+ * 2. **只有环境光吃 AO。** 主光也乘 AO 会把整个物体压成一块，褶皱反而分不开：
+ *    AO 的物理含义是「缝里没有环境光」，不是「缝里没有太阳光」。
+ * 3. **有镜面项。** 上一版只有 Lambert + 假边缘光，所有表面都像石膏。
+ * 4. **雾往「雾色」沉，不往黑沉**，且 \`u_fog = 0\` 时严格为 0（menger 依赖这一点）。
+ * 5. **tonemap 先于雾**，于是雾色是**显示空间**的颜色：把 fogColor 设成与 bg
+ *    相同，远景就真的融进背景，而不是留一圈轮廓。
+ * 6. 旧的按距离压暗保留，但**只压环境光**（当纵深用）—— 主光的衰减是雾的活，
+ *    两边都压会让远处黑成一团。
  */
 vec3 sdfShade(vec3 p, vec3 n, vec3 rd, float dist, vec3 albedo) {
+  vec3 V = -rd;
+  float NoV = max(dot(n, V), 1e-3);
+  float e = sdfNormalEps(dist);
+  float a = mix(0.35, 0.02, clamp(u_gloss, 0.0, 1.0));
+
+  /* 环境：半球天光 × AO × 纵深 */
+  float ao = mix(1.0, sdfAO(p, n), clamp(u_ao, 0.0, 1.0));
+  vec3 amb = u_ambient * mix(0.30, 1.0, 0.5 + 0.5 * n.y) * ao
+           * mix(0.75, 1.0, clamp(1.0 - dist * 0.08, 0.0, 1.0));
+
+  /* 主光 + 软阴影。起点抬离表面 = 一个法线差分步长，否则整片表面自阴影痤疮。 */
   vec3 L = u_light;
-  float lam = max(dot(n, L), 0.0);
-  float bak = max(dot(n, -L), 0.0) * 0.30;
-  float rim = pow(1.0 - max(dot(n, -rd), 0.0), 2.2) * 0.45;
-  float shade = 0.06 + lam * 0.60 + bak * 0.7 + rim * 0.8;
-  shade *= mix(0.55, 1.0, mix(1.0, sdfAO(p, n), clamp(u_ao, 0.0, 1.0)));
-  /* 光线爬了多远当纵深用：越深越沉 */
-  shade *= mix(0.60, 1.0, clamp(1.0 - dist * 0.17, 0.0, 1.0));
-  vec3 col = shade * albedo;
-  col *= mix(1.0, clamp(1.0 - dist * 0.11, 0.0, 1.0), clamp(u_fog, 0.0, 1.0));
-  return col * u_gain;
+  float NoL = max(dot(n, L), 0.0);
+  float sh = 1.0;
+  if (u_shadow > 0.0 && u_shadowSteps > 0) {
+    sh = mix(1.0, sdfShadow(p + n * e, L, e, u_maxDist, 12.0, u_shadowSteps),
+             clamp(u_shadow, 0.0, 1.0));
+  }
+  vec3 col = albedo * (amb + NoL * sh) + sdfSpec(n, V, L, NoV, NoL, a) * sh;
+
+  /* 点光。预算减半 —— 它是补光，双份阴影是双份成本换一点边角收益。 */
+  if (u_pointPow > 0.0) {
+    vec3 Lp = u_pointPos - p;
+    float d2 = max(dot(Lp, Lp), 1e-4);
+    vec3 Ln = Lp * inversesqrt(d2);
+    float NdL = max(dot(n, Ln), 0.0);
+    /*
+     * \`3.0 / (1 + d²)\` 而不是 \`1 / d²\`：后者在 d 趋 0 时炸成 NaN，而「把灯拖到
+     * 贴着物体」正是用户第一下会做的事。渐近行为仍是平方反比；3.0 是量纲校准
+     * （场景直径约两个单位），没有它那个系数毫无意义。
+     */
+    float att = u_pointPow * 3.0 / (1.0 + d2);
+    float shp = 1.0;
+    if (u_shadow > 0.0 && u_shadowSteps > 1) {
+      shp = mix(1.0, sdfShadow(p + n * e, Ln, e, min(u_maxDist, 6.0), 8.0, u_shadowSteps / 2),
+                clamp(u_shadow, 0.0, 1.0));
+    }
+    col += u_pointCol * (att * shp) * (albedo * NdL + sdfSpec(n, V, Ln, NoV, NdL, a));
+  }
+
+  vec3 c = u_tonemap == 1 ? sdfACES(col * u_gain) : clamp(col * u_gain, 0.0, 1.0);
+  float fogA = clamp(u_fog, 0.0, 1.0) * (1.0 - exp(-dist * 0.30));
+  return mix(c, u_fogCol, clamp(fogA, 0.0, 0.92));
 }
 `;
 }
@@ -338,6 +514,32 @@ float sdfAOMat(vec3 p, vec3 n) {
     sca *= 0.85;
   }
   return clamp(1.0 - 1.5 * occ, 0.0, 1.0);
+}
+
+/**
+ * 软阴影（材质型内核）。与 \`sdfKernel\` 里那个逐字同构，只差**距离取 .x**。
+ *
+ * 走廊几何有一条那个内核不会遇到的路径：\`sdfMarchMat\` 的**命中后精修**可能
+ * 把一个点留在距离为负的一侧（贴墙的掠射光）。那里 h < 0 ⇒ 第一轮 res 就低于
+ * 0.004 ⇒ 提前返回 0，即判成「在阴影里」—— 这正是想要的。
+ * 让 \`clamp(h * u_stepScale, ...)\` 去处理负数则是灾难：它会把射线往回推。
+ */
+float sdfShadowMat(vec3 ro, vec3 rd, float mint, float maxt, float k, int steps) {
+  float res = 1.0;
+  float t = mint;
+  float ph = 1e10;
+  for (int i = 0; i < ${MAX_SHADOW_STEPS}; i++) {
+    if (i >= steps) break;
+    float h = ${sd}(ro + rd * t).x;
+    float y = h * h / (2.0 * ph);
+    float d = sqrt(max(h * h - y * y, 0.0));
+    res = min(res, k * d / max(t - y, mint * 0.5));
+    if (res < 0.004) return 0.0;
+    ph = h;
+    t += clamp(h * u_stepScale, mint * 0.5, maxt * 0.1);
+    if (t > maxt) break;
+  }
+  return clamp(res, 0.0, 1.0);
 }
 `;
 }
@@ -475,24 +677,158 @@ export function sdfLightParams(opts: { fog?: number; ao?: number } = {}): ParamD
   ];
 }
 
-/** 3D 生成器共用的参数尾巴：质量 + 光照 + 背景开关 + 内部分辨率。 */
+/**
+ * 3D 生成器共用的**着色模型**参数（阴影 / 高光 / 环境光 / 点光 / 雾色 / tonemap）。
+ *
+ * 与 `sdfLightParams` 分成两个函数是**必须的**，不是洁癖：`sdfLightParams` 被
+ * `tunnel3d` 也引用了，而隧道自己有另一套着色（`shadeScenery` 逐材质分支），
+ * 它不认识这些参数。并成一个函数就会往它的参数表里塞九个无效滑杆。
+ *
+ * 键名注意：**高光叫 `gloss` 不叫 `rough`** —— `tunnel3d` 已经用 `rough` 表示
+ * 壁面粗糙度，同名会让两个概念在工程 JSON 里混成一个。
+ */
+export function sdfShadeParams(
+  opts: {
+    shadow?: number;
+    shadowSteps?: number;
+    gloss?: number;
+    ambient?: string;
+    pointPow?: number;
+    pointDist?: number;
+    pointColor?: string;
+    fogColor?: string;
+    tonemap?: string;
+  } = {},
+): ParamDef[] {
+  const shadow = opts.shadow ?? 0.6;
+  const pointPow = opts.pointPow ?? 0.3;
+  return [
+    {
+      key: 'shadow',
+      labelKey: 'algo.sdf.shadow',
+      type: 'range',
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: shadow,
+    } satisfies RangeParam,
+    {
+      key: 'shadowSteps',
+      labelKey: 'algo.sdf.shadowSteps',
+      type: 'range',
+      min: 4,
+      max: MAX_SHADOW_STEPS,
+      step: 4,
+      defaultValue: opts.shadowSteps ?? 12,
+      // 阴影关了还留着「阴影步数」滑杆，拖动它什么也不动 —— 那是纯噪音。
+      visibleWhen: (v) => Number(v.shadow ?? 0.6) > 0,
+    } satisfies RangeParam,
+    {
+      key: 'gloss',
+      labelKey: 'algo.sdf.gloss',
+      type: 'range',
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: opts.gloss ?? 0.45,
+    } satisfies RangeParam,
+    { key: 'ambient', labelKey: 'algo.sdf.ambient', type: 'color', defaultValue: opts.ambient ?? '#18233a' },
+    {
+      key: 'pointPow',
+      labelKey: 'algo.sdf.pointPow',
+      type: 'range',
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: pointPow,
+    } satisfies RangeParam,
+    {
+      key: 'pointDist',
+      labelKey: 'algo.sdf.pointDist',
+      type: 'range',
+      min: 0.5,
+      max: 6,
+      step: 0.05,
+      defaultValue: opts.pointDist ?? 2.8,
+      visibleWhen: (v) => Number(v.pointPow ?? 0) > 0,
+    } satisfies RangeParam,
+    {
+      key: 'pointColor',
+      labelKey: 'algo.sdf.pointColor',
+      type: 'color',
+      defaultValue: opts.pointColor ?? '#ffd2a1',
+      visibleWhen: (v) => Number(v.pointPow ?? 0) > 0,
+    },
+    {
+      key: 'fogColor',
+      labelKey: 'algo.sdf.fogColor',
+      type: 'color',
+      defaultValue: opts.fogColor ?? '#121a2a',
+      visibleWhen: (v) => Number(v.fog ?? 0.3) > 0,
+    },
+    {
+      key: 'tonemap',
+      labelKey: 'algo.sdf.tonemap',
+      type: 'select',
+      defaultValue: opts.tonemap ?? 'none',
+      options: [
+        { labelKey: 'algo.sdf.tonemapNone', value: 'none' },
+        { labelKey: 'algo.sdf.tonemapAces', value: 'aces' },
+      ],
+    } satisfies SelectParam,
+  ];
+}
+
+/** 3D 生成器共用的参数尾巴：质量 + 光照 + 着色 + 背景开关 + 内部分辨率。 */
 export function sdfParams(
-  opts: { steps?: number; stepScale?: number; fog?: number; ao?: number } = {},
+  opts: {
+    steps?: number;
+    stepScale?: number;
+    fog?: number;
+    ao?: number;
+    shadow?: number;
+    shadowSteps?: number;
+    gloss?: number;
+    ambient?: string;
+    pointPow?: number;
+    pointDist?: number;
+    pointColor?: string;
+  } = {},
 ): ParamDef[] {
   const quality = sdfQualityParams(opts.steps).map((p) =>
     p.key === 'stepScale' && opts.stepScale !== undefined
       ? ({ ...p, defaultValue: opts.stepScale } as ParamDef)
       : p,
   );
-  return [...quality, ...sdfLightParams(opts), bgModeParam(), intResParam()];
+  return [
+    ...quality,
+    ...sdfLightParams(opts),
+    ...sdfShadeParams(opts),
+    bgModeParam(),
+    /*
+     * 3D 的默认内部尺寸是 `auto`（跟渲染目标一样大）。**只覆盖缺省值，不动共用选项表** ——
+     * `intRes` 是全 realtime 家族共用的键，把 `intResParam()` 的缺省改成 `auto`
+     * 会让二十来个 2D 分形也按全分辨率渲染，并让全部缩略图重烘。
+     *
+     * 为什么只有 3D 配得上：光线步进的成本全在像素上，而 480 行放大到 1080p 是
+     * 2.25 倍线性放大 —— 阴影与高光都在这步被抹掉。2D 分形放大只是变糊，
+     * 而且它们的默认 `intRes` 调高会让一批 sim/bake 图元的边变硬，收益小得多。
+     */
+    { ...intResParam(), defaultValue: 'auto' } as ParamDef,
+  ];
 }
 
 /**
- * 内核那批 uniform 的派发。生成器的 `setUniforms` 先调它，再派自己的。
+ * 内核那批 **base** uniform 的派发。生成器的 `setUniforms` 先调它，再调
+ * `sdfShadeUniforms()`，最后派自己的。
  *
- * ⚠️ **必须写满自己声明的那 12 个** —— `algo-uniforms.test.ts` 的判据是
+ * ⚠️ **必须写满自己声明的那 14 个** —— `algo-uniforms.test.ts` 的判据是
  * 「fragment 里声明了的都被写到」，而内核的声明就在每个 3D def 的 fragment 里
  * （拼在前面的）。漏一个的表现是那个 uniform 恒为默认值且不报错。
+ *
+ * ⚠️ **不要往这里加着色模型的 uniform。** 这个函数 `tunnel3d` 也调，而它不声明
+ * `u_shadow` / `u_gloss` / `u_ambient` 这些 —— 写了就是「摸到未声明的 uniform」，
+ * `algo-uniforms.test.ts` 直接红。着色那批走 `sdfShadeUniforms()`。
  */
 export function sdfUniforms(): AlgoSetUniforms {
   return (gl, l, v, _ctx: AlgoUniformCtx) => {
@@ -530,5 +866,53 @@ export function sdfUniforms(): AlgoSetUniforms {
     const ce = Math.cos(el);
     const light = l['u_light'];
     if (light) gl.uniform3f(light, Math.sin(az) * ce, Math.sin(el), Math.cos(az) * ce);
+  };
+}
+
+/**
+ * 着色模型那 9 个 uniform 的派发。
+ *
+ * **只能被 `sdfKernel` 的消费方调用**（menger / mandelbulb / apollonian）。
+ * 材质型内核不声明这批名字，接进来就是「摸到未声明的 uniform」。
+ */
+export function sdfShadeUniforms(): AlgoSetUniforms {
+  return (gl, l, v, _ctx: AlgoUniformCtx) => {
+    const set1f = (name: string, value: number): void => {
+      const loc = l[name];
+      if (loc) gl.uniform1f(loc, value);
+    };
+    const set1i = (name: string, value: number): void => {
+      const loc = l[name];
+      if (loc) gl.uniform1i(loc, Math.round(value));
+    };
+    const set3 = (name: string, hex: string): void => {
+      const loc = l[name];
+      if (!loc) return;
+      const [r, g, b] = colorVec3(hex);
+      gl.uniform3f(loc, r, g, b);
+    };
+
+    set1i('u_shadowSteps', Number(v.shadowSteps ?? 12));
+    set1f('u_shadow', Number(v.shadow ?? 0.6));
+    set1f('u_gloss', Number(v.gloss ?? 0.45));
+    set3('u_ambient', String(v.ambient ?? '#18233a'));
+    set1f('u_pointPow', Number(v.pointPow ?? 0.3));
+    set3('u_pointCol', String(v.pointColor ?? '#ffd2a1'));
+    set3('u_fogCol', String(v.fogColor ?? '#121a2a'));
+    // 拼错的名字与缺省都落到「线性」：ACES 是**压缩高光**的档，它会把暗部一起抬起来
+    // （ACES(0.1) ≈ 0.13），默认开着就是一层灰雾 —— 分形的褶皱会被糊平。
+    set1i('u_tonemap', SDF_TONEMAPS[String(v.tonemap ?? 'none')] ?? 0);
+
+    /*
+     * 点光位置：`ParamDef` 没有 vec3 这一档，所以用「主光方向 + 一个距离」——
+     * 点光天然跟着主光转，不会出现两盏灯互相对打的组合，也少两个滑杆。
+     * 真要独立摆放时再加 pointAz / pointEl（与 lightAz/lightEl 同口径）。
+     */
+    const az = (Number(v.lightAz ?? -45) * Math.PI) / 180;
+    const el = (Number(v.lightEl ?? 44) * Math.PI) / 180;
+    const ce = Math.cos(el);
+    const pd = Math.max(0.2, Number(v.pointDist ?? 2.8));
+    const pos = l['u_pointPos'];
+    if (pos) gl.uniform3f(pos, Math.sin(az) * ce * pd, Math.sin(el) * pd, Math.cos(az) * ce * pd);
   };
 }

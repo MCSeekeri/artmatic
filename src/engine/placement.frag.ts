@@ -100,9 +100,29 @@ vec2 layerUv(vec2 uv) {
   return r / max(u_drawSize, vec2(1.0)) + 0.5;
 }
 
+/**
+ * 解析覆盖率：对 [lo, hi] 这个矩形窗口做**按像素足迹展开的边缘**。
+ *
+ * 旧写法是 step() —— 于是旋转/缩放的层矩形、四角透视的边、裁剪边全是 1 像素
+ * 硬阶梯，缩放动画里还会「爬行」。而 MSAA 在这里帮不上忙：所有绘制都是全屏
+ * 三角形，不存在光栅化边缘，抗锯齿只能自己算。
+ *
+ * 三条实现约束：
+ * - fwidth 给的是屏幕空间导数，四角透视下 uv 是非仿射的，那里依然正确。
+ * - 宽度上下都夹住。下界防 drawSize 极大时坡变成 0（退化成 step）；上界防
+ *   图层被缩到几个像素时整块糊成一团。
+ * - **inside 精确为 1 的像素逐位不变**（smoothstep 在边界内部返回 1.0），
+ *   既有的确定性回归与逐位断言因此不受影响。
+ */
+float coverage(vec2 uv, vec2 lo, vec2 hi) {
+  vec2 w = clamp(fwidth(uv) * 0.5, vec2(1e-5), vec2(0.25));
+  vec2 a = smoothstep(lo - w, lo + w, uv);
+  vec2 b = smoothstep(hi + w, hi - w, uv);
+  return min(a.x, a.y) * min(b.x, b.y);
+}
+
 float insideLayer(vec2 uv) {
-  vec2 e = step(vec2(0.0), uv) * step(uv, vec2(1.0));
-  return e.x * e.y;
+  return coverage(uv, vec2(0.0), vec2(1.0));
 }
 
 // BT.601 色差分量。抠图以它为主：亮度被剥掉，阴影/高光下的同一背景颜色一致。
@@ -157,8 +177,8 @@ void main() {
   if (u_cropOn > 0.5) {
     vec2 lo = u_crop.xy;
     vec2 hi = vec2(1.0) - u_crop.zw;
-    vec2 e = step(lo, cropUv) * step(cropUv, hi);
-    inside *= e.x * e.y;
+    /* 裁剪边同样是层内的硬边，走同一套覆盖率（否则裁出来的长条两端还是阶梯） */
+    inside *= coverage(cropUv, lo, hi);
   }
 
   vec4 c = texture(u_texture, clamp(srcGl, 0.0, 1.0));
