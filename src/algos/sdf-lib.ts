@@ -60,6 +60,42 @@ export const SDF_PALETTES: Record<string, number> = {
 };
 
 /**
+ * 相机 / 射线这一段在**两个**内核里都要用（普通 SDF 与材质型 SDF）。
+ *
+ * 单独抽出来是因为「各写一份」在这里的失效形态特别难看：视场角的口径
+ * 或右向量的兜底一旦有一边漂了，同一个参数在两个生成器里给出不同的取景，
+ * 而两边都编译得过、都看起来正常。
+ */
+const SDF_CAM_GLSL = `
+/** 相机基。列 = 右 / 上 / 前，所以 \`cam * vec3(x, y, 1)\` 就是视线方向。 */
+mat3 sdfCam(vec3 eye, vec3 target) {
+  vec3 f = normalize(target - eye);
+  // 上去向量固定用 +Y；视线与 Y 平行时右手系退化，给一个任意但合法的右向量
+  // （不处理的话 \`normalize\` 传入零向量，驱动会告警说结果未定义）
+  vec3 r = cross(vec3(0.0, 1.0, 0.0), f);
+  r = dot(r, r) > 1e-8 ? normalize(r) : vec3(1.0, 0.0, 0.0);
+  return mat3(r, cross(f, r), f);
+}
+
+/** 由 uv 与相机基造世界方向。fov 越小视野越窄。 */
+vec3 sdfRay(vec2 uv, float aspect, mat3 cam) {
+  vec2 sc = (uv - 0.5) * vec2(aspect, 1.0);
+  return normalize(cam * vec3(sc * u_fov, 1.0));
+}
+
+/**
+ * 轨道相机：绕原点公转 + 推近，看向原点。三个 3D 分形要的就是这个，
+ * 所以连「eye 怎么摆」也共用一份 —— 各写一遍的话，某个分形的 pitch 符号
+ * 反了就是「相机从地底下往上看」，不报错也不好查。
+ */
+mat3 sdfOrbitCam(float yaw, float pitch, float dist, out vec3 eye) {
+  float cp = cos(pitch);
+  eye = vec3(sin(yaw) * cp, sin(pitch), cos(yaw) * cp) * dist;
+  return sdfCam(eye, vec3(0.0));
+}
+`;
+
+/**
  * 造共享内核的 GLSL 代码块。`sd` 是这个生成器的 SDF 函数名。
  *
  * 提供（全部读下面的共用 uniform，生成器不必传参）：
@@ -109,33 +145,7 @@ uniform int   u_bgMode;
 vec4 sdfBackground() {
   return u_bgMode == 1 ? vec4(0.0) : vec4(u_bg, 1.0);
 }
-
-/** 相机基。列 = 右 / 上 / 前，所以 \`cam * vec3(x, y, 1)\` 就是视线方向。 */
-mat3 sdfCam(vec3 eye, vec3 target) {
-  vec3 f = normalize(target - eye);
-  // 上去向量固定用 +Y；视线与 Y 平行时右手系退化，给一个任意但合法的右向量
-  // （不处理的话 \`normalize\` 传入零向量，驱动会告警说结果未定义）
-  vec3 r = cross(vec3(0.0, 1.0, 0.0), f);
-  r = dot(r, r) > 1e-8 ? normalize(r) : vec3(1.0, 0.0, 0.0);
-  return mat3(r, cross(f, r), f);
-}
-
-/** 由 uv 与相机基造世界方向。fov 越小视野越窄。 */
-vec3 sdfRay(vec2 uv, float aspect, mat3 cam) {
-  vec2 sc = (uv - 0.5) * vec2(aspect, 1.0);
-  return normalize(cam * vec3(sc * u_fov, 1.0));
-}
-
-/**
- * 轨道相机：绕原点公转 + 推近，看向原点。三个 3D 分形要的就是这个，
- * 所以连「eye 怎么摆」也共用一份 —— 各写一遍的话，某个分形的 pitch 符号
- * 反了就是「相机从地底下往上看」，不报错也不好查。
- */
-mat3 sdfOrbitCam(float yaw, float pitch, float dist, out vec3 eye) {
-  float cp = cos(pitch);
-  eye = vec3(sin(yaw) * cp, sin(pitch), cos(yaw) * cp) * dist;
-  return sdfCam(eye, vec3(0.0));
-}
+${SDF_CAM_GLSL}
 
 /**
  * 光线步进。**命中返回行进距离，没命中返回负值**（哨兵值而不是 out 参数：
@@ -215,6 +225,119 @@ vec3 sdfShade(vec3 p, vec3 n, vec3 rd, float dist, vec3 albedo) {
   vec3 col = shade * albedo;
   col *= mix(1.0, clamp(1.0 - dist * 0.11, 0.0, 1.0), clamp(u_fog, 0.0, 1.0));
   return col * u_gain;
+}
+`;
+}
+
+/**
+ * 材质型内核：SDF 返回 `vec3(距离, 材质号, 自发光场)`，步进时顺带把
+ * 「自发光结构的光晕」沿射线积分出来。
+ *
+ * ## 什么时候用它而不是 `sdfKernel`
+ *
+ * `sdfKernel` 假设画面上只有一个物体（一颗星球、一块海绵）：命中了就
+ * `sdfShade` 一次，颜色由一个调色板决定。**走廊 / 隧道 / 任何「多个构件
+ * 拼起来的场景」都不成立** —— 壁、拱架、支架、窗外的东西要用不同的材质与
+ * 不同的自发光规则着色，而 `sdfMarch` 只回传距离。
+ *
+ * 三条协议差异，都很小：
+ *
+ * - SDF 返回 `vec3` 而不是 `float`。`.y` 是材质号（生成器自己定义语义），
+ *   `.z` 是**该点的自发光场强度**（0..1 量级），只有「光晕」用它。
+ * - 步进返回命中距离，`out` 回传材质号与累积光晕。
+ * - 法线 / 遮蔽走 `.x`（`sdfNormalMat` / `sdfAOMat`），签名与 `sdfKernel`
+ *   的对应物一致。
+ *
+ * `.z` 之所以是「场」而不是「这个最近物体的自发光」：光晕是**沿射线**积分的，
+ * 而射线离某个发光构件最近的那一点，通常不是全局最近的物体（壁把拱架挡住了）。
+ * 让 SDF 顺带算出「我在发光结构附近有多近」，步进只做一次乘加，就不必有第二趟。
+ *
+ * 只声明**步进自己**要用的五个 uniform（`u_steps` / `u_maxDist` /
+ * `u_stepScale` / `u_eps` / `u_fov`）；光照与配色由生成器自己声明与使用 ——
+ * 场景型生成器几乎不会照搬 `sdfShade` 那一套三项光照。
+ */
+export function sdfKernelMaterial(sd: string): string {
+  return `
+/* 前向声明（理由同 \`sdfKernel\`）：.x 距离 · .y 材质 · .z 自发光场 */
+vec3 ${sd}(vec3 p);
+
+uniform int   u_steps;
+uniform float u_maxDist;
+uniform float u_stepScale;
+uniform float u_eps;
+uniform float u_fov;
+${SDF_CAM_GLSL}
+
+/**
+ * 步进。命中返回行进距离并写出 \`mat\`，未命中返回负值；\`glow\` 两条路径都有效
+ * （没打中东西时它就是背景里那层雾的光源）。
+ *
+ * 光晕按**线段长度**加权累积，而不是每步加一个常量：步长在物体附近本来就小，
+ * 按步计会让「离得近但走得慢」的区域过亮，形成一圈假的亮带。
+ */
+float sdfMarchMat(vec3 ro, vec3 rd, out float mat, out float glow) {
+  float tt = 0.0;
+  float prev = 0.0;
+  mat = 0.0;
+  glow = 0.0;
+  for (int i = 0; i < ${MAX_MARCH_STEPS}; i++) {
+    if (i >= u_steps) break;
+    vec3 r = ${sd}(ro + rd * tt);
+    glow += r.z * (tt - prev);
+    prev = tt;
+    if (r.x < u_eps * (1.0 + tt * 0.5)) {
+      /*
+       * **命中后精修**。少了这一段，掠射轮廓会碎成阶梯状方块 —— 这不是几何
+       * 问题，是球体步进的固有精度：判据是「距离 < eps」，而一条掠过表面的射线
+       * 在 eps 带上要走 sqrt(2R·eps) 那么长（R=2、eps=0.004 时是 0.13 个单位），
+       * 于是「第一次满足判据的位置」在带内跳动，命中点连同材质号一起跳。
+       *
+       * 补几步 0.9·d 的推进就够：每步把剩余距离缩到 1/10，5 步之后误差已经
+       * 在浮点噪声里。**不会穿过表面**（球体步进的性质），也不会误判「擦过但
+       * 没打到」的射线 —— 距离一旦开始变大就停手，返回上一次的位置。
+       */
+      float prevD = r.x;
+      for (int k = 0; k < 5; k++) {
+        float nt = tt + r.x * 0.9;
+        vec3 nr = ${sd}(ro + rd * nt);
+        if (nr.x > prevD * 0.92) break;
+        prevD = nr.x;
+        tt = nt;
+        r = nr;
+      }
+      mat = r.y;
+      return tt;
+    }
+    tt += r.x * u_stepScale;
+    if (tt > u_maxDist) break;
+  }
+  return -1.0;
+}
+
+/** 法线（四面体差分，取 .x）。 */
+vec3 sdfNormalMat(vec3 p, float e) {
+  const vec2 k = vec2(1.0, -1.0);
+  return normalize(
+    k.xyy * ${sd}(p + k.xyy * e).x +
+    k.yyx * ${sd}(p + k.yyx * e).x +
+    k.yxy * ${sd}(p + k.yxy * e).x +
+    k.xxx * ${sd}(p + k.xxx * e).x);
+}
+
+/**
+ * 采样式环境遮蔽（4 步）。走廊场景里 AO 是「拱架与壁之间的缝」唯一的来源 ——
+ * 只靠 Lambert 时内凹的肋与窗框会糊成一片。
+ */
+float sdfAOMat(vec3 p, vec3 n) {
+  float occ = 0.0;
+  float sca = 1.0;
+  for (int i = 0; i < 4; i++) {
+    float h = 0.02 + 0.22 * (float(i) + 1.0) / 4.0;
+    float d = ${sd}(p + n * h).x;
+    occ += (h - d) * sca;
+    sca *= 0.85;
+  }
+  return clamp(1.0 - 1.5 * occ, 0.0, 1.0);
 }
 `;
 }

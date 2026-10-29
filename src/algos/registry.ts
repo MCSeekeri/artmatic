@@ -25,6 +25,7 @@ import { bifurcationDef } from './bifurcation';
 import { langtonsAntDef } from './langtons-ant';
 import { lsystemDef } from './lsystem';
 import { mengerDef } from './menger';
+import { tunnel3dDef } from './tunnel3d';
 import { mandelbulbDef } from './mandelbulb';
 import { apollonianDef } from './apollonian';
 import { newtonDef } from './newton';
@@ -66,6 +67,8 @@ const DEFS = new Map<string, GeneratorDef>(
     langtonsAntDef,
     lsystemDef,
     mengerDef,
+    // 3D 隧道：以 z 为参数的管体 + 按单元哈希布置的构件（走 sdfKernelMaterial）
+    tunnel3dDef,
     mandelbulbDef,
     apollonianDef,
     newtonDef,

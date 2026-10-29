@@ -122,6 +122,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   'Langton 蚂蚁（turmite）': 'ma yi',
   'L-system（离根距离场）': 'li gen ju li chang',
   'Menger 海绵': 'hai mian',
+  '3D 隧道': 'sui dao',
   'Mandelbulb（幂次球）': 'mi ci qiu',
   阿波罗尼奥斯球堆: 'a bo luo ni ao si qiu dui',
   '牛顿分形（zⁿ−1）': 'niu dun fen xing',

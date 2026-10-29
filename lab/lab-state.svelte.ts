@@ -131,7 +131,17 @@ function defaultsFor(scope: 'source' | 'effect', id: string | null): Record<stri
 }
 
 const DEFAULT_SOURCE = SOURCE_ITEMS[0]!.id;
-const DEFAULT_EFFECT = 'slices';
+/**
+ * 出厂**不挂任何特效**。
+ *
+ * 这里原来是 `'slices'`。代价不是「多一层」，而是**每一个「这个生成器长什么样」
+ * 的判断都得先在心里减掉一层副作用** —— 而 `slices` 的横条错位看起来极像
+ * 「SDF 的距离场碎了」（边缘成排方块、纯 x 的函数出现 y 方向台阶），实测让
+ * 一次 3D 隧道的排查白跑了两个小时，最后是关掉特效链才看出画面本来就是干净的。
+ *
+ * 默认值应当让被观察的对象保持原样；要看特效自己选。
+ */
+const DEFAULT_EFFECT: string | null = null;
 
 class LabState {
   readonly groups = LAB_GROUPS;

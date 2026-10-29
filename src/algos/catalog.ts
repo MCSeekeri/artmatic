@@ -157,6 +157,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   streamlines: rt('geometry', 'algo.desc.streamlines'),
   mandelbrot: rt('math', 'algo.desc.mandelbrot', 0),
   menger: rt('math', 'algo.desc.menger'),
+  /*
+   * 3D 隧道：`previewT = 8` 让镜头在单元里走出一段（默认 2.6 单位/秒 → 约 21 单位，
+   * 三个单元），零秒那一帧是「站在拱架正下方」，看不出纵深。
+   */
+  'tunnel-3d': rt('geometry', 'algo.desc.tunnel3d', 8.6),
   mandelbulb: rt('math', 'algo.desc.mandelbulb'),
   apollonian: rt('math', 'algo.desc.apollonian'),
   newton: rt('math', 'algo.desc.newton', 0),
