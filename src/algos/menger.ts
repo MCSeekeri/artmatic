@@ -53,6 +53,7 @@ uniform int   u_extent;   // 0 = 单体 · 1 = 无限延伸（只在海绵下成
 uniform int   u_camera;   // 0 = 环绕 · 1 = 穿梭
 uniform float u_flySpeed;
 uniform float u_flyShake;
+uniform float u_flyTilt;
 
 /** 绕 y 轴按高度扭转 —— 让方块从「古典几何体」变成「藤蔓」。 */
 vec3 twistY(vec3 p, float k) {
@@ -123,17 +124,18 @@ void main() {
   vec3 rd;
   if (u_camera == 1) {
     /*
-     * 穿梭：镜头沿正弦叠加路径游走，视线朝切线，再沿距离场梯度推出实体。
-     * 没有「推出」这一步的话，镜头一进墙整幅画面就变成一块纯色（第一段步进
-     * 立刻以 d 接近 0 判成命中），看起来像渲染坏了。
+     * 穿梭：镜头沿坐标轴直飞整整一个周期再换轴（见 sdf-lib 的 SDF_FLY_GLSL）。
+     * 相机基用显式的上向量，否则视线接近竖直时右向量会退化 —— 表现为
+     * 「看天花板时镜头猛地转 180°」。
      */
-    vec3 fwd;
+    mat3 cam;
     /* head = (0,0,0)：Menger 的八度 1 十字孔是三条互相垂直的贯通隧道，
        它们的交点就是原点。六个方向的走廊都从这一点出发，所以「飞一个周期
-       再换轴」永远不会撞墙，sdfCameraClear 只是兜底。 */
-    sdfFlyCam(u_time, u_seed, u_flySpeed, u_flyShake, vec3(0.0), ro, fwd);
+       再换轴」永远不会撞墙，sdfCameraClear 只是兜底。
+       axes = 3：海绵上下左右前后都是同一套结构，竖直飞也有内容。 */
+    sdfFlyCam(u_time, u_seed, u_flySpeed, u_flyShake, u_flyTilt, 3, vec3(0.0), ro, cam);
     ro = sdfCameraClear(ro, 0.08);
-    rd = sdfRay(vUv, u_aspect, sdfCam(ro, ro + fwd));
+    rd = sdfRay(vUv, u_aspect, cam);
   } else {
     // 相机：上游那套「同时转 ro 与 rd」的轨道 + 推进（见文件头）
     float tm = u_time * 0.10 * u_rate;
@@ -270,6 +272,7 @@ export const mengerDef: GeneratorDef = {
     set1f('u_twist', Number(v.twist ?? 0));
     set1f('u_flySpeed', Number(v.flySpeed ?? 0.6));
     set1f('u_flyShake', Number(v.flyShake ?? 0.3));
+    set1f('u_flyTilt', ((Number(v.flyTilt ?? 0) * Math.PI) / 180));
     const depth = l['u_depth'];
     if (depth) gl.uniform1i(depth, Math.round(Number(v.depth ?? 4)));
     const variant = l['u_variant'];

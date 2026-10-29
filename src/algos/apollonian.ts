@@ -47,6 +47,7 @@ uniform float u_dist;
 uniform int   u_camera;    // 0 = 环绕 · 1 = 穿梭
 uniform float u_flySpeed;
 uniform float u_flyShake;
+uniform float u_flyTilt;
 
 /** 折回 [-1,1]³：\`fract\` 把小数部分映射到 [0,1)，再线性拉回来。 */
 vec3 apollFold(vec3 p) {
@@ -77,20 +78,23 @@ void main() {
   vec3 eye;
   vec3 rd;
   if (u_camera == 1) {
-    vec3 fwd;
+    mat3 cam;
     /*
      * head 取 cell 的角 (1,1,1)：折叠把 [-1,1]³ 里的球堆当作一个周期，
      * 原点在球堆内部（而且 r2 = 0 会让反演倍率炸成 1e6，是个退化点），
      * 角上是这个周期里最空的地方。于是每段都从空处出发、穿过一团球堆、
      * 再回到空处 —— 就是「朝一个方向飞过去」。
+     *
+     * axes = 2：**只在 XZ 平面里走**。球堆沿竖直方向也以 2 为周期，
+     * 但头上脚下是一整片纯色，竖直飞过去整屏什么都没有。
      */
-    sdfFlyCam(u_time, u_seed, u_flySpeed, u_flyShake, vec3(1.0), eye, fwd);
+    sdfFlyCam(u_time, u_seed, u_flySpeed, u_flyShake, u_flyTilt, 2, vec3(1.0), eye, cam);
     /* 推出实体：球堆两两相切，缝很窄，镜头擦到球面上时整幅画面会变成一块纯色。
        ⚠️ 这个余量调不大：实测 0.1 与 0.45 的画面几乎一样 —— 因为这条折叠-反演的
        距离场在球堆外侧会 plateau（0.25*|p.y|/s，s 累积越大越扁），它自己就认为
        「到处都是表面」，沿它的梯度推不动。要根治得换一条可靠的距离估计。 */
     eye = sdfCameraClear(eye, 0.15);
-    rd = sdfRay(vUv, u_aspect, sdfCam(eye, eye + fwd));
+    rd = sdfRay(vUv, u_aspect, cam);
   } else {
     float yaw = u_time * 0.06 * u_rate + u_push * 1.6;
     float pitch = 0.20 + 0.14 * sin(u_time * 0.04 * u_rate);
@@ -165,6 +169,7 @@ export const apollonianDef: GeneratorDef = {
     set1f('u_dist', Number(v.dist ?? 2.6));
     set1f('u_flySpeed', Number(v.flySpeed ?? 0.6));
     set1f('u_flyShake', Number(v.flyShake ?? 0.3));
+    set1f('u_flyTilt', ((Number(v.flyTilt ?? 0) * Math.PI) / 180));
     const iter = l['u_iter'];
     if (iter) gl.uniform1i(iter, Math.round(Number(v.iter ?? 8)));
     const camera = l['u_camera'];

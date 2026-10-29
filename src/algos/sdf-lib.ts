@@ -117,14 +117,21 @@ float sdfFlyHash(vec2 p) {
   return fract((p3.x + p3.y) * p3.z);
 }
 
-/** 0..5 → ±x / ±y / ±z。0/1、2/3、4/5 成对（异或 1 就是反向）。 */
-vec3 sdfFlyAxis(int i) {
-  if (i == 0) return vec3(1.0, 0.0, 0.0);
-  if (i == 1) return vec3(-1.0, 0.0, 0.0);
-  if (i == 2) return vec3(0.0, 1.0, 0.0);
-  if (i == 3) return vec3(0.0, -1.0, 0.0);
-  if (i == 4) return vec3(0.0, 0.0, 1.0);
-  return vec3(0.0, 0.0, -1.0);
+/**
+ * 轴向索引 → 世界方向。低半位是符号（0 正 · 1 负），高位是轴序号。
+ *
+ * axes = 3 时是三根轴全用（menger）。axes = 2 时**只在 XZ 平面里走** ——
+ * 球堆的结构沿第三轴同样以 2 为周期，但头上脚下是一整片纯色，竖直飞过去
+ * 整屏什么都没有。这是球堆自己的几何决定的，不是相机的事。
+ */
+vec3 sdfFlyAxis(int i, int axes) {
+  int a = i / 2;
+  int sig = i - a * 2;
+  if (axes < 3) a = a * 2;
+  float sg = sig == 0 ? 1.0 : -1.0;
+  if (a == 0) return vec3(sg, 0.0, 0.0);
+  if (a == 1) return vec3(0.0, sg, 0.0);
+  return vec3(0.0, 0.0, sg);
 }
 
 /**
@@ -137,19 +144,20 @@ vec3 sdfFlyAxis(int i) {
  * 而上一段的值其实已被修正过一次，两者不一致时排除失效 ⇒ 段边界上出现
  * 一次 90° 硬切（实测 400 段里有 1 段）。数值上看就是相邻两段方向恰好反向。
  *
- * 现在改成**按 n 循环**：轴 = (起点 + 步长 × n) % 3。相邻两段必然换轴，
- * 所以**不可能折返**，而且完全不需要查上一段。符号由哈希给，六个方向都能出现。
+ * 现在改成**按 n 循环**：轴 = (起点 + 步长 × n) % count。相邻两段必然换轴，
+ * 所以**不可能折返**，而且完全不需要查上一段。符号由哈希给，每个轴两个方向都能出现。
  *
  * 代价：不会出现「直着继续飞」的段。要允许直飞就得知道上一段的符号，
  * 那就回到递推上去了（硬约束 1.1 不许存状态）。
  */
-int sdfFlyDir(float n, float seed) {
-  int base = min(int(floor(sdfFlyHash(vec2(seed, 13.0)) * 3.0)), 2);
-  int step = 1 + min(int(floor(sdfFlyHash(vec2(seed, 71.0)) * 2.0)), 1);
-  int a = (base + step * int(n)) % 3;
-  a = a < 0 ? a + 3 : a;
-  int s = sdfFlyHash(vec2(n, seed * 97.0)) < 0.5 ? 0 : 1;
-  return a * 2 + s;
+int sdfFlyDir(float n, float seed, int axes) {
+  int count = max(axes, 2);
+  int base = min(int(floor(sdfFlyHash(vec2(seed, 13.0)) * float(count))), count - 1);
+  int step = 1 + min(int(floor(sdfFlyHash(vec2(seed, 71.0)) * float(count - 1))), count - 2);
+  int a = (base + step * int(n)) % count;
+  a = a < 0 ? a + count : a;
+  int sig = sdfFlyHash(vec2(n, seed * 97.0)) < 0.5 ? 0 : 1;
+  return a * 2 + sig;
 }
 
 /**
@@ -184,23 +192,57 @@ float sdfFlyEase(float x) {
  *
  * ## 摇晃
  *
- * shake 是三轴小幅高频抖动，幅度按 shake 缩放。它读 t 的闭式正弦，所以
- * 拖时间轴能拿到同一帧（不是逐帧累加的噪声）。
+ * shake 是三轴小幅高频抖动，tilt 是绕视线的固定滚转角（可打关键帧做荷兰角）。
+ * 两者都读 t 的闭式正弦 / 常量，所以拖时间轴能拿到同一帧。
  *
  * ## 确定性
  *
  * 全程只读 t 和 seed。转弯相位是段相位的闭式函数，不累加任何状态 ——
  * 拖时间轴到同一个 t 会拿到逐像素相同的一帧。
  */
-void sdfFlyCam(float t, float seed, float speed, float shake, vec3 head, out vec3 eye, out vec3 fwd) {
+/**
+ * 上向量。**不能用世界 +Y 直接投影**：cross(+Y, f) 在 f 竖直时长度趋 0，
+ * 右向量的方向就由浮点噪声决定 —— 画面猛地转 180°，也就是「看天花板时
+ * 镜头随机转一圈」。
+ *
+ * 这里用两条投影按「离竖直多远」加权：
+ *
+ * - raw：以 (1,1,1) 方向为参考。它离**所有**飞行方向都远（六个轴方向差 54.7°，
+ *   转弯途中的对角方向也在 35° 以外），所以这条投影永不退化。代价是它自带
+ *   约 45° 的滚转。
+ * - level：世界 +Y 投影，地平线是平的，但竖直处退化。
+ *
+ * 权重按 |fwd.y| 线性过渡（试过 smoothstep 与按角度线性，峰值滚转都比它高）。
+ * 水平时完全用 level，竖直时完全用 raw，中间是连续的滚转 —— 看起来是
+ * 「飞进竖井时镜头顺势侧过去」，不是突跳。
+ */
+vec3 sdfFlyUp(vec3 fwd) {
+  const vec3 REF = vec3(0.57735027);
+  vec3 raw = REF - dot(REF, fwd) * fwd;
+  vec3 level = vec3(0.0, 1.0, 0.0) - fwd * fwd.y;
+  float w = 1.0 - clamp(abs(fwd.y), 0.0, 1.0);
+  return normalize(raw * (1.0 - w) + level * w);
+}
+
+/** 绕单位轴旋转（Rodrigues）。用来把倾角滚到 up 上。 */
+vec3 sdfFlyRot(vec3 v, vec3 axis, float a) {
+  float c = cos(a);
+  float s = sin(a);
+  return v * c + cross(axis, v) * s + axis * (dot(axis, v) * (1.0 - c));
+}
+
+void sdfFlyCam(
+  float t, float seed, float speed, float shake, float tilt, int axes, vec3 head,
+  out vec3 eye, out mat3 cam
+) {
   float legT = SDF_FLY_LEG / max(speed, 0.01);
   float u = t / legT;
   float n = floor(u);
   float f = u - n;
 
-  vec3 d0 = sdfFlyAxis(sdfFlyDir(n, seed));
-  vec3 d1 = sdfFlyAxis(sdfFlyDir(n + 1.0, seed));
-  vec3 dm = sdfFlyAxis(sdfFlyDir(n - 1.0, seed));
+  vec3 d0 = sdfFlyAxis(sdfFlyDir(n, seed, axes), axes);
+  vec3 d1 = sdfFlyAxis(sdfFlyDir(n + 1.0, seed, axes), axes);
+  vec3 dm = sdfFlyAxis(sdfFlyDir(n - 1.0, seed, axes), axes);
 
   eye = head + d0 * (f * SDF_FLY_LEG);
 
@@ -208,6 +250,7 @@ void sdfFlyCam(float t, float seed, float speed, float shake, vec3 head, out vec
   const float A = 0.70;
   const float B = 0.10;
   const float W = 1.0 + B - A;
+  vec3 fwd;
   if (n >= 1.0 && f < B) {
     // 收上一段留下的尾：从 d(m-1) 转到 d0
     fwd = sdfFlySlerp(dm, d0, sdfFlyEase((f + 1.0 - A) / W));
@@ -218,15 +261,23 @@ void sdfFlyCam(float t, float seed, float speed, float shake, vec3 head, out vec
     fwd = d0;
   }
 
+  /* 摇晃：绕当前 up 的两个正交方向各加一条高频正弦。必须在算 up 之前作用到
+     fwd 上 —— 否则 up 与 fwd 会不同步，画面在抖的同时还会自转。 */
+  vec3 up = sdfFlyUp(fwd);
   if (shake > 0.0) {
-    vec3 up = abs(fwd.y) > 0.95 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
     vec3 rt = normalize(cross(up, fwd));
     vec3 upn = cross(fwd, rt);
     float a = shake * 0.085;
     float s1 = sin(t * 7.31 + seed * 31.0) + 0.55 * sin(t * 13.7 + seed * 11.0);
     float s2 = sin(t * 5.93 + seed * 17.0) + 0.55 * sin(t * 11.3 + seed * 5.0);
     fwd = normalize(fwd + rt * (a * s1) + upn * (a * s2));
+    up = sdfFlyUp(fwd);
   }
+
+  /* 固定倾角：绕视线滚 up。可打关键帧，用来做荷兰角一类的运镜。 */
+  if (tilt != 0.0) up = sdfFlyRot(up, fwd, tilt);
+
+  cam = sdfCamWithUp(eye, eye + fwd, up);
 }
 `;
 
@@ -278,6 +329,22 @@ mat3 sdfOrbitCam(float yaw, float pitch, float dist, out vec3 eye) {
   float cp = cos(pitch);
   eye = vec3(sin(yaw) * cp, sin(pitch), cos(yaw) * cp) * dist;
   return sdfCam(eye, vec3(0.0));
+}
+
+/**
+ * 相机基（**显式给上向量**）。
+ *
+ * sdfCam 把上向量固定成世界 +Y。视线一旦接近竖直，右向量 cross(Y, f) 的长度
+ * 就趋 0，接着 normalize 出来的方向由浮点噪声决定 —— 表现出「镜头看天花板时
+ * 猛地转 180°」。公转相机不会竖直看，所以一直没暴露；穿梭会。
+ *
+ * 有 up 之后，竖直飞行也能给出稳定的滚转角。
+ */
+mat3 sdfCamWithUp(vec3 eye, vec3 target, vec3 up) {
+  vec3 f = normalize(target - eye);
+  vec3 r = cross(up, f);
+  r = dot(r, r) > 1e-8 ? normalize(r) : vec3(1.0, 0.0, 0.0);
+  return mat3(r, cross(f, r), f);
 }
 `;
 
@@ -1015,6 +1082,17 @@ export function sdfCameraParams(): ParamDef[] {
       max: 1,
       step: 0.01,
       defaultValue: 0.3,
+      visibleWhen: (v) => v.camera === 'fly',
+    } satisfies RangeParam,
+    {
+      /** 绕视线的固定滚转。**可打关键帧** —— 荷兰角（地平线倾斜）就是它。 */
+      key: 'flyTilt',
+      labelKey: 'algo.sdf.flyTilt',
+      type: 'range',
+      min: -180,
+      max: 180,
+      step: 1,
+      defaultValue: 0,
       visibleWhen: (v) => v.camera === 'fly',
     } satisfies RangeParam,
   ];

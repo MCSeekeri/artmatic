@@ -171,6 +171,26 @@ describe('3D 内核家族', () => {
     );
   });
 
+  it('穿梭镜头的倾角缺省是 0（老工程没这个键，非零缺省会让所有穿梭带倾斜开场）', () => {
+    for (const id of ['menger', 'apollonian']) {
+      const p = getGenerator(id)!.params.find((q) => q.key === 'flyTilt');
+      expect(p, `${id} 没有 flyTilt`).toBeDefined();
+      expect(p!.defaultValue).toBe(0);
+    }
+  });
+
+  it('球堆只在 XZ 平面里飞（竖直段整屏是纯色）', () => {
+    /*
+     * 这是用户实际报上来的第二个问题：Menger 的「三轴全开」被直接套给了球堆，
+     * 于是镜头偶尔朝上/朝下飞 —— 而球堆的头顶脚下是一整片纯色，那几秒画面
+     * 什么都没有。轴数由 sdfFlyCam 的第 6 个实参决定。
+     */
+    const apoll = (getGenerator('apollonian') as { fragment: string }).fragment;
+    expect(apoll, 'apollonian 必须传 axes = 2').toMatch(/sdfFlyCam\([^;]*,\s*2,\s*vec3/);
+    const menger = (getGenerator('menger') as { fragment: string }).fragment;
+    expect(menger, 'menger 六向全开，传 axes = 3').toMatch(/sdfFlyCam\([^;]*,\s*3,\s*vec3/);
+  });
+
   it('软阴影的步长上界按 maxt 的比例夹，不按 mint 夹', () => {
     /*
      * 踩过的坑：`clamp(h * stepScale, mint * 0.5, mint * 8.0)`。
