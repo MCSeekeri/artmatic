@@ -144,6 +144,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   损坏栅格: 'sun huai zha ge',
   域扭曲墨迹: 'yu niu qu mo ji',
   竖线束: 'shu xian shu',
+  正多面体: 'zheng duo mian ti',
 
   /* -------------------------------------------- 分类 / 标签 / 分组小标题 */
   调色: 'tiao se',

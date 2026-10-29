@@ -162,6 +162,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    * 三个单元），零秒那一帧是「站在拱架正下方」，看不出纵深。
    */
   'tunnel-3d': rt('geometry', 'algo.desc.tunnel3d', 8.6),
+  /*
+   * 正多面体：4 秒让自旋走到一个不撞坐标轴的姿态。默认 0.6 弧度/秒 ⇒ 2.4 弧度，
+   * 五重对称的形体在这个角度上棱的疏密最均匀。
+   */
+  polyhedron: rt('geometry', 'algo.desc.polyhedron'),
   mandelbulb: rt('math', 'algo.desc.mandelbulb'),
   apollonian: rt('math', 'algo.desc.apollonian'),
   newton: rt('math', 'algo.desc.newton', 0),
@@ -174,10 +179,16 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   lyapunov: rt('math', 'algo.desc.lyapunov', 0),
 
   'scene-ripple': rt('geometry', 'algo.desc.sceneRipple'),
-  'scene-field': rt('physics', 'algo.desc.sceneField'),
-  'scene-datamosh': rt('special', 'algo.desc.sceneDatamosh'),
-  'scene-flow': rt('physics', 'algo.desc.sceneFlow'),
-  'scene-strands': rt('physics', 'algo.desc.sceneStrands'),
+  /*
+   * 场景家族里「几何形状本身就是画面」的四个也归「几何图形」：尘场是一层层
+   * 网格上的点、墨迹是等值线、损坏栅格是像素块阵、竖线束是一排竖线。
+   * 它们与 `scene-flow` 的区别不在技术（都读音频特征），而在**用户找它们时
+   * 想的是「一串线」还是「一团运动」** —— 分组是浏览维度，见 AlgoGroupId。
+   */
+  'scene-field': rt('geometry', 'algo.desc.sceneField'),
+  'scene-datamosh': rt('geometry', 'algo.desc.sceneDatamosh'),
+  'scene-flow': rt('geometry', 'algo.desc.sceneFlow'),
+  'scene-strands': rt('geometry', 'algo.desc.sceneStrands'),
   /*
    * 体积烟雾：t 无关（噪声沿 `-wind·t` 平移，没有「长出来」的过程），4 秒只是
    * 让涡纹走到一个不像 t = 0 的相位。
