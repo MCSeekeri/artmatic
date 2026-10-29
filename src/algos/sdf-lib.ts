@@ -74,39 +74,159 @@ export const SDF_CAMERAS: Record<string, number> = { orbit: 0, fly: 1 };
 /**
  * 穿梭相机的路径。两个生成器共用（menger / apollonian）。
  *
- * ## 为什么是正弦叠加而不是真随机
+ * ## 为什么是「沿轴直飞 + 段尾换轴」而不是一条连续曲线
  *
- * 硬约束 1.1：唯一时钟是 t，同一个 t 必须给出同一帧。所以路径必须是 t 的
- * **闭式函数** —— 积分「速度 + 随机转向」那种写法在 seek 时不可复现。
+ * 正弦叠加那种连续曲线在周期结构里就是没头苍蝇：它不知道走廊在哪，一半时间
+ * 贴着墙、一半时间对着虚空。而这两个分形的可行空间是**沿坐标轴**的：
  *
- * 三层正弦的频率比取互质的小数（0.37 / 0.91 / 2.03 …）：单层是明显的闭环，
- * 三层叠加在一个镜头（几秒）里看不出周期，而在 24 秒的工程里也不会正好撞回
- * 起点。相位由 `u_seed` 给，所以同一个工程里两条轨道不会飞同一条线。
+ * - Menger 的八度 1 十字孔就是三条互相垂直的贯通隧道，走廊中心在
+ *   `p ≡ 0 (mod 2)`、半宽 1/3，深层的八度只会往里加材料，所以这条隧道
+ *   永远存在、永远畅通。沿着它直飞不需要任何避障。
+ * - Apollonian 的距离场以 2 为周期，所以「飞整整 2 个单位」就是飞过一个
+ *   完整的球堆周期。
  *
- * ## 切线与退化
+ * ## 周期带来的那个免费的便宜
  *
- * 视线朝路径的切线（0.25 秒的有限差分）。解析导数写起来更容易错，而这里
- * 每帧只要两次求值。切线长度趋零时（路径在某个轴上到了极值点）退回 +z ——
- * `normalize` 零向量会给 NaN，而 NaN 相机让整幅画面消失且不报错。
+ * 每段飞 **正好 2 个单位**（一个周期）⇒ 段末的位置与段首**模格同余**
+ * ⇒ 下一段直接从段首重新开始，画面完全连续（分形的距离场自己被折叠过，
+ * 同余的点渲染结果逐像素相同）。于是整个路径不需要累加状态，O(1) 就能算，
+ * 也就天然满足「同一个 t 必须给出同一帧」（硬约束 1.1）。
+ *
+ * 代价：段末不折返的前提是「位置真的只差格向量」。所以 `head` 必须对**所有
+ * 六个方向**都落在可行空间里 —— Menger 的 (0,0,0) 是三条隧道的交点，
+ * 正好满足。
+ *
+ * ## 换轴不折返
+ *
+ * 第 n 段的轴向由哈希定（`seed` 参与相位，所以同一个工程里两条轨道不撞线）。
+ * 与上一段反向时改到另一个轴上 —— 折返等于原路退回，观众一眼看出来。
  */
 const SDF_FLY_GLSL = `
-vec3 sdfFlyPos(float t, float seed) {
-  float a = seed * 6.2831853;
-  return vec3(
-    sin(t * 0.37 + a)       + 0.45 * sin(t * 0.91 + a * 1.7) + 0.18 * sin(t * 2.03 + a * 2.3),
-    sin(t * 0.43 + a * 1.3) + 0.45 * sin(t * 1.07 + a * 2.9) + 0.18 * sin(t * 1.87 + a * 0.7),
-    sin(t * 0.29 + a * 2.1) + 0.45 * sin(t * 0.83 + a * 0.4) + 0.18 * sin(t * 1.71 + a * 1.9));
+/** 一段的长度 = 分形的一个周期。 */
+const float SDF_FLY_LEG = 2.0;
+
+/**
+ * Dave Hoskins 的 hash21（无 sin 族）。**必须无 sin**：leg 序号乘以常数之后
+ * 自变量很快就上百，而 fract(sin(x) * 43758.5453) 在大参数下低位不稳，
+ * 表现是「某些 leg 的轴向逐帧跳」。仓库里另有一份同源的 HASH_FAST_GLSL，
+ * 这里单独起名是为了不与生成器自己 import 的那份重复定义。
+ */
+float sdfFlyHash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
 }
 
-/** 穿梭相机：位置在原点附近游走，视线朝切线。amp 用来把某一轴压扁。 */
-void sdfFlyCam(float t, float seed, float speed, float range, vec3 amp, out vec3 eye, out vec3 fwd) {
-  float tt = t * speed;
-  vec3 p0 = sdfFlyPos(tt, seed) * range * amp;
-  vec3 p1 = sdfFlyPos(tt + 0.25, seed) * range * amp;
-  vec3 d = p1 - p0;
-  float l = length(d);
-  eye = p0;
-  fwd = l > 1e-4 ? d / l : vec3(0.0, 0.0, 1.0);
+/** 0..5 → ±x / ±y / ±z。0/1、2/3、4/5 成对（异或 1 就是反向）。 */
+vec3 sdfFlyAxis(int i) {
+  if (i == 0) return vec3(1.0, 0.0, 0.0);
+  if (i == 1) return vec3(-1.0, 0.0, 0.0);
+  if (i == 2) return vec3(0.0, 1.0, 0.0);
+  if (i == 3) return vec3(0.0, -1.0, 0.0);
+  if (i == 4) return vec3(0.0, 0.0, 1.0);
+  return vec3(0.0, 0.0, -1.0);
+}
+
+/**
+ * 第 n 段的轴向索引（0/1、2/3、4/5 是同一根轴的两个方向）。
+ *
+ * ⚠️ **不许折返**（等于原路退回，观众一眼看出来）。而「上一段实际是什么方向」
+ * 在闭式函数里拿不到 —— 上一段自己也依赖再上一段，那是一条递推链。
+ *
+ * 第一版就是这里出的错：拿 hash(n-1) 的**原始值**当「上一段方向」去排除，
+ * 而上一段的值其实已被修正过一次，两者不一致时排除失效 ⇒ 段边界上出现
+ * 一次 90° 硬切（实测 400 段里有 1 段）。数值上看就是相邻两段方向恰好反向。
+ *
+ * 现在改成**按 n 循环**：轴 = (起点 + 步长 × n) % 3。相邻两段必然换轴，
+ * 所以**不可能折返**，而且完全不需要查上一段。符号由哈希给，六个方向都能出现。
+ *
+ * 代价：不会出现「直着继续飞」的段。要允许直飞就得知道上一段的符号，
+ * 那就回到递推上去了（硬约束 1.1 不许存状态）。
+ */
+int sdfFlyDir(float n, float seed) {
+  int base = min(int(floor(sdfFlyHash(vec2(seed, 13.0)) * 3.0)), 2);
+  int step = 1 + min(int(floor(sdfFlyHash(vec2(seed, 71.0)) * 2.0)), 1);
+  int a = (base + step * int(n)) % 3;
+  a = a < 0 ? a + 3 : a;
+  int s = sdfFlyHash(vec2(n, seed * 97.0)) < 0.5 ? 0 : 1;
+  return a * 2 + s;
+}
+
+/**
+ * 球面插值。这里两个方向只差 90°（正交），**不能用 normalize(mix())**：
+ * 那是弦插值，角度按 atan2(k, 1-k) 走，中段的角速度是两端的 2 倍 ——
+ * 曲线看上去就是「转起来突然加速再突然停」，也就是「不丝滑」。
+ */
+vec3 sdfFlySlerp(vec3 a, vec3 b, float k) {
+  float c = clamp(dot(a, b), -1.0, 1.0);
+  float s = sqrt(max(1.0 - c * c, 1e-8));
+  vec3 r = (sin((1.0 - k) * acos(c)) * a + sin(k * acos(c)) * b) / s;
+  return s > 1e-4 ? r : normalize(mix(a, b, k));
+}
+
+/** 6t⁵-15t⁴+10t³：两端的一阶、二阶导都为 0，所以转向前后都没有「顿一下」。 */
+float sdfFlyEase(float x) {
+  float k = clamp(x, 0.0, 1.0);
+  return k * k * k * (k * (k * 6.0 - 15.0) + 10.0);
+}
+
+/**
+ * 穿梭相机。eye 沿当前轴从 head 直飞一个周期。
+ *
+ * ## 转弯窗口**跨过段边界**
+ *
+ * 转向从前一段的 70% 开始、到下一段的 10% 结束（总共 0.4 段）。压在段尾的写法
+ * 会把 90° 的转动挤在很短的行程里，角速度必然陡；跨过边界之后，转弯的后半段
+ * 发生在「已经沿新轴飞」的时候 —— 这正是真实运镜的样子：先看进弯里，飞过去，
+ * 再收尾。
+ *
+ * 相位走 smootherstep，角速度是两端为 0 的钟形，**不是线性**，也不是匀速转。
+ *
+ * ## 摇晃
+ *
+ * shake 是三轴小幅高频抖动，幅度按 shake 缩放。它读 t 的闭式正弦，所以
+ * 拖时间轴能拿到同一帧（不是逐帧累加的噪声）。
+ *
+ * ## 确定性
+ *
+ * 全程只读 t 和 seed。转弯相位是段相位的闭式函数，不累加任何状态 ——
+ * 拖时间轴到同一个 t 会拿到逐像素相同的一帧。
+ */
+void sdfFlyCam(float t, float seed, float speed, float shake, vec3 head, out vec3 eye, out vec3 fwd) {
+  float legT = SDF_FLY_LEG / max(speed, 0.01);
+  float u = t / legT;
+  float n = floor(u);
+  float f = u - n;
+
+  vec3 d0 = sdfFlyAxis(sdfFlyDir(n, seed));
+  vec3 d1 = sdfFlyAxis(sdfFlyDir(n + 1.0, seed));
+  vec3 dm = sdfFlyAxis(sdfFlyDir(n - 1.0, seed));
+
+  eye = head + d0 * (f * SDF_FLY_LEG);
+
+  /* 转弯窗口 = [0.70, 1.10]（按段相位计） */
+  const float A = 0.70;
+  const float B = 0.10;
+  const float W = 1.0 + B - A;
+  if (n >= 1.0 && f < B) {
+    // 收上一段留下的尾：从 d(m-1) 转到 d0
+    fwd = sdfFlySlerp(dm, d0, sdfFlyEase((f + 1.0 - A) / W));
+  } else if (f > A) {
+    fwd = sdfFlySlerp(d0, d1, sdfFlyEase((f - A) / W));
+  } else {
+    // 第一段的开头没有「上一段」，直接朝当前轴，不进入转弯
+    fwd = d0;
+  }
+
+  if (shake > 0.0) {
+    vec3 up = abs(fwd.y) > 0.95 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    vec3 rt = normalize(cross(up, fwd));
+    vec3 upn = cross(fwd, rt);
+    float a = shake * 0.085;
+    float s1 = sin(t * 7.31 + seed * 31.0) + 0.55 * sin(t * 13.7 + seed * 11.0);
+    float s2 = sin(t * 5.93 + seed * 17.0) + 0.55 * sin(t * 11.3 + seed * 5.0);
+    fwd = normalize(fwd + rt * (a * s1) + upn * (a * s2));
+  }
 }
 `;
 
@@ -881,20 +1001,20 @@ export function sdfCameraParams(): ParamDef[] {
       key: 'flySpeed',
       labelKey: 'algo.sdf.flySpeed',
       type: 'range',
-      min: 0.05,
+      min: 0.1,
       max: 3,
       step: 0.05,
-      defaultValue: 0.6,
+      defaultValue: 0.8,
       visibleWhen: (v) => v.camera === 'fly',
     } satisfies RangeParam,
     {
-      key: 'flyRange',
-      labelKey: 'algo.sdf.flyRange',
+      key: 'flyShake',
+      labelKey: 'algo.sdf.flyShake',
       type: 'range',
-      min: 0.2,
-      max: 4,
-      step: 0.05,
-      defaultValue: 1.2,
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: 0.3,
       visibleWhen: (v) => v.camera === 'fly',
     } satisfies RangeParam,
   ];

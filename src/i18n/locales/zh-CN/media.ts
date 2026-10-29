@@ -1233,7 +1233,7 @@ export const media = {
   'algo.sdf.cameraOrbit': '环绕',
   'algo.sdf.cameraFly': '穿梭',
   'algo.sdf.flySpeed': '穿梭速度',
-  'algo.sdf.flyRange': '穿梭幅度',
+  'algo.sdf.flyShake': '镜头摇晃',
 
   /* ---- 反应扩散（Gray-Scott）---- */
   'algo.reactionDiffusion': '反应扩散',

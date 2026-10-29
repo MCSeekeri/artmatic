@@ -52,7 +52,7 @@ uniform int   u_variant;  // 0 = 海绵（三维挖）· 1 = 地毯（只挖 xz 
 uniform int   u_extent;   // 0 = 单体 · 1 = 无限延伸（只在海绵下成立）
 uniform int   u_camera;   // 0 = 环绕 · 1 = 穿梭
 uniform float u_flySpeed;
-uniform float u_flyRange;
+uniform float u_flyShake;
 
 /** 绕 y 轴按高度扭转 —— 让方块从「古典几何体」变成「藤蔓」。 */
 vec3 twistY(vec3 p, float k) {
@@ -128,8 +128,11 @@ void main() {
      * 立刻以 d 接近 0 判成命中），看起来像渲染坏了。
      */
     vec3 fwd;
-    sdfFlyCam(u_time, u_seed, u_flySpeed, u_flyRange, vec3(1.0), ro, fwd);
-    ro = sdfCameraClear(ro, 0.12);
+    /* head = (0,0,0)：Menger 的八度 1 十字孔是三条互相垂直的贯通隧道，
+       它们的交点就是原点。六个方向的走廊都从这一点出发，所以「飞一个周期
+       再换轴」永远不会撞墙，sdfCameraClear 只是兜底。 */
+    sdfFlyCam(u_time, u_seed, u_flySpeed, u_flyShake, vec3(0.0), ro, fwd);
+    ro = sdfCameraClear(ro, 0.08);
     rd = sdfRay(vUv, u_aspect, sdfCam(ro, ro + fwd));
   } else {
     // 相机：上游那套「同时转 ro 与 rd」的轨道 + 推进（见文件头）
@@ -266,7 +269,7 @@ export const mengerDef: GeneratorDef = {
     set1f('u_rate', Number(v.rate ?? 1.6));
     set1f('u_twist', Number(v.twist ?? 0));
     set1f('u_flySpeed', Number(v.flySpeed ?? 0.6));
-    set1f('u_flyRange', Number(v.flyRange ?? 1.2));
+    set1f('u_flyShake', Number(v.flyShake ?? 0.3));
     const depth = l['u_depth'];
     if (depth) gl.uniform1i(depth, Math.round(Number(v.depth ?? 4)));
     const variant = l['u_variant'];
